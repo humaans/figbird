@@ -1,0 +1,28 @@
+.github {
+  box-sizing: border-box;
+  position: fixed;
+  top: 40px;
+  right: 0;
+  width: 240px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.github svg {
+  margin-right: 4px;
+  margin-top: -2px;
+}
+
+.github a {
+  display: flex;
+  flex: 1;
+  flex-direction: row;
+  align-items: center;
+  text-decoration: none;
+  color: black;
+}
+
+.github:hover a {
+  color: #ff4800;
+}
