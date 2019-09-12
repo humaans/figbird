@@ -1,5 +1,6 @@
 dist
 coverage
 .nyc_output
+docs/public
 docs/themes/kube/static/js/*.min.js
 docs/themes/kube/static/css/*.min.css
