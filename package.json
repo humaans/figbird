@@ -2,14 +2,54 @@
   "name": "figbird",
   "version": "0.0.0",
   "description": "Declarative Feathers / REST data fetching for React",
-  "main": "index.js",
+  "main": "dist/figbird.cjs.js",
+  "module": "dist/figbird.esm.js",
   "scripts": {
-    "test": "healthier && prettier '**/*.{js,css,yml}' && nyc ava"
+    "test": "healthier && prettier '**/*.{js,css,yml}' && nyc ava",
+    "build": "node ./tasks/build.js",
+    "version": "npm run build",
+    "release": "np --contents dist",
+    "release-beta": "np --tag=beta --contents=dist"
   },
   "author": "",
   "license": "ISC",
+  "dependencies": {
+    "@feathersjs/adapter-commons": "^4.3.1",
+    "react": "^16.9.0",
+    "sift": "^8.5.0",
+    "tiny-atom": "^5.0.0-pre.2"
+  },
   "devDependencies": {
+    "@babel/cli": "^7.6.0",
+    "@babel/core": "^7.6.0",
+    "@babel/plugin-transform-react-jsx": "^7.3.0",
+    "@babel/preset-env": "^7.6.0",
+    "@babel/register": "^7.6.0",
+    "ava": "^2.3.0",
+    "babel-eslint": "^10.0.3",
+    "execa": "^2.0.4",
     "healthier": "^3.2.0",
+    "np": "^5.0.3",
+    "nyc": "^14.1.1",
     "prettier": "^1.18.2"
+  },
+  "sideEffects": false,
+  "healthier": {
+    "parser": "babel-eslint",
+    "ignore": [
+      "docs/static/*.min*"
+    ]
+  },
+  "ava": {
+    "files": [
+      "test/*.test.js"
+    ],
+    "require": [
+      "@babel/register",
+      "./test/setup.js"
+    ]
+  },
+  "np": {
+    "releaseDraft": false
   }
 }
