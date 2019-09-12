@@ -137,13 +137,29 @@ export function Note({ id }) {
 
 <pre><code class="language-js">import { useFind } from 'figbird'
 
-export function Notes() {
-  const notes = useFind('notes', {})
+export function Notes({ tag }) {
+  const notes = useFind('notes', { query: { tag } })
 
   if (notes.loading) return 'Loading...'
   if (notes.error) return 'Error...'
 
   return &lt;div&gt;{notes.data}&lt;/div&gt;
+}
+</code></pre>
+
+<h2 id="usemutation">useMutation</h2>
+
+<p>Fetch a collection, calls <code>feathers.service('notes').find(params)</code>.</p>
+
+<pre><code class="language-js">import { useMutation } from 'figbird'
+
+export function Note({ id }) {
+  const { patch, loading, error } = useMutation('notes')
+
+  if (loading) return 'Updating...'
+  if (error) return 'Error...'
+
+  return &lt;button onClick={() =&gt; patch(id, { tag: 'idea' })}&gt;Add tag&lt;/div&gt;
 }
 </code></pre>
 
