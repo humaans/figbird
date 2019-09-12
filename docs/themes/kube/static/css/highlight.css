@@ -1,7 +1,16 @@
 /*
 
-Zenburn style from voldmar.ru (c) Vladimir Epifanov <voldmar@voldmar.ru>
-based on dark.css by Ivan Sagalaev
+Dracula Theme v1.2.0
+
+https://github.com/zenorocha/dracula-theme
+
+Copyright 2015, All rights reserved
+
+Code licensed under the MIT license
+http://zenorocha.mit-license.org
+
+@author Éverton Ribeiro <nuxlli@gmail.com>
+@author Zeno Rocha <hi@zenorocha.com>
 
 */
 
@@ -9,71 +18,59 @@ based on dark.css by Ivan Sagalaev
   display: block;
   overflow-x: auto;
   padding: 0.5em;
-  background: #3f3f3f;
-  color: #dcdcdc;
+  background: #282a36;
 }
 
 .hljs-keyword,
 .hljs-selector-tag,
-.hljs-tag {
-  color: #e3ceab;
+.hljs-literal,
+.hljs-section,
+.hljs-link {
+  color: #8be9fd;
 }
 
-.hljs-template-tag {
-  color: #dcdcdc;
+.hljs-function .hljs-keyword {
+  color: #ff79c6;
 }
 
-.hljs-number {
-  color: #8cd0d3;
-}
-
-.hljs-variable,
-.hljs-template-variable,
-.hljs-attribute {
-  color: #efdcbc;
-}
-
-.hljs-literal {
-  color: #efefaf;
-}
-
+.hljs,
 .hljs-subst {
-  color: #8f8f8f;
+  color: #f8f8f2;
 }
 
+.hljs-string,
 .hljs-title,
 .hljs-name,
-.hljs-selector-id,
-.hljs-selector-class,
-.hljs-section,
-.hljs-type {
-  color: #efef8f;
-}
-
+.hljs-type,
+.hljs-attribute,
 .hljs-symbol,
 .hljs-bullet,
-.hljs-link {
-  color: #dca3a3;
-}
-
-.hljs-deletion,
-.hljs-string,
-.hljs-built_in,
-.hljs-builtin-name {
-  color: #cc9393;
-}
-
 .hljs-addition,
+.hljs-variable,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: #f1fa8c;
+}
+
 .hljs-comment,
 .hljs-quote,
+.hljs-deletion,
 .hljs-meta {
-  color: #7f9f7f;
+  color: #6272a4;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-title,
+.hljs-section,
+.hljs-doctag,
+.hljs-type,
+.hljs-name,
+.hljs-strong {
+  /*font-weight: bold;*/
 }
 
 .hljs-emphasis {
   font-style: italic;
-}
-
-.hljs-strong {
-  font-weight: bold;
 }

@@ -1,26 +1,6 @@
 body {
-  font-family: Lato, Arial, sans-serif;
-}
-
-h1.title,
-h1,
-h2,
-h3,
-h4,
-h5,
-h6,
-.h1,
-.h2,
-.h3,
-.h4,
-.h5,
-.h6 {
-  font-family: Lato, Arial, sans-serif;
-}
-
-button,
-.button {
-  font-family: Lato, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial,
+    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
 }
 
 h1,
@@ -212,7 +192,6 @@ h6 {
 }
 
 #contents {
-  margin: 24px auto 60px auto;
   padding: 32px;
 }
 @media (min-width: 768px) {
@@ -222,7 +201,7 @@ h6 {
     padding: 0;
     top: 200px;
     right: 0;
-    width: 240px;
+    width: 200px;
     font-size: 14px;
   }
 }
@@ -290,7 +269,7 @@ body.page-account #hero h1 {
 }
 
 .content {
-  max-width: 840px;
+  max-width: 680px;
   margin: auto;
 }
 

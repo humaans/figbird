@@ -1,12 +1,12 @@
 /*
-	Kube. CSS & JS Framework
-	Version 6.5.2
-	Updated: February 2, 2017
+  Kube. CSS & JS Framework
+  Version 6.5.2
+  Updated: February 2, 2017
 
-	http://imperavi.com/kube/
+  http://imperavi.com/kube/
 
-	Copyright (c) 2009-2017, Imperavi LLC.
-	License: MIT
+  Copyright (c) 2009-2017, Imperavi LLC.
+  License: MIT
 */
 html {
   box-sizing: border-box;
@@ -169,8 +169,8 @@ input[type='search']::-webkit-search-cancel-button {
 
 html,
 body {
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 18px;
+  line-height: 29px;
 }
 
 body {
@@ -308,7 +308,7 @@ figure + h3,
 figure + h4,
 figure + h5,
 figure + h6 {
-  margin-top: 24px;
+  margin-top: 48px;
 }
 
 ul,
@@ -415,7 +415,9 @@ kbd {
 }
 
 code {
-  background: #e0e1e1;
+  background: aliceblue;
+  border-radius: 4px;
+  font-size: 16px;
 }
 
 mark {
@@ -452,11 +454,10 @@ code,
 samp,
 var,
 kbd {
-  font-family: Consolas, Monaco, 'Courier New', monospace;
+  font-family: Monaco, Consolas, 'Lucida Console', monospace;
 }
 
 pre,
-code,
 samp,
 var,
 kbd,
@@ -466,18 +467,19 @@ mark {
 
 pre,
 pre code {
-  background: #f8f8f8;
+  font-size: 13px;
   padding: 0;
   top: 0;
   display: block;
-  line-height: 20px;
+  line-height: 21px;
   color: rgba(49, 52, 57, 0.85);
   overflow: none;
   white-space: pre-wrap;
+  border-radius: 4px;
 }
 
 pre {
-  padding: 1rem;
+  /*padding: 1rem;*/
 }
 
 figcaption {
@@ -2788,4 +2790,8 @@ button:hover,
   .tabs li.active a {
     border-bottom: 1px solid #fff;
   }
+}
+
+footer {
+  height: 120px;
 }
