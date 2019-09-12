@@ -5,7 +5,7 @@
   "main": "dist/figbird.cjs.js",
   "module": "dist/figbird.esm.js",
   "scripts": {
-    "test": "healthier && prettier '**/*.{js,css,yml}' && nyc ava",
+    "test": "healthier && prettier --check '**/*.{js,css,yml}' && nyc ava",
     "build": "node ./tasks/build.js",
     "version": "npm run build",
     "release": "np --contents dist",
