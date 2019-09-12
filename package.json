@@ -10,7 +10,8 @@
     "watch": "node ./tasks/build.js -w",
     "version": "npm run build",
     "release": "np --contents dist",
-    "release-beta": "np --tag=beta --contents=dist"
+    "release:beta": "np --tag=beta --contents=dist",
+    "release:docs": "hugo -s docs && gh-pages -d docs/public"
   },
   "author": "",
   "license": "ISC",
@@ -29,6 +30,7 @@
     "ava": "^2.3.0",
     "babel-eslint": "^10.0.3",
     "execa": "^2.0.4",
+    "gh-pages": "^2.1.1",
     "healthier": "^3.2.0",
     "np": "^5.0.3",
     "nyc": "^14.1.1",
