@@ -7,6 +7,8 @@ Declarative and realtime data management for **ultra responsive** Feathers and R
 - multiple data fetching policies
 - fine control over cache evictions
 
+The library has been extracted from production code used at https://humaans.io/.
+
 ## Features
 
 **Idiomatic React hooks**. Works how you'd expect it, fetch some data with `const data = useFind('notes')` and know that your components will rerender in realtime as the data upstream changes. Modify the data using the `const { patch } = useMutation` and have the updates be instantly propagated to all components referencing the same entities.
@@ -18,6 +20,47 @@ Declarative and realtime data management for **ultra responsive** Feathers and R
 **Fetch policies**. Fetch policies allow you to fine tune Figbird to your requirements. With the default `cache-and-network` you will use cached data when possible for maximum responsiveness, but will always refetch in the background to make sure data is up to date. Or use one of the other 4 policies to minimise network usage or always go to network first.
 
 **Logging**. Figbird's cache is implemented using the [`tiny-atom`](https://github.com/KidkArolis/tiny-atom) store which comes with a powerful logger. Observe and inspect all the changes to your cache with ease.
+
+## TODO
+
+- [x] `useGet`
+- [x] `useFind`
+- [x] `useMutations`
+- [x] `useFeathers`
+- [x] `error` and `loading` state in `useMutation`
+- [ ] manual `refetch` for gets and finds
+- [ ] reuse inflight requests for identical get/find requests
+
+Options
+
+- [ ] option - logger
+- [ ] option - disable realtime
+- [ ] option - disable cache
+- [ ] option - custom `id` field
+
+Cache
+
+- [x] cache all results and queries
+- [x] live update queries on entity updates
+- [x] fetch policy `cache-and-network`
+- [ ] fetch policy `cache-first`
+- [ ] fetch policy `network-only`
+- [ ] fetch policy `no-cache`
+- [ ] fetch policy `cache-only`
+- [ ] useCacheEviction - sweep through cache and remove any queries or entities, e.g. clean('notes')
+- [ ] ref counting - do not remove entities/queries if they're actively used
+
+Pagination
+
+- [x] `useFind` - pagination metadata
+- [x] `useFind` - handle updates to paginated queries
+- [ ] `useFind` - `fetchMore`
+- [ ] `useFind` - `allPages`
+- [ ] support `find` without pagination envelope
+
+Bugs
+
+- [ ] bug: unmounting should not stop listening if other components need to
 
 ## useGet
 

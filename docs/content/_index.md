@@ -11,6 +11,8 @@ Declarative and realtime data management for **ultra responsive** Feathers and R
 - multiple data fetching policies
 - fine control over cache evictions
 
+The library has been extracted from production code used at https://humaans.io/.
+
 ## Features
 
 **Idiomatic React hooks**. Works how you'd expect it, fetch some data with `const data = useFind('notes')` and know that your components will rerender in realtime as the data upstream changes. Modify the data using the `const { patch } = useMutation` and have the updates be instantly propagated to all components referencing the same entities.
