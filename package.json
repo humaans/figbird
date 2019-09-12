@@ -1,6 +1,6 @@
 {
   "name": "figbird",
-  "version": "0.1.0-pre.0",
+  "version": "0.1.0",
   "description": "Declarative and realtime data management for Feathers and React",
   "main": "dist/cjs",
   "module": "dist/esm",
