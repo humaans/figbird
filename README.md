@@ -86,13 +86,30 @@ Fetch a collection, calls `feathers.service('notes').find(params)`.
 ```js
 import { useFind } from 'figbird'
 
-export function Notes() {
-  const notes = useFind('notes', {})
+export function Notes({ tag }) {
+  const notes = useFind('notes', { query: { tag } })
 
   if (notes.loading) return 'Loading...'
   if (notes.error) return 'Error...'
 
   return <div>{notes.data}</div>
+}
+```
+
+## useMutation
+
+Fetch a collection, calls `feathers.service('notes').find(params)`.
+
+```js
+import { useMutation } from 'figbird'
+
+export function Note({ id }) {
+  const { patch, loading, error } = useMutation('notes')
+
+  if (loading) return 'Updating...'
+  if (error) return 'Error...'
+
+  return <button onClick={() => patch(id, { tag: 'idea' })}>Add tag</div>
 }
 ```
 
