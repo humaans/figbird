@@ -17,7 +17,6 @@
   "license": "ISC",
   "dependencies": {
     "@feathersjs/adapter-commons": "^4.3.1",
-    "react": "^16.9.0",
     "sift": "^8.5.0",
     "tiny-atom": "^5.0.0-pre.2"
   },
@@ -29,12 +28,17 @@
     "@babel/register": "^7.6.0",
     "ava": "^2.3.0",
     "babel-eslint": "^10.0.3",
+    "enzyme": "^3.10.0",
+    "enzyme-adapter-react-16": "^1.14.0",
     "execa": "^2.0.4",
     "gh-pages": "^2.1.1",
     "healthier": "^3.2.0",
+    "jsdom": "^15.1.1",
     "np": "^5.0.3",
     "nyc": "^14.1.1",
-    "prettier": "^1.18.2"
+    "prettier": "^1.18.2",
+    "react": "^16.9.0",
+    "react-dom": "^16.9.0"
   },
   "sideEffects": false,
   "healthier": {
@@ -44,6 +48,7 @@
     ]
   },
   "ava": {
+    "serial": true,
     "files": [
       "test/*.test.js"
     ],
