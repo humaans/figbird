@@ -267,6 +267,15 @@ export function App({ children }) {
 <li><code>error</code> - error object of the last failed mutation</li>
 </ul>
 
+<h3 id="provider-1"><code>Provider</code></h3>
+
+<ul>
+<li><code>feathers</code> - feathers instance</li>
+<li><code>idField</code> - optional, string or function, defaults to getting <code>id</code> and then <code>_id</code></li>
+<li><code>atom</code> - optional, custom atom instance</li>
+<li><code>AtomContext</code> - optional, custom atom context</li>
+</ul>
+
 <h2 id="advanced-usage">Advanced usage</h2>
 
 <p>Figbird is using <a href="https://github.com/KidkArolis/tiny-atom">tiny-atom</a> for it&rsquo;s cache. This allows for a succint implementation and efficient bindings from cached data to components. It is possible to pass in a custom instance of tiny-atom to <code>figbird</code> if you&rsquo;re already using tiny-atom in your appsta would allow for easier inspection and debugging of your application&rsquo;s state and behaviour. For example:</p>
