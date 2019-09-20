@@ -16,7 +16,7 @@ const createFeathers = () =>
     }
   })
 
-function App({ feathers, children }) {
+function App({ feathers, config, children }) {
   function AtomObserver({ children }) {
     const { atom } = useFigbird()
     useEffect(() => {
@@ -26,7 +26,7 @@ function App({ feathers, children }) {
   }
   return (
     <TestErrorHandler>
-      <Provider feathers={feathers}>
+      <Provider feathers={feathers} {...config}>
         <AtomObserver>{children}</AtomObserver>
       </Provider>
     </TestErrorHandler>
@@ -58,15 +58,15 @@ class TestErrorHandler extends React.Component {
   }
 }
 
-function mount(Comp, feathers) {
+function mount(Comp, feathers, config) {
   return mountToDOM(
-    <App feathers={feathers}>
+    <App feathers={feathers} config={config}>
       <Comp />
     </App>
   )
 }
 
-function NoteList({ notes }) {
+function NoteList({ notes, keyField = 'id' }) {
   if (notes.loading) {
     return <div className='spinner'>loading...</div>
   }
@@ -74,7 +74,7 @@ function NoteList({ notes }) {
   return (
     <>
       {(Array.isArray(notes.data) ? notes.data : [notes.data]).map(note => (
-        <div key={note.id} className='note'>
+        <div key={note[keyField]} className='note'>
           {note.content}
         </div>
       ))}
@@ -286,4 +286,82 @@ test('Provider requires feathers to be passed in', async t => {
   const app = mount(Feathers, undefined)
 
   t.is(app.find('.error').text(), 'Please pass in a feathers client')
+})
+
+test('support _id out of the box', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: {
+          _id: 1,
+          content: 'hello _id'
+        }
+      }
+    }
+  })
+
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} keyField='_id' />
+  }
+
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello _id')
+
+  app.unmount()
+})
+
+test('support custom idField string', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: {
+          _xid: 1,
+          content: 'hello _xid'
+        }
+      }
+    }
+  })
+
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} keyField='_xid' />
+  }
+
+  const app = mount(Note, feathers, { idField: '_xid' })
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello _xid')
+
+  app.unmount()
+})
+
+test('support custom idField function', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: {
+          _foo: 1,
+          content: 'hello _foo'
+        }
+      }
+    }
+  })
+
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} keyField='_foo' />
+  }
+
+  const app = mount(Note, feathers, { idField: entity => entity._foo })
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello _foo')
+
+  app.unmount()
 })

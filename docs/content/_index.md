@@ -168,6 +168,13 @@ Resulting object has the following attributes:
 - `loading` - true if the last called mutation is in flight
 - `error` - error object of the last failed mutation
 
+### `Provider`
+
+- `feathers` - feathers instance
+- `idField` - optional, string or function, defaults to getting `id` and then `_id`
+- `atom` - optional, custom atom instance
+- `AtomContext` - optional, custom atom context
+
 ## Advanced usage
 
 Figbird is using [tiny-atom](https://github.com/KidkArolis/tiny-atom) for it's cache. This allows for a succint implementation and efficient bindings from cached data to components. It is possible to pass in a custom instance of tiny-atom to `figbird` if you're already using tiny-atom in your appsta would allow for easier inspection and debugging of your application's state and behaviour. For example:

@@ -33,10 +33,10 @@ The library has been extracted from production code used at https://humaans.io/.
 
 Options
 
+- [x] option - custom `id` field
 - [ ] option - logger
 - [ ] option - disable realtime
 - [ ] option - disable cache
-- [ ] option - custom `id` field
 
 Cache
 
@@ -204,6 +204,13 @@ Resulting object has the following attributes:
 - `remove(id)` - remove
 - `loading` - true if the last called mutation is in flight
 - `error` - error object of the last failed mutation
+
+### `Provider`
+
+- `feathers` - feathers instance
+- `idField` - optional, string or function, defaults to getting `id` and then `_id`
+- `atom` - optional, custom atom instance
+- `AtomContext` - optional, custom atom context
 
 ## Advanced usage
 

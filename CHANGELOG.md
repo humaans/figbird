@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.3.0
+
+- Add `idField` option to Provider. By default look for both `id` and then `_id` - both common in Feathers applications.
+
 ## 0.2.0
 
 - Improve realtime event listeners to work with multiple components using the same service. Previously, as soon as the component unmounts, we'd stop listening. Now, the realtime event listeners will remain active while there's at least one component connected to the given service.
