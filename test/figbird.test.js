@@ -365,3 +365,24 @@ test('support custom idField function', async t => {
 
   app.unmount()
 })
+
+test('useFind with skip', async t => {
+  function Note() {
+    const notes = useFind('notes', {
+      skip: true
+    })
+    return <div className='data'>{notes.data ? 'yes' : 'no'}</div>
+  }
+
+  const feathers = createFeathers()
+  feathers.service('notes').find = () => {
+    throw new Error('Should not be called')
+  }
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.data').text(), 'no')
+
+  app.unmount()
+})

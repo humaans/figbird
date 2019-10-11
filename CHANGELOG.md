@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.3.1
+
+- Fix `skip` option - do not fetch data when skip option is passed in to `useFind` or `useGet`
+
 ## 0.3.0
 
 - Add `idField` option to Provider. By default look for both `id` and then `_id` - both common in Feathers applications.
