@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.3.2
+
+- Fix mutations from failing when no query object is used
+
 ## 0.3.1
 
 - Fix `skip` option - do not fetch data when skip option is passed in to `useFind` or `useGet`
