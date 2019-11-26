@@ -28,7 +28,7 @@ The library has been extracted from production code used at https://humaans.io/.
 - [x] `useMutations`
 - [x] `useFeathers`
 - [x] `error` and `loading` state in `useMutation`
-- [ ] manual `refetch` for gets and finds
+- [x] manual `refetch` for gets and finds
 - [ ] reuse inflight requests for identical get/find requests
 
 Options
@@ -167,7 +167,7 @@ export function App({ children }) {
 - `serviceName` - the name of Feathers service
 - `id` - the id of the resource
 - `params` - any params you'd pass to Feathers, with the following extras:
-- `skip` - setting skip to true will not fetch the data
+  - `skip` - setting skip to true will not fetch the data
 
 Resulting object has the following attributes:
 
@@ -175,6 +175,7 @@ Resulting object has the following attributes:
 - `loading` - true if loading data for the first time with nothing in cache
 - `reloading` - true loading data in the background to update the cache
 - `error` - error object if request failed
+- `refetch` - refetch the data
 
 ### `useFind(serviceName, params)`
 
@@ -191,6 +192,7 @@ Resulting object has the following attributes:
 - `loading` - true if loading data for the first time with nothing in cache
 - `reloading` - true loading data in the background to update the cache
 - `error` - error object if request failed
+- `refetch` - refetch the data
 
 ### `useMutation(serviceName)`
 

@@ -138,6 +138,7 @@ Resulting object has the following attributes:
 - `loading` - true if loading data for the first time with nothing in cache
 - `reloading` - true loading data in the background to update the cache
 - `error` - error object if request failed
+- `refetch` - refetch the data
 
 ### `useFind(serviceName, params)`
 
@@ -154,6 +155,7 @@ Resulting object has the following attributes:
 - `loading` - true if loading data for the first time with nothing in cache
 - `reloading` - true loading data in the background to update the cache
 - `error` - error object if request failed
+- `refetch` - refetch the data
 
 ### `useMutation(serviceName)`
 

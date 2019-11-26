@@ -386,3 +386,41 @@ test('useFind with skip', async t => {
 
   app.unmount()
 })
+
+test('useFind with refetch', async t => {
+  let refetch
+
+  function Note() {
+    const notes = useFind('notes')
+
+    refetch = notes.refetch
+
+    return <div className='data'>{notes.data && notes.data[0].id}</div>
+  }
+
+  const results = [{ data: [{ id: 1 }] }, { data: [{ id: 2 }] }]
+  const feathers = createFeathers()
+
+  let calls = 0
+  feathers.service('notes').find = () => {
+    calls++
+    const res = results.shift()
+    return Promise.resolve(res)
+  }
+
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.data').text(), '1')
+
+  refetch()
+
+  await flush(app)
+
+  t.is(app.find('.data').text(), '2')
+
+  app.unmount()
+
+  t.is(calls, 2)
+})

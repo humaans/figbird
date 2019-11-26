@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.4.0
+
+- Add `refetch` in `useFind` and `useGet` to allow imperatively reloading the data
+
 ## 0.3.3
 
 - Add dependencies to `useSelector`, otherwise wrong old closed over params are used. This meant that if say you change query, the old `hashedQuery` id was being used, returning wrong data in `useFind`
