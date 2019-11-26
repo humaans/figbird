@@ -3,6 +3,7 @@
 ## 0.5.0
 
 - Add `allPages` option to fetch all pages of the given resource
+- Reuse in flight requests when identical (same id for get and same params hash for find)
 
 ## 0.4.0
 
