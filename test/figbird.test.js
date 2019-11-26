@@ -66,7 +66,11 @@ function mount(Comp, feathers, config) {
   )
 }
 
-function NoteList({ notes, keyField = 'id' }) {
+function NoteList({ notes, error, keyField = 'id' }) {
+  if (error) {
+    return <div className='error'>{error.message}</div>
+  }
+
   if (notes.loading) {
     return <div className='spinner'>loading...</div>
   }
@@ -230,6 +234,28 @@ test('useFind binding updates after realtime remove', async t => {
   app.unmount()
 })
 
+test('useFind binding updates after realtime patch with no query', async t => {
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello')
+
+  await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+
+  await flush(app)
+
+  t.deepEqual(app.find('.note').map(n => n.text()), ['doc'])
+
+  app.unmount()
+})
+
 test('useMutation patch updates the get binding', async t => {
   function Note() {
     const note = useGet('notes', 1)
@@ -251,6 +277,39 @@ test('useMutation patch updates the get binding', async t => {
 
   const noteEl = app.find('.note')
   t.is(noteEl.text(), 'hi')
+
+  app.unmount()
+})
+
+test('useMutation handles errors', async t => {
+  let handled = false
+
+  function Note() {
+    const note = useGet('notes', 1)
+    const { patch, error } = useMutation('notes')
+
+    useEffect(() => {
+      patch(1, {
+        content: 'hi'
+      }).catch(err => {
+        handled = err.message
+      })
+    }, [])
+
+    return <NoteList notes={note} error={error} />
+  }
+
+  const feathers = createFeathers()
+  feathers.service('notes').patch = () => {
+    return Promise.reject(new Error('unexpected'))
+  }
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.error').text(), 'unexpected')
+
+  t.is(handled, 'unexpected')
 
   app.unmount()
 })
@@ -423,4 +482,24 @@ test('useFind with refetch', async t => {
   app.unmount()
 
   t.is(calls, 2)
+})
+
+test('useFind with allPages', async t => {
+  function Note() {
+    const notes = useFind('notes', { query: { $limit: 1 }, allPages: true })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.deepEqual(app.find('.note').map(n => n.text()), ['hello', 'doc', 'dmc'])
+
+  app.unmount()
 })

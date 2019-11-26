@@ -6,6 +6,7 @@
   "module": "dist/esm",
   "scripts": {
     "test": "healthier && prettier --check '**/*.{js,css,yml}' && nyc ava",
+    "coverage": "nyc --reporter=html ava",
     "build": "node ./tasks/build.js",
     "watch": "node ./tasks/build.js -w",
     "version": "npm run build",

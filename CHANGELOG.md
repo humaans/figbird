@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.5.0
+
+- Add `allPages` option to fetch all pages of the given resource
+
 ## 0.4.0
 
 - Add `refetch` in `useFind` and `useGet` to allow imperatively reloading the data

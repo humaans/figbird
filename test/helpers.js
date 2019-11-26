@@ -12,12 +12,18 @@ class Service {
     return Promise.resolve(this.data[id])
   }
 
-  find(params) {
-    const data = Object.keys(this.data).map(id => this.data[id])
+  find(params = {}) {
+    const limit = (params.query && params.query.$limit) || 100
+    const skip = (params.query && params.query.$skip) || 0
+    const keys = Object.keys(this.data)
+    const data = keys
+      .slice(skip)
+      .slice(0, limit)
+      .map(id => this.data[id])
     return Promise.resolve({
-      total: data.length,
-      limit: 100,
-      skip: 0,
+      total: keys.length,
+      limit,
+      skip,
       data
     })
   }

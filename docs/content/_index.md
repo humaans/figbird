@@ -145,6 +145,7 @@ Resulting object has the following attributes:
 - `serviceName` - the name of Feathers service
 - `params` - any params you'd pass to Feathers, with the following extras:
   - `skip` - setting skip to true will not fetch the data
+  - `allPages` - fetch all pages
 
 Resulting object has the following attributes:
 
