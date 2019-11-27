@@ -1,9 +1,11 @@
 # Figbird Changelog
 
-## 0.5.2
+## 0.6.0
 
+- Add new option `updatedAtField`, similar to `idField` it is used to extract the `updatedAt` value of an entity to know if the entity is newer or older than what's in the cache. This is to avoid overwriting older data with newer data when a get request is racing with a realtime update.
 - Fix an issue with disposing the realtime event listeners. Previously, realtime event listeners were not always being disposed of, depending on the order in which components were rendered and unrendered.
 - Fix an issue where updating the query in `useFind` call would put the `useFind` into incorrect state with data `null` and loading `false`. Now, in such situations, `loading` (and `reloading`) will be set to true to correctly indicate that updated query is not cached and data is being fetched.
+- Fix error `useGet` and `useFind` error handling
 
 ## 0.5.1
 

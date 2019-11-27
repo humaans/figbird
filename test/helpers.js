@@ -30,19 +30,19 @@ class Service {
 
   create(data, params) {
     const { id } = data
-    this.data = { ...this.data, [id]: data }
+    this.data = { ...this.data, [id]: { ...data, updatedAt: Date.now() } }
     this.emit('created', this.data[id])
     return this.get(id)
   }
 
   patch(id, data, params) {
-    this.data = { ...this.data, [id]: { ...this.data[id], ...data } }
+    this.data = { ...this.data, [id]: { ...this.data[id], ...data, updatedAt: Date.now() } }
     this.emit('patched', this.data[id])
     return this.get(id)
   }
 
   update(id, data, params) {
-    this.data = { ...this.data, [id]: { ...data } }
+    this.data = { ...this.data, [id]: { ...data, updatedAt: Date.now() } }
     this.emit('updated', this.data[id])
     return this.get(id)
   }

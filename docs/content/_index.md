@@ -175,6 +175,7 @@ Resulting object has the following attributes:
 
 - `feathers` - feathers instance
 - `idField` - optional, string or function, defaults to getting `id` and then `_id`
+- `updatedAtField` - optional, string or function, defaults to getting `updatedAt` and then `updated_at`, used to avoid overwriting newer data in cache with older data when `get` or realtime `patched` requests are racing
 - `atom` - optional, custom atom instance
 - `AtomContext` - optional, custom atom context
 

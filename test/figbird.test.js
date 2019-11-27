@@ -10,7 +10,8 @@ const createFeathers = () =>
       data: {
         1: {
           id: 1,
-          content: 'hello'
+          content: 'hello',
+          updatedAt: Date.now()
         }
       }
     }
@@ -40,19 +41,13 @@ class TestErrorHandler extends React.Component {
   }
 
   static getDerivedStateFromError(error) {
-    if (error.message === 'Please pass in a feathers client') {
-      return { hasError: true, error: error.message }
-    }
-    console.error('Failed to render', error)
     return { hasError: true, error: error.message }
-    // return { hasError}
   }
 
-  // componentDidCatch(error) {
-  //   console.log('CAUGHT!?', error.message === 'Please pass in a feathers client')
-  //   if (error.message === 'Please pass in a feathers client') return
-  //   throw error
-  // }
+  componentDidCatch(error) {
+    if (error.message === 'Please pass in a feathers client') return
+    console.error('Failed to render', error)
+  }
 
   render() {
     if (this.state.hasError) return <div className='error'>{this.state.error}</div>
@@ -68,9 +63,9 @@ function mount(Comp, feathers, config) {
   )
 }
 
-function NoteList({ notes, error, keyField = 'id' }) {
-  if (error) {
-    return <div className='error'>{error.message}</div>
+function NoteList({ notes, keyField = 'id' }) {
+  if (notes.error) {
+    return <div className='error'>{notes.error.message}</div>
   }
 
   if (notes.loading) {
@@ -336,15 +331,19 @@ test('useRealtime listeners are correctly disposed of', async t => {
 })
 
 test('useMutation patch updates the get binding', async t => {
+  let setContent
+
   function Note() {
     const note = useGet('notes', 1)
     const { patch } = useMutation('notes')
+    const [content, _setContent] = useState('hi1')
+    setContent = _setContent
 
     useEffect(() => {
       patch(1, {
-        content: 'hi'
+        content: content
       })
-    }, [])
+    }, [content])
 
     return <NoteList notes={note} />
   }
@@ -354,8 +353,13 @@ test('useMutation patch updates the get binding', async t => {
 
   await flush(app)
 
-  const noteEl = app.find('.note')
-  t.is(noteEl.text(), 'hi')
+  t.is(app.find('.note').text(), 'hi1')
+
+  setContent('hi2')
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hi2')
 
   app.unmount()
 })
@@ -375,7 +379,7 @@ test('useMutation handles errors', async t => {
       })
     }, [])
 
-    return <NoteList notes={note} error={error} />
+    return <NoteList notes={{ ...note, error }} />
   }
 
   const feathers = createFeathers()
@@ -500,6 +504,25 @@ test('support custom idField function', async t => {
   await flush(app)
 
   t.is(app.find('.note').text(), 'hello _foo')
+
+  app.unmount()
+})
+
+test('useFind error', async t => {
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  feathers.service('notes').find = () => {
+    return Promise.reject(new Error('unexpected'))
+  }
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.error').text(), 'unexpected')
 
   app.unmount()
 })
