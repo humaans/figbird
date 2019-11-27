@@ -225,6 +225,7 @@ export function App({ children }) {
 <li><code>loading</code> - true if loading data for the first time with nothing in cache</li>
 <li><code>reloading</code> - true loading data in the background to update the cache</li>
 <li><code>error</code> - error object if request failed</li>
+<li><code>refetch</code> - refetch the data</li>
 </ul>
 
 <h3 id="usefind-servicename-params"><code>useFind(serviceName, params)</code></h3>
@@ -235,6 +236,7 @@ export function App({ children }) {
 
 <ul>
 <li><code>skip</code> - setting skip to true will not fetch the data</li>
+<li><code>allPages</code> - fetch all pages</li>
 </ul></li>
 </ul>
 
@@ -248,6 +250,7 @@ export function App({ children }) {
 <li><code>loading</code> - true if loading data for the first time with nothing in cache</li>
 <li><code>reloading</code> - true loading data in the background to update the cache</li>
 <li><code>error</code> - error object if request failed</li>
+<li><code>refetch</code> - refetch the data</li>
 </ul>
 
 <h3 id="usemutation-servicename"><code>useMutation(serviceName)</code></h3>
@@ -272,6 +275,7 @@ export function App({ children }) {
 <ul>
 <li><code>feathers</code> - feathers instance</li>
 <li><code>idField</code> - optional, string or function, defaults to getting <code>id</code> and then <code>_id</code></li>
+<li><code>updatedAtField</code> - optional, string or function, defaults to getting <code>updatedAt</code> and then <code>updated_at</code>, used to avoid overwriting newer data in cache with older data when <code>get</code> or realtime <code>patched</code> requests are racing</li>
 <li><code>atom</code> - optional, custom atom instance</li>
 <li><code>AtomContext</code> - optional, custom atom context</li>
 </ul>
