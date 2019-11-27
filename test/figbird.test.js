@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { mount as mountToDOM } from 'enzyme'
 import test from 'ava'
 import { mockFeathers, flush } from './helpers'
@@ -43,7 +43,9 @@ class TestErrorHandler extends React.Component {
     if (error.message === 'Please pass in a feathers client') {
       return { hasError: true, error: error.message }
     }
-    return {}
+    console.error('Failed to render', error)
+    return { hasError: true, error: error.message }
+    // return { hasError}
   }
 
   // componentDidCatch(error) {
@@ -254,6 +256,83 @@ test('useFind binding updates after realtime patch with no query', async t => {
   t.deepEqual(app.find('.note').map(n => n.text()), ['doc'])
 
   app.unmount()
+})
+
+test('useRealtime listeners are correctly disposed of', async t => {
+  let atom
+
+  function Note1() {
+    const notes = useFind('notes')
+    return <div className='note1'>{notes.data && notes.data[0].content}</div>
+  }
+
+  function Note2() {
+    const notes = useFind('notes')
+    return <div className='note2'>{notes.data && notes.data[0].content}</div>
+  }
+
+  function Notes() {
+    const figbird = useFigbird()
+    atom = figbird.atom
+
+    const [counter, setCounter] = useState(0)
+
+    useEffect(() => {
+      if (counter >= 2) {
+        return
+      }
+      setCounter(counter => counter + 1)
+    }, [counter])
+
+    if (counter === 0) {
+      return (
+        <>
+          <Note1 />
+        </>
+      )
+    }
+
+    if (counter === 1) {
+      return (
+        <>
+          <Note1 />
+          <Note2 />
+        </>
+      )
+    }
+
+    if (counter === 2) {
+      return (
+        <>
+          <Note2 />
+        </>
+      )
+    }
+
+    return null
+  }
+
+  const feathers = createFeathers()
+  const app = mount(Notes, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.note2').text(), 'hello')
+  t.is(atom.get().feathers.entities.notes[1].content, 'hello')
+
+  await feathers.service('notes').patch(1, { content: 'real' })
+  t.is(atom.get().feathers.entities.notes[1].content, 'real')
+
+  await flush(app)
+
+  t.deepEqual(app.find('.note2').map(n => n.text()), ['real'])
+
+  app.unmount()
+
+  await feathers.service('notes').patch(1, { content: 'nomo' })
+
+  // should not have updated!
+  t.is(atom.get().feathers.entities.notes[1].content, 'real')
 })
 
 test('useMutation patch updates the get binding', async t => {
