@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.5.1
+
+- Fix an issue with removing realtime event listeners, chaining `.off()` doesn't work in Feathers (See https://github.com/feathersjs/feathers/issues/1704). This meant that when component with `useFind` was rendered in and out multiple times, the realtime event listeners were never being removed.
+
 ## 0.5.0
 
 - Add `allPages` option to fetch all pages of the given resource
