@@ -24,7 +24,7 @@ class Service {
       total: keys.length,
       limit,
       skip,
-      data
+      data,
     })
   }
 
@@ -72,7 +72,7 @@ export function mockFeathers(services) {
   const feathers = {
     service(name) {
       return services[name]
-    }
+    },
   }
 
   return feathers

@@ -11,10 +11,10 @@ const createFeathers = () =>
         1: {
           id: 1,
           content: 'hello',
-          updatedAt: Date.now()
-        }
-      }
-    }
+          updatedAt: Date.now(),
+        },
+      },
+    },
   })
 
 function App({ feathers, config, children }) {
@@ -158,7 +158,10 @@ test('useFind binding updates after realtime create', async t => {
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['hello', 'doc'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc']
+  )
 
   app.unmount()
 })
@@ -180,7 +183,10 @@ test('useFind binding updates after realtime patch', async t => {
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['doc'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['doc']
+  )
 
   app.unmount()
 })
@@ -196,13 +202,19 @@ test('useFind binding updates after realtime update', async t => {
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['hello'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello']
+  )
 
   await feathers.service('notes').update(1, { id: 1, content: 'doc', tag: 'idea' })
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['doc'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['doc']
+  )
 
   app.unmount()
 })
@@ -220,13 +232,19 @@ test('useFind binding updates after realtime remove', async t => {
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['hello', 'doc'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc']
+  )
 
   await feathers.service('notes').remove(1)
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['doc'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['doc']
+  )
 
   app.unmount()
 })
@@ -248,7 +266,10 @@ test('useFind binding updates after realtime patch with no query', async t => {
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['doc'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['doc']
+  )
 
   app.unmount()
 })
@@ -320,7 +341,10 @@ test('useRealtime listeners are correctly disposed of', async t => {
 
   await flush(app)
 
-  t.deepEqual(app.find('.note2').map(n => n.text()), ['real'])
+  t.deepEqual(
+    app.find('.note2').map(n => n.text()),
+    ['real']
+  )
 
   app.unmount()
 
@@ -341,7 +365,7 @@ test('useMutation patch updates the get binding', async t => {
 
     useEffect(() => {
       patch(1, {
-        content: content
+        content: content,
       })
     }, [content])
 
@@ -373,7 +397,7 @@ test('useMutation handles errors', async t => {
 
     useEffect(() => {
       patch(1, {
-        content: 'hi'
+        content: 'hi',
       }).catch(err => {
         handled = err.message
       })
@@ -436,10 +460,10 @@ test('support _id out of the box', async t => {
       data: {
         1: {
           _id: 1,
-          content: 'hello _id'
-        }
-      }
-    }
+          content: 'hello _id',
+        },
+      },
+    },
   })
 
   function Note() {
@@ -462,10 +486,10 @@ test('support custom idField string', async t => {
       data: {
         1: {
           _xid: 1,
-          content: 'hello _xid'
-        }
-      }
-    }
+          content: 'hello _xid',
+        },
+      },
+    },
   })
 
   function Note() {
@@ -488,10 +512,10 @@ test('support custom idField function', async t => {
       data: {
         1: {
           _foo: 1,
-          content: 'hello _foo'
-        }
-      }
-    }
+          content: 'hello _foo',
+        },
+      },
+    },
   })
 
   function Note() {
@@ -530,7 +554,7 @@ test('useFind error', async t => {
 test('useFind with skip', async t => {
   function Note() {
     const notes = useFind('notes', {
-      skip: true
+      skip: true,
     })
     return <div className='data'>{notes.data ? 'yes' : 'no'}</div>
   }
@@ -601,7 +625,10 @@ test('useFind with allPages', async t => {
 
   await flush(app)
 
-  t.deepEqual(app.find('.note').map(n => n.text()), ['hello', 'doc', 'dmc'])
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc', 'dmc']
+  )
 
   app.unmount()
 })
