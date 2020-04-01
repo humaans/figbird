@@ -334,10 +334,10 @@ test('useRealtime listeners are correctly disposed of', async t => {
   await flush(app)
 
   t.is(app.find('.note2').text(), 'hello')
-  t.is(atom.get().feathers.entities.notes[1].content, 'hello')
+  t.is(atom.get().feathers.entities.live.notes[1].content, 'hello')
 
   await feathers.service('notes').patch(1, { content: 'real' })
-  t.is(atom.get().feathers.entities.notes[1].content, 'real')
+  t.is(atom.get().feathers.entities.live.notes[1].content, 'real')
 
   await flush(app)
 
@@ -351,7 +351,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
   await feathers.service('notes').patch(1, { content: 'nomo' })
 
   // should not have updated!
-  t.is(atom.get().feathers.entities.notes[1].content, 'real')
+  t.is(atom.get().feathers.entities.live.notes[1].content, 'real')
 })
 
 test('useMutation patch updates the get binding', async t => {

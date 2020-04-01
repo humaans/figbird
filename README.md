@@ -29,24 +29,26 @@ The library has been extracted from production code used at https://humaans.io/.
 - [x] `useFeathers`
 - [x] `error` and `loading` state in `useMutation`
 - [x] manual `refetch` for gets and finds
-- [ ] reuse inflight requests for identical get/find requests
+- [x] reuse inflight requests for identical get/find requests
 
 Options
 
 - [x] option - custom `id` field
 - [ ] option - logger
-- [ ] option - disable realtime
+- [x] option - realtime mode 'merge' that merges updates into cached entities and query
+- [x] option - realtime mode 'refetch' that keeps stale data, but refetches from server, useful for complex queries
+- [x] option - ability to disable realtime updates
 - [ ] option - disable cache
 
 Cache
 
 - [x] cache all results and queries
 - [x] live update queries on entity updates
-- [x] fetch policy `cache-and-network`
+- [x] fetch policy `cache-and-network` (aka, stale-while-revalidate)
 - [ ] fetch policy `cache-first`
 - [ ] fetch policy `network-only`
 - [ ] fetch policy `no-cache`
-- [ ] fetch policy `cache-only`
+- [ ] ~~fetch policy `cache-only`~~
 - [ ] useCacheEviction - sweep through cache and remove any queries or entities, e.g. clean('notes')
 - [ ] ref counting - do not remove entities/queries if they're actively used
 
@@ -57,10 +59,11 @@ Pagination
 - [x] `useFind` - `allPages`
 - [ ] `useFind` - `fetchMore`
 - [ ] support `find` without pagination envelope
+- [ ] support `find` with custom pagination
 
 Bugs
 
-- [ ] bug: unmounting should not stop listening if other components need to
+- [x] bug: unmounting should not stop listening if other components need to
 
 ## useGet
 
