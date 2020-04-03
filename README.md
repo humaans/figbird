@@ -1,6 +1,6 @@
 # Figbird
 
-Declarative realtime data management for snappy React + Feathers applications.
+> Declarative realtime data management for snappy React + Feathers applications.
 
 The library has been extracted from production code at https://humaans.io/.
 
