@@ -13,6 +13,7 @@
 - Add `status` and `isFetching` that supersedes `loading` and `reloading` boolean flags, which are still there but are now deprecated. For `useGet/useFind` status can be one of `loading | success | error` and for `useMutation` it's `idle | loading | success | error`
 - Add `data` in `useMutation` return value, which holds the result of last successful mutation
 - Log a warning if an item doesn't have an ID to help identify a misconfigured `idField`
+- Remove dependency on `@feathersjs/adapter-commons` reducing the bundle size
 
 ## 0.6.0
 

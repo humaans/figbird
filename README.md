@@ -1,8 +1,8 @@
 # Figbird
 
-> Declarative realtime data management for snappy React + Feathers applications.
+Effortless realtime data management for React + Feathers applications.
 
-The library has been extracted from production code at https://humaans.io/.
+> The library has been extracted from production code at https://humaans.io/.
 
 ## Features
 
@@ -41,6 +41,10 @@ The usage of `useGet` and `useFind` hooks gets reference counted so that Figbird
 ### Logging
 
 Figbird's cache is implemented using the [`tiny-atom`](https://github.com/KidkArolis/tiny-atom) store which comes with a powerful logger. Observe and inspect all the changes to your cache with ease.
+
+## Install
+
+    $ npm install figbird
 
 ## API Reference
 
