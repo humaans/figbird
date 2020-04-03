@@ -3,14 +3,16 @@
 ## 0.7.0
 
 - Add `fetchPolicy` option to `useGet` and `useFind`:
-  - `fetchPolicy: 'swr'` - show cached data if possible and refetch in the background
-  - `fetchPolicy: 'cache-first'` - show cached data if possible without refetching
-  - `fetchPolicy: 'network-only'` - always refetch the data on mount
+  - `swr` - show cached data if possible and refetch in the background
+  - `cache-first` - show cached data if possible without refetching
+  - `network-only` - always refetch the data on mount
 - Add `realtime` option to `useGet` and `useFind`:
-  - `realtime: 'merge'` - merge realtime events into cached queries as they come
-  - `realtime: 'refetch'` - refetch the query when realtime event is received
-  - `realtime: 'disabled'` - do not update cached data on realtime events
-- Add a warning when an entity doesn't have an ID to help identify a misconfigured `idField`
+  - `merge` - merge realtime events into cached queries as they come
+  - `refetch` - refetch the query when realtime event is received
+  - `disabled` - do not update cached data on realtime events
+- Add `status` and `isFetching` that supersedes `loading` and `reloading` boolean flags, which are still there but are now deprecated. For `useGet/useFind` status can be one of `loading | success | error` and for `useMutation` it's `idle | loading | success | error`
+- Add `data` in `useMutation` return value, which holds the result of last successful mutation
+- Log a warning if an item doesn't have an ID to help identify a misconfigured `idField`
 
 ## 0.6.0
 
