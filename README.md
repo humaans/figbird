@@ -2,44 +2,39 @@
 
 Declarative realtime data management for snappy React + Feathers applications.
 
-- idiomatic React hooks – `useGet` / `useFind` / `useMutation` / `useFeathers`
-- powerful caching with realtime updates and live queries
-- multiple data fetching policies
-- fine control over cache evictions
-
 The library has been extracted from production code at https://humaans.io/.
 
 ## Features
 
-### Idiomatic React hooks
+### Idiomatic React Hooks
 
-Works how you'd expect it, fetch some data with `const data = useFind('notes')` and know that your components will rerender in realtime as the data upstream changes. Modify the data using the `const { patch } = useMutation('notes')` and have the updates be instantly propagated to all components referencing the same entities.
+Fetch some data with `const { data } = useFind('notes')` and know that your components will rerender in realtime as the data upstream changes. Modify the data using the `const { patch } = useMutation('notes')` and have the updates be instantly propagated to all components referencing the same objects.
 
 - `useGet`
 - `useFind`
 - `useMutation`
 
-### Live queries
+### Live Queries
 
-Works with both Feathers realtime events and with local data mutations. Sophisticated and Feathers compatible live query support means that when you patch a record it gets added or removed to any queries matching this record. For example, if your data is fetched using `useFind('notes', { query: { tag: 'ideas' } })` and you then patch some note with `patch({ tag: 'ideas' })` - the query will updated immediately and rerender all components referencing that query. Adjust how this works per query:
+Works with Feathers realtime events and with local data mutations. Once a record is created/modified/removed all queries referencing this record get updated. For example, if your data is fetched using `useFind('notes', { query: { tag: 'ideas' } })` and you then patch some note with `patch({ tag: 'ideas' })` - the query will updated immediately and rerender all components referencing that query. Adjust behaviour per query:
 
-- `merge` - merge realtime events into cached queries as they come
-- `refetch` - refetch the query when realtime event is received
-- `disabled` - do not update cached data on realtime events
+- `merge` - merge realtime events into cached queries as they come (default)
+- `refetch` - refetch data for this query from the server when a realtime event is received
+- `disabled` - ignore realtime events for this query
 
 ### Fetch policies
 
 Fetch policies allow you to fine tune Figbird to your requirements. With the default `swr` (stale-while-revalidate) Figbir's uses cached data when possible for maximum responsiveness, but refetches in the background on mount to make sure data is up to date. The other policies are `cache-first` which will use cache and not refresh from the server (compatible with realtime)
 
-- `swr` - show cached data if possible and refetch in the background
-- `cache-first` - show cached data if possible without refetching
-- `network-only` - always refetch the data on mount
+- `swr` - show cached data if possible and refetch in the background (default)
+- `cache-first` - show cached data if possible and avoid fetching if data is there
+- `network-only` - always refetch data on mount
 
 ### Cache eviction
 
-The usage of `useGet` and `useFind` hooks gets reference counted so that Figbird knows exactly if any of the queries and fetched entities are still being referenced by the UI. By default, Figbird will keep all the data and cache without ever evicting, but if your application demands it, you can strategically implement cache eviction hooks (e.g. on page navigations) to clear out all unused cache items or specific items based on service name or data attributes. (TBD)
+The usage of `useGet` and `useFind` hooks gets reference counted so that Figbird knows exactly if any of the queries are still being referenced by the UI. By default, Figbird will keep all the data and cache without ever evicting, but if your application demands it, you can strategically implement cache eviction hooks (e.g. on page navigation) to clear out all unused cache items or specific items based on service name or data attributes. (Note: yet to be implemnted)
 
-- `manual` - cache all queries in memory forever, evict manually
+- `manual` - cache all queries in memory forever, evict manually (default)
 - `unmount` - remove cached query data on unmount (if no component is referencing that particular cached data anymore)
 - `delayed` - remove unused cached data after some time
 
@@ -66,6 +61,9 @@ Options
 - [x] option - custom `id` field
 - [x] option - custom `updatedAt` field
 - [ ] option - logger
+- [ ] global `realtime` option
+- [ ] global `fetchPolicy` option
+- [ ] global `cacheEviction` option
 
 Cache
 
