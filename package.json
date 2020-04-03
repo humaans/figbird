@@ -1,7 +1,7 @@
 {
   "name": "figbird",
   "version": "0.6.0",
-  "description": "Declarative realtime data management for snappy React + Feathers applications",
+  "description": "Effortless realtime data management for React + Feathers applications.",
   "main": "lib",
   "scripts": {
     "test": "healthier && prettier --check '**/*.{js,css,yml}' && nyc ava",

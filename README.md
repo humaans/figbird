@@ -1,8 +1,6 @@
 # Figbird
 
-Effortless realtime data management for React + Feathers applications.
-
-> The library has been extracted from production code at https://humaans.io/.
+Effortless realtime data management for React + Feathers applications. Used in [Humaans](https://humaans.io/).
 
 ## Features
 
