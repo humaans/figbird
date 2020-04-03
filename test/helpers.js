@@ -6,13 +6,28 @@ class Service {
   constructor(name, data) {
     this.name = name
     this.data = data
+    this.counts = {
+      get: 0,
+      find: 0,
+      create: 0,
+      patch: 0,
+      update: 0,
+      remove: 0,
+    }
+    this.delay = 0
+  }
+
+  setDelay(delay) {
+    this.delay = delay
   }
 
   get(id, params) {
+    this.counts.get++
     return Promise.resolve(this.data[id])
   }
 
-  find(params = {}) {
+  async find(params = {}) {
+    this.counts.find++
     const limit = (params.query && params.query.$limit) || 100
     const skip = (params.query && params.query.$skip) || 0
     const keys = Object.keys(this.data)
@@ -20,6 +35,11 @@ class Service {
       .slice(skip)
       .slice(0, limit)
       .map(id => this.data[id])
+
+    if (this.delay) {
+      await new Promise(resolve => setTimeout(resolve, this.delay))
+    }
+
     return Promise.resolve({
       total: keys.length,
       limit,
@@ -29,6 +49,7 @@ class Service {
   }
 
   create(data, params) {
+    this.counts.create++
     const { id } = data
     this.data = { ...this.data, [id]: { ...data, updatedAt: Date.now() } }
     this.emit('created', this.data[id])
@@ -36,18 +57,21 @@ class Service {
   }
 
   patch(id, data, params) {
+    this.counts.patch++
     this.data = { ...this.data, [id]: { ...this.data[id], ...data, updatedAt: Date.now() } }
     this.emit('patched', this.data[id])
     return this.get(id)
   }
 
   update(id, data, params) {
+    this.counts.update++
     this.data = { ...this.data, [id]: { ...data, updatedAt: Date.now() } }
     this.emit('updated', this.data[id])
     return this.get(id)
   }
 
   remove(id, params) {
+    this.counts.remove++
     this.data = { ...this.data }
     const item = this.data[id]
     delete this.data[id]

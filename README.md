@@ -21,7 +21,7 @@ The library has been extracted from production code used at https://humaans.io/.
 
 **Logging**. Figbird's cache is implemented using the [`tiny-atom`](https://github.com/KidkArolis/tiny-atom) store which comes with a powerful logger. Observe and inspect all the changes to your cache with ease.
 
-## TODO
+## Roadmap
 
 - [x] `useGet`
 - [x] `useFind`
@@ -34,21 +34,23 @@ The library has been extracted from production code used at https://humaans.io/.
 Options
 
 - [x] option - custom `id` field
+- [x] option - custom `updatedAt` field
 - [ ] option - logger
-- [x] option - realtime mode 'merge' that merges updates into cached entities and query
-- [x] option - realtime mode 'refetch' that keeps stale data, but refetches from server, useful for complex queries
-- [x] option - ability to disable realtime updates
-- [ ] option - disable cache
 
 Cache
 
 - [x] cache all results and queries
 - [x] live update queries on entity updates
-- [x] fetch policy `cache-and-network` (aka, stale-while-revalidate)
-- [ ] fetch policy `cache-first`
-- [ ] fetch policy `network-only`
-- [ ] fetch policy `no-cache`
-- [ ] ~~fetch policy `cache-only`~~
+- [x] realtime mode `merge` that merges updates into cached entities and query
+- [x] realtime mode `refetch` that keeps stale data, but refetches from server, useful for complex queries
+- [x] realtime mode `disabled` to disable realtime updates
+- [x] fetch policy `swr` (aka, `stale-while-revalidate`, show cached data, but refetch, the default)
+- [x] fetch policy `cache-first`
+- [x] fetch policy `network-only`
+- [ ] cache eviction `manual`
+- [ ] cache eviction `unmount`
+- [ ] cache eviction `delayed`
+- [ ] cache eviction ttl `ttl`
 - [ ] useCacheEviction - sweep through cache and remove any queries or entities, e.g. clean('notes')
 - [ ] ref counting - do not remove entities/queries if they're actively used
 
@@ -56,7 +58,7 @@ Pagination
 
 - [x] `useFind` - pagination metadata
 - [x] `useFind` - handle updates to paginated queries
-- [x] `useFind` - `allPages`
+- [x] `useFind` - `allPages` to fetch all pages
 - [ ] `useFind` - `fetchMore`
 - [ ] support `find` without pagination envelope
 - [ ] support `find` with custom pagination
