@@ -1,7 +1,7 @@
 {
   "name": "figbird",
   "version": "0.6.0",
-  "description": "Declarative and realtime data management for Feathers and React",
+  "description": "Declarative realtime data management for snappy React + Feathers applications",
   "main": "lib",
   "scripts": {
     "test": "healthier && prettier --check '**/*.{js,css,yml}' && nyc ava",
@@ -35,7 +35,7 @@
     "healthier": "^3.3.0",
     "jsdom": "^16.2.2",
     "np": "^6.2.0",
-    "nyc": "^15.0.0",
+    "nyc": "^15.0.1",
     "prettier": "^2.0.2",
     "react": "^16.13.1",
     "react-dom": "^16.13.1"

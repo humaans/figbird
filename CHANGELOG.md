@@ -2,12 +2,15 @@
 
 ## 0.7.0
 
-- Add new option `realtime` to `useGet` and `useFind` hooks. Possible values are:
-  - `'merge'` - default, listen to realtime events and merge all updates as they come
-  - `'refetch'` - listen to realtime events and refetch the data when the realtime event is received, this is useful for more complex queries where the realtime event payload is not enough to correctly re-evaluate the query's result set on the client
-  - `false` - do not listen to realtime events, fetch the data and keep showing that data until it's manually refetched
-- Add new options `additionalFilters` and `additionalOperators`. Use this when you're using non standard filters and operators in your queries. The additional filters will be removed from the query when matching realtime event payloads against local queries and additional operators will be kept in as long as sifter can handle them. This area might be need to be improved further in the future.
-- Add a warning when entity doesn't have an ID to help identify a misconfigured `idField`
+- Add `fetchPolicy` option to `useGet` and `useFind`:
+  - `fetchPolicy: 'swr'` - show cached data if possible and refetch in the background
+  - `fetchPolicy: 'cache-first'` - show cached data if possible without refetching
+  - `fetchPolicy: 'network-only'` - always refetch the data on mount
+- Add `realtime` option to `useGet` and `useFind`:
+  - `realtime: 'merge'` - merge realtime events into cached queries as they come
+  - `realtime: 'refetch'` - refetch the query when realtime event is received
+  - `realtime: 'disabled'` - do not update cached data on realtime events
+- Add a warning when an entity doesn't have an ID to help identify a misconfigured `idField`
 
 ## 0.6.0
 
