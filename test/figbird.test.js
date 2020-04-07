@@ -931,3 +931,29 @@ test('useFind - fetchPolicy network-only', async t => {
 
   app.unmount()
 })
+
+test('useFind - updates correctly after a sequence of create+patch', async t => {
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello')
+
+  await feathers.service('notes').create({ id: 2, content: 'doc' })
+  await feathers.service('notes').patch(2, { content: 'doc updated' })
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc updated']
+  )
+
+  app.unmount()
+})
