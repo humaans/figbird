@@ -30,6 +30,12 @@
   <link rel="prev" href="{{ .Params.prev }}"> {{ end }} {{ if (isset .Params "next") }}
   <link rel="next" href="{{ .Params.next }}"> {{ end }}
 
+  <meta name="twitter:title" content="Figbird">
+  <meta name="twitter:description" content="Effortless realtime data management for React + Feathers applications.">
+  <meta name="twitter:card" content="summary"/>
+  <meta name="twitter:image" content="https://figbird.github.io/figbird.jpg"/>
+  <meta name="twitter:image:alt" content="Figbird"/>
+
   {{ partial "favicon" . }}
    <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400;500;600;700&family=Vollkorn:wght@400;600;700;900&display=swap" rel="stylesheet">
    <link href="https://fonts.googleapis.com/css2?family=Vollkorn:wght@400;600;700;900&display=swap" rel="stylesheet"> 
@@ -47,7 +53,6 @@
 <body class="page-kube">
   <header>{{ block "header" . }}{{ end }}</header>
   <main>{{ block "main" . }}{{ end }}</main>
-  <footer>{{ block "footer" . }}{{ end }}</footer>
   <script src="{{ "/js/master.js" | relURL }}" type="text/javascript"></script>
 </body>
 

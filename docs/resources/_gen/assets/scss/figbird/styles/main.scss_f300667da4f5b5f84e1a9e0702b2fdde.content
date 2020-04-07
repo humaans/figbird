@@ -182,15 +182,15 @@ h1 {
       position: fixed;
       margin-left: 0px;
       padding: 40px;
-      padding-top: 40px;
+      padding-top: 20px;
       top: 0;
       left: 0;
       bottom: 0;
       width: 300px;
-      font-size: 16px;
+      font-size: 14px;
       border-right: 1px solid #ffe2e2;
       overflow: auto; } }
-  @media (min-height: 900px) {
+  @media (min-height: 980px) {
     #TOC {
       padding-top: 100px; } }
 
@@ -206,7 +206,7 @@ h1 {
   margin: 0; }
 
 #TOC li {
-  line-height: 30px; }
+  line-height: 26px; }
 
 #TOC li:last-child {
   border-bottom: none; }
@@ -226,7 +226,7 @@ h1 {
 
 #TOC > nav > ul > li > a {
   font-weight: bold;
-  margin-top: 20px; }
+  margin-top: 12px; }
 
 #main {
   padding-left: 300px; }
@@ -252,8 +252,10 @@ body.page-account #hero h1 {
   margin-bottom: 48px; }
 
 .content {
-  max-width: 680px;
-  margin: 60px 120px; }
+  max-width: 680px; }
+  @media (min-width: 768px) {
+    .content {
+      margin: 60px 120px; } }
 
 #redactor-intro-box {
   max-width: 920px;
@@ -1081,13 +1083,14 @@ tr.border-none td {
     margin-bottom: 20px; } }
 
 .highlight {
-  margin-top: 40px;
+  margin-top: 20px;
   margin-bottom: 40px;
-  margin-left: -30px;
-  margin-right: -30px; }
+  margin-left: -20px;
+  margin-right: -20px; }
 
 .highlight pre {
-  padding: 12px 30px; }
+  padding: 12px 30px;
+  overflow: scroll; }
 
 .MethodListGroup {
   list-style: none;
@@ -1169,8 +1172,8 @@ tr.border-none td {
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  margin-top: 40px;
-  margin-bottom: 40px; }
+  margin-top: 30px;
+  margin-bottom: 10px; }
 
 #TOC .github svg {
   margin-right: 4px;
@@ -1188,6 +1191,10 @@ tr.border-none td {
   color: #ff4800; }
 
 .Image {
+  margin: 50px;
   max-width: 360px; }
   .Image img {
     width: 100%; }
+  @media (min-width: 768px) {
+    .Image {
+      margin: 0; } }
