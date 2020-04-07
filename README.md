@@ -6,7 +6,7 @@ Effortless realtime data management for React + Feathers applications. Used in [
 
 ### Idiomatic React Hooks
 
-Fetch some data with `const { data } = useFind('notes')` and know that your components will rerender in realtime as the data upstream changes. Modify the data using the `const { patch } = useMutation('notes')` and have the updates be instantly propagated to all components referencing the same objects.
+Fetch some data with `const { data } = useFind('notes')` and your components will rerender in realtime as the data changes upstream. Modify the data using the `const { patch } = useMutation('notes')` and the upates will be instantly propagated to all components referencing the same objects.
 
 - `useGet`
 - `useFind`
