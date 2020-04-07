@@ -4,3 +4,4 @@ node_modules
 coverage
 dist
 docs/public
+docs/resources/_gen
