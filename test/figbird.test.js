@@ -957,3 +957,163 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 
   app.unmount()
 })
+
+test('useFind - with custom matcher', async t => {
+  const customMatcher = matcher => query => item => {
+    return matcher(query)(item) && item.foo
+  }
+
+  function Note() {
+    const notes = useFind('notes', { query: { tag: 'post' }, matcher: customMatcher })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello')
+
+  await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', foo: false })
+  await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', foo: true })
+  await feathers.service('notes').create({ id: 4, tag: 'draft', content: 'doc 4', foo: true })
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc 3']
+  )
+
+  await feathers.service('notes').patch(4, { tag: 'post' })
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc 3', 'doc 4']
+  )
+
+  app.unmount()
+})
+
+test('item gets deleted from cache if it is updated and no longer relevant to a query', async t => {
+  let atom
+
+  function Note() {
+    const notes = useFind('notes', { query: { tag: 'post' } })
+    atom = useFigbird().atom
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers({ noUpdatedAt: true })
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello')
+
+  await feathers.service('notes').patch(1, { updatedAt: null })
+  await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: 1 })
+  await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', updatedAt: 2 })
+  await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', updatedAt: 3 })
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['doc 1', 'doc 2', 'doc 3']
+  )
+
+  t.deepEqual(atom.get().feathers.entities, {
+    notes: {
+      '1': {
+        id: 1,
+        tag: 'post',
+        content: 'doc 1',
+        updatedAt: 1,
+      },
+      '2': {
+        id: 2,
+        tag: 'post',
+        content: 'doc 2',
+        updatedAt: 2,
+      },
+      '3': {
+        id: 3,
+        tag: 'post',
+        content: 'doc 3',
+        updatedAt: 3,
+      },
+    },
+  })
+
+  t.deepEqual(atom.get().feathers.index, {
+    notes: {
+      '1': {
+        queries: {
+          'f:-1755522248': true,
+        },
+        size: 1,
+      },
+      '2': {
+        queries: {
+          'f:-1755522248': true,
+        },
+        size: 1,
+      },
+      '3': {
+        queries: {
+          'f:-1755522248': true,
+        },
+        size: 1,
+      },
+    },
+  })
+
+  await feathers.service('notes').patch(3, { tag: 'draft' })
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['doc 1', 'doc 2']
+  )
+
+  t.deepEqual(atom.get().feathers.entities, {
+    notes: {
+      '1': {
+        id: 1,
+        tag: 'post',
+        content: 'doc 1',
+        updatedAt: 1,
+      },
+      '2': {
+        id: 2,
+        tag: 'post',
+        content: 'doc 2',
+        updatedAt: 2,
+      },
+    },
+  })
+
+  t.deepEqual(atom.get().feathers.index, {
+    notes: {
+      '1': {
+        queries: {
+          'f:-1755522248': true,
+        },
+        size: 1,
+      },
+      '2': {
+        queries: {
+          'f:-1755522248': true,
+        },
+        size: 1,
+      },
+    },
+  })
+
+  app.unmount()
+})

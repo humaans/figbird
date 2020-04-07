@@ -124,6 +124,7 @@ const { data, status, isFetching, error, refetch } = useFind(serviceName, params
 - `realtime` - one of `merge` (default), `refetch` or `disabled`
 - `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
 - `allPages` - fetch all pages
+- `matcher` - custom matcher function of signature `(defaultMatcher) => (query) => (item): bool`, used when merging realtime events into local query cache
 
 **Returns**
 
@@ -183,7 +184,7 @@ Get the feathers instance passed to `Provider`.
 
 Figbird is compatible with the Feathers realtime model out of the box. The moment you mount a component with a `useFind` or `useGet` hook, Figbird will start listening to realtime events for the services in use. It will only at most subscribe once per service. All realtime events will get processed in the following manner:
 
-- `created` - check if the created object matches any of the cached `find` queries, if so, push it at the end of the array, discard otherwise
+- `created` - check if the created object matches any of the cached `find` queries, if so, push it at the end of the array, discard otherwise, note: the created object is only pushed if `data.length === total`, that is if the query has full data set, if the query is paginated and has only a slice of data, the created object will not be pushed, consider using `realtime: 'refetch'` mode for such cases
 - `updated` and `patched` - check if this object is in cache, if so, update
 - `removed` - remove this object from cache and any `find` queries referencing it
 
