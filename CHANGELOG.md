@@ -2,6 +2,8 @@
 
 ## 0.7.0
 
+No breaking changes! But some things have been deprecated and new options have been added.
+
 - Add `fetchPolicy` option to `useGet` and `useFind`:
   - `swr` - show cached data if possible and refetch in the background
   - `cache-first` - show cached data if possible without refetching
