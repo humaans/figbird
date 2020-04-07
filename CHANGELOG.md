@@ -1,5 +1,21 @@
 # Figbird Changelog
 
+## 0.7.0
+
+- Add `fetchPolicy` option to `useGet` and `useFind`:
+  - `swr` - show cached data if possible and refetch in the background
+  - `cache-first` - show cached data if possible without refetching
+  - `network-only` - always refetch the data on mount
+- Add `realtime` option to `useGet` and `useFind`:
+  - `merge` - merge realtime events into cached queries as they come
+  - `refetch` - refetch the query when realtime event is received
+  - `disabled` - do not update cached data on realtime events
+- Add `status` and `isFetching` that supersedes `loading` and `reloading` boolean flags, which are still there but are now deprecated. For `useGet/useFind` status can be one of `loading | success | error` and for `useMutation` it's `idle | loading | success | error`
+- Add `data` in `useMutation` return value, which holds the result of last successful mutation
+- Log a warning if an item doesn't have an ID to help identify a misconfigured `idField`
+- Add `matcher` option to `useGet` and `useFind` for customising how objects get matched against queries, e.g. useful if you use a custom filter or operation and want to handle that correctly client side
+- Remove dependency on `@feathersjs/adapter-commons` reducing the bundle size
+
 ## 0.6.0
 
 - Add new option `updatedAtField`, similar to `idField` it is used to extract the `updatedAt` value of an entity to know if the entity is newer or older than what's in the cache. This is to avoid overwriting older data with newer data when a get request is racing with a realtime update.

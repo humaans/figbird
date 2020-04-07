@@ -1,5 +1,9 @@
-baseURL = "https://humaans.github.io/figbird/"
+baseURL = "https://humaans.github.io/figbird"
 languageCode = "en-us"
-title = "Figbird Docs"
-description = "Figbird – declarative Feathers / REST data fetching for React"
-theme = "kube"
+title = "Figbird"
+description = "Effortless realtime data management for React + Feathers applications."
+
+[markup]
+  [markup.highlight]
+    noClasses = false
+    tabWidth = 4

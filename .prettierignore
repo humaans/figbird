@@ -4,3 +4,6 @@ coverage
 docs/public
 docs/themes/kube/static/js/*.min.js
 docs/themes/kube/static/css/*.min.css
+
+docs/layouts/index.html
+docs/layouts/*

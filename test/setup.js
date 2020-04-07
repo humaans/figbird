@@ -13,26 +13,26 @@ const { window } = dom
 function copyProps(src, target) {
   Object.defineProperties(target, {
     ...Object.getOwnPropertyDescriptors(src),
-    ...Object.getOwnPropertyDescriptors(target)
+    ...Object.getOwnPropertyDescriptors(target),
   })
 }
 
 global.window = window
 global.document = window.document
 global.navigator = {
-  userAgent: 'node.js'
+  userAgent: 'node.js',
 }
-window.requestAnimationFrame = global.requestAnimationFrame = function(callback) {
+window.requestAnimationFrame = global.requestAnimationFrame = function (callback) {
   return setTimeout(callback, 0)
 }
-window.cancelAnimationFrame = global.cancelAnimationFrame = function(id) {
+window.cancelAnimationFrame = global.cancelAnimationFrame = function (id) {
   clearTimeout(id)
 }
 copyProps(window, global)
 
 const IGNORE_ERROR_REGEXES = [
   /Please pass in a feathers client/,
-  /The above error occurred in the <Provider> component/
+  /The above error occurred in the <Provider> component/,
 ]
 
 // eslint-disable-next-line no-console
