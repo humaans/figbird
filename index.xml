@@ -1,14 +1,24 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Figbird on Figbird Docs</title>
+    <title>Figbird</title>
     <link>https://humaans.github.io/figbird/</link>
-    <description>Recent content in Figbird on Figbird Docs</description>
+    <description>Recent content on Figbird</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
     
 	<atom:link href="https://humaans.github.io/figbird/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title></title>
+      <link>https://humaans.github.io/figbird/examples/</link>
+      <pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+      
+      <guid>https://humaans.github.io/figbird/examples/</guid>
+      <description>import { useGet } from &amp;#39;figbird&amp;#39; export function Note({ id }) { const note = useGet(&amp;#39;notes&amp;#39;, id) if (note.loading) return &amp;#39;Loading...&amp;#39; if (note.error) return &amp;#39;Error...&amp;#39; return &amp;lt;div&amp;gt;{note.data}&amp;lt;/div&amp;gt; } useFind Fetch a collection, calls feathers.service(&#39;notes&#39;).find(params).
+import { useFind } from &amp;#39;figbird&amp;#39; export function Notes({ tag }) { const notes = useFind(&amp;#39;notes&amp;#39;, { query: { tag } }) if (notes.loading) return &amp;#39;Loading...&amp;#39; if (notes.error) return &amp;#39;Error...&amp;#39; return &amp;lt;div&amp;gt;{notes.data}&amp;lt;/div&amp;gt; } useMutation Fetch a collection, calls feathers.</description>
+    </item>
     
   </channel>
 </rss>
