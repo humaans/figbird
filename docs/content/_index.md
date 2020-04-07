@@ -159,6 +159,14 @@ const { data, status, error, create, update, patch, remove } = useFind(serviceNa
 - `data` - starts of as `null` and is set to the latest mutation result
 - `error` - error object of the last failed mutation
 
+### `useFeathers`
+
+```js
+const { feathers } = useFeathers()
+```
+
+Get the feathers instance passed to `Provider`.
+
 ### `Provider`
 
 ```js
@@ -272,6 +280,29 @@ And now the component that was using `useFind` gets rerendered since it's data h
 Hopefully this small example gives you more clarity in how to fit Figbird into your application.
 
 ## Advanced usage
+
+### Inspect cache contents
+
+If you want to have a looke at the cache contents for debugging reasons, you can do so as shown above. Note: this is not part of the public API and could change in the future.
+
+```js
+function App() {
+  const { atom } = useFigbird()
+
+  useEffect(() => {
+    // attach the store to window for debugging
+    window.atom = atom
+
+    // log the contents of the cache
+    console.log(atom.get())
+
+    // listen to changes to the cache
+    atom.observe(() => {
+      console.log(atom.get())
+    })
+  }, [atom])
+}
+```
 
 ### Use without Feathers.js
 
