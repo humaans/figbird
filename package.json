@@ -2,7 +2,8 @@
   "name": "figbird",
   "version": "0.7.0",
   "description": "Effortless realtime data management for React + Feathers applications.",
-  "main": "lib",
+  "main": "dist/cjs",
+  "module": "dist/esm",
   "scripts": {
     "test": "healthier && prettier --check '**/*.{js,css,yml}' && nyc ava",
     "format": "prettier --write '**/*.{js,css,yml}'",

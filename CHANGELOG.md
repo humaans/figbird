@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.7.1
+
+- Fix bad `packafge.json#main` field.
+
 ## 0.7.0
 
 No breaking changes! But some things have been deprecated and new options have been added.
