@@ -116,9 +116,13 @@
 <span class="kr">import</span> <span class="nx">createFeathersClient</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/feathers&#39;</span>
 <span class="kr">import</span> <span class="p">{</span> <span class="nx">Provider</span><span class="p">,</span> <span class="nx">useFind</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
 
-<span class="kd">function</span> <span class="nx">App</span><span class="p">(</span><span class="p">{</span> <span class="nx">feathers</span><span class="p">,</span> <span class="nx">children</span> <span class="p">}</span><span class="p">)</span> <span class="p">{</span>
+<span class="kd">function</span> <span class="nx">App</span><span class="p">(</span><span class="p">)</span> <span class="p">{</span>
   <span class="kr">const</span> <span class="p">[</span><span class="nx">feathers</span><span class="p">]</span> <span class="o">=</span> <span class="nx">useState</span><span class="p">(</span><span class="p">(</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="nx">createFeathersClient</span><span class="p">(</span><span class="p">)</span><span class="p">)</span>
-  <span class="k">return</span> <span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">feathers</span><span class="p">}</span><span class="o">&gt;</span><span class="p">{</span><span class="nx">children</span><span class="p">}</span><span class="o">&lt;</span><span class="err">/</span><span class="err">P</span><span class="err">r</span><span class="err">o</span><span class="err">v</span><span class="err">i</span><span class="err">d</span><span class="err">e</span><span class="err">r</span><span class="err">&gt;</span>
+  <span class="k">return</span> <span class="p">(</span>
+    <span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">feathers</span><span class="p">}</span><span class="o">&gt;</span>
+      <span class="o">&lt;</span><span class="nx">Notes</span> <span class="o">/</span><span class="o">&gt;</span>
+    <span class="o">&lt;</span><span class="err">/</span><span class="err">P</span><span class="err">r</span><span class="err">o</span><span class="err">v</span><span class="err">i</span><span class="err">d</span><span class="err">e</span><span class="err">r</span><span class="err">&gt;</span>
+  <span class="p">)</span>
 <span class="p">}</span>
 
 <span class="kd">function</span> <span class="nx">Notes</span><span class="p">(</span><span class="p">{</span> <span class="nx">tag</span> <span class="p">}</span><span class="p">)</span> <span class="p">{</span>
