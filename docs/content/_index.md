@@ -57,9 +57,13 @@ import React, { useState } from 'react'
 import createFeathersClient from '@feathersjs/feathers'
 import { Provider, useFind } from 'figbird'
 
-function App({ feathers, children }) {
+function App() {
   const [feathers] = useState(() => createFeathersClient())
-  return <Provider feathers={feathers}>{children}</Provider>
+  return (
+    <Provider feathers={feathers}>
+      <Notes />
+    </Provider>
+  )
 }
 
 function Notes({ tag }) {
