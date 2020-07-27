@@ -54,13 +54,21 @@ $ npm install figbird
 
 ```js
 import React, { useState } from 'react'
-import createFeathersClient from '@feathersjs/feathers'
+import io from 'socket.io-client'
+import feathers from '@feathersjs/client'
 import { Provider, useFind } from 'figbird'
 
+const socket = io('http://localhost:3030')
+const client = feathers()
+
+client.configure(feathers.socketio(socket))
+client.configure(feathers.authentication({
+  storage: window.localStorage
+}))
+
 function App() {
-  const [feathers] = useState(() => createFeathersClient())
   return (
-    <Provider feathers={feathers}>
+    <Provider feathers={client}>
       <Notes />
     </Provider>
   )
