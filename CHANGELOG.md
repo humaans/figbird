@@ -1,5 +1,10 @@
 # Figbird Changelog
 
+## 0.8.0
+
+- The return values of `useGet`, `useFind` and `useMutation` are now wrapped in `useMemo`. This means they don't change between renders unless some of the keys changed.
+- Functions `create`, `update`, `patch`, `remove` are now wrapped in `useCallback`. This means they don't change between renders.
+
 ## 0.7.1
 
 - Fix bad `packafge.json#main` field.
