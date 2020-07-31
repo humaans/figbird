@@ -3,6 +3,7 @@
 ## 0.8.1
 
 - Do not dispatch mutation `success` / `error` if the component is unmounted
+- Upgrade all dependencies
 
 ## 0.8.0
 
