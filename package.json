@@ -56,7 +56,8 @@
     "require": [
       "@babel/register",
       "./test/setup.js"
-    ]
+    ],
+    "timeout": "30s"
   },
   "np": {
     "releaseDraft": false
