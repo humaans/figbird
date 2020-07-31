@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.8.1
+
+- Do not dispatch mutation `success` / `error` if the component is unmounted
+
 ## 0.8.0
 
 - The return values of `useGet`, `useFind` and `useMutation` are now wrapped in `useMemo`. This means they don't change between renders unless some of the keys changed.
