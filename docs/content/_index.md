@@ -155,7 +155,7 @@ The return object also has the rest of the Feathers response mixed, typically:
 ### `useMutation`
 
 ```js
-const { data, status, error, create, update, patch, remove } = useFind(serviceName, params)
+const { data, status, error, create, update, patch, remove } = useMutation(serviceName, params)
 ```
 
 **Arguments**
