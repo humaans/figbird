@@ -49,6 +49,16 @@ class Service {
   }
 
   create(data, params) {
+    if (Array.isArray(data)) {
+      this.counts.create += data.length
+      const ids = data.map(datum => datum.id)
+      this.data = { ...this.data }
+      for (const datum of data) {
+        this.data[datum.id] = { ...datum, updatedAt: datum.updatedAt || Date.now() }
+        this.emit('created', this.data[datum.id])
+      }
+      return Promise.all(ids.map(id => this.get(id)))
+    }
     this.counts.create++
     const { id } = data
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
