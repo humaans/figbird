@@ -354,6 +354,35 @@ test('useRealtime listeners are correctly disposed of', async t => {
   t.is(atom.get().feathers.entities.notes[1].content, 'real')
 })
 
+test('useMutation - multicreate updates cache correctly', async t => {
+  let create
+
+  function Note() {
+    const notes = useFind('notes')
+    const { create: _create } = useMutation('notes')
+    create = _create
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  create([
+    { id: 2, content: 'hi2' },
+    { id: 3, content: 'hi3' },
+  ])
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'hi2', 'hi3']
+  )
+})
+
 test('useMutation patch updates the get binding', async t => {
   let setContent
 
