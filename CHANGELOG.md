@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.10.0
+
+- Add support for multi remove, in addition to multi create.
+
 ## 0.9.0
 
 - Add support for multi operations. E.g. multi create result, which is an array, now gets correctly incorporated into the cache.
