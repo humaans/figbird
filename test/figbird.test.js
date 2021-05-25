@@ -1057,19 +1057,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   t.deepEqual(atom.get().feathers.entities, {
     notes: {
-      '1': {
+      1: {
         id: 1,
         tag: 'post',
         content: 'doc 1',
         updatedAt: 1,
       },
-      '2': {
+      2: {
         id: 2,
         tag: 'post',
         content: 'doc 2',
         updatedAt: 2,
       },
-      '3': {
+      3: {
         id: 3,
         tag: 'post',
         content: 'doc 3',
@@ -1080,19 +1080,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   t.deepEqual(atom.get().feathers.index, {
     notes: {
-      '1': {
+      1: {
         queries: {
           'f:-1755522248': true,
         },
         size: 1,
       },
-      '2': {
+      2: {
         queries: {
           'f:-1755522248': true,
         },
         size: 1,
       },
-      '3': {
+      3: {
         queries: {
           'f:-1755522248': true,
         },
@@ -1112,13 +1112,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   t.deepEqual(atom.get().feathers.entities, {
     notes: {
-      '1': {
+      1: {
         id: 1,
         tag: 'post',
         content: 'doc 1',
         updatedAt: 1,
       },
-      '2': {
+      2: {
         id: 2,
         tag: 'post',
         content: 'doc 2',
@@ -1129,13 +1129,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   t.deepEqual(atom.get().feathers.index, {
     notes: {
-      '1': {
+      1: {
         queries: {
           'f:-1755522248': true,
         },
         size: 1,
       },
-      '2': {
+      2: {
         queries: {
           'f:-1755522248': true,
         },
