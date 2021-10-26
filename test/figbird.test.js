@@ -2,7 +2,17 @@ import React, { useState, useEffect } from 'react'
 import { mount as mountToDOM } from 'enzyme'
 import test from 'ava'
 import { mockFeathers, flush } from './helpers'
-import { Provider, useFigbird, useGet, useFind, useMutation, useFeathers } from '../lib'
+import {
+  Provider,
+  useFigbird,
+  useGet,
+  useFind,
+  useMutation,
+  useFeathers,
+  createProjection,
+  useProjection,
+  useProjectionValue,
+} from '../lib'
 
 const createFeathers = () =>
   mockFeathers({
@@ -14,6 +24,9 @@ const createFeathers = () =>
           updatedAt: Date.now(),
         },
       },
+    },
+    comments: {
+      data: {},
     },
   })
 
@@ -1143,6 +1156,65 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
       },
     },
   })
+
+  app.unmount()
+})
+
+test.only('useProjection', async t => {
+  const proj = createProjection()
+
+  function usePreloadProjection() {
+    const notes = useFind('notes')
+    const comments = useFind('comments')
+    const projection = useProjection(proj, { notes: notes.queryId, comments: comments.queryId })
+    return projection
+  }
+
+  function Note() {
+    console.log('usePreloadProjection()')
+    usePreloadProjection()
+
+    console.log('usePreloadProjectionValue()')
+    const { notes } = useProjectionValue(proj, state => {
+      console.log('Seeing projection state', state)
+      return { notes: state.notes }
+    })
+
+    console.log('notes', notes)
+
+    if (!notes) {
+      return null
+    }
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.is(app.find('.note').text(), 'hello')
+
+  // await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', foo: false })
+  // await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', foo: true })
+  // await feathers.service('notes').create({ id: 4, tag: 'draft', content: 'doc 4', foo: true })
+
+  // await flush(app)
+
+  // t.deepEqual(
+  //   app.find('.note').map(n => n.text()),
+  //   ['hello', 'doc 3']
+  // )
+
+  // await feathers.service('notes').patch(4, { tag: 'post' })
+
+  // await flush(app)
+
+  // t.deepEqual(
+  //   app.find('.note').map(n => n.text()),
+  //   ['hello', 'doc 3', 'doc 4']
+  // )
 
   app.unmount()
 })
