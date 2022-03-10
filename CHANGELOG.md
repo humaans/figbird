@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.10.1
+
+- Fix: when skip is set to `true`, return data as `null` even if there's cached data available.
+
 ## 0.10.0
 
 - Add support for multi remove, in addition to multi create.
