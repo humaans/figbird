@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.11.0
+
+- Add `parallel: true` option to useFind to use in combination with `allPages: true` that fetches all pages (after the 1st one) in parallel, resulting in faster page loads for when multiple pages need to be fetched.
+
 ## 0.10.1
 
 - Fix: when skip is set to `true`, return data as `null` even if there's cached data available.

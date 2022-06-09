@@ -62,9 +62,11 @@ const socket = io('http://localhost:3030')
 const client = feathers()
 
 client.configure(feathers.socketio(socket))
-client.configure(feathers.authentication({
-  storage: window.localStorage
-}))
+client.configure(
+  feathers.authentication({
+    storage: window.localStorage,
+  })
+)
 
 function App() {
   return (
@@ -136,6 +138,7 @@ const { data, status, isFetching, error, refetch } = useFind(serviceName, params
 - `realtime` - one of `merge` (default), `refetch` or `disabled`
 - `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
 - `allPages` - fetch all pages
+- `parallel` - when used in combination with `allPages` will fetch all pages in parallel
 - `matcher` - custom matcher function of signature `(defaultMatcher) => (query) => (item): bool`, used when merging realtime events into local query cache
 
 **Returns**
