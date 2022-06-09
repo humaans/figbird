@@ -672,6 +672,29 @@ test('useFind with allPages', async t => {
   app.unmount()
 })
 
+test('useFind with allPages and parallel: true', async t => {
+  function Note() {
+    const notes = useFind('notes', { query: { $limit: 1 }, allPages: true, parallel: true })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc', 'dmc']
+  )
+
+  app.unmount()
+})
+
 test('useFind - realtime merge', async t => {
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'merge' })
