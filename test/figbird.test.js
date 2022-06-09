@@ -3,6 +3,7 @@ import { mount as mountToDOM } from 'enzyme'
 import test from 'ava'
 import { mockFeathers, flush } from './helpers'
 import { Provider, useFigbird, useGet, useFind, useMutation, useFeathers } from '../lib'
+import sinon from 'sinon'
 
 const createFeathers = () =>
   mockFeathers({
@@ -668,6 +669,32 @@ test('useFind with allPages', async t => {
     app.find('.note').map(n => n.text()),
     ['hello', 'doc', 'dmc']
   )
+
+  app.unmount()
+})
+
+test('useFind with allPages and parallel', async t => {
+  function Note() {
+    const notes = useFind('notes', { query: { $limit: 1 }, allPages: true, parallel: true })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+
+  const findSpy = sinon.spy(feathers.service('notes'), 'find')
+
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc', 'dmc']
+  )
+  t.is(findSpy.callCount, 3)
 
   app.unmount()
 })
