@@ -19,6 +19,7 @@
   "license": "ISC",
   "dependencies": {
     "sift": "^13.5.4",
+    "sinon": "^14.0.0",
     "tiny-atom": "^5.0.0-pre.2"
   },
   "devDependencies": {
