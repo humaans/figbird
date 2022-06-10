@@ -3,7 +3,6 @@ import { mount as mountToDOM } from 'enzyme'
 import test from 'ava'
 import { mockFeathers, flush } from './helpers'
 import { Provider, useFigbird, useGet, useFind, useMutation, useFeathers } from '../lib'
-import sinon from 'sinon'
 
 const createFeathers = () =>
   mockFeathers({
@@ -675,7 +674,7 @@ test('useFind with allPages', async t => {
 
 test('useFind with allPages and parallel', async t => {
   function Note() {
-    const notes = useFind('notes', { query: { $limit: 1 }, allPages: true, parallel: true })
+    const notes = useFind('notes', { query: { $limit: 2 }, allPages: true, parallel: true })
     return <NoteList notes={notes} />
   }
 
@@ -683,8 +682,6 @@ test('useFind with allPages and parallel', async t => {
 
   await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
   await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
-
-  const findSpy = sinon.spy(feathers.service('notes'), 'find')
 
   const app = mount(Note, feathers)
 
@@ -694,7 +691,33 @@ test('useFind with allPages and parallel', async t => {
     app.find('.note').map(n => n.text()),
     ['hello', 'doc', 'dmc']
   )
-  t.is(findSpy.callCount, 3)
+  t.is(feathers.service('notes').counts.find, 2)
+
+  app.unmount()
+})
+
+test('useFind with allPages and parallel where limit is not wholly divisible by total', async t => {
+  function Note() {
+    const notes = useFind('notes', { query: { $limit: 2 }, allPages: true, parallel: true })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+  await feathers.service('notes').create({ id: 4, content: 'wat', tag: 'nonsense' })
+  await feathers.service('notes').create({ id: 5, content: 'huh', tag: 'thingies' })
+
+  const app = mount(Note, feathers)
+
+  await flush(app)
+
+  t.deepEqual(
+    app.find('.note').map(n => n.text()),
+    ['hello', 'doc', 'dmc', 'wat', 'huh']
+  )
+  t.is(feathers.service('notes').counts.find, 3) // first call returns initial 2, second returns 3 and 4, third returns 5
 
   app.unmount()
 })
