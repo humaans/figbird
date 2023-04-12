@@ -3,6 +3,7 @@
 ## 0.12.0
 
 - Upgrade all dependencies.
+- Replace babel with swc.
 
 ## 0.11.1
 

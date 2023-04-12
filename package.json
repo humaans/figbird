@@ -5,12 +5,11 @@
   "main": "dist/cjs",
   "module": "dist/esm",
   "scripts": {
-    "test": "healthier && prettier --check '**/*.{js,css,yml}' && nyc ava",
+    "test": "npm run build && healthier && prettier --check '**/*.{js,css,yml}' && nyc ava",
     "format": "prettier --write '**/*.{js,css,yml}'",
     "coverage": "nyc --reporter=html ava",
     "build": "node ./tasks/build.js",
     "watch": "node ./tasks/build.js -w",
-    "version": "npm run build",
     "release": "np",
     "release:beta": "np --tag=beta",
     "release:docs": "hugo -s docs && gh-pages -d docs/public"
@@ -22,12 +21,9 @@
     "tiny-atom": "^5.0.0-pre.2"
   },
   "devDependencies": {
-    "@babel/cli": "^7.21.0",
-    "@babel/core": "^7.21.4",
-    "@babel/eslint-parser": "^7.21.3",
-    "@babel/plugin-transform-react-jsx": "^7.21.0",
-    "@babel/preset-env": "^7.21.4",
-    "@babel/register": "^7.21.0",
+    "@swc-node/register": "^1.6.4",
+    "@swc/cli": "^0.1.62",
+    "@swc/core": "^1.3.49",
     "ava": "^5.2.0",
     "execa": "^7.1.1",
     "gh-pages": "^5.0.0",
@@ -40,7 +36,6 @@
   },
   "sideEffects": false,
   "healthier": {
-    "parser": "@babel/eslint-parser",
     "ignore": [
       "docs/static/*.min*"
     ]
@@ -51,7 +46,7 @@
       "test/*.test.js"
     ],
     "require": [
-      "@babel/register",
+      "@swc-node/register",
       "./test/setup.js"
     ]
   },
