@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.12.0
+
+- Upgrade all dependencies.
+
 ## 0.11.1
 
 - Fix an issue with `parallel: true` where it wasn't always fetching the last page of data.

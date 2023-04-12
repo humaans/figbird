@@ -1,6 +1,73 @@
 import util from 'util'
+import { JSDOM } from 'jsdom'
 import EventEmitter from 'events'
+import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+
+export function dom() {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>')
+  global.window = dom.window
+  const domNode = dom.window.document.getElementById('root')
+  const root = createRoot(domNode)
+
+  function onError(event) {
+    // Note: this will swallow reports about unhandled errors!
+    // Use with extreme caution.
+    console.log(event)
+    event.preventDefault()
+  }
+  dom.window.addEventListener('error', onError)
+
+  function render(el) {
+    act(() => {
+      root.render(el)
+    })
+  }
+
+  function unmount() {
+    act(() => {
+      root.unmount()
+    })
+  }
+
+  function click(el) {
+    act(() => {
+      el.dispatchEvent(
+        new dom.window.MouseEvent('click', {
+          view: dom.window,
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  }
+
+  function $(sel) {
+    return dom.window.document.querySelector(sel)
+  }
+
+  function $all(sel) {
+    return Array.from(dom.window.document.querySelectorAll(sel))
+  }
+
+  async function flush(fn) {
+    await act(async () => {
+      if (fn) {
+        await fn()
+      }
+      await new Promise(resolve => setTimeout(resolve, 20))
+    })
+  }
+
+  return { root, render, unmount, click, flush, $, $all, act }
+}
+
+export const swallowErrors = yourTestFn => {
+  const error = console.error
+  console.error = () => {}
+  yourTestFn()
+  console.error = error
+}
 
 class Service {
   constructor(name, data) {
