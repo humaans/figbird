@@ -1,6 +1,6 @@
 {
   "name": "figbird",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Effortless realtime data management for React + Feathers applications.",
   "main": "dist/cjs",
   "module": "dist/esm",
@@ -28,7 +28,7 @@
     "execa": "^7.1.1",
     "gh-pages": "^5.0.0",
     "healthier": "^6.3.0",
-    "jsdom": "^21.1.1",
+    "jsdom": "^22.1.0",
     "nyc": "^15.1.0",
     "prettier": "^2.8.7",
     "react": "^18.2.0",
