@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.12.1
+
+- Upgrade all dependencies to address security alerts.
+
 ## 0.12.0
 
 - Upgrade all dependencies.
