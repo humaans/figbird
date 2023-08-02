@@ -6,7 +6,7 @@ import { getIn } from './helpers';
  * An internal hook that will listen to realtime updates to a service
  * and update the cache as changes happen.
  */ export function useRealtime(serviceName, mode, cb) {
-    const { feathers , atom , actions  } = useFigbird();
+    const { feathers, atom, actions } = useFigbird();
     useEffect(()=>{
         // realtime is turned off
         if (mode === 'disabled') return;

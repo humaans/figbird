@@ -37,7 +37,7 @@ export function dom() {
           view: dom.window,
           bubbles: true,
           cancelable: true,
-        })
+        }),
       )
     })
   }

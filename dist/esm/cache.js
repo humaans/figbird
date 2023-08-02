@@ -89,7 +89,7 @@ const initialState = ()=>({
             index: {}
         }
     });
-const actions = ({ idField , updatedAtField  })=>({
+const actions = ({ idField, updatedAtField })=>({
         feathersFetched: fetched(idField, updatedAtField),
         feathersCreated: created(idField, updatedAtField),
         feathersUpdated: updated(idField, updatedAtField),
@@ -98,12 +98,12 @@ const actions = ({ idField , updatedAtField  })=>({
         feathersUpdateQueries: updateQuery(idField, updatedAtField)
     });
 function fetched(idField, updatedAtField) {
-    return ({ get , set , actions  }, { serviceName , data , method , params , queryId , realtime , matcher  })=>{
+    return ({ get, set, actions }, { serviceName, data, method, params, queryId, realtime, matcher })=>{
         const curr = getIn(get(), [
             namespace
         ]);
         let next = curr;
-        const { data: items  } = data, meta = _object_without_properties(data, [
+        const { data: items } = data, meta = _object_without_properties(data, [
             "data"
         ]);
         const entities = realtime === 'merge' ? _object_spread({}, getIn(curr, [
@@ -160,7 +160,7 @@ function fetched(idField, updatedAtField) {
     };
 }
 function created(idField, updatedAtField) {
-    return ({ get , set , actions  }, { serviceName , item  })=>{
+    return ({ get, set, actions }, { serviceName, item })=>{
         actions.feathersUpdateQueries({
             serviceName,
             method: 'create',
@@ -170,7 +170,7 @@ function created(idField, updatedAtField) {
 }
 // applies to both update and patch
 function updated(idField, updatedAtField) {
-    return ({ get , set , actions  }, { serviceName , item  })=>{
+    return ({ get, set, actions }, { serviceName, item })=>{
         const itemId = idField(item);
         const curr = getIn(get(), [
             namespace
@@ -223,7 +223,7 @@ function updated(idField, updatedAtField) {
     };
 }
 function removed(idField) {
-    return ({ get , set , actions  }, { serviceName , item: itemOrItems  })=>{
+    return ({ get, set, actions }, { serviceName, item: itemOrItems })=>{
         const items = Array.isArray(itemOrItems) ? itemOrItems : [
             itemOrItems
         ];
@@ -268,7 +268,7 @@ function removed(idField) {
     };
 }
 function updateQuery(idField, updatedAtField) {
-    return function feathersUpdateQueries({ get , set  }, { serviceName , method , item  }) {
+    return function feathersUpdateQueries({ get, set }, { serviceName, method, item }) {
         const items = Array.isArray(item) ? item : [
             item
         ];
@@ -392,8 +392,8 @@ export const useCacheInstance = (atom, config)=>{
         // and everything do not interfere with the main atom. Use this
         // secondary context even if we use an existing atom – there is no
         // issue with that.
-        const { AtomContext , Provider: AtomProvider  } = createAtomContext();
-        const { useSelector  } = createAtomHooks(AtomContext);
+        const { AtomContext, Provider: AtomProvider } = createAtomContext();
+        const { useSelector } = createAtomHooks(AtomContext);
         // configure atom with initial state and figbird actions
         atom.fuse({
             state: initialState(),

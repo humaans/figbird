@@ -87,7 +87,7 @@ test('useGet', async t => {
   render(
     <App feathers={createFeathers()}>
       <Note />
-    </App>
+    </App>,
   )
 
   t.is($('.spinner').innerHTML, 'loading...')
@@ -108,7 +108,7 @@ test('useGet updates after realtime patch', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   t.is($('.spinner').innerHTML, 'loading...')
@@ -138,7 +138,7 @@ test('useFind', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -160,7 +160,7 @@ test('useFind binding updates after realtime create', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -174,7 +174,7 @@ test('useFind binding updates after realtime create', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc']
+    ['hello', 'doc'],
   )
 
   unmount()
@@ -191,7 +191,7 @@ test('useFind binding updates after realtime patch', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -204,7 +204,7 @@ test('useFind binding updates after realtime patch', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   unmount()
@@ -221,14 +221,14 @@ test('useFind binding updates after realtime update', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await feathers.service('notes').update(1, { id: 1, content: 'doc', tag: 'idea' })
@@ -237,7 +237,7 @@ test('useFind binding updates after realtime update', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   unmount()
@@ -256,14 +256,14 @@ test('useFind binding updates after realtime remove', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc']
+    ['hello', 'doc'],
   )
 
   await feathers.service('notes').remove(1)
@@ -272,7 +272,7 @@ test('useFind binding updates after realtime remove', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   unmount()
@@ -289,7 +289,7 @@ test('useFind binding updates after realtime patch with no query', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -302,7 +302,7 @@ test('useFind binding updates after realtime patch with no query', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   unmount()
@@ -367,7 +367,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
   render(
     <App feathers={feathers}>
       <Notes />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -382,7 +382,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
-    ['real']
+    ['real'],
   )
 
   unmount()
@@ -409,7 +409,7 @@ test('useMutation - multicreate updates cache correctly', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -423,7 +423,7 @@ test('useMutation - multicreate updates cache correctly', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'hi2', 'hi3']
+    ['hello', 'hi2', 'hi3'],
   )
 
   unmount()
@@ -460,7 +460,7 @@ test('useMutation patch updates the get binding', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -503,7 +503,7 @@ test('useMutation handles errors', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -534,7 +534,7 @@ test('useFeathers', async t => {
   render(
     <App feathers={feathers}>
       <Content />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -555,7 +555,7 @@ test('Provider requires feathers to be passed in', async t => {
     render(
       <App config={{ idField: '_xid' }}>
         <Content />
-      </App>
+      </App>,
     )
   })
 
@@ -587,7 +587,7 @@ test('support _id out of the box', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -618,7 +618,7 @@ test('support custom idField string', async t => {
   render(
     <App feathers={feathers} config={{ idField: '_xid' }}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -649,7 +649,7 @@ test('support custom idField function', async t => {
   render(
     <App feathers={feathers} config={{ idField: entity => entity._foo }}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -674,7 +674,7 @@ test('useFind error', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -701,7 +701,7 @@ test('useFind with skip', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -736,7 +736,7 @@ test('useFind with refetch', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -769,14 +769,14 @@ test('useFind with allPages', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc', 'dmc']
+    ['hello', 'doc', 'dmc'],
   )
 
   unmount()
@@ -797,14 +797,14 @@ test('useFind with allPages and parallel', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc', 'dmc']
+    ['hello', 'doc', 'dmc'],
   )
   t.is(feathers.service('notes').counts.find, 2)
 
@@ -829,14 +829,14 @@ test('useFind with allPages and parallel where limit is not wholly divisible by 
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc', 'dmc', 'wat', 'huh']
+    ['hello', 'doc', 'dmc', 'wat', 'huh'],
   )
   t.is(feathers.service('notes').counts.find, 3) // first call returns initial 2, second returns 3 and 4, third returns 5
 
@@ -855,7 +855,7 @@ test('useFind - realtime merge', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -864,7 +864,7 @@ test('useFind - realtime merge', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
@@ -876,7 +876,7 @@ test('useFind - realtime merge', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   unmount()
@@ -893,7 +893,7 @@ test('useFind - realtime refetch', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -902,7 +902,7 @@ test('useFind - realtime refetch', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await flush(async () => {
@@ -914,7 +914,7 @@ test('useFind - realtime refetch', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   unmount()
@@ -938,7 +938,7 @@ test('useFind - realtime disabled', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -947,7 +947,7 @@ test('useFind - realtime disabled', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
@@ -959,7 +959,7 @@ test('useFind - realtime disabled', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await flush(() => {
@@ -971,7 +971,7 @@ test('useFind - realtime disabled', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   unmount()
@@ -996,7 +996,7 @@ test('useFind - fetchPolicy swr', async t => {
   render(
     <App feathers={feathers}>
       <Content />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -1005,7 +1005,7 @@ test('useFind - fetchPolicy swr', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await flush(() => {
@@ -1028,7 +1028,7 @@ test('useFind - fetchPolicy swr', async t => {
   // but we see old note at first
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   // and then after a while
@@ -1038,7 +1038,7 @@ test('useFind - fetchPolicy swr', async t => {
   // we see new note
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   feathers.service('notes').setDelay(0)
@@ -1065,7 +1065,7 @@ test('useFind - fetchPolicy cache-first', async t => {
   render(
     <App feathers={feathers}>
       <Content />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -1074,7 +1074,7 @@ test('useFind - fetchPolicy cache-first', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await flush(() => {
@@ -1095,7 +1095,7 @@ test('useFind - fetchPolicy cache-first', async t => {
   // we see old note
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   unmount()
@@ -1120,7 +1120,7 @@ test('useFind - fetchPolicy network-only', async t => {
   render(
     <App feathers={feathers}>
       <Content />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -1129,7 +1129,7 @@ test('useFind - fetchPolicy network-only', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello']
+    ['hello'],
   )
 
   await flush(() => {
@@ -1153,7 +1153,7 @@ test('useFind - fetchPolicy network-only', async t => {
   // cache was not used
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    []
+    [],
   )
 
   // and then after a while
@@ -1163,7 +1163,7 @@ test('useFind - fetchPolicy network-only', async t => {
   // we see new note
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc']
+    ['doc'],
   )
 
   feathers.service('notes').setDelay(0)
@@ -1182,7 +1182,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -1196,7 +1196,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc updated']
+    ['hello', 'doc updated'],
   )
 
   unmount()
@@ -1217,7 +1217,7 @@ test('useFind - with custom matcher', async t => {
   render(
     <App feathers={feathers}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -1232,7 +1232,7 @@ test('useFind - with custom matcher', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc 3']
+    ['hello', 'doc 3'],
   )
 
   await feathers.service('notes').patch(4, { tag: 'post' })
@@ -1241,7 +1241,7 @@ test('useFind - with custom matcher', async t => {
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc 3', 'doc 4']
+    ['hello', 'doc 3', 'doc 4'],
   )
 
   unmount()
@@ -1261,7 +1261,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
   render(
     <App feathers={feathers} config={{ noUpdatedAt: true }}>
       <Note />
-    </App>
+    </App>,
   )
 
   await flush()
@@ -1277,7 +1277,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc 1', 'doc 2', 'doc 3']
+    ['doc 1', 'doc 2', 'doc 3'],
   )
 
   t.deepEqual(atom.get().feathers.entities, {
@@ -1332,7 +1332,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['doc 1', 'doc 2']
+    ['doc 1', 'doc 2'],
   )
 
   t.deepEqual(atom.get().feathers.entities, {

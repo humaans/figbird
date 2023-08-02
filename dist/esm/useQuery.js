@@ -97,11 +97,11 @@ const realtimeModes = [
 /**
  * A generic abstraction of both get and find
  */ export function useQuery(serviceName, options = {}, queryHookOptions = {}) {
-    const { method , id , selectData , transformResponse  } = queryHookOptions;
-    const { feathers  } = useFigbird();
+    const { method, id, selectData, transformResponse } = queryHookOptions;
+    const { feathers } = useFigbird();
     const disposed = useRef(false);
     const isInitialMount = useRef(true);
-    let { skip , allPages , parallel , realtime ='merge' , fetchPolicy ='swr' , matcher  } = options, params = _object_without_properties(options, [
+    let { skip, allPages, parallel, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
         "skip",
         "allPages",
         "parallel",
@@ -301,7 +301,7 @@ function reducer(state, action) {
 function getter(service, id, params) {
     return service.get(id, params);
 }
-function finder(service, params, { queryId , allPages , parallel  }) {
+function finder(service, params, { queryId, allPages, parallel }) {
     if (!allPages) {
         return service.find(params);
     }

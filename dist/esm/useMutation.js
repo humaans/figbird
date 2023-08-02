@@ -63,7 +63,7 @@ import { useFigbird } from './core';
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */ export function useMutation(serviceName) {
-    const { feathers , actions  } = useFigbird();
+    const { feathers, actions } = useFigbird();
     const [state, dispatch] = useReducer(reducer, {
         status: 'idle',
         data: null,

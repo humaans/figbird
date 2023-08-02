@@ -55,8 +55,8 @@ import { useFigbird } from './core';
 import { namespace } from './namespace';
 import { getIn } from './helpers';
 export function useCache(resourceDescriptor) {
-    const { serviceName , queryId , method , id , params , realtime , selectData , transformResponse , matcher  } = resourceDescriptor;
-    const { actions , useSelector  } = useFigbird();
+    const { serviceName, queryId, method, id, params, realtime, selectData, transformResponse, matcher } = resourceDescriptor;
+    const { actions, useSelector } = useFigbird();
     // we'll use a cheeky ref to store the previous mapped data array
     // because if the underlying list of data didn't change we don't
     // want consumers of useFind to have to worry about changing reference
@@ -69,7 +69,7 @@ export function useCache(resourceDescriptor) {
             queryId
         ]);
         if (query) {
-            let { data , meta  } = query;
+            let { data, meta } = query;
             const entities = query.entities || getIn(state, [
                 namespace,
                 'entities',
