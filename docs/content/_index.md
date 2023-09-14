@@ -40,10 +40,6 @@ The usage of `useGet` and `useFind` hooks gets reference counted so that Figbird
 - `unmount` - remove cached query data on unmount (if no component is referencing that particular cached data anymore)
 - `delayed` - remove unused cached data after some time
 
-#### Logging
-
-Figbird's cache is implemented using the [`tiny-atom`](https://github.com/KidkArolis/tiny-atom) store which comes with a powerful logger. Observe and inspect all the changes to your cache with ease.
-
 ## Install
 
 ```sh
@@ -65,7 +61,7 @@ client.configure(feathers.socketio(socket))
 client.configure(
   feathers.authentication({
     storage: window.localStorage,
-  })
+  }),
 )
 
 function App() {
@@ -192,8 +188,28 @@ Get the feathers instance passed to `Provider`.
 - `feathers` - feathers instance
 - `idField` - string or function, defaults to `item => item.id || item._id`
 - `updatedAtField` - string or function, defaults to `item => item.updatedAt || item.updated_at`, used to avoid overwriting newer data in cache with older data when `get` or realtime `patched` requests are racing
-- `atom` - custom atom instance
-- `AtomContext` - custom atom context
+- `store` - custom store instance - allows inspecting cache contents
+
+### `createStore`
+
+```js
+const store = createStore()
+```
+
+Create a custom store - helpful for inspecting contents of the cache.
+
+### `cache`
+
+```js
+import { createStore, cache } from 'figbird'
+
+const store = createStore()
+
+store.get(cache)
+store.set(cache, val => { ...val, a: 1 })
+```
+
+Get the cache atom for manipulating via the store API.
 
 ## Realtime
 
@@ -299,26 +315,38 @@ Hopefully this small example gives you more clarity in how to fit Figbird into y
 
 ### Inspect cache contents
 
-If you want to have a looke at the cache contents for debugging reasons, you can do so as shown above. Note: this is not part of the public API and could change in the future.
+If you want to have a looke at the cache contents for debugging reasons, you can do so as shown above. You can also update the store using this direct access. See [`kinfolk` docs](https://github.com/KidkArolis/kinfolk/#createstore) for full API docs.
 
-```js
-function App() {
-  const { atom } = useFigbird()
+```jsx
+import React, { useState } from 'react'
+import createFeathersClient from '@feathersjs/feathers'
+import { Provider, createStore, cache } from 'figbird'
 
-  useEffect(() => {
-    // attach the store to window for debugging
-    window.atom = atom
+const store = (window.store = createStore())
+const feathers = createFeathersClient()
 
-    // log the contents of the cache
-    console.log(atom.get())
-
-    // listen to changes to the cache
-    atom.observe(() => {
-      console.log(atom.get())
-    })
-  }, [atom])
+export function App({ children }) {
+  return (
+    <Provider feathers={feathers} store={store}>
+      {children}
+    </Provider>
+  )
 }
+
+// inspect contents of the entire store, the figbird
+// cache atom will be namespaced under the "figbird" key
+console.log(window.store.debug())
+
+// inspect the contents of the figbird cache directly
+console.log(window.store.get(cache)))
+
+// update contents
+window.store.set(cache, val => { ...val, a: 1 })
 ```
+
+### Use with existing kinfolk store
+
+Figbird is using [kinfolk](https://github.com/KidkArolis/kinfolk) for it's cache. This allows for a succint implementation and efficient bindings from cached data to components. It is possible to pass in a shared `kinfolk` store to `figbird` if you're already using `kinfolk` in your app you'd like to create a selector that depends on figbird cache and your application state. Note - that is advanced usage and is entirely optional.
 
 ### Use without Feathers.js
 
@@ -338,46 +366,3 @@ For example, if you have a `comments` resource in your application, you would ha
 - `DELETE /comments/id`
 
 The result of the `find` operation or `GET /comments` would be an object of shape `{ data, total, limit, skip }` (Note: the pagination envolope will be customizable in Figbird in the future, but it's current fixed to this format).
-
-### Use with existing tiny-atom
-
-Figbird is using [tiny-atom](https://github.com/KidkArolis/tiny-atom) for it's cache. This allows for a succint implementation and efficient bindings from cached data to components. It is possible to pass in a custom instance of tiny-atom to `figbird` if you're already using tiny-atom in your app. This would allow for easier inspection and debugging of your application's state and behaviour. For example, here is the `tiny-atom` logger output:
-
-![Figbird Logger](https://user-images.githubusercontent.com/324440/64800653-d94fec00-d57e-11e9-8b35-5a943a22ebe1.png)
-
-#### Pass atom via prop
-
-```js
-import React, { useState } from 'react'
-import { createAtom } from 'tiny-atom'
-import { Provider } from 'figbird'
-import createFeathersClient from '@feathersjs/feathers'
-
-export function App() {
-  const [feathers] = useState(() => createFeathersClient())
-  const [atom] = useState(() => createAtom())
-  return (
-    <Provider feathers={feathers} atom={atom}>
-      {children}
-    </Provider>
-  )
-}
-```
-
-#### Pass atom via context
-
-```js
-import React, { useState } from 'react'
-import { AtomContext } from 'tiny-atom'
-import { Provider } from 'figbird'
-import createFeathersClient from '@feathersjs/feathers'
-
-export function App() {
-  const [feathers] = useState(() => createFeathersClient())
-  return (
-    <Provider feathers={feathers} AtomContext={AtomContext}>
-      {children}
-    </Provider>
-  )
-}
-```

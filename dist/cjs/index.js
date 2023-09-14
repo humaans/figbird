@@ -12,8 +12,11 @@ _export(exports, {
     Provider: function() {
         return _figbird.Provider;
     },
-    namespace: function() {
-        return _figbird.namespace;
+    cache: function() {
+        return _figbird.cache;
+    },
+    createStore: function() {
+        return _figbird.createStore;
     },
     useFeathers: function() {
         return _figbird.useFeathers;

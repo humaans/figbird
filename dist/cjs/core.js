@@ -100,17 +100,14 @@ var defaultUpdatedAtField = function(item) {
     return item.updatedAt || item.updated_at;
 };
 var Provider = function(_param) {
-    var feathers = _param.feathers, children = _param.children, props = _object_without_properties(_param, [
+    var feathers = _param.feathers, store = _param.store, children = _param.children, props = _object_without_properties(_param, [
         "feathers",
+        "store",
         "children"
     ]);
     if (!feathers || !feathers.service) {
         throw new Error("Please pass in a feathers client");
     }
-    // there are 2 ways to pass in an existing atom, either via a prop
-    // directly or by passing in a custom context
-    var atomFromProps = props.atom;
-    var _ref = (0, _react.useContext)(props.AtomContext || {}) || {}, atomFromContext = _ref.atom;
     var idField = useIdField(props.idField);
     var updatedAtField = useUpdatedAtField(props.updatedAtField);
     var config = (0, _react.useMemo)(function() {
@@ -122,27 +119,17 @@ var Provider = function(_param) {
         idField,
         updatedAtField
     ]);
-    var _useCacheInstance = (0, _cache.useCacheInstance)(atomFromProps || atomFromContext, config), atom = _useCacheInstance.atom, AtomProvider = _useCacheInstance.AtomProvider, useSelector = _useCacheInstance.useSelector;
-    // figbird is a catch all context value we use to pass down
-    // the feathers api client, the atom instance and the useSelector hook
-    // now we have all the pieces in context, the api to fetch data, the atom
-    // to store the cache and the selector to efficiently bind to the cache store
     var figbird = (0, _react.useMemo)(function() {
         return {
             feathers: feathers,
-            atom: atom,
-            actions: atom.actions,
-            useSelector: useSelector,
             config: config
         };
     }, [
         feathers,
-        atom,
-        useSelector,
         config
     ]);
-    return /*#__PURE__*/ _react.default.createElement(AtomProvider, {
-        atom: atom
+    return /*#__PURE__*/ _react.default.createElement(_cache.Provider, {
+        store: store
     }, /*#__PURE__*/ _react.default.createElement(FigbirdContext.Provider, {
         value: figbird
     }, children));

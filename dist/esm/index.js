@@ -1,1 +1,1 @@
-export { useGet, useFind, useMutation, Provider, useFigbird, useFeathers, namespace } from './figbird';
+export { useGet, useFind, useMutation, Provider, useFigbird, useFeathers, createStore, cache } from './figbird';

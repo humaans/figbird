@@ -10,18 +10,18 @@ Object.defineProperty(exports, "useRealtime", {
 });
 var _react = require("react");
 var _core = require("./core");
-var _namespace = require("./namespace");
-var _helpers = require("./helpers");
+var _cache = require("./cache");
+var refsSelector = (0, _cache.selector)(function() {
+    return (0, _cache.cache)().refs;
+});
 function useRealtime(serviceName, mode, cb) {
-    var _useFigbird = (0, _core.useFigbird)(), feathers = _useFigbird.feathers, atom = _useFigbird.atom, actions = _useFigbird.actions;
+    var feathers = (0, _core.useFeathers)();
+    var dispatch = (0, _cache.useDispatch)();
+    var refs = (0, _cache.useSelector)(refsSelector, []);
     (0, _react.useEffect)(function() {
         // realtime is turned off
         if (mode === "disabled") return;
         // get the ref store of this service
-        var refs = (0, _helpers.getIn)(atom.get(), [
-            _namespace.namespace,
-            "refs"
-        ]);
         refs[serviceName] = refs[serviceName] || {};
         refs[serviceName].realtime = refs[serviceName].realtime || 0;
         refs[serviceName].callbacks = refs[serviceName].callbacks || [];
@@ -36,7 +36,8 @@ function useRealtime(serviceName, mode, cb) {
         // bind to the realtime events, but only once globally per service
         if (ref.realtime === 1) {
             ref.created = function(item) {
-                actions.feathersCreated({
+                dispatch({
+                    event: "created",
                     serviceName: serviceName,
                     item: item
                 });
@@ -49,7 +50,8 @@ function useRealtime(serviceName, mode, cb) {
                 });
             };
             ref.updated = function(item) {
-                actions.feathersUpdated({
+                dispatch({
+                    event: "updated",
                     serviceName: serviceName,
                     item: item
                 });
@@ -62,7 +64,8 @@ function useRealtime(serviceName, mode, cb) {
                 });
             };
             ref.patched = function(item) {
-                actions.feathersPatched({
+                dispatch({
+                    event: "patched",
                     serviceName: serviceName,
                     item: item
                 });
@@ -75,7 +78,8 @@ function useRealtime(serviceName, mode, cb) {
                 });
             };
             ref.removed = function(item) {
-                actions.feathersRemoved({
+                dispatch({
+                    event: "removed",
                     serviceName: serviceName,
                     item: item
                 });
@@ -106,8 +110,10 @@ function useRealtime(serviceName, mode, cb) {
                 service.off("removed", ref.removed);
             }
         };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
+        feathers,
+        dispatch,
+        refs,
         serviceName,
         mode,
         cb

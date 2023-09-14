@@ -59,24 +59,6 @@ export function Logout() {
 }
 ```
 
-## useFigbird
-
-Advanced. Get all of Figbird's context, including `{ feathers, config, atom, actions, useSelector }`.
-
-```js
-import { useFeathers } from 'figbird'
-
-export function Logout() {
-  const figbird = useFigbird()
-
-  useEffect(() => {
-    // e.g. inspect cache contents
-    window.figbird = figbird
-    console.log(figbird.atom.get())
-  }, [])
-}
-```
-
 ## Provider
 
 Every application using Figbird must be wrapped in Figbird `Provider`.

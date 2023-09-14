@@ -78,9 +78,9 @@ function _object_without_properties_loose(source, excluded) {
     return target;
 }
 import { useReducer, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useFigbird } from './core';
+import { useFeathers } from './core';
 import { useRealtime } from './useRealtime';
-import { useCache } from './useCache';
+import { useCache } from './cache';
 import { hashObject, inflight } from './helpers';
 const get = inflight((service, id, params, options)=>`${service.path}/${options.queryId}`, getter);
 const find = inflight((service, params, options)=>`${service.path}/${options.queryId}`, finder);
@@ -94,11 +94,14 @@ const realtimeModes = [
     'refetch',
     'disabled'
 ];
+const emptyCachedResult = {
+    data: null
+};
 /**
  * A generic abstraction of both get and find
  */ export function useQuery(serviceName, options = {}, queryHookOptions = {}) {
     const { method, id, selectData, transformResponse } = queryHookOptions;
-    const { feathers } = useFigbird();
+    const feathers = useFeathers();
     const disposed = useRef(false);
     const isInitialMount = useRef(true);
     let { skip, allPages, parallel, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
@@ -127,7 +130,7 @@ const realtimeModes = [
         params,
         realtime
     })}`;
-    let [cachedData, updateCache] = useCache({
+    let [cachedResult, updateCache] = useCache({
         serviceName,
         queryId,
         method,
@@ -138,7 +141,7 @@ const realtimeModes = [
         transformResponse,
         matcher
     });
-    let hasCachedData = !!cachedData.data;
+    let hasCachedData = !!cachedResult.data;
     const fetched = fetchPolicy === 'cache-first' && hasCachedData;
     const [state, dispatch] = useReducer(reducer, {
         reloading: false,
@@ -148,9 +151,7 @@ const realtimeModes = [
         error: null
     });
     if (fetchPolicy === 'network-only' && state.fetchedCount === 0) {
-        cachedData = {
-            data: null
-        };
+        cachedResult = emptyCachedResult;
         hasCachedData = false;
     }
     const handleRealtimeEvent = useCallback((payload)=>{
@@ -207,6 +208,9 @@ const realtimeModes = [
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
+        feathers,
+        id,
+        method,
         serviceName,
         queryId,
         state.fetched,
@@ -234,9 +238,9 @@ const realtimeModes = [
             isInitialMount.current = false;
         }
     }, []);
-    // derive the loading/reloading state from other substates
     const loading = !skip && !hasCachedData && !state.error;
-    const reloading = loading || state.reloading;
+    const status = loading ? 'loading' : state.error ? 'error' : 'success';
+    const isFetching = loading || state.reloading;
     const refetch = useCallback(()=>dispatch({
             type: 'refetch'
         }), [
@@ -244,24 +248,18 @@ const realtimeModes = [
     ]);
     return useMemo(()=>_object_spread_props(_object_spread({}, skip ? {
             data: null
-        } : cachedData), {
-            status: loading ? 'loading' : state.error ? 'error' : 'success',
+        } : cachedResult), {
+            status,
             refetch,
-            isFetching: reloading,
-            error: state.error,
-            loading,
-            reloading
-        }), // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
+            isFetching,
+            error: state.error
+        }), [
         skip,
-        cachedData.data,
-        loading,
+        cachedResult,
+        status,
         state.error,
         refetch,
-        reloading,
-        state.error,
-        loading,
-        reloading
+        isFetching
     ]);
 }
 function reducer(state, action) {
