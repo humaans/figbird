@@ -14,7 +14,10 @@
     "release:beta": "np --tag=beta",
     "release:docs": "hugo -s docs && gh-pages -d docs/public"
   },
-  "author": "",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "author": "Humaans",
   "license": "ISC",
   "dependencies": {
     "sift": "^17.0.1",
@@ -36,19 +39,12 @@
   },
   "sideEffects": false,
   "healthier": {
-    "ignore": [
-      "docs/static/*.min*"
-    ]
+    "ignore": ["docs/static/*.min*"]
   },
   "ava": {
     "serial": true,
-    "files": [
-      "test/*.test.js"
-    ],
-    "require": [
-      "@swc-node/register",
-      "./test/setup.js"
-    ]
+    "files": ["test/*.test.js"],
+    "require": ["@swc-node/register", "./test/setup.js"]
   },
   "np": {
     "releaseDraft": false
