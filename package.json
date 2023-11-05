@@ -1,6 +1,6 @@
 {
   "name": "figbird",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "Effortless realtime data management for React + Feathers applications.",
   "main": "dist/cjs",
   "module": "dist/esm",
@@ -39,12 +39,19 @@
   },
   "sideEffects": false,
   "healthier": {
-    "ignore": ["docs/static/*.min*"]
+    "ignore": [
+      "docs/static/*.min*"
+    ]
   },
   "ava": {
     "serial": true,
-    "files": ["test/*.test.js"],
-    "require": ["@swc-node/register", "./test/setup.js"]
+    "files": [
+      "test/*.test.js"
+    ],
+    "require": [
+      "@swc-node/register",
+      "./test/setup.js"
+    ]
   },
   "np": {
     "releaseDraft": false
