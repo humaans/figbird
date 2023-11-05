@@ -9,14 +9,17 @@ function _export(target, all) {
     });
 }
 _export(exports, {
+    forEachObj: function() {
+        return forEachObj;
+    },
     getIn: function() {
         return getIn;
     },
-    setIn: function() {
-        return setIn;
+    hashObject: function() {
+        return hashObject;
     },
-    unsetIn: function() {
-        return unsetIn;
+    inflight: function() {
+        return inflight;
     },
     isObject: function() {
         return isObject;
@@ -24,14 +27,11 @@ _export(exports, {
     matcher: function() {
         return matcher;
     },
-    hashObject: function() {
-        return hashObject;
+    setIn: function() {
+        return setIn;
     },
-    forEachObj: function() {
-        return forEachObj;
-    },
-    inflight: function() {
-        return inflight;
+    unsetIn: function() {
+        return unsetIn;
     }
 });
 var _sift = /*#__PURE__*/ _interop_require_default(require("sift"));

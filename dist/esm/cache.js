@@ -385,8 +385,8 @@ function updateQuery(idField, updatedAtField) {
     };
 }
 export const useCacheInstance = (atom, config)=>{
+    atom = atom || createAtom();
     return useMemo(()=>{
-        atom = atom || createAtom();
         // Create an atom context and a set of hooks separate from the
         // main context used in tiny-atom. This way our store and actions
         // and everything do not interfere with the main atom. Use this
@@ -404,5 +404,8 @@ export const useCacheInstance = (atom, config)=>{
             AtomProvider,
             useSelector
         };
-    }, []);
+    }, [
+        atom,
+        config
+    ]);
 };

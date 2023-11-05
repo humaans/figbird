@@ -9,26 +9,26 @@ function _export(target, all) {
     });
 }
 _export(exports, {
-    useGet: function() {
-        return _useGet.useGet;
-    },
-    useFind: function() {
-        return _useFind.useFind;
-    },
-    useMutation: function() {
-        return _useMutation.useMutation;
-    },
     Provider: function() {
         return _core.Provider;
     },
-    useFigbird: function() {
-        return _core.useFigbird;
+    namespace: function() {
+        return _namespace.namespace;
     },
     useFeathers: function() {
         return _core.useFeathers;
     },
-    namespace: function() {
-        return _namespace.namespace;
+    useFigbird: function() {
+        return _core.useFigbird;
+    },
+    useFind: function() {
+        return _useFind.useFind;
+    },
+    useGet: function() {
+        return _useGet.useGet;
+    },
+    useMutation: function() {
+        return _useMutation.useMutation;
     }
 });
 var _useGet = require("./useGet");

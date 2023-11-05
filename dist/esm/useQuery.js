@@ -205,6 +205,7 @@ const realtimeModes = [
         return ()=>{
             disposed = true;
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         serviceName,
         queryId,
@@ -250,7 +251,8 @@ const realtimeModes = [
             error: state.error,
             loading,
             reloading
-        }), [
+        }), // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
         skip,
         cachedData.data,
         loading,

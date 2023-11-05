@@ -89,6 +89,7 @@ import { getIn } from './helpers';
                 service.off('removed', ref.removed);
             }
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         serviceName,
         mode,

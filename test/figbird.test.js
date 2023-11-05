@@ -21,7 +21,7 @@ function App({ feathers, config, children }) {
     const { atom } = useFigbird()
     useEffect(() => {
       return atom.observe(atom => {})
-    }, [])
+    }, [atom])
     return children
   }
   return (
@@ -451,7 +451,7 @@ test('useMutation patch updates the get binding', async t => {
       if (loaded) {
         patch(1, { content })
       }
-    }, [loaded, content])
+    }, [patch, loaded, content])
 
     return <NoteList notes={note} />
   }
@@ -491,7 +491,7 @@ test('useMutation handles errors', async t => {
       }).catch(err => {
         handled = err.message
       })
-    }, [])
+    }, [patch])
 
     return <NoteList notes={{ ...note, error }} />
   }
@@ -525,7 +525,7 @@ test('useFeathers', async t => {
 
     useEffect(() => {
       feathersFromHook = feathers
-    }, [])
+    }, [feathers])
 
     return null
   }

@@ -9,26 +9,26 @@ function _export(target, all) {
     });
 }
 _export(exports, {
-    useGet: function() {
-        return _figbird.useGet;
-    },
-    useFind: function() {
-        return _figbird.useFind;
-    },
-    useMutation: function() {
-        return _figbird.useMutation;
-    },
     Provider: function() {
         return _figbird.Provider;
     },
-    useFigbird: function() {
-        return _figbird.useFigbird;
+    namespace: function() {
+        return _figbird.namespace;
     },
     useFeathers: function() {
         return _figbird.useFeathers;
     },
-    namespace: function() {
-        return _figbird.namespace;
+    useFigbird: function() {
+        return _figbird.useFigbird;
+    },
+    useFind: function() {
+        return _figbird.useFind;
+    },
+    useGet: function() {
+        return _figbird.useGet;
+    },
+    useMutation: function() {
+        return _figbird.useMutation;
     }
 });
 var _figbird = require("./figbird");

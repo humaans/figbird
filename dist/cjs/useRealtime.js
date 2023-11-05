@@ -106,6 +106,7 @@ function useRealtime(serviceName, mode, cb) {
                 service.off("removed", ref.removed);
             }
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         serviceName,
         mode,

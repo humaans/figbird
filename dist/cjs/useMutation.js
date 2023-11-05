@@ -229,7 +229,8 @@ function useMethod(method, action, serviceName, dispatch, feathers, mountedRef) 
             });
             throw err;
         });
-    }, [
+    }, // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
         serviceName,
         method,
         action,

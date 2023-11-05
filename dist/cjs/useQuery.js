@@ -264,6 +264,7 @@ function useQuery(serviceName) {
         return function() {
             disposed = true;
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         serviceName,
         queryId,
@@ -313,7 +314,8 @@ function useQuery(serviceName) {
             loading: loading,
             reloading: reloading
         });
-    }, [
+    }, // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
         skip,
         cachedData.data,
         loading,
