@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, StrictMode } from 'react'
 import test from 'ava'
 import { dom, mockFeathers, swallowErrors } from './helpers'
 import { Provider, useGet, useFind, useMutation, useFeathers, createStore } from '../lib'
@@ -18,11 +18,13 @@ const createFeathers = () =>
 
 function App({ feathers, store, config, children }) {
   return (
-    <ErrorHandler>
-      <Provider feathers={feathers} store={store} {...config}>
-        {children}
-      </Provider>
-    </ErrorHandler>
+    <StrictMode>
+      <ErrorHandler>
+        <Provider feathers={feathers} store={store} {...config}>
+          {children}
+        </Provider>
+      </ErrorHandler>
+    </StrictMode>
   )
 }
 
