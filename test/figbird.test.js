@@ -72,8 +72,11 @@ function NoteList({ notes, keyField = 'id' }) {
 test('useGet', async t => {
   const { render, unmount, flush, $ } = dom()
 
+  let noteData
+
   function Note() {
     const note = useGet('notes', 1)
+    noteData = note.data
     return <NoteList notes={note} />
   }
 
@@ -86,6 +89,7 @@ test('useGet', async t => {
   t.is($('.spinner').innerHTML, 'loading...')
   await flush()
   t.is($('.note').innerHTML, 'hello')
+  t.is(noteData.id, 1, 'useGet returns an object, not an array')
   unmount()
 })
 

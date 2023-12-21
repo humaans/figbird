@@ -124,7 +124,7 @@ export function useCache(resourceDescriptor) {
                 'entities',
                 serviceName
             ]);
-            return data.map((id)=>entities[id]);
+            return selectData(data.map((id)=>entities[id]));
         } else {
             return null;
         }

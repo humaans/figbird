@@ -163,9 +163,9 @@ function useCache(resourceDescriptor) {
                 "entities",
                 serviceName
             ]);
-            return data.map(function(id) {
+            return selectData(data.map(function(id) {
                 return entities[id];
-            });
+            }));
         } else {
             return null;
         }
