@@ -13,6 +13,7 @@ var _core = require("./core");
 var _useRealtime = require("./useRealtime");
 var _cache = require("./cache");
 var _helpers = require("./helpers");
+var _usePrevious = require("./usePrevious");
 function _array_like_to_array(arr, len) {
     if (len == null || len > arr.length) len = arr.length;
     for(var i = 0, arr2 = new Array(len); i < len; i++)arr2[i] = arr[i];
@@ -161,8 +162,6 @@ function useQuery(serviceName) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {}, queryHookOptions = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
     var method = queryHookOptions.method, id = queryHookOptions.id, selectData = queryHookOptions.selectData, transformResponse = queryHookOptions.transformResponse;
     var feathers = (0, _core.useFeathers)();
-    var disposed = (0, _react.useRef)(false);
-    var isInitialMount = (0, _react.useRef)(true);
     var skip = options.skip, allPages = options.allPages, parallel = options.parallel, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? "merge" : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? "swr" : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -214,21 +213,14 @@ function useQuery(serviceName) {
         hasCachedData = false;
     }
     var handleRealtimeEvent = (0, _react.useCallback)(function(payload) {
-        if (disposed.current) return;
         if (realtime !== "refetch") return;
         dispatch({
             type: "refetch"
         });
     }, [
         dispatch,
-        realtime,
-        disposed
+        realtime
     ]);
-    (0, _react.useEffect)(function() {
-        return function() {
-            disposed.current = true;
-        };
-    }, []);
     (0, _react.useEffect)(function() {
         var disposed = false;
         if (state.fetched) return;
@@ -278,25 +270,26 @@ function useQuery(serviceName) {
         allPages,
         parallel
     ]);
+    var _usePrevious1;
     // If serviceName or queryId changed, we should refetch the data
+    var prevServiceName = (_usePrevious1 = (0, _usePrevious.usePrevious)(serviceName)) !== null && _usePrevious1 !== void 0 ? _usePrevious1 : serviceName;
+    var _usePrevious2;
+    var prevQueryId = (_usePrevious2 = (0, _usePrevious.usePrevious)(queryId)) !== null && _usePrevious2 !== void 0 ? _usePrevious2 : queryId;
     (0, _react.useEffect)(function() {
-        if (!isInitialMount.current) {
+        if (prevServiceName !== serviceName || prevQueryId !== queryId) {
             dispatch({
                 type: "reset"
             });
         }
     }, [
         serviceName,
-        queryId
+        queryId,
+        prevServiceName,
+        prevQueryId
     ]);
     // realtime hook will make sure we're listening to all of the
     // updates to this service
     (0, _useRealtime.useRealtime)(serviceName, realtime, handleRealtimeEvent);
-    (0, _react.useEffect)(function() {
-        if (isInitialMount.current) {
-            isInitialMount.current = false;
-        }
-    }, []);
     var loading = !skip && !hasCachedData && !state.error;
     var status = loading ? "loading" : state.error ? "error" : "success";
     var isFetching = loading || state.reloading;

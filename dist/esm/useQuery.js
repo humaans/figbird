@@ -77,11 +77,12 @@ function _object_without_properties_loose(source, excluded) {
     }
     return target;
 }
-import { useReducer, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useReducer, useEffect, useCallback, useMemo } from 'react';
 import { useFeathers } from './core';
 import { useRealtime } from './useRealtime';
 import { useCache } from './cache';
 import { hashObject, inflight } from './helpers';
+import { usePrevious } from './usePrevious';
 const get = inflight((service, id, params, options)=>`${service.path}/${options.queryId}`, getter);
 const find = inflight((service, params, options)=>`${service.path}/${options.queryId}`, finder);
 const fetchPolicies = [
@@ -102,8 +103,6 @@ const emptyCachedResult = {
  */ export function useQuery(serviceName, options = {}, queryHookOptions = {}) {
     const { method, id, selectData, transformResponse } = queryHookOptions;
     const feathers = useFeathers();
-    const disposed = useRef(false);
-    const isInitialMount = useRef(true);
     let { skip, allPages, parallel, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -155,21 +154,14 @@ const emptyCachedResult = {
         hasCachedData = false;
     }
     const handleRealtimeEvent = useCallback((payload)=>{
-        if (disposed.current) return;
         if (realtime !== 'refetch') return;
         dispatch({
             type: 'refetch'
         });
     }, [
         dispatch,
-        realtime,
-        disposed
+        realtime
     ]);
-    useEffect(()=>{
-        return ()=>{
-            disposed.current = true;
-        };
-    }, []);
     useEffect(()=>{
         let disposed = false;
         if (state.fetched) return;
@@ -219,25 +211,26 @@ const emptyCachedResult = {
         allPages,
         parallel
     ]);
+    var _usePrevious;
     // If serviceName or queryId changed, we should refetch the data
+    const prevServiceName = (_usePrevious = usePrevious(serviceName)) !== null && _usePrevious !== void 0 ? _usePrevious : serviceName;
+    var _usePrevious1;
+    const prevQueryId = (_usePrevious1 = usePrevious(queryId)) !== null && _usePrevious1 !== void 0 ? _usePrevious1 : queryId;
     useEffect(()=>{
-        if (!isInitialMount.current) {
+        if (prevServiceName !== serviceName || prevQueryId !== queryId) {
             dispatch({
                 type: 'reset'
             });
         }
     }, [
         serviceName,
-        queryId
+        queryId,
+        prevServiceName,
+        prevQueryId
     ]);
     // realtime hook will make sure we're listening to all of the
     // updates to this service
     useRealtime(serviceName, realtime, handleRealtimeEvent);
-    useEffect(()=>{
-        if (isInitialMount.current) {
-            isInitialMount.current = false;
-        }
-    }, []);
     const loading = !skip && !hasCachedData && !state.error;
     const status = loading ? 'loading' : state.error ? 'error' : 'success';
     const isFetching = loading || state.reloading;
