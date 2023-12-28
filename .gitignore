@@ -2,5 +2,6 @@
 .nyc_output
 node_modules
 coverage
+docs/.hugo_build.lock
 docs/public
 docs/resources/_gen
