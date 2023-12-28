@@ -10,6 +10,7 @@ Object.defineProperty(exports, "useMutation", {
 });
 var _react = require("react");
 var _core = require("./core");
+var _cache = require("./cache");
 function _array_like_to_array(arr, len) {
     if (len == null || len > arr.length) len = arr.length;
     for(var i = 0, arr2 = new Array(len); i < len; i++)arr2[i] = arr[i];
@@ -121,12 +122,12 @@ function _unsupported_iterable_to_array(o, minLen) {
     if (n === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)) return _array_like_to_array(o, minLen);
 }
 function useMutation(serviceName) {
-    var _useFigbird = (0, _core.useFigbird)(), feathers = _useFigbird.feathers, actions = _useFigbird.actions;
-    var _useReducer = _sliced_to_array((0, _react.useReducer)(reducer, {
+    var feathers = (0, _core.useFeathers)();
+    var cacheDispatch = (0, _cache.useDispatch)();
+    var _useReducer = _sliced_to_array((0, _react.useReducer)(mutationReducer, {
         status: "idle",
         data: null,
-        error: null,
-        loading: false
+        error: null
     }), 2), state = _useReducer[0], dispatch = _useReducer[1];
     var mountedRef = (0, _react.useRef)();
     (0, _react.useEffect)(function() {
@@ -135,75 +136,9 @@ function useMutation(serviceName) {
             mountedRef.current = false;
         };
     }, []);
-    var common = [
-        serviceName,
-        dispatch,
-        feathers,
-        mountedRef
-    ];
-    var create = useMethod.apply(void 0, [
-        "create",
-        actions.feathersCreated
-    ].concat(_to_consumable_array(common)));
-    var update = useMethod.apply(void 0, [
-        "update",
-        actions.feathersUpdated
-    ].concat(_to_consumable_array(common)));
-    var patch = useMethod.apply(void 0, [
-        "patch",
-        actions.feathersPatched
-    ].concat(_to_consumable_array(common)));
-    var remove = useMethod.apply(void 0, [
-        "remove",
-        actions.feathersRemoved
-    ].concat(_to_consumable_array(common)));
-    var mutation = (0, _react.useMemo)(function() {
-        return {
-            create: create,
-            update: update,
-            patch: patch,
-            remove: remove,
-            data: state.data,
-            status: state.status,
-            error: state.error,
-            loading: state.loading
-        };
-    }, [
-        create,
-        update,
-        patch,
-        remove,
-        state
-    ]);
-    return mutation;
-}
-function reducer(state, action) {
-    switch(action.type){
-        case "mutating":
-            return _object_spread_props(_object_spread({}, state), {
-                status: "loading",
-                loading: true,
-                data: null,
-                error: null
-            });
-        case "success":
-            return _object_spread_props(_object_spread({}, state), {
-                status: "success",
-                loading: false,
-                data: action.payload
-            });
-        case "error":
-            return _object_spread_props(_object_spread({}, state), {
-                status: "error",
-                loading: false,
-                error: action.payload
-            });
-    }
-}
-function useMethod(method, action, serviceName, dispatch, feathers, mountedRef) {
-    return (0, _react.useCallback)(function() {
-        for(var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++){
-            args[_key] = arguments[_key];
+    var mutate = (0, _react.useCallback)(function(method, event) {
+        for(var _len = arguments.length, args = new Array(_len > 2 ? _len - 2 : 0), _key = 2; _key < _len; _key++){
+            args[_key - 2] = arguments[_key];
         }
         var _service;
         var service = feathers.service(serviceName);
@@ -212,7 +147,8 @@ function useMethod(method, action, serviceName, dispatch, feathers, mountedRef) 
         });
         return (_service = service)[method].apply(_service, _to_consumable_array(args)).then(function(item) {
             var isMounted = mountedRef.current;
-            action({
+            cacheDispatch({
+                event: event,
                 serviceName: serviceName,
                 item: item
             });
@@ -229,11 +165,92 @@ function useMethod(method, action, serviceName, dispatch, feathers, mountedRef) 
             });
             throw err;
         });
-    }, // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
+    }, [
+        feathers,
         serviceName,
-        method,
-        action,
-        dispatch
+        dispatch,
+        cacheDispatch,
+        mountedRef
     ]);
+    var create = (0, _react.useCallback)(function() {
+        for(var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++){
+            args[_key] = arguments[_key];
+        }
+        return mutate.apply(void 0, [
+            "create",
+            "created"
+        ].concat(_to_consumable_array(args)));
+    }, [
+        mutate
+    ]);
+    var update = (0, _react.useCallback)(function() {
+        for(var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++){
+            args[_key] = arguments[_key];
+        }
+        return mutate.apply(void 0, [
+            "update",
+            "updated"
+        ].concat(_to_consumable_array(args)));
+    }, [
+        mutate
+    ]);
+    var patch = (0, _react.useCallback)(function() {
+        for(var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++){
+            args[_key] = arguments[_key];
+        }
+        return mutate.apply(void 0, [
+            "patch",
+            "patched"
+        ].concat(_to_consumable_array(args)));
+    }, [
+        mutate
+    ]);
+    var remove = (0, _react.useCallback)(function() {
+        for(var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++){
+            args[_key] = arguments[_key];
+        }
+        return mutate.apply(void 0, [
+            "remove",
+            "removed"
+        ].concat(_to_consumable_array(args)));
+    }, [
+        mutate
+    ]);
+    return (0, _react.useMemo)(function() {
+        return {
+            create: create,
+            update: update,
+            patch: patch,
+            remove: remove,
+            data: state.data,
+            status: state.status,
+            error: state.error
+        };
+    }, [
+        create,
+        update,
+        patch,
+        remove,
+        state
+    ]);
+}
+function mutationReducer(state, action) {
+    switch(action.type){
+        case "mutating":
+            return _object_spread_props(_object_spread({}, state), {
+                status: "loading",
+                data: null,
+                error: null
+            });
+        case "success":
+            return _object_spread_props(_object_spread({}, state), {
+                status: "success",
+                data: action.payload
+            });
+        case "error":
+            return _object_spread_props(_object_spread({}, state), {
+                status: "error",
+                error: action.payload
+            });
+    }
 }

@@ -12,8 +12,11 @@ _export(exports, {
     Provider: function() {
         return _core.Provider;
     },
-    namespace: function() {
-        return _namespace.namespace;
+    cache: function() {
+        return _cache.cache;
+    },
+    createStore: function() {
+        return _kinfolk.createStore;
     },
     useFeathers: function() {
         return _core.useFeathers;
@@ -31,8 +34,9 @@ _export(exports, {
         return _useMutation.useMutation;
     }
 });
+var _kinfolk = require("kinfolk");
+var _cache = require("./cache");
 var _useGet = require("./useGet");
 var _useFind = require("./useFind");
 var _useMutation = require("./useMutation");
 var _core = require("./core");
-var _namespace = require("./namespace");

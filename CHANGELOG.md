@@ -1,5 +1,10 @@
 # Figbird Changelog
 
+## 0.13.0
+
+- Switch from `tiny-atom` to `kinfolk` as the cache store. Breaking change if you're relying on using the cache directly.
+- Remove the deprecated `loading: boolean` and `reloading: boolean` from `useFind` and `useGet` result - use `status: string` and `isFetching: boolean` instead.
+
 ## 0.12.2
 
 - Upgrade all dependencies to address security alerts.

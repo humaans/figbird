@@ -1,20 +1,18 @@
 import { useEffect } from 'react';
-import { useFigbird } from './core';
-import { namespace } from './namespace';
-import { getIn } from './helpers';
+import { useFeathers } from './core';
+import { cache, useDispatch, selector, useSelector } from './cache';
+const refsSelector = selector(()=>cache().refs);
 /**
  * An internal hook that will listen to realtime updates to a service
  * and update the cache as changes happen.
  */ export function useRealtime(serviceName, mode, cb) {
-    const { feathers, atom, actions } = useFigbird();
+    const feathers = useFeathers();
+    const dispatch = useDispatch();
+    const refs = useSelector(refsSelector, []);
     useEffect(()=>{
         // realtime is turned off
         if (mode === 'disabled') return;
         // get the ref store of this service
-        const refs = getIn(atom.get(), [
-            namespace,
-            'refs'
-        ]);
         refs[serviceName] = refs[serviceName] || {};
         refs[serviceName].realtime = refs[serviceName].realtime || 0;
         refs[serviceName].callbacks = refs[serviceName].callbacks || [];
@@ -29,7 +27,8 @@ import { getIn } from './helpers';
         // bind to the realtime events, but only once globally per service
         if (ref.realtime === 1) {
             ref.created = (item)=>{
-                actions.feathersCreated({
+                dispatch({
+                    event: 'created',
                     serviceName,
                     item
                 });
@@ -40,7 +39,8 @@ import { getIn } from './helpers';
                     }));
             };
             ref.updated = (item)=>{
-                actions.feathersUpdated({
+                dispatch({
+                    event: 'updated',
                     serviceName,
                     item
                 });
@@ -51,7 +51,8 @@ import { getIn } from './helpers';
                     }));
             };
             ref.patched = (item)=>{
-                actions.feathersPatched({
+                dispatch({
+                    event: 'patched',
                     serviceName,
                     item
                 });
@@ -62,7 +63,8 @@ import { getIn } from './helpers';
                     }));
             };
             ref.removed = (item)=>{
-                actions.feathersRemoved({
+                dispatch({
+                    event: 'removed',
                     serviceName,
                     item
                 });
@@ -89,8 +91,10 @@ import { getIn } from './helpers';
                 service.off('removed', ref.removed);
             }
         };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
+        feathers,
+        dispatch,
+        refs,
         serviceName,
         mode,
         cb

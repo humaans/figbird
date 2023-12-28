@@ -20,8 +20,8 @@
   "author": "Humaans",
   "license": "ISC",
   "dependencies": {
-    "sift": "^17.0.1",
-    "tiny-atom": "^5.0.0"
+    "kinfolk": "^0.5.1",
+    "sift": "^17.0.1"
   },
   "devDependencies": {
     "@swc-node/register": "^1.6.8",

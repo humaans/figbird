@@ -11,8 +11,9 @@ Object.defineProperty(exports, "useQuery", {
 var _react = require("react");
 var _core = require("./core");
 var _useRealtime = require("./useRealtime");
-var _useCache = require("./useCache");
+var _cache = require("./cache");
 var _helpers = require("./helpers");
+var _usePrevious = require("./usePrevious");
 function _array_like_to_array(arr, len) {
     if (len == null || len > arr.length) len = arr.length;
     for(var i = 0, arr2 = new Array(len); i < len; i++)arr2[i] = arr[i];
@@ -154,12 +155,13 @@ var realtimeModes = [
     "refetch",
     "disabled"
 ];
+var emptyCachedResult = {
+    data: null
+};
 function useQuery(serviceName) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {}, queryHookOptions = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
     var method = queryHookOptions.method, id = queryHookOptions.id, selectData = queryHookOptions.selectData, transformResponse = queryHookOptions.transformResponse;
-    var feathers = (0, _core.useFigbird)().feathers;
-    var disposed = (0, _react.useRef)(false);
-    var isInitialMount = (0, _react.useRef)(true);
+    var feathers = (0, _core.useFeathers)();
     var skip = options.skip, allPages = options.allPages, parallel = options.parallel, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? "merge" : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? "swr" : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -186,7 +188,7 @@ function useQuery(serviceName) {
         params: params,
         realtime: realtime
     }));
-    var _useCache1 = _sliced_to_array((0, _useCache.useCache)({
+    var _useCache = _sliced_to_array((0, _cache.useCache)({
         serviceName: serviceName,
         queryId: queryId,
         method: method,
@@ -196,8 +198,8 @@ function useQuery(serviceName) {
         selectData: selectData,
         transformResponse: transformResponse,
         matcher: matcher
-    }), 2), cachedData = _useCache1[0], updateCache = _useCache1[1];
-    var hasCachedData = !!cachedData.data;
+    }), 2), cachedResult = _useCache[0], updateCache = _useCache[1];
+    var hasCachedData = !!cachedResult.data;
     var fetched = fetchPolicy === "cache-first" && hasCachedData;
     var _useReducer = _sliced_to_array((0, _react.useReducer)(reducer, {
         reloading: false,
@@ -207,27 +209,18 @@ function useQuery(serviceName) {
         error: null
     }), 2), state = _useReducer[0], dispatch = _useReducer[1];
     if (fetchPolicy === "network-only" && state.fetchedCount === 0) {
-        cachedData = {
-            data: null
-        };
+        cachedResult = emptyCachedResult;
         hasCachedData = false;
     }
     var handleRealtimeEvent = (0, _react.useCallback)(function(payload) {
-        if (disposed.current) return;
         if (realtime !== "refetch") return;
         dispatch({
             type: "refetch"
         });
     }, [
         dispatch,
-        realtime,
-        disposed
+        realtime
     ]);
-    (0, _react.useEffect)(function() {
-        return function() {
-            disposed.current = true;
-        };
-    }, []);
     (0, _react.useEffect)(function() {
         var disposed = false;
         if (state.fetched) return;
@@ -266,6 +259,9 @@ function useQuery(serviceName) {
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
+        feathers,
+        id,
+        method,
         serviceName,
         queryId,
         state.fetched,
@@ -274,28 +270,29 @@ function useQuery(serviceName) {
         allPages,
         parallel
     ]);
+    var _usePrevious1;
     // If serviceName or queryId changed, we should refetch the data
+    var prevServiceName = (_usePrevious1 = (0, _usePrevious.usePrevious)(serviceName)) !== null && _usePrevious1 !== void 0 ? _usePrevious1 : serviceName;
+    var _usePrevious2;
+    var prevQueryId = (_usePrevious2 = (0, _usePrevious.usePrevious)(queryId)) !== null && _usePrevious2 !== void 0 ? _usePrevious2 : queryId;
     (0, _react.useEffect)(function() {
-        if (!isInitialMount.current) {
+        if (prevServiceName !== serviceName || prevQueryId !== queryId) {
             dispatch({
                 type: "reset"
             });
         }
     }, [
         serviceName,
-        queryId
+        queryId,
+        prevServiceName,
+        prevQueryId
     ]);
     // realtime hook will make sure we're listening to all of the
     // updates to this service
     (0, _useRealtime.useRealtime)(serviceName, realtime, handleRealtimeEvent);
-    (0, _react.useEffect)(function() {
-        if (isInitialMount.current) {
-            isInitialMount.current = false;
-        }
-    }, []);
-    // derive the loading/reloading state from other substates
     var loading = !skip && !hasCachedData && !state.error;
-    var reloading = loading || state.reloading;
+    var status = loading ? "loading" : state.error ? "error" : "success";
+    var isFetching = loading || state.reloading;
     var refetch = (0, _react.useCallback)(function() {
         return dispatch({
             type: "refetch"
@@ -306,25 +303,19 @@ function useQuery(serviceName) {
     return (0, _react.useMemo)(function() {
         return _object_spread_props(_object_spread({}, skip ? {
             data: null
-        } : cachedData), {
-            status: loading ? "loading" : state.error ? "error" : "success",
+        } : cachedResult), {
+            status: status,
             refetch: refetch,
-            isFetching: reloading,
-            error: state.error,
-            loading: loading,
-            reloading: reloading
+            isFetching: isFetching,
+            error: state.error
         });
-    }, // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
+    }, [
         skip,
-        cachedData.data,
-        loading,
+        cachedResult,
+        status,
         state.error,
         refetch,
-        reloading,
-        state.error,
-        loading,
-        reloading
+        isFetching
     ]);
 }
 function reducer(state, action) {

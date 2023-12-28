@@ -36,10 +36,6 @@ The usage of `useGet` and `useFind` hooks gets reference counted so that Figbird
 - `unmount` - remove cached query data on unmount (if no component is referencing that particular cached data anymore)
 - `delayed` - remove unused cached data after some time
 
-### Logging
-
-Figbird's cache is implemented using the [`tiny-atom`](https://github.com/KidkArolis/tiny-atom) store which comes with a powerful logger. Observe and inspect all the changes to your cache with ease.
-
 ## Install
 
     $ npm install figbird
@@ -56,13 +52,12 @@ Visit the [documentation site](https://humaans.github.io/figbird/) for full API 
 - [x] `useFeathers`
 - [x] `refetch` for manual data refetching
 - [x] reuse inflight requests for identical get/find requests
-- [ ] support React Suspense and Concurrent Mode
+- [x] support React Suspense and Concurrent Mode
 
 Options
 
 - [x] option - custom `id` field
 - [x] option - custom `updatedAt` field
-- [ ] option - logger
 - [ ] global `realtime` option
 - [ ] global `fetchPolicy` option
 - [ ] global `cacheEviction` option
@@ -92,7 +87,3 @@ Pagination
 - [ ] `useFind` - `fetchMore`
 - [ ] support `find` without pagination envelope
 - [ ] support `find` with custom pagination envelope
-
-Bugs
-
-- [x] bug: unmounting should not stop listening if other components need to

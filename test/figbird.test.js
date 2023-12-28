@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, StrictMode } from 'react'
 import test from 'ava'
 import { dom, mockFeathers, swallowErrors } from './helpers'
-import { Provider, useFigbird, useGet, useFind, useMutation, useFeathers } from '../lib'
+import { Provider, useGet, useFind, useMutation, useFeathers, createStore } from '../lib'
 
 const createFeathers = () =>
   mockFeathers({
@@ -16,20 +16,15 @@ const createFeathers = () =>
     },
   })
 
-function App({ feathers, config, children }) {
-  function AtomObserver({ children }) {
-    const { atom } = useFigbird()
-    useEffect(() => {
-      return atom.observe(atom => {})
-    }, [atom])
-    return children
-  }
+function App({ feathers, store, config, children }) {
   return (
-    <ErrorHandler>
-      <Provider feathers={feathers} {...config}>
-        <AtomObserver>{children}</AtomObserver>
-      </Provider>
-    </ErrorHandler>
+    <StrictMode>
+      <ErrorHandler>
+        <Provider feathers={feathers} store={store} {...config}>
+          {children}
+        </Provider>
+      </ErrorHandler>
+    </StrictMode>
   )
 }
 
@@ -61,7 +56,7 @@ function NoteList({ notes, keyField = 'id' }) {
     return <div className='error'>{notes.error.message}</div>
   }
 
-  if (notes.loading) {
+  if (notes.status === 'loading') {
     return <div className='spinner'>loading...</div>
   }
 
@@ -79,8 +74,11 @@ function NoteList({ notes, keyField = 'id' }) {
 test('useGet', async t => {
   const { render, unmount, flush, $ } = dom()
 
+  let noteData
+
   function Note() {
     const note = useGet('notes', 1)
+    noteData = note.data
     return <NoteList notes={note} />
   }
 
@@ -93,6 +91,7 @@ test('useGet', async t => {
   t.is($('.spinner').innerHTML, 'loading...')
   await flush()
   t.is($('.note').innerHTML, 'hello')
+  t.is(noteData.id, 1, 'useGet returns an object, not an array')
   unmount()
 })
 
@@ -105,6 +104,7 @@ test('useGet updates after realtime patch', async t => {
   }
 
   const feathers = createFeathers()
+
   render(
     <App feathers={feathers}>
       <Note />
@@ -117,9 +117,9 @@ test('useGet updates after realtime patch', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await feathers.service('notes').patch(1, { content: 'realtime' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'realtime' })
+  })
 
   t.is($('.note').innerHTML, 'realtime')
 
@@ -167,10 +167,10 @@ test('useFind binding updates after realtime create', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
-  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+    await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -198,9 +198,9 @@ test('useFind binding updates after realtime patch', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -231,9 +231,9 @@ test('useFind binding updates after realtime update', async t => {
     ['hello'],
   )
 
-  await feathers.service('notes').update(1, { id: 1, content: 'doc', tag: 'idea' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').update(1, { id: 1, content: 'doc', tag: 'idea' })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -266,9 +266,9 @@ test('useFind binding updates after realtime remove', async t => {
     ['hello', 'doc'],
   )
 
-  await feathers.service('notes').remove(1)
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').remove(1)
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -296,9 +296,9 @@ test('useFind binding updates after realtime patch with no query', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -309,8 +309,9 @@ test('useFind binding updates after realtime patch with no query', async t => {
 })
 
 test('useRealtime listeners are correctly disposed of', async t => {
+  const store = createStore()
+
   const { render, flush, unmount, $, $all } = dom()
-  let atom
 
   function Note1() {
     const notes = useFind('notes')
@@ -323,9 +324,6 @@ test('useRealtime listeners are correctly disposed of', async t => {
   }
 
   function Notes() {
-    const figbird = useFigbird()
-    atom = figbird.atom
-
     const [counter, setCounter] = useState(0)
 
     useEffect(() => {
@@ -365,7 +363,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
 
   const feathers = createFeathers()
   render(
-    <App feathers={feathers}>
+    <App feathers={feathers} store={store}>
       <Notes />
     </App>,
   )
@@ -373,12 +371,12 @@ test('useRealtime listeners are correctly disposed of', async t => {
   await flush()
 
   t.is($('.note2').innerHTML, 'hello')
-  t.is(atom.get().feathers.entities.notes[1].content, 'hello')
+  t.is(store.debug().figbird.entities.notes[1].content, 'hello')
 
-  await feathers.service('notes').patch(1, { content: 'real' })
-  t.is(atom.get().feathers.entities.notes[1].content, 'real')
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'real' })
+  })
+  t.is(store.debug().figbird.entities.notes[1].content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -387,10 +385,12 @@ test('useRealtime listeners are correctly disposed of', async t => {
 
   unmount()
 
-  await feathers.service('notes').patch(1, { content: 'nomo' })
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'nomo' })
+  })
 
   // should not have updated!
-  t.is(atom.get().feathers.entities.notes[1].content, 'real')
+  t.is(store.debug().figbird.entities.notes[1].content, 'real')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
@@ -821,10 +821,12 @@ test('useFind with allPages and parallel where limit is not wholly divisible by 
 
   const feathers = createFeathers()
 
-  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
-  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
-  await feathers.service('notes').create({ id: 4, content: 'wat', tag: 'nonsense' })
-  await feathers.service('notes').create({ id: 5, content: 'huh', tag: 'thingies' })
+  await flush(async () => {
+    await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+    await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+    await feathers.service('notes').create({ id: 4, content: 'wat', tag: 'nonsense' })
+    await feathers.service('notes').create({ id: 5, content: 'huh', tag: 'thingies' })
+  })
 
   render(
     <App feathers={feathers}>
@@ -867,9 +869,9 @@ test('useFind - realtime merge', async t => {
     ['hello'],
   )
 
-  await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  })
 
   // no find happened in the backround!
   t.is(feathers.service('notes').counts.find, 1)
@@ -1189,10 +1191,10 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 
   t.is($('.note').innerHTML, 'hello')
 
-  await feathers.service('notes').create({ id: 2, content: 'doc' })
-  await feathers.service('notes').patch(2, { content: 'doc updated' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').create({ id: 2, content: 'doc' })
+    await feathers.service('notes').patch(2, { content: 'doc updated' })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -1224,20 +1226,20 @@ test('useFind - with custom matcher', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', foo: false })
-  await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', foo: true })
-  await feathers.service('notes').create({ id: 4, tag: 'draft', content: 'doc 4', foo: true })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', foo: false })
+    await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', foo: true })
+    await feathers.service('notes').create({ id: 4, tag: 'draft', content: 'doc 4', foo: true })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
     ['hello', 'doc 3'],
   )
 
-  await feathers.service('notes').patch(4, { tag: 'post' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(4, { tag: 'post' })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -1249,17 +1251,16 @@ test('useFind - with custom matcher', async t => {
 
 test('item gets deleted from cache if it is updated and no longer relevant to a query', async t => {
   const { render, flush, unmount, $, $all } = dom()
-  let atom
+  const feathers = createFeathers()
+  const store = createStore()
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'post' } })
-    atom = useFigbird().atom
     return <NoteList notes={notes} />
   }
 
-  const feathers = createFeathers()
   render(
-    <App feathers={feathers} config={{ noUpdatedAt: true }}>
+    <App feathers={feathers} store={store} config={{ noUpdatedAt: true }}>
       <Note />
     </App>,
   )
@@ -1268,19 +1269,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   t.is($('.note').innerHTML, 'hello')
 
-  await feathers.service('notes').patch(1, { updatedAt: null })
-  await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: 1 })
-  await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', updatedAt: 2 })
-  await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', updatedAt: 3 })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { updatedAt: null })
+    await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: 1 })
+    await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', updatedAt: 2 })
+    await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', updatedAt: 3 })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
     ['doc 1', 'doc 2', 'doc 3'],
   )
 
-  t.deepEqual(atom.get().feathers.entities, {
+  t.deepEqual(store.debug().figbird.entities, {
     notes: {
       1: {
         id: 1,
@@ -1303,7 +1304,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(atom.get().feathers.index, {
+  t.deepEqual(store.debug().figbird.index, {
     notes: {
       1: {
         queries: {
@@ -1326,16 +1327,16 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  await feathers.service('notes').patch(3, { tag: 'draft' })
-
-  await flush()
+  await flush(async () => {
+    await feathers.service('notes').patch(3, { tag: 'draft' })
+  })
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
     ['doc 1', 'doc 2'],
   )
 
-  t.deepEqual(atom.get().feathers.entities, {
+  t.deepEqual(store.debug().figbird.entities, {
     notes: {
       1: {
         id: 1,
@@ -1352,7 +1353,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(atom.get().feathers.index, {
+  t.deepEqual(store.debug().figbird.index, {
     notes: {
       1: {
         queries: {

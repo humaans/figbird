@@ -51,7 +51,8 @@ function _object_spread_props(target, source) {
     return target;
 }
 import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react';
-import { useFigbird } from './core';
+import { useFeathers } from './core';
+import { useDispatch } from './cache';
 /**
  * Simple mutation hook exposing crud methods
  * of any feathers service. The resulting state
@@ -63,12 +64,12 @@ import { useFigbird } from './core';
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */ export function useMutation(serviceName) {
-    const { feathers, actions } = useFigbird();
-    const [state, dispatch] = useReducer(reducer, {
+    const feathers = useFeathers();
+    const cacheDispatch = useDispatch();
+    const [state, dispatch] = useReducer(mutationReducer, {
         status: 'idle',
         data: null,
-        error: null,
-        loading: false
+        error: null
     });
     const mountedRef = useRef();
     useEffect(()=>{
@@ -77,66 +78,15 @@ import { useFigbird } from './core';
             mountedRef.current = false;
         };
     }, []);
-    const common = [
-        serviceName,
-        dispatch,
-        feathers,
-        mountedRef
-    ];
-    const create = useMethod('create', actions.feathersCreated, ...common);
-    const update = useMethod('update', actions.feathersUpdated, ...common);
-    const patch = useMethod('patch', actions.feathersPatched, ...common);
-    const remove = useMethod('remove', actions.feathersRemoved, ...common);
-    const mutation = useMemo(()=>({
-            create,
-            update,
-            patch,
-            remove,
-            data: state.data,
-            status: state.status,
-            error: state.error,
-            loading: state.loading
-        }), [
-        create,
-        update,
-        patch,
-        remove,
-        state
-    ]);
-    return mutation;
-}
-function reducer(state, action) {
-    switch(action.type){
-        case 'mutating':
-            return _object_spread_props(_object_spread({}, state), {
-                status: 'loading',
-                loading: true,
-                data: null,
-                error: null
-            });
-        case 'success':
-            return _object_spread_props(_object_spread({}, state), {
-                status: 'success',
-                loading: false,
-                data: action.payload
-            });
-        case 'error':
-            return _object_spread_props(_object_spread({}, state), {
-                status: 'error',
-                loading: false,
-                error: action.payload
-            });
-    }
-}
-function useMethod(method, action, serviceName, dispatch, feathers, mountedRef) {
-    return useCallback((...args)=>{
+    const mutate = useCallback((method, event, ...args)=>{
         const service = feathers.service(serviceName);
         dispatch({
             type: 'mutating'
         });
         return service[method](...args).then((item)=>{
             const isMounted = mountedRef.current;
-            action({
+            cacheDispatch({
+                event,
                 serviceName,
                 item
             });
@@ -153,11 +103,58 @@ function useMethod(method, action, serviceName, dispatch, feathers, mountedRef) 
             });
             throw err;
         });
-    }, // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
+    }, [
+        feathers,
         serviceName,
-        method,
-        action,
-        dispatch
+        dispatch,
+        cacheDispatch,
+        mountedRef
     ]);
+    const create = useCallback((...args)=>mutate('create', 'created', ...args), [
+        mutate
+    ]);
+    const update = useCallback((...args)=>mutate('update', 'updated', ...args), [
+        mutate
+    ]);
+    const patch = useCallback((...args)=>mutate('patch', 'patched', ...args), [
+        mutate
+    ]);
+    const remove = useCallback((...args)=>mutate('remove', 'removed', ...args), [
+        mutate
+    ]);
+    return useMemo(()=>({
+            create,
+            update,
+            patch,
+            remove,
+            data: state.data,
+            status: state.status,
+            error: state.error
+        }), [
+        create,
+        update,
+        patch,
+        remove,
+        state
+    ]);
+}
+function mutationReducer(state, action) {
+    switch(action.type){
+        case 'mutating':
+            return _object_spread_props(_object_spread({}, state), {
+                status: 'loading',
+                data: null,
+                error: null
+            });
+        case 'success':
+            return _object_spread_props(_object_spread({}, state), {
+                status: 'success',
+                data: action.payload
+            });
+        case 'error':
+            return _object_spread_props(_object_spread({}, state), {
+                status: 'error',
+                error: action.payload
+            });
+    }
 }
