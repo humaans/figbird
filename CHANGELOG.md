@@ -2,8 +2,9 @@
 
 ## 0.13.0
 
-- Switch from `tiny-atom` to `kinfolk` as the cache store. Breaking change if you're relying on using the cache directly.
+- Switch the cache store from `tiny-atom` to `kinfolk`. Breaking change if you're relying on using the cache directly. Refer to [`kinfolk`](https://github.com/KidkArolis/kinfolk/ documentation] for how to consume the new cache.
 - Remove the deprecated `loading: boolean` and `reloading: boolean` from `useFind` and `useGet` result - use `status: string` and `isFetching: boolean` instead.
+- Upgrade all dependencies.
 
 ## 0.12.2
 
