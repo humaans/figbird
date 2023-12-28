@@ -15,7 +15,7 @@
     "release:docs": "hugo -s docs && gh-pages -d docs/public"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "author": "Humaans",
   "license": "ISC",
