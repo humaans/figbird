@@ -2,7 +2,7 @@
 <html lang="en-us">
 
 <head>
-  <meta name="generator" content="Hugo 0.62.2" />
+  <meta name="generator" content="Hugo 0.120.4">
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -94,7 +94,7 @@
 <li><code>disabled</code> - ignore realtime events for this query</li>
 </ul>
 <h4 id="fetch-policies">Fetch policies</h4>
-<p>Fetch policies allow you to fine tune Figbird to your requirements. With the default <code>swr</code> (stale-while-revalidate) Figbir's uses cached data when possible for maximum responsiveness, but refetches in the background on mount to make sure data is up to date. The other policies are <code>cache-first</code> which will use cache and not refresh from the server (compatible with realtime)</p>
+<p>Fetch policies allow you to fine tune Figbird to your requirements. With the default <code>swr</code> (stale-while-revalidate) Figbir&rsquo;s uses cached data when possible for maximum responsiveness, but refetches in the background on mount to make sure data is up to date. The other policies are <code>cache-first</code> which will use cache and not refresh from the server (compatible with realtime)</p>
 <ul>
 <li><code>swr</code> - show cached data if possible and refetch in the background (default)</li>
 <li><code>cache-first</code> - show cached data if possible and avoid fetching if data is there</li>
@@ -107,55 +107,55 @@
 <li><code>unmount</code> - remove cached query data on unmount (if no component is referencing that particular cached data anymore)</li>
 <li><code>delayed</code> - remove unused cached data after some time</li>
 </ul>
-<h4 id="logging">Logging</h4>
-<p>Figbird's cache is implemented using the <a href="https://github.com/KidkArolis/tiny-atom"><code>tiny-atom</code></a> store which comes with a powerful logger. Observe and inspect all the changes to your cache with ease.</p>
 <h2 id="install">Install</h2>
-<div class="highlight"><pre class="chroma"><code class="language-sh" data-lang="sh">$ npm install figbird
-</code></pre></div><h2 id="example">Example</h2>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kr">import</span> <span class="nx">React</span><span class="p">,</span> <span class="p">{</span> <span class="nx">useState</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;react&#39;</span>
-<span class="kr">import</span> <span class="nx">io</span> <span class="nx">from</span> <span class="s1">&#39;socket.io-client&#39;</span>
-<span class="kr">import</span> <span class="nx">feathers</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/client&#39;</span>
-<span class="kr">import</span> <span class="p">{</span> <span class="nx">Provider</span><span class="p">,</span> <span class="nx">useFind</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
-
-<span class="kr">const</span> <span class="nx">socket</span> <span class="o">=</span> <span class="nx">io</span><span class="p">(</span><span class="s1">&#39;http://localhost:3030&#39;</span><span class="p">)</span>
-<span class="kr">const</span> <span class="nx">client</span> <span class="o">=</span> <span class="nx">feathers</span><span class="p">(</span><span class="p">)</span>
-
-<span class="nx">client</span><span class="p">.</span><span class="nx">configure</span><span class="p">(</span><span class="nx">feathers</span><span class="p">.</span><span class="nx">socketio</span><span class="p">(</span><span class="nx">socket</span><span class="p">)</span><span class="p">)</span>
-<span class="nx">client</span><span class="p">.</span><span class="nx">configure</span><span class="p">(</span><span class="nx">feathers</span><span class="p">.</span><span class="nx">authentication</span><span class="p">(</span><span class="p">{</span>
-  <span class="nx">storage</span><span class="o">:</span> <span class="nb">window</span><span class="p">.</span><span class="nx">localStorage</span>
-<span class="p">}</span><span class="p">)</span><span class="p">)</span>
-
-<span class="kd">function</span> <span class="nx">App</span><span class="p">(</span><span class="p">)</span> <span class="p">{</span>
-  <span class="k">return</span> <span class="p">(</span>
-    <span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">client</span><span class="p">}</span><span class="o">&gt;</span>
-      <span class="o">&lt;</span><span class="nx">Notes</span> <span class="o">/</span><span class="o">&gt;</span>
-    <span class="o">&lt;</span><span class="err">/</span><span class="err">P</span><span class="err">r</span><span class="err">o</span><span class="err">v</span><span class="err">i</span><span class="err">d</span><span class="err">e</span><span class="err">r</span><span class="err">&gt;</span>
-  <span class="p">)</span>
-<span class="p">}</span>
-
-<span class="kd">function</span> <span class="nx">Notes</span><span class="p">(</span><span class="p">{</span> <span class="nx">tag</span> <span class="p">}</span><span class="p">)</span> <span class="p">{</span>
-  <span class="kr">const</span> <span class="p">{</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">total</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">tag</span> <span class="p">}</span> <span class="p">}</span><span class="p">)</span>
-
-  <span class="k">if</span> <span class="p">(</span><span class="nx">status</span> <span class="o">===</span> <span class="s1">&#39;loading&#39;</span><span class="p">)</span> <span class="p">{</span>
-    <span class="k">return</span> <span class="s1">&#39;Loading...&#39;</span>
-  <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="nx">status</span> <span class="o">===</span> <span class="s1">&#39;error&#39;</span><span class="p">)</span> <span class="p">{</span>
-    <span class="k">return</span> <span class="nx">notes</span><span class="p">.</span><span class="nx">error</span><span class="p">.</span><span class="nx">message</span>
-  <span class="p">}</span>
-
-  <span class="k">return</span> <span class="p">(</span>
-    <span class="o">&lt;</span><span class="nx">div</span><span class="o">&gt;</span>
-      <span class="nx">Showing</span> <span class="p">{</span><span class="nx">data</span><span class="p">.</span><span class="nx">length</span><span class="p">}</span> <span class="nx">notes</span> <span class="k">of</span> <span class="p">{</span><span class="nx">total</span><span class="p">}</span>
-    <span class="o">&lt;</span><span class="err">/</span><span class="err">d</span><span class="err">i</span><span class="err">v</span><span class="err">&gt;</span>
-  <span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div><h2 id="api-reference">API Reference</h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl">$ npm install figbird
+</span></span></code></pre></div><h2 id="example">Example</h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">React</span><span class="p">,</span> <span class="p">{</span> <span class="nx">useState</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;react&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">io</span> <span class="nx">from</span> <span class="s1">&#39;socket.io-client&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">feathers</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/client&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Provider</span><span class="p">,</span> <span class="nx">useFind</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">socket</span> <span class="o">=</span> <span class="nx">io</span><span class="p">(</span><span class="s1">&#39;http://localhost:3030&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">client</span> <span class="o">=</span> <span class="nx">feathers</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="nx">client</span><span class="p">.</span><span class="nx">configure</span><span class="p">(</span><span class="nx">feathers</span><span class="p">.</span><span class="nx">socketio</span><span class="p">(</span><span class="nx">socket</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl"><span class="nx">client</span><span class="p">.</span><span class="nx">configure</span><span class="p">(</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">feathers</span><span class="p">.</span><span class="nx">authentication</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">storage</span><span class="o">:</span> <span class="nb">window</span><span class="p">.</span><span class="nx">localStorage</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}),</span>
+</span></span><span class="line"><span class="cl"><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">App</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">(</span>
+</span></span><span class="line"><span class="cl">    <span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">client</span><span class="p">}</span><span class="o">&gt;</span>
+</span></span><span class="line"><span class="cl">      <span class="o">&lt;</span><span class="nx">Notes</span> <span class="o">/&gt;</span>
+</span></span><span class="line"><span class="cl">    <span class="o">&lt;</span><span class="err">/Provider&gt;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">Notes</span><span class="p">({</span> <span class="nx">tag</span> <span class="p">})</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="p">{</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">total</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">tag</span> <span class="p">}</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="k">if</span> <span class="p">(</span><span class="nx">status</span> <span class="o">===</span> <span class="s1">&#39;loading&#39;</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="k">return</span> <span class="s1">&#39;Loading...&#39;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="nx">status</span> <span class="o">===</span> <span class="s1">&#39;error&#39;</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="k">return</span> <span class="nx">notes</span><span class="p">.</span><span class="nx">error</span><span class="p">.</span><span class="nx">message</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">(</span>
+</span></span><span class="line"><span class="cl">    <span class="o">&lt;</span><span class="nx">div</span><span class="o">&gt;</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">Showing</span> <span class="p">{</span><span class="nx">data</span><span class="p">.</span><span class="nx">length</span><span class="p">}</span> <span class="nx">notes</span> <span class="k">of</span> <span class="p">{</span><span class="nx">total</span><span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="o">&lt;</span><span class="err">/div&gt;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><h2 id="api-reference">API Reference</h2>
 <h3 id="useget"><code>useGet</code></h3>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">id</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
-</code></pre></div><p><strong>Arguments</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">id</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
+</span></span></code></pre></div><p><strong>Arguments</strong></p>
 <ul>
 <li><code>serviceName</code> - the name of Feathers service</li>
 <li><code>id</code> - the id of the resource</li>
-<li><code>params</code> - any params you'd pass to a Feathers service call, plus any Figbird params</li>
+<li><code>params</code> - any params you&rsquo;d pass to a Feathers service call, plus any Figbird params</li>
 </ul>
 <p><strong>Figbird params</strong></p>
 <ul>
@@ -172,11 +172,11 @@
 <li><code>refetch</code> - function to refetch data</li>
 </ul>
 <h3 id="usefind"><code>useFind</code></h3>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
-</code></pre></div><p><strong>Arguments</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
+</span></span></code></pre></div><p><strong>Arguments</strong></p>
 <ul>
 <li><code>serviceName</code> - the name of Feathers service</li>
-<li><code>params</code> - any params you'd pass to Feathers, plus any Figbird params</li>
+<li><code>params</code> - any params you&rsquo;d pass to Feathers, plus any Figbird params</li>
 </ul>
 <p><strong>Figbird params</strong></p>
 <ul>
@@ -184,6 +184,7 @@
 <li><code>realtime</code> - one of <code>merge</code> (default), <code>refetch</code> or <code>disabled</code></li>
 <li><code>fetchPolicy</code> - one of <code>swr</code> (default), <code>cache-first</code> or <code>network-only</code></li>
 <li><code>allPages</code> - fetch all pages</li>
+<li><code>parallel</code> - when used in combination with <code>allPages</code> will fetch all pages in parallel</li>
 <li><code>matcher</code> - custom matcher function of signature <code>(defaultMatcher) =&gt; (query) =&gt; (item): bool</code>, used when merging realtime events into local query cache</li>
 </ul>
 <p><strong>Returns</strong></p>
@@ -201,8 +202,8 @@
 <li><code>skip</code> - number of skipped items (offset)</li>
 </ul>
 <h3 id="usemutation"><code>useMutation</code></h3>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">create</span><span class="p">,</span> <span class="nx">update</span><span class="p">,</span> <span class="nx">patch</span><span class="p">,</span> <span class="nx">remove</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
-</code></pre></div><p><strong>Arguments</strong></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">create</span><span class="p">,</span> <span class="nx">update</span><span class="p">,</span> <span class="nx">patch</span><span class="p">,</span> <span class="nx">remove</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
+</span></span></code></pre></div><p><strong>Arguments</strong></p>
 <ul>
 <li><code>serviceName</code> - the name of Feathers service</li>
 </ul>
@@ -217,17 +218,27 @@
 <li><code>error</code> - error object of the last failed mutation</li>
 </ul>
 <h3 id="usefeathers"><code>useFeathers</code></h3>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kr">const</span> <span class="p">{</span> <span class="nx">feathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFeathers</span><span class="p">(</span><span class="p">)</span>
-</code></pre></div><p>Get the feathers instance passed to <code>Provider</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">feathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFeathers</span><span class="p">()</span>
+</span></span></code></pre></div><p>Get the feathers instance passed to <code>Provider</code>.</p>
 <h3 id="provider"><code>Provider</code></h3>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">feathers</span><span class="p">}</span><span class="o">&gt;</span><span class="p">{</span><span class="nx">children</span><span class="p">}</span><span class="o">&lt;</span><span class="err">/</span><span class="err">P</span><span class="err">r</span><span class="err">o</span><span class="err">v</span><span class="err">i</span><span class="err">d</span><span class="err">e</span><span class="err">r</span><span class="err">&gt;</span>
-</code></pre></div><ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">feathers</span><span class="p">}</span><span class="o">&gt;</span><span class="p">{</span><span class="nx">children</span><span class="p">}</span><span class="o">&lt;</span><span class="err">/Provider&gt;</span>
+</span></span></code></pre></div><ul>
 <li><code>feathers</code> - feathers instance</li>
 <li><code>idField</code> - string or function, defaults to <code>item =&gt; item.id || item._id</code></li>
 <li><code>updatedAtField</code> - string or function, defaults to <code>item =&gt; item.updatedAt || item.updated_at</code>, used to avoid overwriting newer data in cache with older data when <code>get</code> or realtime <code>patched</code> requests are racing</li>
-<li><code>atom</code> - custom atom instance</li>
-<li><code>AtomContext</code> - custom atom context</li>
+<li><code>store</code> - custom store instance - allows inspecting cache contents</li>
 </ul>
+<h3 id="createstore"><code>createStore</code></h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">store</span> <span class="o">=</span> <span class="nx">createStore</span><span class="p">()</span>
+</span></span></code></pre></div><p>Create a custom store - helpful for inspecting contents of the cache.</p>
+<h3 id="cache"><code>cache</code></h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">createStore</span><span class="p">,</span> <span class="nx">cache</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">store</span> <span class="o">=</span> <span class="nx">createStore</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="nx">store</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="nx">cache</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="nx">store</span><span class="p">.</span><span class="nx">set</span><span class="p">(</span><span class="nx">cache</span><span class="p">,</span> <span class="nx">val</span> <span class="p">=&gt;</span> <span class="p">{</span> <span class="p">...</span><span class="nx">val</span><span class="p">,</span> <span class="nx">a</span><span class="o">:</span> <span class="mi">1</span> <span class="p">})</span>
+</span></span></code></pre></div><p>Get the cache atom for manipulating via the store API.</p>
 <h2 id="realtime">Realtime</h2>
 <p>Figbird is compatible with the Feathers realtime model out of the box. The moment you mount a component with a <code>useFind</code> or <code>useGet</code> hook, Figbird will start listening to realtime events for the services in use. It will only at most subscribe once per service. All realtime events will get processed in the following manner:</p>
 <ul>
@@ -239,7 +250,7 @@
 <h3 id="merge"><code>merge</code></h3>
 <p>This is the default mode that merges all realtime events into cached queries as described above.</p>
 <h3 id="refetch"><code>refetch</code></h3>
-<p>Sometimes, the client does not have the full information to make a decision about how to merge an individual realtime event into the local query result set. For example, if you have a server side query that picks the latest record of each kind and some record is removed - the client might not want to remove it from the query set, but instead show the correct record in it's place. In these cases, setting <code>realtime</code> param to <code>refetch</code> might be useful.</p>
+<p>Sometimes, the client does not have the full information to make a decision about how to merge an individual realtime event into the local query result set. For example, if you have a server side query that picks the latest record of each kind and some record is removed - the client might not want to remove it from the query set, but instead show the correct record in it&rsquo;s place. In these cases, setting <code>realtime</code> param to <code>refetch</code> might be useful.</p>
 <p>In <code>refetch</code> mode, the <code>useGet</code> and <code>useFind</code> results are not shared with other components that are in realtime mode, instead the objects are cached locally to those queries and those components. And once a realtime event is received, instead of merging that event as described above, the <code>find</code> or <code>get</code> is refetched in full. That is, the server told us that something in this service changed, and we use that as a signal to update our local result set.</p>
 <h3 id="disabled"><code>disabled</code></h3>
 <p>Setting <code>realtime</code> to <code>disabled</code> will store the <code>useGet</code> and <code>useFind</code> results locally and will not share them with components that are in <code>realtime</code> or <code>refetch</code> mode. This way, the results will stay as they are even as realtime events are received. You can still manually trigger a refetch using the <code>refetch</code> function which is returned by the <code>useGet</code> and <code>useFind</code> hooks.</p>
@@ -253,71 +264,81 @@
 <p>With this policy, Figbird will never show cached data on mount and will always fetch on component mount.</p>
 <h2 id="architecture">Architecture</h2>
 <p>The idea behind Figbird is rather simple. Fetch all the data requested by the hooks, index all items by id in the cache, listen to realtime events and update all items/queries as neccessary.</p>
-<p>Let's take a look at an example. Say, component X uses <code>useFind('comments')</code> hook, and component Y uses <code>useGet('comments/5')</code> hook. Figbird fetches this data and caches in a structure similar to:</p>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="p">{</span>
-  <span class="nx">entities</span><span class="o">:</span> <span class="p">{</span>
-    <span class="nx">comments</span><span class="o">:</span> <span class="p">{</span>
-      <span class="mi">2</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;a&#39;</span> <span class="p">}</span><span class="p">,</span>
-      <span class="mi">4</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">4</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;b&#39;</span> <span class="p">}</span><span class="p">,</span>
-      <span class="mi">5</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;c&#39;</span> <span class="p">}</span><span class="p">,</span>
-      <span class="mi">7</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">7</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;d&#39;</span> <span class="p">}</span><span class="p">,</span>
-    <span class="p">}</span>
-  <span class="p">}</span>
-  <span class="nx">queries</span><span class="o">:</span> <span class="p">{</span>
-    <span class="nx">comments</span><span class="o">:</span> <span class="p">{</span>
-      <span class="s1">&#39;f223315&#39;</span><span class="o">:</span> <span class="p">{</span>
-        <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;find&#39;</span><span class="p">,</span>
-        <span class="nx">data</span><span class="o">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">]</span><span class="p">,</span>
-        <span class="nx">params</span><span class="o">:</span> <span class="p">{</span><span class="p">}</span><span class="p">,</span>
-        <span class="nx">meta</span><span class="o">:</span> <span class="p">{</span> <span class="nx">total</span><span class="o">:</span> <span class="mi">4</span><span class="p">,</span> <span class="nx">limit</span><span class="o">:</span> <span class="mi">100</span><span class="p">,</span> <span class="nx">skip</span><span class="o">:</span> <span class="mi">0</span> <span class="p">}</span>
-      <span class="p">}</span><span class="p">,</span>
-      <span class="s1">&#39;g742218&#39;</span><span class="o">:</span> <span class="p">{</span>
-        <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;get&#39;</span><span class="p">,</span>
-        <span class="nx">id</span><span class="o">:</span> <span class="mi">5</span><span class="p">,</span>
-        <span class="nx">data</span><span class="o">:</span> <span class="p">[</span><span class="mi">5</span><span class="p">]</span>
-      <span class="p">}</span>
-    <span class="p">}</span>
-  <span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div><p>Now if some other user/client/server makes a modification to the resource already referenced, the cache will be updated. For example, if we receive the following realtime event:</p>
+<p>Let&rsquo;s take a look at an example. Say, component X uses <code>useFind('comments')</code> hook, and component Y uses <code>useGet('comments/5')</code> hook. Figbird fetches this data and caches in a structure similar to:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">entities</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">comments</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="mi">2</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;a&#39;</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">      <span class="mi">4</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">4</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;b&#39;</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">      <span class="mi">5</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;c&#39;</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">      <span class="mi">7</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">7</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;d&#39;</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">queries</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">comments</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="s1">&#39;f223315&#39;</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;find&#39;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">data</span><span class="o">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">params</span><span class="o">:</span> <span class="p">{},</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">meta</span><span class="o">:</span> <span class="p">{</span> <span class="nx">total</span><span class="o">:</span> <span class="mi">4</span><span class="p">,</span> <span class="nx">limit</span><span class="o">:</span> <span class="mi">100</span><span class="p">,</span> <span class="nx">skip</span><span class="o">:</span> <span class="mi">0</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">      <span class="p">},</span>
+</span></span><span class="line"><span class="cl">      <span class="s1">&#39;g742218&#39;</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;get&#39;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">id</span><span class="o">:</span> <span class="mi">5</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">data</span><span class="o">:</span> <span class="p">[</span><span class="mi">5</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">      <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><p>Now if some other user/client/server makes a modification to the resource already referenced, the cache will be updated. For example, if we receive the following realtime event:</p>
 <p><code>[&quot;comments patched&quot;,{&quot;id&quot;:4,&quot;content&quot;:&quot;b2&quot;}]</code>.</p>
 <p>The entities get updated:</p>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="p">{</span>
-  <span class="nx">entities</span><span class="o">:</span> <span class="p">{</span>
-    <span class="nx">comments</span><span class="o">:</span> <span class="p">{</span>
-      <span class="mi">2</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;a&#39;</span> <span class="p">}</span><span class="p">,</span>
-      <span class="mi">4</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">4</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;b2&#39;</span> <span class="p">}</span><span class="p">,</span> <span class="c1">// updated
-</span><span class="c1"></span>      <span class="mi">5</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;c&#39;</span> <span class="p">}</span><span class="p">,</span>
-      <span class="mi">7</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">7</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;d&#39;</span> <span class="p">}</span><span class="p">,</span>
-    <span class="p">}</span>
-  <span class="p">}</span>
-  <span class="nx">queries</span><span class="o">:</span> <span class="p">{</span>
-    <span class="c1">// ...same as before
-</span><span class="c1"></span>  <span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div><p>And now the component that was using <code>useFind</code> gets rerendered since it's data has been updated, but component using <code>useGet</code> does not, since it is not referencing the changed comment.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">entities</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">comments</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="mi">2</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;a&#39;</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">      <span class="mi">4</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">4</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;b2&#39;</span> <span class="p">},</span> <span class="c1">// updated
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>      <span class="mi">5</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;c&#39;</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">      <span class="mi">7</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="mi">7</span><span class="p">,</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;d&#39;</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">queries</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">// ...same as before
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><p>And now the component that was using <code>useFind</code> gets rerendered since it&rsquo;s data has been updated, but component using <code>useGet</code> does not, since it is not referencing the changed comment.</p>
 <p>Hopefully this small example gives you more clarity in how to fit Figbird into your application.</p>
 <h2 id="advanced-usage">Advanced usage</h2>
 <h3 id="inspect-cache-contents">Inspect cache contents</h3>
-<p>If you want to have a looke at the cache contents for debugging reasons, you can do so as shown above. Note: this is not part of the public API and could change in the future.</p>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kd">function</span> <span class="nx">App</span><span class="p">(</span><span class="p">)</span> <span class="p">{</span>
-  <span class="kr">const</span> <span class="p">{</span> <span class="nx">atom</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFigbird</span><span class="p">(</span><span class="p">)</span>
-
-  <span class="nx">useEffect</span><span class="p">(</span><span class="p">(</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="p">{</span>
-    <span class="c1">// attach the store to window for debugging
-</span><span class="c1"></span>    <span class="nb">window</span><span class="p">.</span><span class="nx">atom</span> <span class="o">=</span> <span class="nx">atom</span>
-
-    <span class="c1">// log the contents of the cache
-</span><span class="c1"></span>    <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">atom</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="p">)</span><span class="p">)</span>
-
-    <span class="c1">// listen to changes to the cache
-</span><span class="c1"></span>    <span class="nx">atom</span><span class="p">.</span><span class="nx">observe</span><span class="p">(</span><span class="p">(</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="p">{</span>
-      <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">atom</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="p">)</span><span class="p">)</span>
-    <span class="p">}</span><span class="p">)</span>
-  <span class="p">}</span><span class="p">,</span> <span class="p">[</span><span class="nx">atom</span><span class="p">]</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div><h3 id="use-without-feathersjs">Use without Feathers.js</h3>
-<p>In principle, you could use Figbird with any REST API as long as several conventions are followed or are mapped to. Feathers is a collection of patterns as much as it is a library. In fact, Figbird does not have any code dependencies on Feathers. It's only the Feathers patterns and conventions that the library is designed for. In short, those conventions are:</p>
+<p>If you want to have a looke at the cache contents for debugging reasons, you can do so as shown above. You can also update the store using this direct access. See <a href="https://github.com/KidkArolis/kinfolk/#createstore"><code>kinfolk</code> docs</a> for full API docs.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-jsx" data-lang="jsx"><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">React</span><span class="p">,</span> <span class="p">{</span> <span class="nx">useState</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;react&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">createFeathersClient</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/feathers&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Provider</span><span class="p">,</span> <span class="nx">createStore</span><span class="p">,</span> <span class="nx">cache</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">store</span> <span class="o">=</span> <span class="p">(</span><span class="nb">window</span><span class="p">.</span><span class="nx">store</span> <span class="o">=</span> <span class="nx">createStore</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">feathers</span> <span class="o">=</span> <span class="nx">createFeathersClient</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">export</span> <span class="kd">function</span> <span class="nx">App</span><span class="p">({</span> <span class="nx">children</span> <span class="p">})</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">(</span>
+</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">Provider</span> <span class="na">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">feathers</span><span class="p">}</span> <span class="na">store</span><span class="o">=</span><span class="p">{</span><span class="nx">store</span><span class="p">}&gt;</span>
+</span></span><span class="line"><span class="cl">      <span class="p">{</span><span class="nx">children</span><span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="p">&lt;/</span><span class="nt">Provider</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">// inspect contents of the entire store, the figbird
+</span></span></span><span class="line"><span class="cl"><span class="c1">// cache atom will be namespaced under the &#34;figbird&#34; key
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nb">window</span><span class="p">.</span><span class="nx">store</span><span class="p">.</span><span class="nx">debug</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">// inspect the contents of the figbird cache directly
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nb">window</span><span class="p">.</span><span class="nx">store</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="nx">cache</span><span class="p">)))</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">// update contents
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nb">window</span><span class="p">.</span><span class="nx">store</span><span class="p">.</span><span class="nx">set</span><span class="p">(</span><span class="nx">cache</span><span class="p">,</span> <span class="nx">val</span> <span class="p">=&gt;</span> <span class="p">{</span> <span class="p">...</span><span class="nx">val</span><span class="p">,</span> <span class="nx">a</span><span class="o">:</span> <span class="mi">1</span> <span class="p">})</span>
+</span></span></code></pre></div><h3 id="use-with-existing-kinfolk-store">Use with existing kinfolk store</h3>
+<p>Figbird is using <a href="https://github.com/KidkArolis/kinfolk">kinfolk</a> for it&rsquo;s cache. This allows for a succint implementation and efficient bindings from cached data to components. It is possible to pass in a shared <code>kinfolk</code> store to <code>figbird</code> if you&rsquo;re already using <code>kinfolk</code> in your app you&rsquo;d like to create a selector that depends on figbird cache and your application state. Note - that is advanced usage and is entirely optional.</p>
+<h3 id="use-without-feathersjs">Use without Feathers.js</h3>
+<p>In principle, you could use Figbird with any REST API as long as several conventions are followed or are mapped to. Feathers is a collection of patterns as much as it is a library. In fact, Figbird does not have any code dependencies on Feathers. It&rsquo;s only the Feathers patterns and conventions that the library is designed for. In short, those conventions are:</p>
 <ol>
 <li>Structure your API around resources</li>
 <li>Where the resources support operations: <code>find</code>, <code>get</code>, <code>create</code>, <code>update</code>, <code>patch</code>, <code>remove</code></li>
@@ -332,40 +353,8 @@
 <li><code>PATCH /comments/:id</code></li>
 <li><code>DELETE /comments/id</code></li>
 </ul>
-<p>The result of the <code>find</code> operation or <code>GET /comments</code> would be an object of shape <code>{ data, total, limit, skip }</code> (Note: the pagination envolope will be customizable in Figbird in the future, but it's current fixed to this format).</p>
-<h3 id="use-with-existing-tiny-atom">Use with existing tiny-atom</h3>
-<p>Figbird is using <a href="https://github.com/KidkArolis/tiny-atom">tiny-atom</a> for it's cache. This allows for a succint implementation and efficient bindings from cached data to components. It is possible to pass in a custom instance of tiny-atom to <code>figbird</code> if you're already using tiny-atom in your app. This would allow for easier inspection and debugging of your application's state and behaviour. For example, here is the <code>tiny-atom</code> logger output:</p>
-<p><img src="https://user-images.githubusercontent.com/324440/64800653-d94fec00-d57e-11e9-8b35-5a943a22ebe1.png" alt="Figbird Logger"></p>
-<h4 id="pass-atom-via-prop">Pass atom via prop</h4>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kr">import</span> <span class="nx">React</span><span class="p">,</span> <span class="p">{</span> <span class="nx">useState</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;react&#39;</span>
-<span class="kr">import</span> <span class="p">{</span> <span class="nx">createAtom</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;tiny-atom&#39;</span>
-<span class="kr">import</span> <span class="p">{</span> <span class="nx">Provider</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
-<span class="kr">import</span> <span class="nx">createFeathersClient</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/feathers&#39;</span>
+<p>The result of the <code>find</code> operation or <code>GET /comments</code> would be an object of shape <code>{ data, total, limit, skip }</code> (Note: the pagination envolope will be customizable in Figbird in the future, but it&rsquo;s current fixed to this format).</p>
 
-<span class="kr">export</span> <span class="kd">function</span> <span class="nx">App</span><span class="p">(</span><span class="p">)</span> <span class="p">{</span>
-  <span class="kr">const</span> <span class="p">[</span><span class="nx">feathers</span><span class="p">]</span> <span class="o">=</span> <span class="nx">useState</span><span class="p">(</span><span class="p">(</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="nx">createFeathersClient</span><span class="p">(</span><span class="p">)</span><span class="p">)</span>
-  <span class="kr">const</span> <span class="p">[</span><span class="nx">atom</span><span class="p">]</span> <span class="o">=</span> <span class="nx">useState</span><span class="p">(</span><span class="p">(</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="nx">createAtom</span><span class="p">(</span><span class="p">)</span><span class="p">)</span>
-  <span class="k">return</span> <span class="p">(</span>
-    <span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">feathers</span><span class="p">}</span> <span class="nx">atom</span><span class="o">=</span><span class="p">{</span><span class="nx">atom</span><span class="p">}</span><span class="o">&gt;</span>
-      <span class="p">{</span><span class="nx">children</span><span class="p">}</span>
-    <span class="o">&lt;</span><span class="err">/</span><span class="err">P</span><span class="err">r</span><span class="err">o</span><span class="err">v</span><span class="err">i</span><span class="err">d</span><span class="err">e</span><span class="err">r</span><span class="err">&gt;</span>
-  <span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div><h4 id="pass-atom-via-context">Pass atom via context</h4>
-<div class="highlight"><pre class="chroma"><code class="language-js" data-lang="js"><span class="kr">import</span> <span class="nx">React</span><span class="p">,</span> <span class="p">{</span> <span class="nx">useState</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;react&#39;</span>
-<span class="kr">import</span> <span class="p">{</span> <span class="nx">AtomContext</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;tiny-atom&#39;</span>
-<span class="kr">import</span> <span class="p">{</span> <span class="nx">Provider</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
-<span class="kr">import</span> <span class="nx">createFeathersClient</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/feathers&#39;</span>
-
-<span class="kr">export</span> <span class="kd">function</span> <span class="nx">App</span><span class="p">(</span><span class="p">)</span> <span class="p">{</span>
-  <span class="kr">const</span> <span class="p">[</span><span class="nx">feathers</span><span class="p">]</span> <span class="o">=</span> <span class="nx">useState</span><span class="p">(</span><span class="p">(</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="nx">createFeathersClient</span><span class="p">(</span><span class="p">)</span><span class="p">)</span>
-  <span class="k">return</span> <span class="p">(</span>
-    <span class="o">&lt;</span><span class="nx">Provider</span> <span class="nx">feathers</span><span class="o">=</span><span class="p">{</span><span class="nx">feathers</span><span class="p">}</span> <span class="nx">AtomContext</span><span class="o">=</span><span class="p">{</span><span class="nx">AtomContext</span><span class="p">}</span><span class="o">&gt;</span>
-      <span class="p">{</span><span class="nx">children</span><span class="p">}</span>
-    <span class="o">&lt;</span><span class="err">/</span><span class="err">P</span><span class="err">r</span><span class="err">o</span><span class="err">v</span><span class="err">i</span><span class="err">d</span><span class="err">e</span><span class="err">r</span><span class="err">&gt;</span>
-  <span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div>
     </div>
   </div>
   
@@ -381,33 +370,35 @@
     <li><a href="#example">Example</a></li>
     <li><a href="#api-reference">API Reference</a>
       <ul>
-        <li><a href="#useget">useGet</a></li>
-        <li><a href="#usefind">useFind</a></li>
-        <li><a href="#usemutation">useMutation</a></li>
-        <li><a href="#usefeathers">useFeathers</a></li>
-        <li><a href="#provider">Provider</a></li>
+        <li><a href="#useget"><code>useGet</code></a></li>
+        <li><a href="#usefind"><code>useFind</code></a></li>
+        <li><a href="#usemutation"><code>useMutation</code></a></li>
+        <li><a href="#usefeathers"><code>useFeathers</code></a></li>
+        <li><a href="#provider"><code>Provider</code></a></li>
+        <li><a href="#createstore"><code>createStore</code></a></li>
+        <li><a href="#cache"><code>cache</code></a></li>
       </ul>
     </li>
     <li><a href="#realtime">Realtime</a>
       <ul>
-        <li><a href="#merge">merge</a></li>
-        <li><a href="#refetch">refetch</a></li>
-        <li><a href="#disabled">disabled</a></li>
+        <li><a href="#merge"><code>merge</code></a></li>
+        <li><a href="#refetch"><code>refetch</code></a></li>
+        <li><a href="#disabled"><code>disabled</code></a></li>
       </ul>
     </li>
     <li><a href="#fetch-policies-1">Fetch Policies</a>
       <ul>
-        <li><a href="#swr">swr</a></li>
-        <li><a href="#cache-first">cache-first</a></li>
-        <li><a href="#network-only">network-only</a></li>
+        <li><a href="#swr"><code>swr</code></a></li>
+        <li><a href="#cache-first"><code>cache-first</code></a></li>
+        <li><a href="#network-only"><code>network-only</code></a></li>
       </ul>
     </li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#advanced-usage">Advanced usage</a>
       <ul>
         <li><a href="#inspect-cache-contents">Inspect cache contents</a></li>
+        <li><a href="#use-with-existing-kinfolk-store">Use with existing kinfolk store</a></li>
         <li><a href="#use-without-feathersjs">Use without Feathers.js</a></li>
-        <li><a href="#use-with-existing-tiny-atom">Use with existing tiny-atom</a></li>
       </ul>
     </li>
   </ul>
@@ -423,7 +414,7 @@
   
 </div>
 </main>
-  <script src="/figbird/js/master.js" type="text/javascript"></script>
+  <script src="/js/master.js" type="text/javascript"></script>
 </body>
 
 </html>
