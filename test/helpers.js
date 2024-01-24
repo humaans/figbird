@@ -122,14 +122,19 @@ class Service {
       this.data = { ...this.data }
       for (const datum of data) {
         this.data[datum.id] = { ...datum, updatedAt: datum.updatedAt || Date.now() }
-        this.emit('created', this.data[datum.id])
+        setTimeout(() => {
+          this.emit('created', this.data[datum.id])
+        }, 1)
       }
       return Promise.all(ids.map(id => this.get(id)))
     }
     this.counts.create++
     const { id } = data
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
-    this.emit('created', this.data[id])
+    const mutatedItem = this.data[id]
+    setTimeout(() => {
+      this.emit('created', mutatedItem)
+    }, 1)
     return this.get(id)
   }
 
@@ -139,25 +144,33 @@ class Service {
       ...this.data,
       [id]: { ...this.data[id], ...data, updatedAt: data.updatedAt || Date.now() },
     }
-    this.emit('patched', this.data[id])
+    const mutatedItem = this.data[id]
+    setTimeout(() => {
+      this.emit('patched', mutatedItem)
+    }, 1)
     return this.get(id)
   }
 
   update(id, data, params) {
     this.counts.update++
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
-    this.emit('updated', this.data[id])
+    const mutatedItem = this.data[id]
+    setTimeout(() => {
+      this.emit('updated', mutatedItem)
+    }, 1)
     return this.get(id)
   }
 
   remove(id, params) {
     this.counts.remove++
     this.data = { ...this.data }
-    const item = this.data[id]
+    const mutatedItem = this.data[id]
     delete this.data[id]
-    this.emit('removed', item)
+    setTimeout(() => {
+      this.emit('removed', mutatedItem)
+    }, 1)
     // TODO - check if feathers throws 404 in this case
-    return Promise.resolve(item)
+    return Promise.resolve(mutatedItem)
   }
 }
 
