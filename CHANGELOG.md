@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.13.1
+
+- Fix an issue where multi operations in useMutation (e.g. creating an array of items) would not correctly update the cache after completing
+
 ## 0.13.0
 
 - Switch the cache store from `tiny-atom` to `kinfolk`. Breaking change if you're relying on using the cache directly. Refer to [`kinfolk`](https://github.com/KidkArolis/kinfolk/ documentation] for how to consume the new cache.
