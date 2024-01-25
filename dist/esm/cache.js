@@ -184,11 +184,11 @@ function fetched(curr, { serviceName, data, method, params, queryId, realtime, m
     const { data: items } = data, meta = _object_without_properties(data, [
         "data"
     ]);
-    const entities = realtime === 'merge' ? _object_spread({}, getIn(curr, [
+    const entities = realtime === 'merge' ? _object_spread({}, getIn(next, [
         'entities',
         serviceName
     ])) : {};
-    const index = realtime === 'merge' ? _object_spread({}, getIn(curr, [
+    const index = realtime === 'merge' ? _object_spread({}, getIn(next, [
         'index',
         serviceName
     ])) : {};
@@ -254,9 +254,9 @@ function updated(curr, { serviceName, item }, { idField, updatedAtField }) {
             return curr;
         }
     }
-    let next;
+    let next = curr;
     if (currItem) {
-        next = setIn(curr, [
+        next = setIn(next, [
             'entities',
             serviceName,
             itemId
@@ -266,7 +266,7 @@ function updated(curr, { serviceName, item }, { idField, updatedAtField }) {
             queries: {},
             size: 0
         };
-        next = setIn(curr, [
+        next = setIn(next, [
             'entities',
             serviceName,
             itemId
@@ -300,7 +300,8 @@ function removed(curr, { serviceName, item: itemOrItems }, { idField, updatedAtF
         ]));
     if (!exists) return curr;
     // updating queries updates state, get a fresh copy
-    curr = updateQueries(curr, {
+    let next = curr;
+    next = updateQueries(next, {
         serviceName,
         method: 'remove',
         item: itemOrItems
@@ -309,11 +310,10 @@ function removed(curr, { serviceName, item: itemOrItems }, { idField, updatedAtF
         updatedAtField
     });
     // now remove it from entities
-    const serviceEntities = _object_spread({}, getIn(curr, [
+    const serviceEntities = _object_spread({}, getIn(next, [
         'entities',
         serviceName
     ]));
-    let next = curr;
     const removedIds = [];
     for (const item of items){
         delete serviceEntities[idField(item)];
@@ -332,11 +332,11 @@ function updateQueries(curr, { serviceName, method, item }, { idField, updatedAt
     let next = curr;
     for (const item of items){
         const itemId = idField(item);
-        const queries = _object_spread({}, getIn(curr, [
+        const queries = _object_spread({}, getIn(next, [
             'queries',
             serviceName
         ]));
-        const index = _object_spread({}, getIn(curr, [
+        const index = _object_spread({}, getIn(next, [
             'index',
             serviceName,
             itemId

@@ -228,11 +228,11 @@ function fetched(curr, param, param1) {
     var items = data.data, meta = _object_without_properties(data, [
         "data"
     ]);
-    var entities = realtime === "merge" ? _object_spread({}, (0, _helpers.getIn)(curr, [
+    var entities = realtime === "merge" ? _object_spread({}, (0, _helpers.getIn)(next, [
         "entities",
         serviceName
     ])) : {};
-    var index = realtime === "merge" ? _object_spread({}, (0, _helpers.getIn)(curr, [
+    var index = realtime === "merge" ? _object_spread({}, (0, _helpers.getIn)(next, [
         "index",
         serviceName
     ])) : {};
@@ -317,9 +317,9 @@ function updated(curr, param, param1) {
             return curr;
         }
     }
-    var next;
+    var next = curr;
     if (currItem) {
-        next = (0, _helpers.setIn)(curr, [
+        next = (0, _helpers.setIn)(next, [
             "entities",
             serviceName,
             itemId
@@ -329,7 +329,7 @@ function updated(curr, param, param1) {
             queries: {},
             size: 0
         };
-        next = (0, _helpers.setIn)(curr, [
+        next = (0, _helpers.setIn)(next, [
             "entities",
             serviceName,
             itemId
@@ -366,7 +366,8 @@ function removed(curr, param, param1) {
     });
     if (!exists) return curr;
     // updating queries updates state, get a fresh copy
-    curr = updateQueries(curr, {
+    var next = curr;
+    next = updateQueries(next, {
         serviceName: serviceName,
         method: "remove",
         item: itemOrItems
@@ -375,11 +376,10 @@ function removed(curr, param, param1) {
         updatedAtField: updatedAtField
     });
     // now remove it from entities
-    var serviceEntities = _object_spread({}, (0, _helpers.getIn)(curr, [
+    var serviceEntities = _object_spread({}, (0, _helpers.getIn)(next, [
         "entities",
         serviceName
     ]));
-    var next = curr;
     var removedIds = [];
     var _iteratorNormalCompletion = true, _didIteratorError = false, _iteratorError = undefined;
     try {
@@ -419,11 +419,11 @@ function updateQueries(curr, param, param1) {
         var _loop = function() {
             var item = _step.value;
             var itemId = idField(item);
-            var queries = _object_spread({}, (0, _helpers.getIn)(curr, [
+            var queries = _object_spread({}, (0, _helpers.getIn)(next, [
                 "queries",
                 serviceName
             ]));
-            var index = _object_spread({}, (0, _helpers.getIn)(curr, [
+            var index = _object_spread({}, (0, _helpers.getIn)(next, [
                 "index",
                 serviceName,
                 itemId
