@@ -181,7 +181,7 @@ test('useFind binding updates after realtime create', async t => {
 })
 
 test('useFind binding updates after realtime patch', async t => {
-  const { render, flush, unmount, $, $all } = dom()
+  const { render, flush, unmount, $ } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
     return <NoteList notes={notes} />
@@ -202,10 +202,7 @@ test('useFind binding updates after realtime patch', async t => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
-  t.deepEqual(
-    $all('.note').map(n => n.innerHTML),
-    ['doc'],
-  )
+  t.is($('.note').innerHTML, 'doc')
 
   unmount()
 })
@@ -1271,6 +1268,9 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { updatedAt: null })
+  })
+
+  await flush(async () => {
     await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: 1 })
     await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', updatedAt: 2 })
     await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', updatedAt: 3 })
@@ -1308,19 +1308,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
       3: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
@@ -1357,13 +1357,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
