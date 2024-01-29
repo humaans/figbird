@@ -1100,6 +1100,76 @@ test('useFind - fetchPolicy cache-first', async t => {
   unmount()
 })
 
+test('useFind - fetchPolicy cache-first and changing query', async t => {
+  const { render, flush, unmount, $all } = dom()
+  let renderNote
+
+  function Content() {
+    const [n, setRenderNote] = useState(1)
+    renderNote = setRenderNote
+    return n ? <Note n={n} /> : null
+  }
+
+  function Note({ n }) {
+    const notes = useFind('notes', { query: { tag: 'idea' }, n, fetchPolicy: 'cache-first' })
+    return <NoteList notes={notes} />
+  }
+
+  const store = createStore()
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers} store={store}>
+      <Content />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(feathers.service('notes').counts.find, 1)
+
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello'],
+  )
+
+  await flush(() => {
+    renderNote(0)
+  })
+
+  // update note in the meantime
+  await feathers.service('notes').patch(1, { content: 'hello-2', tag: 'idea' })
+
+  // render 2nd time
+  await flush(() => {
+    renderNote(2)
+  })
+
+  // we do a second find because we changed n param to 2
+  t.is(feathers.service('notes').counts.find, 2)
+
+  // we see the updated note
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello-2'],
+  )
+
+  // render 3rd time
+  await flush(() => {
+    renderNote(1)
+  })
+
+  // no find happened this time, we used cache, even though we changed n!
+  t.is(feathers.service('notes').counts.find, 2)
+
+  // we see old note
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello-2'],
+  )
+
+  unmount()
+})
+
 test('useFind - fetchPolicy network-only', async t => {
   const { render, flush, unmount, $all } = dom()
   let renderNote
