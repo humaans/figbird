@@ -194,16 +194,3 @@ export function mockFeathers(services) {
 
   return feathers
 }
-
-export async function flush(app) {
-  const update = async () => {
-    app.update()
-  }
-
-  // flush effects
-  await act(update)
-  // wait for data to be fetched and atom changes to propagate
-  await new Promise(resolve => setTimeout(resolve, 20))
-  // flush the atom state change effects
-  await act(update)
-}
