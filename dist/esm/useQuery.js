@@ -77,14 +77,13 @@ function _object_without_properties_loose(source, excluded) {
     }
     return target;
 }
-import { useReducer, useEffect, useCallback, useMemo } from 'react';
+import { useReducer, useEffect, useCallback, useMemo, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useFeathers } from './core';
 import { useRealtime } from './useRealtime';
 import { useCache } from './cache';
-import { hashObject, inflight } from './helpers';
-import { usePrevious } from './usePrevious';
-const get = inflight((service, id, params, options)=>`${service.path}/${options.queryId}`, getter);
-const find = inflight((service, params, options)=>`${service.path}/${options.queryId}`, finder);
+import { fetch } from './fetch';
+import { hashObject } from './helpers';
 const fetchPolicies = [
     'swr',
     'cache-first',
@@ -95,13 +94,32 @@ const realtimeModes = [
     'refetch',
     'disabled'
 ];
-const emptyCachedResult = {
-    data: null
-};
+function reducer(state, action) {
+    switch(action.type){
+        case 'fetching':
+            return _object_spread_props(_object_spread({}, state), {
+                status: 'fetching',
+                error: null
+            });
+        case 'success':
+            return _object_spread_props(_object_spread({}, state), {
+                status: 'success'
+            });
+        case 'error':
+            return _object_spread_props(_object_spread({}, state), {
+                status: 'error',
+                error: action.error
+            });
+        case 'reset':
+            return _object_spread_props(_object_spread({}, state), {
+                status: 'pending',
+                error: null
+            });
+    }
+}
 /**
  * A generic abstraction of both get and find
  */ export function useQuery(serviceName, options = {}, queryHookOptions = {}) {
-    const { method, id, selectData, transformResponse } = queryHookOptions;
     const feathers = useFeathers();
     let { skip, allPages, parallel, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
         "skip",
@@ -111,8 +129,8 @@ const emptyCachedResult = {
         "fetchPolicy",
         "matcher"
     ]);
-    realtime = realtime || 'disabled';
-    if (realtime !== 'disabled' && realtime !== 'merge' && realtime !== 'refetch') {
+    const { method, id, selectData, transformResponse } = queryHookOptions;
+    if (!realtimeModes.includes(realtime)) {
         throw new Error(`Bad realtime option, must be one of ${[
             realtimeModes
         ].join(', ')}`);
@@ -122,229 +140,154 @@ const emptyCachedResult = {
             fetchPolicies
         ].join(', ')}`);
     }
-    const queryId = `${method.substr(0, 1)}:${hashObject({
+    const queryId = useQueryHash({
         serviceName,
         method,
         id,
         params,
+        allPages,
         realtime
-    })}`;
-    let [cachedResult, updateCache] = useCache({
-        serviceName,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    params = useMemo(()=>params, [
+        queryId
+    ]);
+    const [cachedResult, updateCache] = useCache({
         queryId,
+        serviceName,
         method,
-        id,
         params,
         realtime,
         selectData,
-        transformResponse,
         matcher
     });
-    let hasCachedData = !!cachedResult.data;
-    const fetched = fetchPolicy === 'cache-first' && hasCachedData;
+    const isCacheSufficient = fetchPolicy === 'cache-first' && !!cachedResult;
     const [state, dispatch] = useReducer(reducer, {
-        reloading: false,
-        fetched,
-        fetchedCount: 0,
-        refetchSeq: 0,
+        status: isCacheSufficient ? 'success' : 'pending',
         error: null
     });
-    if (fetchPolicy === 'network-only' && state.fetchedCount === 0) {
-        cachedResult = emptyCachedResult;
-        hasCachedData = false;
-    }
-    const handleRealtimeEvent = useCallback((payload)=>{
-        if (realtime !== 'refetch') return;
-        dispatch({
-            type: 'refetch'
-        });
-    }, [
-        dispatch,
-        realtime
-    ]);
+    const isPending = state.status === 'pending';
+    const requestRef = useRef(0);
     useEffect(()=>{
-        let disposed = false;
-        if (state.fetched) return;
         if (skip) return;
+        if (!isPending) return;
+        if (isCacheSufficient) return;
+        // increment the request ref so we can ignore old requests
+        const reqRef = requestRef.current = requestRef.current + 1;
         dispatch({
             type: 'fetching'
         });
-        const service = feathers.service(serviceName);
-        const result = method === 'get' ? get(service, id, params, {
-            queryId
-        }) : find(service, params, {
+        fetch(feathers, serviceName, method, id, params, {
             queryId,
             allPages,
             parallel
-        });
-        result.then((res)=>{
-            // no res means we've piggy backed on an in flight request
-            if (res) {
-                updateCache(res);
-            }
-            if (!disposed) {
-                dispatch({
-                    type: 'success'
-                });
-            }
-        }).catch((err)=>{
-            if (!disposed) {
+        }).then((res)=>{
+            flushSync(()=>{
+                // no res means we've piggy backed on an in flight request
+                if (res) {
+                    // update cache even if this particular useQuery invocation
+                    // no longer needs the result, that is because we are potentially
+                    // sharing this request with other useQuery invocations that
+                    // might still want the result to be propagated to cache
+                    updateCache(transformResponse(res));
+                }
+                if (reqRef === requestRef.current) {
+                    dispatch({
+                        type: 'success'
+                    });
+                }
+            });
+        }).catch((error)=>{
+            if (reqRef === requestRef.current) {
                 dispatch({
                     type: 'error',
-                    payload: err
+                    error
                 });
             }
         });
-        return ()=>{
-            disposed = true;
-        };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         feathers,
-        id,
-        method,
-        serviceName,
         queryId,
-        state.fetched,
-        state.refetchSeq,
+        serviceName,
+        method,
+        id,
+        params,
+        transformResponse,
         skip,
         allPages,
-        parallel
+        parallel,
+        updateCache,
+        isPending,
+        isCacheSufficient
     ]);
-    var _usePrevious;
-    // If serviceName or queryId changed, we should refetch the data
-    const prevServiceName = (_usePrevious = usePrevious(serviceName)) !== null && _usePrevious !== void 0 ? _usePrevious : serviceName;
-    var _usePrevious1;
-    const prevQueryId = (_usePrevious1 = usePrevious(queryId)) !== null && _usePrevious1 !== void 0 ? _usePrevious1 : queryId;
-    useEffect(()=>{
-        if (prevServiceName !== serviceName || prevQueryId !== queryId) {
-            dispatch({
-                type: 'reset'
-            });
-        }
-    }, [
-        serviceName,
-        queryId,
-        prevServiceName,
-        prevQueryId
-    ]);
-    // realtime hook will make sure we're listening to all of the
-    // updates to this service
-    useRealtime(serviceName, realtime, handleRealtimeEvent);
-    const loading = !skip && !hasCachedData && !state.error;
-    const status = loading ? 'loading' : state.error ? 'error' : 'success';
-    const isFetching = loading || state.reloading;
     const refetch = useCallback(()=>dispatch({
-            type: 'refetch'
+            type: 'reset'
         }), [
         dispatch
     ]);
-    return useMemo(()=>_object_spread_props(_object_spread({}, skip ? {
+    // refetch if the query changes
+    useEffect(()=>{
+        if (!isCacheSufficient) {
+            refetch();
+        }
+    }, [
+        refetch,
+        queryId,
+        isCacheSufficient
+    ]);
+    // realtime hook subscribes to realtime updates to this service
+    useRealtime(serviceName, realtime, refetch);
+    let status;
+    let isFetching = state.status === 'pending' || state.status === 'fetching';
+    let result = useMemo(()=>({
             data: null
-        } : cachedResult), {
+        }), []);
+    const error = state.error;
+    if (skip) {
+        status = 'success';
+        isFetching = false;
+    } else if (state.error) {
+        status = 'error';
+    } else if (fetchPolicy === 'swr') {
+        status = cachedResult ? 'success' : 'loading';
+        result = cachedResult || result;
+    } else if (fetchPolicy === 'cache-first') {
+        status = cachedResult ? 'success' : 'loading';
+        result = cachedResult || result;
+    } else if (fetchPolicy === 'network-only') {
+        status = isFetching ? 'loading' : 'success';
+        result = isFetching ? result : cachedResult;
+    }
+    return useMemo(()=>_object_spread_props(_object_spread({}, result), {
             status,
             refetch,
             isFetching,
-            error: state.error
+            error
         }), [
-        skip,
-        cachedResult,
+        result,
         status,
-        state.error,
+        error,
         refetch,
         isFetching
     ]);
 }
-function reducer(state, action) {
-    switch(action.type){
-        case 'fetching':
-            return _object_spread_props(_object_spread({}, state), {
-                reloading: true,
-                error: null
-            });
-        case 'success':
-            return _object_spread_props(_object_spread({}, state), {
-                fetched: true,
-                fetchedCount: state.fetchedCount + 1,
-                reloading: false
-            });
-        case 'error':
-            return _object_spread_props(_object_spread({}, state), {
-                reloading: false,
-                fetched: true,
-                fetchedCount: state.fetchedCount + 1,
-                error: action.payload
-            });
-        case 'refetch':
-            return _object_spread_props(_object_spread({}, state), {
-                fetched: false,
-                refetchSeq: state.refetchSeq + 1
-            });
-        case 'reset':
-            if (state.fetched) {
-                return _object_spread_props(_object_spread({}, state), {
-                    fetched: false,
-                    fetchedCount: 0
-                });
-            } else {
-                return state;
-            }
-    }
-}
-function getter(service, id, params) {
-    return service.get(id, params);
-}
-function finder(service, params, { queryId, allPages, parallel }) {
-    if (!allPages) {
-        return service.find(params);
-    }
-    return new Promise((resolve, reject)=>{
-        let skip = 0;
-        const result = {
-            data: [],
-            skip: 0
-        };
-        fetchNext();
-        function doFind(skip) {
-            return service.find(_object_spread_props(_object_spread({}, params), {
-                query: _object_spread_props(_object_spread({}, params.query || {}), {
-                    $skip: skip
-                })
-            }));
-        }
-        function resolveOrFetchNext(res) {
-            if (res.data.length === 0 || result.data.length >= result.total) {
-                resolve(result);
-            } else {
-                skip = result.data.length;
-                fetchNext();
-            }
-        }
-        function fetchNextParallel() {
-            const requiredFetches = Math.ceil((result.total - result.data.length) / result.limit);
-            if (requiredFetches > 0) {
-                Promise.all(new Array(requiredFetches).fill().map((_, idx)=>doFind(skip + idx * result.limit))).then((results)=>{
-                    const [lastResult] = results.slice(-1);
-                    result.limit = lastResult.limit;
-                    result.total = lastResult.total;
-                    result.data = result.data.concat(results.flatMap((r)=>r.data));
-                    resolveOrFetchNext(lastResult);
-                }).catch(reject);
-            } else {
-                resolve(result);
-            }
-        }
-        function fetchNext() {
-            if (typeof result.total !== 'undefined' && typeof result.limit !== 'undefined' && parallel === true) {
-                fetchNextParallel();
-            } else {
-                doFind(skip).then((res)=>{
-                    result.limit = res.limit;
-                    result.total = res.total;
-                    result.data = result.data.concat(res.data);
-                    resolveOrFetchNext(res);
-                }).catch(reject);
-            }
-        }
-    });
+function useQueryHash({ serviceName, method, id, params, allPages, realtime }) {
+    return useMemo(()=>{
+        const hash = hashObject({
+            serviceName,
+            method,
+            id,
+            params,
+            allPages,
+            realtime
+        });
+        return `${method}:${hash}`;
+    }, [
+        serviceName,
+        method,
+        id,
+        params,
+        allPages,
+        realtime
+    ]);
 }

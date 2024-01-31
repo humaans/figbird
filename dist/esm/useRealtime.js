@@ -5,7 +5,7 @@ const refsSelector = selector(()=>cache().refs);
 /**
  * An internal hook that will listen to realtime updates to a service
  * and update the cache as changes happen.
- */ export function useRealtime(serviceName, mode, cb) {
+ */ export function useRealtime(serviceName, mode, refetch) {
     const feathers = useFeathers();
     const dispatch = useDispatch();
     const refs = useSelector(refsSelector, []);
@@ -17,8 +17,8 @@ const refsSelector = selector(()=>cache().refs);
         refs[serviceName].realtime = refs[serviceName].realtime || 0;
         refs[serviceName].callbacks = refs[serviceName].callbacks || [];
         const ref = refs[serviceName];
-        if (mode === 'refetch' && cb) {
-            refs[serviceName].callbacks.push(cb);
+        if (mode === 'refetch' && refetch) {
+            refs[serviceName].callbacks.push(refetch);
         }
         // get the service itself
         const service = feathers.service(serviceName);
@@ -82,7 +82,7 @@ const refsSelector = selector(()=>cache().refs);
         return ()=>{
             // decrement the listener counter
             ref.realtime -= 1;
-            refs[serviceName].callbacks = refs[serviceName].callbacks.filter((c)=>c !== cb);
+            refs[serviceName].callbacks = refs[serviceName].callbacks.filter((c)=>c !== refetch);
             // unbind from the realtime events if nothing is listening anymore
             if (ref.realtime === 0) {
                 service.off('created', ref.created);
@@ -97,6 +97,6 @@ const refsSelector = selector(()=>cache().refs);
         refs,
         serviceName,
         mode,
-        cb
+        refetch
     ]);
 }

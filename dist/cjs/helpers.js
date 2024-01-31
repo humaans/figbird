@@ -166,10 +166,18 @@ function hashObject(obj) {
     for(var i = 0; i < str.length; i++){
         var char = str.charCodeAt(i);
         hash = (hash << 5) - hash + char;
-        hash = hash & hash // Convert to 32bit integer
+        hash |= 0 // Convert to 32bit integer
         ;
     }
-    return hash;
+    return numberToBase64(hash);
+}
+function numberToBase64(num) {
+    var buffer = new ArrayBuffer(8);
+    var view = new DataView(buffer);
+    view.setFloat64(0, num);
+    var string = String.fromCharCode.apply(null, new Uint8Array(buffer));
+    // Encode the string to base64
+    return btoa(string);
 }
 function forEachObj(obj, fn) {
     for(var key in obj){

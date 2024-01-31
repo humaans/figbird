@@ -14,7 +14,7 @@ var _cache = require("./cache");
 var refsSelector = (0, _cache.selector)(function() {
     return (0, _cache.cache)().refs;
 });
-function useRealtime(serviceName, mode, cb) {
+function useRealtime(serviceName, mode, refetch) {
     var feathers = (0, _core.useFeathers)();
     var dispatch = (0, _cache.useDispatch)();
     var refs = (0, _cache.useSelector)(refsSelector, []);
@@ -26,8 +26,8 @@ function useRealtime(serviceName, mode, cb) {
         refs[serviceName].realtime = refs[serviceName].realtime || 0;
         refs[serviceName].callbacks = refs[serviceName].callbacks || [];
         var ref = refs[serviceName];
-        if (mode === "refetch" && cb) {
-            refs[serviceName].callbacks.push(cb);
+        if (mode === "refetch" && refetch) {
+            refs[serviceName].callbacks.push(refetch);
         }
         // get the service itself
         var service = feathers.service(serviceName);
@@ -100,7 +100,7 @@ function useRealtime(serviceName, mode, cb) {
             // decrement the listener counter
             ref.realtime -= 1;
             refs[serviceName].callbacks = refs[serviceName].callbacks.filter(function(c) {
-                return c !== cb;
+                return c !== refetch;
             });
             // unbind from the realtime events if nothing is listening anymore
             if (ref.realtime === 0) {
@@ -116,6 +116,6 @@ function useRealtime(serviceName, mode, cb) {
         refs,
         serviceName,
         mode,
-        cb
+        refetch
     ]);
 }
