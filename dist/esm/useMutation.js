@@ -51,7 +51,7 @@ function _object_spread_props(target, source) {
     return target;
 }
 import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react';
-import { useFeathers } from './core';
+import { useFigbird } from './core';
 import { useDispatch } from './cache';
 /**
  * Simple mutation hook exposing crud methods
@@ -64,8 +64,9 @@ import { useDispatch } from './cache';
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */ export function useMutation(serviceName) {
-    const feathers = useFeathers();
+    const { feathers, config } = useFigbird();
     const cacheDispatch = useDispatch();
+    const { debug } = config;
     const [state, dispatch] = useReducer(mutationReducer, {
         status: 'idle',
         data: null,
@@ -83,6 +84,11 @@ import { useDispatch } from './cache';
         dispatch({
             type: 'mutating'
         });
+        log({
+            serviceName,
+            method,
+            debug
+        }, 'mutating', ...args);
         return service[method](...args).then((item)=>{
             const isMounted = mountedRef.current;
             cacheDispatch({
@@ -156,5 +162,10 @@ function mutationReducer(state, action) {
                 status: 'error',
                 error: action.payload
             });
+    }
+}
+function log({ serviceName, method, debug }, ...ctx) {
+    if (debug) {
+        console.log(`✨ Mutating ${serviceName}#${method}`, ...ctx);
     }
 }
