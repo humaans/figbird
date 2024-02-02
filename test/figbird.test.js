@@ -10,7 +10,7 @@ const createFeathers = () =>
         1: {
           id: 1,
           content: 'hello',
-          updatedAt: Date.now(),
+          updatedAt: new Date('2024-02-02').getTime(),
         },
       },
     },
@@ -1439,6 +1439,126 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
       },
     },
   })
+
+  unmount()
+})
+
+test('useFind - state sequencing for fetchPolicy swr', async t => {
+  const { render, flush, unmount } = dom()
+
+  let seq = []
+
+  let renderNote
+
+  function Note() {
+    const [n, setN] = useState(1)
+    renderNote = setN
+
+    const notes = useFind('notes', { n })
+
+    const { data, status, isFetching } = notes
+    useEffect(() => {
+      seq.push({ data, status, isFetching })
+    }, [data, status, isFetching])
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    { data: null, isFetching: true, status: 'loading' }, // effects trigger twice on mount in strict mode
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
+
+  seq = []
+
+  // change params
+  await flush(() => {
+    renderNote(2)
+  })
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
+
+  unmount()
+})
+
+test('useFind - state sequencing for fetchPolicy network-only', async t => {
+  const { render, flush, unmount, $all } = dom()
+
+  let seq = []
+
+  let renderNote
+
+  function Content() {
+    const [n, setRenderNote] = useState(1)
+    renderNote = setRenderNote
+    return n ? <Note n={n} /> : null
+  }
+
+  function Note({ n }) {
+    const notes = useFind('notes', { query: { tag: 'idea', n }, fetchPolicy: 'network-only' })
+
+    const { data, status, isFetching } = notes
+    useEffect(() => {
+      seq.push({ data, status, isFetching })
+    }, [data, status, isFetching])
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers}>
+      <Content />
+    </App>,
+  )
+
+  await flush()
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    { data: null, isFetching: true, status: 'loading' }, // strict mode runs mount effect twice
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
+
+  seq = []
+
+  await flush(() => {
+    renderNote(2)
+  })
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
 
   unmount()
 })

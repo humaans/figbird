@@ -312,7 +312,7 @@ function useQuery(serviceName) {
     // realtime hook subscribes to realtime updates to this service
     (0, _useRealtime.useRealtime)(serviceName, realtime, refetch);
     var status;
-    var isFetching = isPending;
+    var isFetching;
     var result = (0, _react.useMemo)(function() {
         return {
             data: null
@@ -324,14 +324,18 @@ function useQuery(serviceName) {
         isFetching = false;
     } else if (state.status === "error") {
         status = "error";
+        isFetching = false;
     } else if (fetchPolicy === "swr") {
         status = cachedResult ? "success" : "loading";
+        isFetching = isPending || status === "loading";
         result = cachedResult || result;
     } else if (fetchPolicy === "cache-first") {
         status = cachedResult ? "success" : "loading";
+        isFetching = isPending || status === "loading";
         result = cachedResult || result;
     } else if (fetchPolicy === "network-only") {
-        status = isFetching ? "loading" : "success";
+        status = isPending || !cachedResult ? "loading" : "success";
+        isFetching = isPending || status === "loading";
         result = isFetching ? result : cachedResult;
     }
     return (0, _react.useMemo)(function() {

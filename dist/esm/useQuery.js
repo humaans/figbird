@@ -253,7 +253,7 @@ function reducer(state, action) {
     // realtime hook subscribes to realtime updates to this service
     useRealtime(serviceName, realtime, refetch);
     let status;
-    let isFetching = isPending;
+    let isFetching;
     let result = useMemo(()=>({
             data: null
         }), []);
@@ -263,14 +263,18 @@ function reducer(state, action) {
         isFetching = false;
     } else if (state.status === 'error') {
         status = 'error';
+        isFetching = false;
     } else if (fetchPolicy === 'swr') {
         status = cachedResult ? 'success' : 'loading';
+        isFetching = isPending || status === 'loading';
         result = cachedResult || result;
     } else if (fetchPolicy === 'cache-first') {
         status = cachedResult ? 'success' : 'loading';
+        isFetching = isPending || status === 'loading';
         result = cachedResult || result;
     } else if (fetchPolicy === 'network-only') {
-        status = isFetching ? 'loading' : 'success';
+        status = isPending || !cachedResult ? 'loading' : 'success';
+        isFetching = isPending || status === 'loading';
         result = isFetching ? result : cachedResult;
     }
     return useMemo(()=>_object_spread_props(_object_spread({}, result), {
