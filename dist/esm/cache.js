@@ -195,6 +195,16 @@ export function useCache(resourceDescriptor) {
     ];
 }
 function fetched(curr, { serviceName, data, method, params, queryId, realtime, matcher, selectData }, { idField }) {
+    // we already inserted this response to cache
+    const prevData = getIn(curr, [
+        'queries',
+        serviceName,
+        queryId,
+        'res'
+    ]);
+    if (prevData === data) {
+        return curr;
+    }
     let next = curr;
     const { data: items } = data, meta = _object_without_properties(data, [
         "data"
@@ -242,7 +252,8 @@ function fetched(curr, { serviceName, data, method, params, queryId, realtime, m
         method,
         realtime,
         matcher,
-        selectData
+        selectData,
+        res: data
     }, realtime === 'merge' ? {} : {
         entities
     }));

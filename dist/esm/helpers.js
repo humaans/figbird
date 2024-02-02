@@ -106,7 +106,7 @@ export function inflight(makeKey, fn) {
     return (...args)=>{
         const key = makeKey(...args);
         if (flying[key]) {
-            return flying[key].then(()=>null);
+            return flying[key];
         }
         const res = fn(...args);
         flying[key] = res.then((res)=>{

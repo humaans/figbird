@@ -180,18 +180,12 @@ function reducer(state, action) {
         fetch(feathers, serviceName, method, id, params, {
             queryId,
             allPages,
-            parallel
+            parallel,
+            transformResponse
         }).then((res)=>{
             flushSync(()=>{
-                // no res means we've piggy backed on an in flight request
-                if (res) {
-                    // update cache even if this particular useQuery invocation
-                    // no longer needs the result, that is because we are potentially
-                    // sharing this request with other useQuery invocations that
-                    // might still want the result to be propagated to cache
-                    updateCache(transformResponse(res));
-                }
                 if (reqRef === requestRef.current) {
+                    updateCache(res);
                     dispatch({
                         type: 'success'
                     });

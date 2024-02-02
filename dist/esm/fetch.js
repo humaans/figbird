@@ -53,15 +53,16 @@ function _object_spread_props(target, source) {
 import { inflight } from './helpers';
 const get = inflight((service, id, params, options)=>`${service.path}/${options.queryId}`, getter);
 const find = inflight((service, params, options)=>`${service.path}/${options.queryId}`, finder);
-export function fetch(feathers, serviceName, method, id, params, { queryId, allPages, parallel }) {
+export function fetch(feathers, serviceName, method, id, params, { queryId, allPages, parallel, transformResponse }) {
     const service = feathers.service(serviceName);
-    return method === 'get' ? get(service, id, params, {
+    const result = method === 'get' ? get(service, id, params, {
         queryId
     }) : find(service, params, {
         queryId,
         allPages,
         parallel
     });
+    return result.then(transformResponse);
 }
 function getter(service, id, params) {
     return service.get(id, params);
