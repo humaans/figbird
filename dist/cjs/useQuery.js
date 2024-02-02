@@ -289,7 +289,8 @@ function useQuery(serviceName) {
         parallel,
         updateCache,
         isPending,
-        isCacheSufficient
+        isCacheSufficient,
+        debug
     ]);
     var refetch = (0, _react.useCallback)(function() {
         return dispatch({

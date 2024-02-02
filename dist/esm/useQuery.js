@@ -232,7 +232,8 @@ function reducer(state, action) {
         parallel,
         updateCache,
         isPending,
-        isCacheSufficient
+        isCacheSufficient,
+        debug
     ]);
     const refetch = useCallback(()=>dispatch({
             type: 'reset'

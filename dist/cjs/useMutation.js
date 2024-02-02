@@ -179,7 +179,8 @@ function useMutation(serviceName) {
         serviceName,
         dispatch,
         cacheDispatch,
-        mountedRef
+        mountedRef,
+        debug
     ]);
     var create = (0, _react.useCallback)(function() {
         for(var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++){

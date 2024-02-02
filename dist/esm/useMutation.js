@@ -114,7 +114,8 @@ import { useDispatch } from './cache';
         serviceName,
         dispatch,
         cacheDispatch,
-        mountedRef
+        mountedRef,
+        debug
     ]);
     const create = useCallback((...args)=>mutate('create', 'created', ...args), [
         mutate
