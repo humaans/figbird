@@ -176,6 +176,7 @@ function reducer(state, action) {
 function useQuery(serviceName) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {}, queryHookOptions = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
     var feathers = (0, _core.useFeathers)();
+    console.log("Fetching", serviceName);
     var skip = options.skip, allPages = options.allPages, parallel = options.parallel, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? "merge" : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? "swr" : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
         "skip",
         "allPages",

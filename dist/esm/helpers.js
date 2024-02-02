@@ -27,7 +27,7 @@ function _object_spread(target) {
     return target;
 }
 import sift from 'sift';
-import filterQuery from './filterQuery';
+import { filterQuery } from './filterQuery';
 export function getIn(obj, path) {
     for (const segment of path){
         if (obj) {

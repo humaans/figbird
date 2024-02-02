@@ -15,8 +15,7 @@ _export(exports, {
     OPERATORS: function() {
         return OPERATORS;
     },
-    // Removes special filters from the `query` parameters
-    default: function() {
+    filterQuery: function() {
         return filterQuery;
     }
 });

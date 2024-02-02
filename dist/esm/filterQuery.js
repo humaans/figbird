@@ -36,7 +36,7 @@ export const OPERATORS = [
     '$or'
 ];
 // Removes special filters from the `query` parameters
-export default function filterQuery(query, options = {}) {
+export function filterQuery(query, options = {}) {
     if (!query) return query;
     const { filters: additionalFilters = [], operators: additionalOperators = [] } = options;
     return cleanQuery(query, OPERATORS.concat(additionalOperators), FILTERS.concat(additionalFilters));

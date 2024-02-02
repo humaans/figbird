@@ -35,7 +35,7 @@ _export(exports, {
     }
 });
 var _sift = /*#__PURE__*/ _interop_require_default(require("sift"));
-var _filterQuery = /*#__PURE__*/ _interop_require_default(require("./filterQuery"));
+var _filterQuery = require("./filterQuery");
 function _array_like_to_array(arr, len) {
     if (len == null || len > arr.length) len = arr.length;
     for(var i = 0, arr2 = new Array(len); i < len; i++)arr2[i] = arr[i];
@@ -154,7 +154,7 @@ function isObject(obj) {
     return typeof obj === "object" && obj !== null;
 }
 function matcher(query, options) {
-    var filteredQuery = (0, _filterQuery.default)(query, options);
+    var filteredQuery = (0, _filterQuery.filterQuery)(query, options);
     var sifter = (0, _sift.default)(filteredQuery);
     return function(item) {
         return sifter(item);
