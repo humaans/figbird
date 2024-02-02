@@ -114,15 +114,16 @@ var find = (0, _helpers.inflight)(function(service, params, options) {
     return "".concat(service.path, "/").concat(options.queryId);
 }, finder);
 function fetch(feathers, serviceName, method, id, params, param) {
-    var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel;
+    var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel, transformResponse = param.transformResponse;
     var service = feathers.service(serviceName);
-    return method === "get" ? get(service, id, params, {
+    var result = method === "get" ? get(service, id, params, {
         queryId: queryId
     }) : find(service, params, {
         queryId: queryId,
         allPages: allPages,
         parallel: parallel
     });
+    return result.then(transformResponse);
 }
 function getter(service, id, params) {
     return service.get(id, params);

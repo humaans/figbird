@@ -100,9 +100,10 @@ var defaultUpdatedAtField = function(item) {
     return item.updatedAt || item.updated_at;
 };
 var Provider = function(_param) {
-    var feathers = _param.feathers, store = _param.store, children = _param.children, props = _object_without_properties(_param, [
+    var feathers = _param.feathers, store = _param.store, debug = _param.debug, children = _param.children, props = _object_without_properties(_param, [
         "feathers",
         "store",
+        "debug",
         "children"
     ]);
     if (!feathers || !feathers.service) {
@@ -113,11 +114,13 @@ var Provider = function(_param) {
     var config = (0, _react.useMemo)(function() {
         return {
             idField: idField,
-            updatedAtField: updatedAtField
+            updatedAtField: updatedAtField,
+            debug: debug
         };
     }, [
         idField,
-        updatedAtField
+        updatedAtField,
+        debug
     ]);
     var figbird = (0, _react.useMemo)(function() {
         return {

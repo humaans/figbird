@@ -152,11 +152,6 @@ var realtimeModes = [
 ];
 function reducer(state, action) {
     switch(action.type){
-        case "fetching":
-            return _object_spread_props(_object_spread({}, state), {
-                status: "fetching",
-                error: null
-            });
         case "success":
             return _object_spread_props(_object_spread({}, state), {
                 status: "success"
@@ -175,8 +170,8 @@ function reducer(state, action) {
 }
 function useQuery(serviceName) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {}, queryHookOptions = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
-    var feathers = (0, _core.useFeathers)();
-    console.log("Fetching", serviceName);
+    var _useFigbird = (0, _core.useFigbird)(), feathers = _useFigbird.feathers, config = _useFigbird.config;
+    var debug = config.debug;
     var skip = options.skip, allPages = options.allPages, parallel = options.parallel, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? "merge" : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? "swr" : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -232,35 +227,53 @@ function useQuery(serviceName) {
         if (isCacheSufficient) return;
         // increment the request ref so we can ignore old requests
         var reqRef = requestRef.current = requestRef.current + 1;
-        dispatch({
-            type: "fetching"
-        });
         (0, _fetch.fetch)(feathers, serviceName, method, id, params, {
             queryId: queryId,
             allPages: allPages,
-            parallel: parallel
+            parallel: parallel,
+            transformResponse: transformResponse
         }).then(function(res) {
-            (0, _reactdom.flushSync)(function() {
-                // no res means we've piggy backed on an in flight request
-                if (res) {
-                    // update cache even if this particular useQuery invocation
-                    // no longer needs the result, that is because we are potentially
-                    // sharing this request with other useQuery invocations that
-                    // might still want the result to be propagated to cache
-                    updateCache(transformResponse(res));
-                }
-                if (reqRef === requestRef.current) {
+            if (reqRef === requestRef.current) {
+                log({
+                    queryId: queryId,
+                    serviceName: serviceName,
+                    method: method,
+                    id: id,
+                    params: params,
+                    debug: debug
+                }, "success", res);
+                (0, _reactdom.flushSync)(function() {
+                    updateCache(res);
                     dispatch({
                         type: "success"
                     });
-                }
-            });
+                });
+            }
         }).catch(function(error) {
             if (reqRef === requestRef.current) {
+                log({
+                    queryId: queryId,
+                    serviceName: serviceName,
+                    method: method,
+                    id: id,
+                    params: params,
+                    debug: debug
+                }, "success", error);
                 dispatch({
                     type: "error",
                     error: error
                 });
+            }
+        }).finally(function() {
+            if (reqRef !== requestRef.current) {
+                log({
+                    queryId: queryId,
+                    serviceName: serviceName,
+                    method: method,
+                    id: id,
+                    params: params,
+                    debug: debug
+                }, "superseded");
             }
         });
     }, [
@@ -298,7 +311,7 @@ function useQuery(serviceName) {
     // realtime hook subscribes to realtime updates to this service
     (0, _useRealtime.useRealtime)(serviceName, realtime, refetch);
     var status;
-    var isFetching = state.status === "pending" || state.status === "fetching";
+    var isFetching = isPending;
     var result = (0, _react.useMemo)(function() {
         return {
             data: null
@@ -308,7 +321,7 @@ function useQuery(serviceName) {
     if (skip) {
         status = "success";
         isFetching = false;
-    } else if (state.error) {
+    } else if (state.status === "error") {
         status = "error";
     } else if (fetchPolicy === "swr") {
         status = cachedResult ? "success" : "loading";
@@ -355,4 +368,10 @@ function useQueryHash(param) {
         allPages,
         realtime
     ]);
+}
+function log(param, msg, ctx) {
+    var queryId = param.queryId, serviceName = param.serviceName, method = param.method, id = param.id, debug = param.debug;
+    if (debug) {
+        console.log("✨ [".concat(queryId, "] Fetching ").concat(serviceName, "#").concat(method).concat(id ? " ".concat(id) : "").concat(msg ? " - ".concat(msg) : ""), ctx);
+    }
 }

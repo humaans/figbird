@@ -244,6 +244,16 @@ function useCache(resourceDescriptor) {
 }
 function fetched(curr, param, param1) {
     var serviceName = param.serviceName, data = param.data, method = param.method, params = param.params, queryId = param.queryId, realtime = param.realtime, matcher = param.matcher, selectData = param.selectData, idField = param1.idField;
+    // we already inserted this response to cache
+    var prevData = (0, _helpers.getIn)(curr, [
+        "queries",
+        serviceName,
+        queryId,
+        "res"
+    ]);
+    if (prevData === data) {
+        return curr;
+    }
     var next = curr;
     var items = data.data, meta = _object_without_properties(data, [
         "data"
@@ -308,7 +318,8 @@ function fetched(curr, param, param1) {
         method: method,
         realtime: realtime,
         matcher: matcher,
-        selectData: selectData
+        selectData: selectData,
+        res: data
     }, realtime === "merge" ? {} : {
         entities: entities
     }));

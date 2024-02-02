@@ -96,11 +96,6 @@ const realtimeModes = [
 ];
 function reducer(state, action) {
     switch(action.type){
-        case 'fetching':
-            return _object_spread_props(_object_spread({}, state), {
-                status: 'fetching',
-                error: null
-            });
         case 'success':
             return _object_spread_props(_object_spread({}, state), {
                 status: 'success'
@@ -175,9 +170,6 @@ function reducer(state, action) {
         if (isCacheSufficient) return;
         // increment the request ref so we can ignore old requests
         const reqRef = requestRef.current = requestRef.current + 1;
-        dispatch({
-            type: 'fetching'
-        });
         fetch(feathers, serviceName, method, id, params, {
             queryId,
             allPages,
@@ -260,7 +252,7 @@ function reducer(state, action) {
     // realtime hook subscribes to realtime updates to this service
     useRealtime(serviceName, realtime, refetch);
     let status;
-    let isFetching = state.status === 'pending' || state.status === 'fetching';
+    let isFetching = isPending;
     let result = useMemo(()=>({
             data: null
         }), []);
@@ -268,7 +260,7 @@ function reducer(state, action) {
     if (skip) {
         status = 'success';
         isFetching = false;
-    } else if (state.error) {
+    } else if (state.status === 'error') {
         status = 'error';
     } else if (fetchPolicy === 'swr') {
         status = cachedResult ? 'success' : 'loading';

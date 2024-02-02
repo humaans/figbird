@@ -194,9 +194,7 @@ function inflight(makeKey, fn) {
         }
         var key = makeKey.apply(void 0, _to_consumable_array(args));
         if (flying[key]) {
-            return flying[key].then(function() {
-                return null;
-            });
+            return flying[key];
         }
         var res = fn.apply(void 0, _to_consumable_array(args));
         flying[key] = res.then(function(res) {
