@@ -55,11 +55,19 @@ export function dom() {
       if (fn) {
         await fn()
       }
-      await new Promise(resolve => setTimeout(resolve, 20))
     })
   }
 
-  return { root, render, unmount, click, flush, $, $all, act }
+  async function flushRealtime(fn) {
+    await act(async () => {
+      if (fn) {
+        await fn()
+      }
+      await new Promise(resolve => setTimeout(resolve, 1))
+    })
+  }
+
+  return { root, render, unmount, click, flush, flushRealtime, $, $all, act }
 }
 
 export const swallowErrors = yourTestFn => {
