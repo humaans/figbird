@@ -18,6 +18,9 @@ _export(exports, {
     cache: function() {
         return cache;
     },
+    querySelector: function() {
+        return querySelector;
+    },
     selector: function() {
         return selector;
     },
@@ -123,7 +126,10 @@ var cache = atom({
     entities: {},
     queries: {},
     refs: {},
-    index: {}
+    index: {},
+    lookups: {
+        serviceNamesByQueryId: {}
+    }
 }, {
     label: "figbird"
 });
@@ -148,73 +154,87 @@ function useDispatch() {
     ]);
     return useReducer(cache, reducer);
 }
+var dataSelector = selector(function(queryId) {
+    var _cache = cache(), queries = _cache.queries, entities = _cache.entities, lookups = _cache.lookups;
+    var serviceName = (0, _helpers.getIn)(lookups, [
+        "serviceNamesByQueryId",
+        queryId
+    ]);
+    var query = (0, _helpers.getIn)(queries, [
+        serviceName,
+        queryId
+    ]);
+    if (query) {
+        var items = query.entities || entities[serviceName];
+        return query.selectData(query.data.map(function(id) {
+            return items[id];
+        }));
+    } else {
+        return null;
+    }
+}, {
+    label: "figbird:data",
+    persist: false
+});
+var metaSelector = selector(function(queryId) {
+    var _cache = cache(), queries = _cache.queries, lookups = _cache.lookups;
+    var serviceName = (0, _helpers.getIn)(lookups, [
+        "serviceNamesByQueryId",
+        queryId
+    ]);
+    var query = (0, _helpers.getIn)(queries, [
+        serviceName,
+        queryId
+    ]);
+    if (query) {
+        return query.meta;
+    } else {
+        return null;
+    }
+}, {
+    label: "figbird:meta",
+    persist: false
+});
+var querySelector = selector(function(queryId) {
+    var data = dataSelector(queryId);
+    var meta = metaSelector(queryId);
+    return data ? _object_spread_props(_object_spread({}, meta), {
+        data: data
+    }) : null;
+}, {
+    label: "figbird:query",
+    persist: false
+});
 function useCache(resourceDescriptor) {
-    var serviceName = resourceDescriptor.serviceName, queryId = resourceDescriptor.queryId, method = resourceDescriptor.method, id = resourceDescriptor.id, params = resourceDescriptor.params, realtime = resourceDescriptor.realtime, selectData = resourceDescriptor.selectData, transformResponse = resourceDescriptor.transformResponse, matcher = resourceDescriptor.matcher;
+    var queryId = resourceDescriptor.queryId, serviceName = resourceDescriptor.serviceName, method = resourceDescriptor.method, params = resourceDescriptor.params, realtime = resourceDescriptor.realtime, selectData = resourceDescriptor.selectData, matcher = resourceDescriptor.matcher;
     var dispatch = useDispatch();
-    var cachedData = useSelector(function() {
-        var query = (0, _helpers.getIn)(cache(), [
-            "queries",
-            serviceName,
-            queryId
-        ]);
-        if (query) {
-            var data = query.data;
-            var entities = query.entities || (0, _helpers.getIn)(cache(), [
-                "entities",
-                serviceName
-            ]);
-            return selectData(data.map(function(id) {
-                return entities[id];
-            }));
-        } else {
-            return null;
-        }
-    }, [
-        serviceName,
-        queryId,
-        selectData
-    ]);
     var cachedResult = useSelector(function() {
-        var query = (0, _helpers.getIn)(cache(), [
-            "queries",
-            serviceName,
-            queryId
-        ]);
-        if (query) {
-            var meta = query.meta;
-            return _object_spread_props(_object_spread({}, meta), {
-                data: cachedData
-            });
-        } else {
-            return {
-                data: null
-            };
-        }
+        return querySelector(queryId);
     }, [
-        serviceName,
-        queryId,
-        cachedData
-    ]);
+        queryId
+    ], {
+        label: "figbird:cache"
+    });
     var updateCache = (0, _react.useCallback)(function(data) {
         return dispatch({
             event: "fetched",
-            serviceName: serviceName,
             queryId: queryId,
+            serviceName: serviceName,
             method: method,
             params: params,
-            data: _object_spread({}, transformResponse(data), id ? {
-                id: id
-            } : {}),
             realtime: realtime,
-            matcher: matcher
+            selectData: selectData,
+            matcher: matcher,
+            data: data
         });
-    }, // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
+    }, [
         dispatch,
-        serviceName,
         queryId,
+        serviceName,
         method,
+        params,
         realtime,
+        selectData,
         matcher
     ]);
     return [
@@ -223,7 +243,17 @@ function useCache(resourceDescriptor) {
     ];
 }
 function fetched(curr, param, param1) {
-    var serviceName = param.serviceName, data = param.data, method = param.method, params = param.params, queryId = param.queryId, realtime = param.realtime, matcher = param.matcher, idField = param1.idField;
+    var serviceName = param.serviceName, data = param.data, method = param.method, params = param.params, queryId = param.queryId, realtime = param.realtime, matcher = param.matcher, selectData = param.selectData, idField = param1.idField;
+    // we already inserted this response to cache
+    var prevData = (0, _helpers.getIn)(curr, [
+        "queries",
+        serviceName,
+        queryId,
+        "res"
+    ]);
+    if (prevData === data) {
+        return curr;
+    }
     var next = curr;
     var items = data.data, meta = _object_without_properties(data, [
         "data"
@@ -287,10 +317,24 @@ function fetched(curr, param, param1) {
         meta: meta,
         method: method,
         realtime: realtime,
-        matcher: matcher
+        matcher: matcher,
+        selectData: selectData,
+        res: data
     }, realtime === "merge" ? {} : {
         entities: entities
     }));
+    // update queryId index
+    if ((0, _helpers.getIn)(next, [
+        "lookups",
+        "serviceNamesByQueryId",
+        queryId
+    ]) !== serviceName) {
+        next = (0, _helpers.setIn)(next, [
+            "lookups",
+            "serviceNamesByQueryId",
+            queryId
+        ], serviceName);
+    }
     return next;
 }
 function created(state, param, config) {
@@ -409,9 +453,9 @@ function removed(curr, param, param1) {
     return next;
 }
 function updateQueries(curr, param, param1) {
-    var serviceName = param.serviceName, method = param.method, item = param.item, idField = param1.idField, updatedAtField = param1.updatedAtField;
-    var items = Array.isArray(item) ? item : [
-        item
+    var serviceName = param.serviceName, method = param.method, itemOrItems = param.item, idField = param1.idField, updatedAtField = param1.updatedAtField;
+    var items = Array.isArray(itemOrItems) ? itemOrItems : [
+        itemOrItems
     ];
     var next = curr;
     var _iteratorNormalCompletion = true, _didIteratorError = false, _iteratorError = undefined;

@@ -55,11 +55,19 @@ export function dom() {
       if (fn) {
         await fn()
       }
-      await new Promise(resolve => setTimeout(resolve, 20))
     })
   }
 
-  return { root, render, unmount, click, flush, $, $all, act }
+  async function flushRealtime(fn) {
+    await act(async () => {
+      if (fn) {
+        await fn()
+      }
+      await new Promise(resolve => setTimeout(resolve, 1))
+    })
+  }
+
+  return { root, render, unmount, click, flush, flushRealtime, $, $all, act }
 }
 
 export const swallowErrors = yourTestFn => {
@@ -193,17 +201,4 @@ export function mockFeathers(services) {
   }
 
   return feathers
-}
-
-export async function flush(app) {
-  const update = async () => {
-    app.update()
-  }
-
-  // flush effects
-  await act(update)
-  // wait for data to be fetched and atom changes to propagate
-  await new Promise(resolve => setTimeout(resolve, 20))
-  // flush the atom state change effects
-  await act(update)
 }

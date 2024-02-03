@@ -35,7 +35,7 @@ _export(exports, {
     }
 });
 var _sift = /*#__PURE__*/ _interop_require_default(require("sift"));
-var _filterQuery = /*#__PURE__*/ _interop_require_default(require("./filterQuery"));
+var _filterQuery = require("./filterQuery");
 function _array_like_to_array(arr, len) {
     if (len == null || len > arr.length) len = arr.length;
     for(var i = 0, arr2 = new Array(len); i < len; i++)arr2[i] = arr[i];
@@ -154,7 +154,7 @@ function isObject(obj) {
     return typeof obj === "object" && obj !== null;
 }
 function matcher(query, options) {
-    var filteredQuery = (0, _filterQuery.default)(query, options);
+    var filteredQuery = (0, _filterQuery.filterQuery)(query, options);
     var sifter = (0, _sift.default)(filteredQuery);
     return function(item) {
         return sifter(item);
@@ -166,10 +166,18 @@ function hashObject(obj) {
     for(var i = 0; i < str.length; i++){
         var char = str.charCodeAt(i);
         hash = (hash << 5) - hash + char;
-        hash = hash & hash // Convert to 32bit integer
+        hash |= 0 // Convert to 32bit integer
         ;
     }
-    return hash;
+    return numberToBase64(hash);
+}
+function numberToBase64(num) {
+    var buffer = new ArrayBuffer(8);
+    var view = new DataView(buffer);
+    view.setFloat64(0, num);
+    var string = String.fromCharCode.apply(null, new Uint8Array(buffer));
+    // Encode the string to base64
+    return btoa(string);
 }
 function forEachObj(obj, fn) {
     for(var key in obj){
@@ -186,9 +194,7 @@ function inflight(makeKey, fn) {
         }
         var key = makeKey.apply(void 0, _to_consumable_array(args));
         if (flying[key]) {
-            return flying[key].then(function() {
-                return null;
-            });
+            return flying[key];
         }
         var res = fn.apply(void 0, _to_consumable_array(args));
         flying[key] = res.then(function(res) {

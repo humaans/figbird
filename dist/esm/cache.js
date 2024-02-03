@@ -86,7 +86,10 @@ export const cache = atom({
     entities: {},
     queries: {},
     refs: {},
-    index: {}
+    index: {},
+    lookups: {
+        serviceNamesByQueryId: {}
+    }
 }, {
     label: 'figbird'
 });
@@ -109,69 +112,81 @@ export function useDispatch() {
     ]);
     return useReducer(cache, reducer);
 }
+const dataSelector = selector((queryId)=>{
+    const { queries, entities, lookups } = cache();
+    const serviceName = getIn(lookups, [
+        'serviceNamesByQueryId',
+        queryId
+    ]);
+    const query = getIn(queries, [
+        serviceName,
+        queryId
+    ]);
+    if (query) {
+        const items = query.entities || entities[serviceName];
+        return query.selectData(query.data.map((id)=>items[id]));
+    } else {
+        return null;
+    }
+}, {
+    label: 'figbird:data',
+    persist: false
+});
+const metaSelector = selector((queryId)=>{
+    const { queries, lookups } = cache();
+    const serviceName = getIn(lookups, [
+        'serviceNamesByQueryId',
+        queryId
+    ]);
+    const query = getIn(queries, [
+        serviceName,
+        queryId
+    ]);
+    if (query) {
+        return query.meta;
+    } else {
+        return null;
+    }
+}, {
+    label: 'figbird:meta',
+    persist: false
+});
+export const querySelector = selector((queryId)=>{
+    const data = dataSelector(queryId);
+    const meta = metaSelector(queryId);
+    return data ? _object_spread_props(_object_spread({}, meta), {
+        data
+    }) : null;
+}, {
+    label: 'figbird:query',
+    persist: false
+});
 export function useCache(resourceDescriptor) {
-    const { serviceName, queryId, method, id, params, realtime, selectData, transformResponse, matcher } = resourceDescriptor;
+    const { queryId, serviceName, method, params, realtime, selectData, matcher } = resourceDescriptor;
     const dispatch = useDispatch();
-    const cachedData = useSelector(()=>{
-        const query = getIn(cache(), [
-            'queries',
-            serviceName,
-            queryId
-        ]);
-        if (query) {
-            const { data } = query;
-            const entities = query.entities || getIn(cache(), [
-                'entities',
-                serviceName
-            ]);
-            return selectData(data.map((id)=>entities[id]));
-        } else {
-            return null;
-        }
-    }, [
-        serviceName,
-        queryId,
-        selectData
-    ]);
-    const cachedResult = useSelector(()=>{
-        const query = getIn(cache(), [
-            'queries',
-            serviceName,
-            queryId
-        ]);
-        if (query) {
-            const { meta } = query;
-            return _object_spread_props(_object_spread({}, meta), {
-                data: cachedData
-            });
-        } else {
-            return {
-                data: null
-            };
-        }
-    }, [
-        serviceName,
-        queryId,
-        cachedData
-    ]);
+    const cachedResult = useSelector(()=>querySelector(queryId), [
+        queryId
+    ], {
+        label: 'figbird:cache'
+    });
     const updateCache = useCallback((data)=>dispatch({
             event: 'fetched',
-            serviceName,
             queryId,
+            serviceName,
             method,
             params,
-            data: _object_spread({}, transformResponse(data), id ? {
-                id
-            } : {}),
             realtime,
-            matcher
-        }), // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
+            selectData,
+            matcher,
+            data
+        }), [
         dispatch,
-        serviceName,
         queryId,
+        serviceName,
         method,
+        params,
         realtime,
+        selectData,
         matcher
     ]);
     return [
@@ -179,7 +194,17 @@ export function useCache(resourceDescriptor) {
         updateCache
     ];
 }
-function fetched(curr, { serviceName, data, method, params, queryId, realtime, matcher }, { idField }) {
+function fetched(curr, { serviceName, data, method, params, queryId, realtime, matcher, selectData }, { idField }) {
+    // we already inserted this response to cache
+    const prevData = getIn(curr, [
+        'queries',
+        serviceName,
+        queryId,
+        'res'
+    ]);
+    if (prevData === data) {
+        return curr;
+    }
     let next = curr;
     const { data: items } = data, meta = _object_without_properties(data, [
         "data"
@@ -226,10 +251,24 @@ function fetched(curr, { serviceName, data, method, params, queryId, realtime, m
         meta,
         method,
         realtime,
-        matcher
+        matcher,
+        selectData,
+        res: data
     }, realtime === 'merge' ? {} : {
         entities
     }));
+    // update queryId index
+    if (getIn(next, [
+        'lookups',
+        'serviceNamesByQueryId',
+        queryId
+    ]) !== serviceName) {
+        next = setIn(next, [
+            'lookups',
+            'serviceNamesByQueryId',
+            queryId
+        ], serviceName);
+    }
     return next;
 }
 function created(state, { serviceName, item }, config) {
@@ -325,9 +364,9 @@ function removed(curr, { serviceName, item: itemOrItems }, { idField, updatedAtF
     }
     return next;
 }
-function updateQueries(curr, { serviceName, method, item }, { idField, updatedAtField }) {
-    const items = Array.isArray(item) ? item : [
-        item
+function updateQueries(curr, { serviceName, method, item: itemOrItems }, { idField, updatedAtField }) {
+    const items = Array.isArray(itemOrItems) ? itemOrItems : [
+        itemOrItems
     ];
     let next = curr;
     for (const item of items){

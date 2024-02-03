@@ -10,7 +10,7 @@ const createFeathers = () =>
         1: {
           id: 1,
           content: 'hello',
-          updatedAt: Date.now(),
+          updatedAt: new Date('2024-02-02').getTime(),
         },
       },
     },
@@ -89,14 +89,17 @@ test('useGet', async t => {
   )
 
   t.is($('.spinner').innerHTML, 'loading...')
+
   await flush()
+
   t.is($('.note').innerHTML, 'hello')
   t.is(noteData.id, 1, 'useGet returns an object, not an array')
+
   unmount()
 })
 
 test('useGet updates after realtime patch', async t => {
-  const { render, flush, unmount, $ } = dom()
+  const { render, flush, flushRealtime, unmount, $ } = dom()
 
   function Note() {
     const note = useGet('notes', 1)
@@ -117,7 +120,7 @@ test('useGet updates after realtime patch', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(1, { content: 'realtime' })
   })
 
@@ -149,7 +152,7 @@ test('useFind', async t => {
 })
 
 test('useFind binding updates after realtime create', async t => {
-  const { render, flush, unmount, $, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $, $all } = dom()
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
@@ -167,7 +170,7 @@ test('useFind binding updates after realtime create', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
     await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
   })
@@ -181,7 +184,7 @@ test('useFind binding updates after realtime create', async t => {
 })
 
 test('useFind binding updates after realtime patch', async t => {
-  const { render, flush, unmount, $, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $ } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
     return <NoteList notes={notes} />
@@ -198,20 +201,17 @@ test('useFind binding updates after realtime patch', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
-  t.deepEqual(
-    $all('.note').map(n => n.innerHTML),
-    ['doc'],
-  )
+  t.is($('.note').innerHTML, 'doc')
 
   unmount()
 })
 
 test('useFind binding updates after realtime update', async t => {
-  const { render, flush, unmount, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
     return <NoteList notes={notes} />
@@ -231,7 +231,7 @@ test('useFind binding updates after realtime update', async t => {
     ['hello'],
   )
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').update(1, { id: 1, content: 'doc', tag: 'idea' })
   })
 
@@ -244,7 +244,7 @@ test('useFind binding updates after realtime update', async t => {
 })
 
 test('useFind binding updates after realtime remove', async t => {
-  const { render, flush, unmount, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
     return <NoteList notes={notes} />
@@ -266,7 +266,7 @@ test('useFind binding updates after realtime remove', async t => {
     ['hello', 'doc'],
   )
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').remove(1)
   })
 
@@ -279,7 +279,7 @@ test('useFind binding updates after realtime remove', async t => {
 })
 
 test('useFind binding updates after realtime patch with no query', async t => {
-  const { render, flush, unmount, $, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $, $all } = dom()
   function Note() {
     const notes = useFind('notes')
     return <NoteList notes={notes} />
@@ -296,7 +296,7 @@ test('useFind binding updates after realtime patch with no query', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -309,9 +309,9 @@ test('useFind binding updates after realtime patch with no query', async t => {
 })
 
 test('useRealtime listeners are correctly disposed of', async t => {
-  const store = createStore()
+  const { render, flush, flushRealtime, unmount, $, $all } = dom()
 
-  const { render, flush, unmount, $, $all } = dom()
+  const store = createStore()
 
   function Note1() {
     const notes = useFind('notes')
@@ -373,7 +373,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
   t.is($('.note2').innerHTML, 'hello')
   t.is(store.debug().figbird.entities.notes[1].content, 'hello')
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
   t.is(store.debug().figbird.entities.notes[1].content, 'real')
@@ -411,8 +411,6 @@ test('useMutation - multicreate updates cache correctly', async t => {
       <Note />
     </App>,
   )
-
-  await flush()
 
   await flush(() => {
     create([
@@ -516,7 +514,7 @@ test('useMutation handles errors', async t => {
 })
 
 test('useFeathers', async t => {
-  const { render, flush, unmount } = dom()
+  const { render, unmount } = dom()
 
   let feathersFromHook
 
@@ -537,15 +535,13 @@ test('useFeathers', async t => {
     </App>,
   )
 
-  await flush()
-
   t.is(feathersFromHook, feathers)
 
   unmount()
 })
 
 test('Provider requires feathers to be passed in', async t => {
-  const { render, flush, unmount, $ } = dom()
+  const { render, unmount, $ } = dom()
 
   function Content() {
     return null
@@ -558,8 +554,6 @@ test('Provider requires feathers to be passed in', async t => {
       </App>,
     )
   })
-
-  await flush()
 
   t.is($('.error').innerHTML, 'Please pass in a feathers client')
 
@@ -821,12 +815,10 @@ test('useFind with allPages and parallel where limit is not wholly divisible by 
 
   const feathers = createFeathers()
 
-  await flush(async () => {
-    await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
-    await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
-    await feathers.service('notes').create({ id: 4, content: 'wat', tag: 'nonsense' })
-    await feathers.service('notes').create({ id: 5, content: 'huh', tag: 'thingies' })
-  })
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+  await feathers.service('notes').create({ id: 4, content: 'wat', tag: 'nonsense' })
+  await feathers.service('notes').create({ id: 5, content: 'huh', tag: 'thingies' })
 
   render(
     <App feathers={feathers}>
@@ -846,7 +838,7 @@ test('useFind with allPages and parallel where limit is not wholly divisible by 
 })
 
 test('useFind - realtime merge', async t => {
-  const { render, flush, unmount, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $all } = dom()
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'merge' })
@@ -869,7 +861,7 @@ test('useFind - realtime merge', async t => {
     ['hello'],
   )
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -885,7 +877,7 @@ test('useFind - realtime merge', async t => {
 })
 
 test('useFind - realtime refetch', async t => {
-  const { render, flush, unmount, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'refetch' })
     return <NoteList notes={notes} />
@@ -907,7 +899,7 @@ test('useFind - realtime refetch', async t => {
     ['hello'],
   )
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -980,7 +972,7 @@ test('useFind - realtime disabled', async t => {
 })
 
 test('useFind - fetchPolicy swr', async t => {
-  const { render, flush, unmount, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $all } = dom()
   let renderNote
 
   function Content() {
@@ -1015,9 +1007,11 @@ test('useFind - fetchPolicy swr', async t => {
   })
 
   // update note in the meantime
-  await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  await flushRealtime(async () => {
+    await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  })
 
-  feathers.service('notes').setDelay(30)
+  feathers.service('notes').setDelay(10)
 
   // render 2nd time
   await flush(() => {
@@ -1034,8 +1028,9 @@ test('useFind - fetchPolicy swr', async t => {
   )
 
   // and then after a while
-  await flush()
-  await flush()
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  })
 
   // we see new note
   t.deepEqual(
@@ -1049,7 +1044,7 @@ test('useFind - fetchPolicy swr', async t => {
 })
 
 test('useFind - fetchPolicy cache-first', async t => {
-  const { render, flush, unmount, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $all } = dom()
   let renderNote
 
   function Content() {
@@ -1087,7 +1082,7 @@ test('useFind - fetchPolicy cache-first', async t => {
   await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
 
   // render 2nd time
-  await flush(() => {
+  await flushRealtime(() => {
     renderNote(true)
   })
 
@@ -1103,8 +1098,78 @@ test('useFind - fetchPolicy cache-first', async t => {
   unmount()
 })
 
-test('useFind - fetchPolicy network-only', async t => {
+test('useFind - fetchPolicy cache-first and changing query', async t => {
   const { render, flush, unmount, $all } = dom()
+  let renderNote
+
+  function Content() {
+    const [n, setRenderNote] = useState(1)
+    renderNote = setRenderNote
+    return n ? <Note n={n} /> : null
+  }
+
+  function Note({ n }) {
+    const notes = useFind('notes', { query: { tag: 'idea' }, n, fetchPolicy: 'cache-first' })
+    return <NoteList notes={notes} />
+  }
+
+  const store = createStore()
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers} store={store}>
+      <Content />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(feathers.service('notes').counts.find, 1)
+
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello'],
+  )
+
+  await flush(() => {
+    renderNote(0)
+  })
+
+  // update note in the meantime
+  await feathers.service('notes').patch(1, { content: 'hello-2', tag: 'idea' })
+
+  // render 2nd time
+  await flush(() => {
+    renderNote(2)
+  })
+
+  // we do a second find because we changed n param to 2
+  t.is(feathers.service('notes').counts.find, 2)
+
+  // we see the updated note
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello-2'],
+  )
+
+  // render 3rd time
+  await flush(() => {
+    renderNote(1)
+  })
+
+  // no find happened this time, we used cache, even though we changed n!
+  t.is(feathers.service('notes').counts.find, 2)
+
+  // we see old note
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello-2'],
+  )
+
+  unmount()
+})
+
+test('useFind - fetchPolicy network-only', async t => {
+  const { render, flush, flushRealtime, unmount, $all } = dom()
   let renderNote
 
   function Content() {
@@ -1139,9 +1204,11 @@ test('useFind - fetchPolicy network-only', async t => {
   })
 
   // update note in the meantime
-  await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  await flushRealtime(async () => {
+    await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  })
 
-  feathers.service('notes').setDelay(30)
+  feathers.service('notes').setDelay(10)
 
   // render 2nd time
   await flush(() => {
@@ -1159,8 +1226,9 @@ test('useFind - fetchPolicy network-only', async t => {
   )
 
   // and then after a while
-  await flush()
-  await flush()
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  })
 
   // we see new note
   t.deepEqual(
@@ -1174,7 +1242,7 @@ test('useFind - fetchPolicy network-only', async t => {
 })
 
 test('useFind - updates correctly after a sequence of create+patch', async t => {
-  const { render, flush, unmount, $, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $, $all } = dom()
   function Note() {
     const notes = useFind('notes')
     return <NoteList notes={notes} />
@@ -1191,7 +1259,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').create({ id: 2, content: 'doc' })
     await feathers.service('notes').patch(2, { content: 'doc updated' })
   })
@@ -1205,7 +1273,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 })
 
 test('useFind - with custom matcher', async t => {
-  const { render, flush, unmount, $, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $, $all } = dom()
   const customMatcher = matcher => query => item => {
     return matcher(query)(item) && item.foo
   }
@@ -1226,7 +1294,7 @@ test('useFind - with custom matcher', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', foo: false })
     await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', foo: true })
     await feathers.service('notes').create({ id: 4, tag: 'draft', content: 'doc 4', foo: true })
@@ -1237,7 +1305,7 @@ test('useFind - with custom matcher', async t => {
     ['hello', 'doc 3'],
   )
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(4, { tag: 'post' })
   })
 
@@ -1250,7 +1318,7 @@ test('useFind - with custom matcher', async t => {
 })
 
 test('item gets deleted from cache if it is updated and no longer relevant to a query', async t => {
-  const { render, flush, unmount, $, $all } = dom()
+  const { render, flush, flushRealtime, unmount, $, $all } = dom()
   const feathers = createFeathers()
   const store = createStore()
 
@@ -1271,6 +1339,9 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { updatedAt: null })
+  })
+
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: 1 })
     await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', updatedAt: 2 })
     await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', updatedAt: 3 })
@@ -1308,26 +1379,26 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
       3: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
     },
   })
 
-  await flush(async () => {
+  await flushRealtime(async () => {
     await feathers.service('notes').patch(3, { tag: 'draft' })
   })
 
@@ -1357,18 +1428,138 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'f:-1755522248': true,
+          'find:wdooyTIAAAA=': true,
         },
         size: 1,
       },
     },
   })
+
+  unmount()
+})
+
+test('useFind - state sequencing for fetchPolicy swr', async t => {
+  const { render, flush, unmount } = dom()
+
+  let seq = []
+
+  let renderNote
+
+  function Note() {
+    const [n, setN] = useState(1)
+    renderNote = setN
+
+    const notes = useFind('notes', { n })
+
+    const { data, status, isFetching } = notes
+    useEffect(() => {
+      seq.push({ data, status, isFetching })
+    }, [data, status, isFetching])
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    { data: null, isFetching: true, status: 'loading' }, // effects trigger twice on mount in strict mode
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
+
+  seq = []
+
+  // change params
+  await flush(() => {
+    renderNote(2)
+  })
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
+
+  unmount()
+})
+
+test('useFind - state sequencing for fetchPolicy network-only', async t => {
+  const { render, flush, unmount } = dom()
+
+  let seq = []
+
+  let renderNote
+
+  function Content() {
+    const [n, setRenderNote] = useState(1)
+    renderNote = setRenderNote
+    return n ? <Note n={n} /> : null
+  }
+
+  function Note({ n }) {
+    const notes = useFind('notes', { query: { tag: 'idea', n }, fetchPolicy: 'network-only' })
+
+    const { data, status, isFetching } = notes
+    useEffect(() => {
+      seq.push({ data, status, isFetching })
+    }, [data, status, isFetching])
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers}>
+      <Content />
+    </App>,
+  )
+
+  await flush()
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    { data: null, isFetching: true, status: 'loading' }, // strict mode runs mount effect twice
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
+
+  seq = []
+
+  await flush(() => {
+    renderNote(2)
+  })
+
+  t.deepEqual(seq, [
+    { data: null, isFetching: true, status: 'loading' },
+    {
+      data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
+      isFetching: false,
+      status: 'success',
+    },
+  ])
 
   unmount()
 })
