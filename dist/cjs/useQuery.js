@@ -170,8 +170,7 @@ function reducer(state, action) {
 }
 function useQuery(serviceName) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {}, queryHookOptions = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
-    var _useFigbird = (0, _core.useFigbird)(), feathers = _useFigbird.feathers, config = _useFigbird.config;
-    var debug = config.debug;
+    var feathers = (0, _core.useFeathers)();
     var skip = options.skip, allPages = options.allPages, parallel = options.parallel, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? "merge" : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? "swr" : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -234,14 +233,6 @@ function useQuery(serviceName) {
             transformResponse: transformResponse
         }).then(function(res) {
             if (reqRef === requestRef.current) {
-                log({
-                    queryId: queryId,
-                    serviceName: serviceName,
-                    method: method,
-                    id: id,
-                    params: params,
-                    debug: debug
-                }, "success", res);
                 (0, _reactdom.flushSync)(function() {
                     updateCache(res);
                     dispatch({
@@ -251,29 +242,10 @@ function useQuery(serviceName) {
             }
         }).catch(function(error) {
             if (reqRef === requestRef.current) {
-                log({
-                    queryId: queryId,
-                    serviceName: serviceName,
-                    method: method,
-                    id: id,
-                    params: params,
-                    debug: debug
-                }, "success", error);
                 dispatch({
                     type: "error",
                     error: error
                 });
-            }
-        }).finally(function() {
-            if (reqRef !== requestRef.current) {
-                log({
-                    queryId: queryId,
-                    serviceName: serviceName,
-                    method: method,
-                    id: id,
-                    params: params,
-                    debug: debug
-                }, "superseded");
             }
         });
     }, [
@@ -289,8 +261,7 @@ function useQuery(serviceName) {
         parallel,
         updateCache,
         isPending,
-        isCacheSufficient,
-        debug
+        isCacheSufficient
     ]);
     var refetch = (0, _react.useCallback)(function() {
         return dispatch({
@@ -373,10 +344,4 @@ function useQueryHash(param) {
         allPages,
         realtime
     ]);
-}
-function log(param, msg, ctx) {
-    var queryId = param.queryId, serviceName = param.serviceName, method = param.method, id = param.id, debug = param.debug;
-    if (debug) {
-        console.log("✨ [".concat(queryId, "] Fetching ").concat(serviceName, "#").concat(method).concat(id ? " ".concat(id) : "").concat(msg ? " - ".concat(msg) : ""), ctx);
-    }
 }

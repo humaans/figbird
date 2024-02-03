@@ -79,7 +79,7 @@ function _object_without_properties_loose(source, excluded) {
 }
 import { useReducer, useEffect, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
-import { useFigbird } from './core';
+import { useFeathers } from './core';
 import { useRealtime } from './useRealtime';
 import { useCache } from './cache';
 import { fetch } from './fetch';
@@ -115,8 +115,7 @@ function reducer(state, action) {
 /**
  * A generic abstraction of both get and find
  */ export function useQuery(serviceName, options = {}, queryHookOptions = {}) {
-    const { feathers, config } = useFigbird();
-    const { debug } = config;
+    const feathers = useFeathers();
     let { skip, allPages, parallel, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -177,14 +176,6 @@ function reducer(state, action) {
             transformResponse
         }).then((res)=>{
             if (reqRef === requestRef.current) {
-                log({
-                    queryId,
-                    serviceName,
-                    method,
-                    id,
-                    params,
-                    debug
-                }, 'success', res);
                 flushSync(()=>{
                     updateCache(res);
                     dispatch({
@@ -194,29 +185,10 @@ function reducer(state, action) {
             }
         }).catch((error)=>{
             if (reqRef === requestRef.current) {
-                log({
-                    queryId,
-                    serviceName,
-                    method,
-                    id,
-                    params,
-                    debug
-                }, 'success', error);
                 dispatch({
                     type: 'error',
                     error
                 });
-            }
-        }).finally(()=>{
-            if (reqRef !== requestRef.current) {
-                log({
-                    queryId,
-                    serviceName,
-                    method,
-                    id,
-                    params,
-                    debug
-                }, 'superseded');
             }
         });
     }, [
@@ -232,8 +204,7 @@ function reducer(state, action) {
         parallel,
         updateCache,
         isPending,
-        isCacheSufficient,
-        debug
+        isCacheSufficient
     ]);
     const refetch = useCallback(()=>dispatch({
             type: 'reset'
@@ -309,9 +280,4 @@ function useQueryHash({ serviceName, method, id, params, allPages, realtime }) {
         allPages,
         realtime
     ]);
-}
-function log({ queryId, serviceName, method, id, debug }, msg, ctx) {
-    if (debug) {
-        console.log(`✨ [${queryId}] Fetching ${serviceName}#${method}${id ? ` ${id}` : ''}${msg ? ` - ${msg}` : ''}`, ctx);
-    }
 }

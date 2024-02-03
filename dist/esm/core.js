@@ -34,10 +34,9 @@ const defaultUpdatedAtField = (item)=>item.updatedAt || item.updated_at;
  * This is the Figbird Provider that at the minimum needs to be passed in a feathers client.
  * Once the app is wrapped in this Provider, all of the figbird hooks can be used.
  */ export const Provider = (_param)=>{
-    var { feathers, store, debug, children } = _param, props = _object_without_properties(_param, [
+    var { feathers, store, children } = _param, props = _object_without_properties(_param, [
         "feathers",
         "store",
-        "debug",
         "children"
     ]);
     if (!feathers || !feathers.service) {
@@ -47,12 +46,10 @@ const defaultUpdatedAtField = (item)=>item.updatedAt || item.updated_at;
     const updatedAtField = useUpdatedAtField(props.updatedAtField);
     const config = useMemo(()=>({
             idField,
-            updatedAtField,
-            debug
+            updatedAtField
         }), [
         idField,
-        updatedAtField,
-        debug
+        updatedAtField
     ]);
     const figbird = useMemo(()=>({
             feathers,

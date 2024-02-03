@@ -122,9 +122,8 @@ function _unsupported_iterable_to_array(o, minLen) {
     if (n === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)) return _array_like_to_array(o, minLen);
 }
 function useMutation(serviceName) {
-    var _useFigbird = (0, _core.useFigbird)(), feathers = _useFigbird.feathers, config = _useFigbird.config;
+    var feathers = (0, _core.useFeathers)();
     var cacheDispatch = (0, _cache.useDispatch)();
-    var debug = config.debug;
     var _useReducer = _sliced_to_array((0, _react.useReducer)(mutationReducer, {
         status: "idle",
         data: null,
@@ -146,14 +145,6 @@ function useMutation(serviceName) {
         dispatch({
             type: "mutating"
         });
-        log.apply(void 0, [
-            {
-                serviceName: serviceName,
-                method: method,
-                debug: debug
-            },
-            "mutating"
-        ].concat(_to_consumable_array(args)));
         return (_service = service)[method].apply(_service, _to_consumable_array(args)).then(function(item) {
             var isMounted = mountedRef.current;
             cacheDispatch({
@@ -179,8 +170,7 @@ function useMutation(serviceName) {
         serviceName,
         dispatch,
         cacheDispatch,
-        mountedRef,
-        debug
+        mountedRef
     ]);
     var create = (0, _react.useCallback)(function() {
         for(var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++){
@@ -262,17 +252,5 @@ function mutationReducer(state, action) {
                 status: "error",
                 error: action.payload
             });
-    }
-}
-function log(param) {
-    var serviceName = param.serviceName, method = param.method, debug = param.debug;
-    for(var _len = arguments.length, ctx = new Array(_len > 1 ? _len - 1 : 0), _key = 1; _key < _len; _key++){
-        ctx[_key - 1] = arguments[_key];
-    }
-    if (debug) {
-        var _console;
-        (_console = console).log.apply(_console, [
-            "✨ Mutating ".concat(serviceName, "#").concat(method)
-        ].concat(_to_consumable_array(ctx)));
     }
 }
