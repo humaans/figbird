@@ -1,5 +1,11 @@
 # Figbird Changelog
 
+## 0.14.0
+
+- Rewrite internals for useQuery to address several issues and simplify the code
+- Reduce the internal states in useQuery to reduce number of re-renders
+- Fix an issue where cache-first would refetch when params changed
+
 ## 0.13.1
 
 - Fix an issue where multi operations in useMutation (e.g. creating an array of items) would not correctly update the cache after completing
