@@ -106,7 +106,7 @@ var Provider = function(_param) {
         "children"
     ]);
     if (!feathers || !feathers.service) {
-        throw new Error("Please pass in a feathers client");
+        throw new Error('Please pass in a feathers client');
     }
     var idField = useIdField(props.idField);
     var updatedAtField = useUpdatedAtField(props.updatedAtField);
@@ -144,8 +144,8 @@ function useFeathers() {
 function useIdField() {
     var idField = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : defaultIdField;
     return (0, _react.useCallback)(function(item) {
-        var id = typeof idField === "string" ? item[idField] : idField(item);
-        if (!id) console.warn("An item has been received without any ID", item);
+        var id = typeof idField === 'string' ? item[idField] : idField(item);
+        if (!id) console.warn('An item has been received without any ID', item);
         return id;
     }, [
         idField
@@ -154,7 +154,7 @@ function useIdField() {
 function useUpdatedAtField() {
     var updatedAtField = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : defaultUpdatedAtField;
     return (0, _react.useCallback)(function(item) {
-        return typeof updatedAtField === "string" ? item[updatedAtField] : updatedAtField(item);
+        return typeof updatedAtField === 'string' ? item[updatedAtField] : updatedAtField(item);
     }, [
         updatedAtField
     ]);

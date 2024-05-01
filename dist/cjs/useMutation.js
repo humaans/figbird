@@ -125,7 +125,7 @@ function useMutation(serviceName) {
     var feathers = (0, _core.useFeathers)();
     var cacheDispatch = (0, _cache.useDispatch)();
     var _useReducer = _sliced_to_array((0, _react.useReducer)(mutationReducer, {
-        status: "idle",
+        status: 'idle',
         data: null,
         error: null
     }), 2), state = _useReducer[0], dispatch = _useReducer[1];
@@ -143,7 +143,7 @@ function useMutation(serviceName) {
         var _service;
         var service = feathers.service(serviceName);
         dispatch({
-            type: "mutating"
+            type: 'mutating'
         });
         return (_service = service)[method].apply(_service, _to_consumable_array(args)).then(function(item) {
             var isMounted = mountedRef.current;
@@ -153,14 +153,14 @@ function useMutation(serviceName) {
                 item: item
             });
             isMounted && dispatch({
-                type: "success",
+                type: 'success',
                 payload: item
             });
             return item;
         }).catch(function(err) {
             var isMounted = mountedRef.current;
             isMounted && dispatch({
-                type: "error",
+                type: 'error',
                 payload: err
             });
             throw err;
@@ -177,8 +177,8 @@ function useMutation(serviceName) {
             args[_key] = arguments[_key];
         }
         return mutate.apply(void 0, [
-            "create",
-            "created"
+            'create',
+            'created'
         ].concat(_to_consumable_array(args)));
     }, [
         mutate
@@ -188,8 +188,8 @@ function useMutation(serviceName) {
             args[_key] = arguments[_key];
         }
         return mutate.apply(void 0, [
-            "update",
-            "updated"
+            'update',
+            'updated'
         ].concat(_to_consumable_array(args)));
     }, [
         mutate
@@ -199,8 +199,8 @@ function useMutation(serviceName) {
             args[_key] = arguments[_key];
         }
         return mutate.apply(void 0, [
-            "patch",
-            "patched"
+            'patch',
+            'patched'
         ].concat(_to_consumable_array(args)));
     }, [
         mutate
@@ -210,8 +210,8 @@ function useMutation(serviceName) {
             args[_key] = arguments[_key];
         }
         return mutate.apply(void 0, [
-            "remove",
-            "removed"
+            'remove',
+            'removed'
         ].concat(_to_consumable_array(args)));
     }, [
         mutate
@@ -236,20 +236,20 @@ function useMutation(serviceName) {
 }
 function mutationReducer(state, action) {
     switch(action.type){
-        case "mutating":
+        case 'mutating':
             return _object_spread_props(_object_spread({}, state), {
-                status: "loading",
+                status: 'loading',
                 data: null,
                 error: null
             });
-        case "success":
+        case 'success':
             return _object_spread_props(_object_spread({}, state), {
-                status: "success",
+                status: 'success',
                 data: action.payload
             });
-        case "error":
+        case 'error':
             return _object_spread_props(_object_spread({}, state), {
-                status: "error",
+                status: 'error',
                 error: action.payload
             });
     }

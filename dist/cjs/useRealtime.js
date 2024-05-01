@@ -20,13 +20,13 @@ function useRealtime(serviceName, mode, refetch) {
     var refs = (0, _cache.useSelector)(refsSelector, []);
     (0, _react.useEffect)(function() {
         // realtime is turned off
-        if (mode === "disabled") return;
+        if (mode === 'disabled') return;
         // get the ref store of this service
         refs[serviceName] = refs[serviceName] || {};
         refs[serviceName].realtime = refs[serviceName].realtime || 0;
         refs[serviceName].callbacks = refs[serviceName].callbacks || [];
         var ref = refs[serviceName];
-        if (mode === "refetch" && refetch) {
+        if (mode === 'refetch' && refetch) {
             refs[serviceName].callbacks.push(refetch);
         }
         // get the service itself
@@ -37,13 +37,13 @@ function useRealtime(serviceName, mode, refetch) {
         if (ref.realtime === 1) {
             ref.created = function(item) {
                 dispatch({
-                    event: "created",
+                    event: 'created',
                     serviceName: serviceName,
                     item: item
                 });
                 refs[serviceName].callbacks.forEach(function(c) {
                     return c({
-                        event: "created",
+                        event: 'created',
                         serviceName: serviceName,
                         item: item
                     });
@@ -51,13 +51,13 @@ function useRealtime(serviceName, mode, refetch) {
             };
             ref.updated = function(item) {
                 dispatch({
-                    event: "updated",
+                    event: 'updated',
                     serviceName: serviceName,
                     item: item
                 });
                 refs[serviceName].callbacks.forEach(function(c) {
                     return c({
-                        event: "updated",
+                        event: 'updated',
                         serviceName: serviceName,
                         item: item
                     });
@@ -65,13 +65,13 @@ function useRealtime(serviceName, mode, refetch) {
             };
             ref.patched = function(item) {
                 dispatch({
-                    event: "patched",
+                    event: 'patched',
                     serviceName: serviceName,
                     item: item
                 });
                 refs[serviceName].callbacks.forEach(function(c) {
                     return c({
-                        event: "patched",
+                        event: 'patched',
                         serviceName: serviceName,
                         item: item
                     });
@@ -79,22 +79,22 @@ function useRealtime(serviceName, mode, refetch) {
             };
             ref.removed = function(item) {
                 dispatch({
-                    event: "removed",
+                    event: 'removed',
                     serviceName: serviceName,
                     item: item
                 });
                 refs[serviceName].callbacks.forEach(function(c) {
                     return c({
-                        event: "removed",
+                        event: 'removed',
                         serviceName: serviceName,
                         item: item
                     });
                 });
             };
-            service.on("created", ref.created);
-            service.on("updated", ref.updated);
-            service.on("patched", ref.patched);
-            service.on("removed", ref.removed);
+            service.on('created', ref.created);
+            service.on('updated', ref.updated);
+            service.on('patched', ref.patched);
+            service.on('removed', ref.removed);
         }
         return function() {
             // decrement the listener counter
@@ -104,10 +104,10 @@ function useRealtime(serviceName, mode, refetch) {
             });
             // unbind from the realtime events if nothing is listening anymore
             if (ref.realtime === 0) {
-                service.off("created", ref.created);
-                service.off("updated", ref.updated);
-                service.off("patched", ref.patched);
-                service.off("removed", ref.removed);
+                service.off('created', ref.created);
+                service.off('updated', ref.updated);
+                service.off('patched', ref.patched);
+                service.off('removed', ref.removed);
             }
         };
     }, [

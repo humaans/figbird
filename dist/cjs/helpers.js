@@ -151,7 +151,7 @@ function unsetIn(obj, path) {
     return res;
 }
 function isObject(obj) {
-    return typeof obj === "object" && obj !== null;
+    return typeof obj === 'object' && obj !== null;
 }
 function matcher(query, options) {
     var filteredQuery = (0, _filterQuery.filterQuery)(query, options);

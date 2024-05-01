@@ -116,7 +116,7 @@ var find = (0, _helpers.inflight)(function(service, params, options) {
 function fetch(feathers, serviceName, method, id, params, param) {
     var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel, transformResponse = param.transformResponse;
     var service = feathers.service(serviceName);
-    var result = method === "get" ? get(service, id, params, {
+    var result = method === 'get' ? get(service, id, params, {
         queryId: queryId
     }) : find(service, params, {
         queryId: queryId,
@@ -168,7 +168,7 @@ function finder(service, params, param) {
             }
         };
         var fetchNext = function fetchNext() {
-            if (typeof result.total !== "undefined" && typeof result.limit !== "undefined" && parallel === true) {
+            if (typeof result.total !== 'undefined' && typeof result.limit !== 'undefined' && parallel === true) {
                 fetchNextParallel();
             } else {
                 doFind(skip).then(function(res) {

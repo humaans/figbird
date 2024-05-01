@@ -141,29 +141,29 @@ function _unsupported_iterable_to_array(o, minLen) {
     if (n === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)) return _array_like_to_array(o, minLen);
 }
 var fetchPolicies = [
-    "swr",
-    "cache-first",
-    "network-only"
+    'swr',
+    'cache-first',
+    'network-only'
 ];
 var realtimeModes = [
-    "merge",
-    "refetch",
-    "disabled"
+    'merge',
+    'refetch',
+    'disabled'
 ];
 function reducer(state, action) {
     switch(action.type){
-        case "success":
+        case 'success':
             return _object_spread_props(_object_spread({}, state), {
-                status: "success"
+                status: 'success'
             });
-        case "error":
+        case 'error':
             return _object_spread_props(_object_spread({}, state), {
-                status: "error",
+                status: 'error',
                 error: action.error
             });
-        case "reset":
+        case 'reset':
             return _object_spread_props(_object_spread({}, state), {
-                status: "pending",
+                status: 'pending',
                 error: null
             });
     }
@@ -171,7 +171,7 @@ function reducer(state, action) {
 function useQuery(serviceName) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {}, queryHookOptions = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
     var feathers = (0, _core.useFeathers)();
-    var skip = options.skip, allPages = options.allPages, parallel = options.parallel, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? "merge" : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? "swr" : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
+    var skip = options.skip, allPages = options.allPages, parallel = options.parallel, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? 'merge' : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? 'swr' : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
         "skip",
         "allPages",
         "parallel",
@@ -183,12 +183,12 @@ function useQuery(serviceName) {
     if (!realtimeModes.includes(realtime)) {
         throw new Error("Bad realtime option, must be one of ".concat([
             realtimeModes
-        ].join(", ")));
+        ].join(', ')));
     }
     if (!fetchPolicies.includes(fetchPolicy)) {
         throw new Error("Bad fetchPolicy option, must be one of ".concat([
             fetchPolicies
-        ].join(", ")));
+        ].join(', ')));
     }
     var queryId = useQueryHash({
         serviceName: serviceName,
@@ -213,12 +213,12 @@ function useQuery(serviceName) {
         selectData: selectData,
         matcher: matcher
     }), 2), cachedResult = _useCache[0], updateCache = _useCache[1];
-    var isCacheSufficient = fetchPolicy === "cache-first" && !!cachedResult;
+    var isCacheSufficient = fetchPolicy === 'cache-first' && !!cachedResult;
     var _useReducer = _sliced_to_array((0, _react.useReducer)(reducer, {
-        status: isCacheSufficient ? "success" : "pending",
+        status: isCacheSufficient ? 'success' : 'pending',
         error: null
     }), 2), state = _useReducer[0], dispatch = _useReducer[1];
-    var isPending = state.status === "pending";
+    var isPending = state.status === 'pending';
     var requestRef = (0, _react.useRef)(0);
     (0, _react.useEffect)(function() {
         if (skip) return;
@@ -236,14 +236,14 @@ function useQuery(serviceName) {
                 (0, _reactdom.flushSync)(function() {
                     updateCache(res);
                     dispatch({
-                        type: "success"
+                        type: 'success'
                     });
                 });
             }
         }).catch(function(error) {
             if (reqRef === requestRef.current) {
                 dispatch({
-                    type: "error",
+                    type: 'error',
                     error: error
                 });
             }
@@ -265,7 +265,7 @@ function useQuery(serviceName) {
     ]);
     var refetch = (0, _react.useCallback)(function() {
         return dispatch({
-            type: "reset"
+            type: 'reset'
         });
     }, [
         dispatch
@@ -291,22 +291,22 @@ function useQuery(serviceName) {
     }, []);
     var error = state.error;
     if (skip) {
-        status = "success";
+        status = 'success';
         isFetching = false;
-    } else if (state.status === "error") {
-        status = "error";
+    } else if (state.status === 'error') {
+        status = 'error';
         isFetching = false;
-    } else if (fetchPolicy === "swr") {
-        status = cachedResult ? "success" : "loading";
-        isFetching = isPending || status === "loading";
+    } else if (fetchPolicy === 'swr') {
+        status = cachedResult ? 'success' : 'loading';
+        isFetching = isPending || status === 'loading';
         result = cachedResult || result;
-    } else if (fetchPolicy === "cache-first") {
-        status = cachedResult ? "success" : "loading";
-        isFetching = isPending || status === "loading";
+    } else if (fetchPolicy === 'cache-first') {
+        status = cachedResult ? 'success' : 'loading';
+        isFetching = isPending || status === 'loading';
         result = cachedResult || result;
-    } else if (fetchPolicy === "network-only") {
-        status = isPending || !cachedResult ? "loading" : "success";
-        isFetching = isPending || status === "loading";
+    } else if (fetchPolicy === 'network-only') {
+        status = isPending || !cachedResult ? 'loading' : 'success';
+        isFetching = isPending || status === 'loading';
         result = isFetching ? result : cachedResult;
     }
     return (0, _react.useMemo)(function() {

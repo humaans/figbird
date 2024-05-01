@@ -28,7 +28,7 @@ function cleanQuery(query, operators, filters) {
         var result = {};
         Object.keys(query).forEach(function(key) {
             var value = query[key];
-            if (key[0] === "$") {
+            if (key[0] === '$') {
                 if (filters.includes(key)) {
                     return;
                 }
@@ -43,20 +43,20 @@ function cleanQuery(query, operators, filters) {
     return query;
 }
 var FILTERS = [
-    "$sort",
-    "$limit",
-    "$skip",
-    "$select"
+    '$sort',
+    '$limit',
+    '$skip',
+    '$select'
 ];
 var OPERATORS = [
-    "$in",
-    "$nin",
-    "$lt",
-    "$lte",
-    "$gt",
-    "$gte",
-    "$ne",
-    "$or"
+    '$in',
+    '$nin',
+    '$lt',
+    '$lte',
+    '$gt',
+    '$gte',
+    '$ne',
+    '$or'
 ];
 function filterQuery(query) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {};
@@ -65,5 +65,5 @@ function filterQuery(query) {
     return cleanQuery(query, OPERATORS.concat(additionalOperators), FILTERS.concat(additionalFilters));
 }
 function isObject(obj) {
-    return typeof obj === "object" && obj !== null;
+    return typeof obj === 'object' && obj !== null;
 }

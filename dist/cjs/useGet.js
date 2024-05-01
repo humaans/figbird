@@ -22,7 +22,7 @@ var transformResponse = function(data) {
 function useGet(serviceName, id) {
     var options = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
     return (0, _useQuery.useQuery)(serviceName, options, {
-        method: "get",
+        method: 'get',
         id: id,
         selectData: selectData,
         transformResponse: transformResponse

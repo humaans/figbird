@@ -9,6 +9,6 @@ const w = watch ? ' -w' : ''
   await sh('mkdir -p dist')
 
   const swc = './node_modules/.bin/swc'
-  await sh(`${swc}${w} --no-swcrc lib -d dist/esm --config-file=./.swc-esm`)
-  await sh(`${swc}${w} --no-swcrc lib -d dist/cjs --config-file=./.swc-cjs`)
+  await sh(`${swc}${w} --no-swcrc lib -d dist/esm --strip-leading-paths --config-file=./.swc-esm`)
+  await sh(`${swc}${w} --no-swcrc lib -d dist/cjs --strip-leading-paths --config-file=./.swc-cjs`)
 })()

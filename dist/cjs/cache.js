@@ -131,7 +131,7 @@ var cache = atom({
         serviceNamesByQueryId: {}
     }
 }, {
-    label: "figbird"
+    label: 'figbird'
 });
 var reducers = {
     fetched: fetched,
@@ -157,7 +157,7 @@ function useDispatch() {
 var dataSelector = selector(function(queryId) {
     var _cache = cache(), queries = _cache.queries, entities = _cache.entities, lookups = _cache.lookups;
     var serviceName = (0, _helpers.getIn)(lookups, [
-        "serviceNamesByQueryId",
+        'serviceNamesByQueryId',
         queryId
     ]);
     var query = (0, _helpers.getIn)(queries, [
@@ -173,13 +173,13 @@ var dataSelector = selector(function(queryId) {
         return null;
     }
 }, {
-    label: "figbird:data",
+    label: 'figbird:data',
     persist: false
 });
 var metaSelector = selector(function(queryId) {
     var _cache = cache(), queries = _cache.queries, lookups = _cache.lookups;
     var serviceName = (0, _helpers.getIn)(lookups, [
-        "serviceNamesByQueryId",
+        'serviceNamesByQueryId',
         queryId
     ]);
     var query = (0, _helpers.getIn)(queries, [
@@ -192,7 +192,7 @@ var metaSelector = selector(function(queryId) {
         return null;
     }
 }, {
-    label: "figbird:meta",
+    label: 'figbird:meta',
     persist: false
 });
 var querySelector = selector(function(queryId) {
@@ -202,7 +202,7 @@ var querySelector = selector(function(queryId) {
         data: data
     }) : null;
 }, {
-    label: "figbird:query",
+    label: 'figbird:query',
     persist: false
 });
 function useCache(resourceDescriptor) {
@@ -213,11 +213,11 @@ function useCache(resourceDescriptor) {
     }, [
         queryId
     ], {
-        label: "figbird:cache"
+        label: 'figbird:cache'
     });
     var updateCache = (0, _react.useCallback)(function(data) {
         return dispatch({
-            event: "fetched",
+            event: 'fetched',
             queryId: queryId,
             serviceName: serviceName,
             method: method,
@@ -246,10 +246,10 @@ function fetched(curr, param, param1) {
     var serviceName = param.serviceName, data = param.data, method = param.method, params = param.params, queryId = param.queryId, realtime = param.realtime, matcher = param.matcher, selectData = param.selectData, idField = param1.idField;
     // we already inserted this response to cache
     var prevData = (0, _helpers.getIn)(curr, [
-        "queries",
+        'queries',
         serviceName,
         queryId,
-        "res"
+        'res'
     ]);
     if (prevData === data) {
         return curr;
@@ -258,12 +258,12 @@ function fetched(curr, param, param1) {
     var items = data.data, meta = _object_without_properties(data, [
         "data"
     ]);
-    var entities = realtime === "merge" ? _object_spread({}, (0, _helpers.getIn)(next, [
-        "entities",
+    var entities = realtime === 'merge' ? _object_spread({}, (0, _helpers.getIn)(next, [
+        'entities',
         serviceName
     ])) : {};
-    var index = realtime === "merge" ? _object_spread({}, (0, _helpers.getIn)(next, [
-        "index",
+    var index = realtime === 'merge' ? _object_spread({}, (0, _helpers.getIn)(next, [
+        'index',
         serviceName
     ])) : {};
     var _iteratorNormalCompletion = true, _didIteratorError = false, _iteratorError = undefined;
@@ -272,7 +272,7 @@ function fetched(curr, param, param1) {
             var item = _step.value;
             var itemId = idField(item);
             entities[itemId] = item;
-            if (realtime === "merge") {
+            if (realtime === 'merge') {
                 var itemIndex = _object_spread({}, index[itemId]);
                 itemIndex.queries = _object_spread_props(_object_spread({}, itemIndex.queries), _define_property({}, queryId, true));
                 itemIndex.size = itemIndex.size ? itemIndex.size + 1 : 1;
@@ -293,20 +293,20 @@ function fetched(curr, param, param1) {
             }
         }
     }
-    if (realtime === "merge") {
+    if (realtime === 'merge') {
         // update entities
         next = (0, _helpers.setIn)(next, [
-            "entities",
+            'entities',
             serviceName
         ], entities);
         next = (0, _helpers.setIn)(next, [
-            "index",
+            'index',
             serviceName
         ], index);
     }
     // update queries
     next = (0, _helpers.setIn)(next, [
-        "queries",
+        'queries',
         serviceName,
         queryId
     ], _object_spread({
@@ -320,18 +320,18 @@ function fetched(curr, param, param1) {
         matcher: matcher,
         selectData: selectData,
         res: data
-    }, realtime === "merge" ? {} : {
+    }, realtime === 'merge' ? {} : {
         entities: entities
     }));
     // update queryId index
     if ((0, _helpers.getIn)(next, [
-        "lookups",
-        "serviceNamesByQueryId",
+        'lookups',
+        'serviceNamesByQueryId',
         queryId
     ]) !== serviceName) {
         next = (0, _helpers.setIn)(next, [
-            "lookups",
-            "serviceNamesByQueryId",
+            'lookups',
+            'serviceNamesByQueryId',
             queryId
         ], serviceName);
     }
@@ -341,7 +341,7 @@ function created(state, param, config) {
     var serviceName = param.serviceName, item = param.item;
     return updateQueries(state, {
         serviceName: serviceName,
-        method: "create",
+        method: 'create',
         item: item
     }, config);
 }
@@ -349,7 +349,7 @@ function updated(curr, param, param1) {
     var serviceName = param.serviceName, item = param.item, idField = param1.idField, updatedAtField = param1.updatedAtField;
     var itemId = idField(item);
     var currItem = (0, _helpers.getIn)(curr, [
-        "entities",
+        'entities',
         serviceName,
         itemId
     ]);
@@ -364,7 +364,7 @@ function updated(curr, param, param1) {
     var next = curr;
     if (currItem) {
         next = (0, _helpers.setIn)(next, [
-            "entities",
+            'entities',
             serviceName,
             itemId
         ], item);
@@ -374,19 +374,19 @@ function updated(curr, param, param1) {
             size: 0
         };
         next = (0, _helpers.setIn)(next, [
-            "entities",
+            'entities',
             serviceName,
             itemId
         ], item);
         next = (0, _helpers.setIn)(next, [
-            "index",
+            'index',
             serviceName,
             itemId
         ], index);
     }
     return updateQueries(next, {
         serviceName: serviceName,
-        method: "update",
+        method: 'update',
         item: item
     }, {
         idField: idField,
@@ -403,7 +403,7 @@ function removed(curr, param, param1) {
     ];
     var exists = items.some(function(item) {
         return (0, _helpers.getIn)(curr, [
-            "entities",
+            'entities',
             serviceName,
             idField(item)
         ]);
@@ -413,7 +413,7 @@ function removed(curr, param, param1) {
     var next = curr;
     next = updateQueries(next, {
         serviceName: serviceName,
-        method: "remove",
+        method: 'remove',
         item: itemOrItems
     }, {
         idField: idField,
@@ -421,7 +421,7 @@ function removed(curr, param, param1) {
     });
     // now remove it from entities
     var serviceEntities = _object_spread({}, (0, _helpers.getIn)(next, [
-        "entities",
+        'entities',
         serviceName
     ]));
     var removedIds = [];
@@ -431,7 +431,7 @@ function removed(curr, param, param1) {
             var item = _step.value;
             delete serviceEntities[idField(item)];
             next = (0, _helpers.setIn)(next, [
-                "entities",
+                'entities',
                 serviceName
             ], serviceEntities);
             removedIds.push(idField(item));
@@ -464,11 +464,11 @@ function updateQueries(curr, param, param1) {
             var item = _step.value;
             var itemId = idField(item);
             var queries = _object_spread({}, (0, _helpers.getIn)(next, [
-                "queries",
+                'queries',
                 serviceName
             ]));
             var index = _object_spread({}, (0, _helpers.getIn)(next, [
-                "index",
+                'index',
                 serviceName,
                 itemId
             ]));
@@ -479,10 +479,10 @@ function updateQueries(curr, param, param1) {
                 var matches;
                 // do not update non realtime queries
                 // those get updated/refetched in a different way
-                if (query.realtime !== "merge") {
+                if (query.realtime !== 'merge') {
                     return;
                 }
-                if (method === "remove") {
+                if (method === 'remove') {
                     // optimisation, if method is remove, we want to immediately remove the object
                     // from cache, which means we don't need to match using matcher
                     matches = false;
@@ -528,11 +528,11 @@ function updateQueries(curr, param, param1) {
             });
             if (updateCount > 0) {
                 next = (0, _helpers.setIn)(next, [
-                    "queries",
+                    'queries',
                     serviceName
                 ], queries);
                 next = (0, _helpers.setIn)(next, [
-                    "index",
+                    'index',
                     serviceName,
                     itemId
                 ], index);
@@ -540,12 +540,12 @@ function updateQueries(curr, param, param1) {
                 // queries, otherwise, we might end up piling in newly created objects into cache
                 // even if the app never uses them
                 if (!(0, _helpers.getIn)(next, [
-                    "entities",
+                    'entities',
                     serviceName,
                     itemId
                 ])) {
                     next = (0, _helpers.setIn)(next, [
-                        "entities",
+                        'entities',
                         serviceName,
                         itemId
                     ], item);
@@ -553,12 +553,12 @@ function updateQueries(curr, param, param1) {
                 // this item is no longer relevant to any query, garbage collect it
                 if (index.size === 0) {
                     next = (0, _helpers.unsetIn)(next, [
-                        "entities",
+                        'entities',
                         serviceName,
                         itemId
                     ]);
                     next = (0, _helpers.unsetIn)(next, [
-                        "index",
+                        'index',
                         serviceName,
                         itemId
                     ]);
