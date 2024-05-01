@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.15.0
+
+- Upgrade all dependencies to address security alerts.
+
 ## 0.14.0
 
 - Rewrite internals for useQuery to address several issues and simplify the code
