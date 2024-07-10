@@ -19,6 +19,10 @@ _export(exports, {
         return filterQuery;
     }
 });
+function _type_of(obj) {
+    "@swc/helpers - typeof";
+    return obj && typeof Symbol !== "undefined" && obj.constructor === Symbol ? "symbol" : typeof obj;
+}
 function cleanQuery(query, operators, filters) {
     if (Array.isArray(query)) {
         return query.map(function(value) {
@@ -65,5 +69,5 @@ function filterQuery(query) {
     return cleanQuery(query, OPERATORS.concat(additionalOperators), FILTERS.concat(additionalFilters));
 }
 function isObject(obj) {
-    return typeof obj === 'object' && obj !== null;
+    return (typeof obj === "undefined" ? "undefined" : _type_of(obj)) === 'object' && obj !== null;
 }

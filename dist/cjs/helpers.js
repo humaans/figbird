@@ -86,6 +86,10 @@ function _object_spread(target) {
 function _to_consumable_array(arr) {
     return _array_without_holes(arr) || _iterable_to_array(arr) || _unsupported_iterable_to_array(arr) || _non_iterable_spread();
 }
+function _type_of(obj) {
+    "@swc/helpers - typeof";
+    return obj && typeof Symbol !== "undefined" && obj.constructor === Symbol ? "symbol" : typeof obj;
+}
 function _unsupported_iterable_to_array(o, minLen) {
     if (!o) return;
     if (typeof o === "string") return _array_like_to_array(o, minLen);
@@ -151,7 +155,7 @@ function unsetIn(obj, path) {
     return res;
 }
 function isObject(obj) {
-    return typeof obj === 'object' && obj !== null;
+    return (typeof obj === "undefined" ? "undefined" : _type_of(obj)) === 'object' && obj !== null;
 }
 function matcher(query, options) {
     var filteredQuery = (0, _filterQuery.filterQuery)(query, options);
