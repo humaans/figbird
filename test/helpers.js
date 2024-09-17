@@ -78,7 +78,7 @@ export const swallowErrors = yourTestFn => {
 }
 
 class Service {
-  constructor(name, data) {
+  constructor(name, data, options = {}) {
     this.name = name
     this.data = data
     this.counts = {
@@ -90,6 +90,7 @@ class Service {
       remove: 0,
     }
     this.delay = 0
+    this.options = options
   }
 
   setDelay(delay) {
@@ -115,12 +116,20 @@ class Service {
       await new Promise(resolve => setTimeout(resolve, this.delay))
     }
 
-    return Promise.resolve({
-      total: keys.length,
-      limit,
-      skip,
-      data,
-    })
+    return Promise.resolve(
+      this.options.skipTotal
+        ? {
+            limit,
+            skip,
+            data,
+          }
+        : {
+            total: keys.length,
+            limit,
+            skip,
+            data,
+          },
+    )
   }
 
   create(data, params) {
@@ -184,13 +193,16 @@ class Service {
 
 util.inherits(Service, EventEmitter)
 
-export function service(name, details) {
-  return new Service(name, details.data)
+export function service(name, details, options) {
+  return new Service(name, details.data, options)
 }
 
 export function mockFeathers(services) {
+  const skipTotal = !!services.skipTotal
+  delete services.skipTotal
+
   services = Object.keys(services).reduce((acc, name) => {
-    acc[name] = service(name, services[name])
+    acc[name] = service(name, services[name], { skipTotal })
     return acc
   }, {})
 

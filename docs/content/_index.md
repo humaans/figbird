@@ -135,6 +135,8 @@ const { data, status, isFetching, error, refetch } = useFind(serviceName, params
 - `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
 - `allPages` - fetch all pages
 - `parallel` - when used in combination with `allPages` will fetch all pages in parallel
+- `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
+- `optimisticParallelLimit` - when used in combination with `parallel` when `result.total` is not available will limit how many optimistic potentially blank requests to make (default: 2)
 - `matcher` - custom matcher function of signature `(defaultMatcher) => (query) => (item): bool`, used when merging realtime events into local query cache
 
 **Returns**
