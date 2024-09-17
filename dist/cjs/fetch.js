@@ -144,7 +144,7 @@ function finder(service, params, param) {
             }));
         };
         var resolveOrFetchNext = function resolveOrFetchNext(res) {
-            if (res.data.length === 0 || res.data.length < res.limit || isTotalAvailale(res) && result.data.length >= res.total) {
+            if (res.data.length === 0 || res.data.length < res.limit || isTotalAvailable(res) && result.data.length >= res.total) {
                 resolve(result);
             } else {
                 skip = result.data.length;
@@ -163,7 +163,7 @@ function finder(service, params, param) {
             //    we optimised a bit and we keep fetching more
             //  - if all or some parallel requests return blank - it's ok
             //    we accept the trade off of trying to paralellise
-            var requiredFetches = isTotalAvailale(result) ? Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit) : optimisticParallelLimit;
+            var requiredFetches = isTotalAvailable(result) ? Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit) : optimisticParallelLimit;
             if (requiredFetches > 0) {
                 Promise.all(new Array(requiredFetches).fill().map(function(_, idx) {
                     return doFind(skip + idx * result.limit);
@@ -202,6 +202,6 @@ function finder(service, params, param) {
 }
 // allow total to be undefined or -1 to indicate
 // that total will not be available on this endpoint
-function isTotalAvailale(res) {
+function isTotalAvailable(res) {
     return typeof res.total === 'number' && res.total >= 0;
 }

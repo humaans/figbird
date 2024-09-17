@@ -88,7 +88,7 @@ function finder(service, params, { allPages, parallel, parallelLimit, optimistic
             }));
         }
         function resolveOrFetchNext(res) {
-            if (res.data.length === 0 || res.data.length < res.limit || isTotalAvailale(res) && result.data.length >= res.total) {
+            if (res.data.length === 0 || res.data.length < res.limit || isTotalAvailable(res) && result.data.length >= res.total) {
                 resolve(result);
             } else {
                 skip = result.data.length;
@@ -107,7 +107,7 @@ function finder(service, params, { allPages, parallel, parallelLimit, optimistic
             //    we optimised a bit and we keep fetching more
             //  - if all or some parallel requests return blank - it's ok
             //    we accept the trade off of trying to paralellise
-            const requiredFetches = isTotalAvailale(result) ? Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit) : optimisticParallelLimit;
+            const requiredFetches = isTotalAvailable(result) ? Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit) : optimisticParallelLimit;
             if (requiredFetches > 0) {
                 Promise.all(new Array(requiredFetches).fill().map((_, idx)=>doFind(skip + idx * result.limit))).then((results)=>{
                     const [lastResult] = results.slice(-1);
@@ -136,6 +136,6 @@ function finder(service, params, { allPages, parallel, parallelLimit, optimistic
 }
 // allow total to be undefined or -1 to indicate
 // that total will not be available on this endpoint
-function isTotalAvailale(res) {
+function isTotalAvailable(res) {
     return typeof res.total === 'number' && res.total >= 0;
 }

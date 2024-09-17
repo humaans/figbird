@@ -170,7 +170,7 @@ function reducer(state, action) {
 }
 function useQuery(serviceName) {
     var options = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {}, queryHookOptions = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {};
-    var feathers = (0, _core.useFeathers)();
+    var _useFigbird = (0, _core.useFigbird)(), config = _useFigbird.config, feathers = _useFigbird.feathers;
     var skip = options.skip, allPages = options.allPages, parallel = options.parallel, parallelLimit = options.parallelLimit, optimisticParallelLimit = options.optimisticParallelLimit, _options_realtime = options.realtime, realtime = _options_realtime === void 0 ? 'merge' : _options_realtime, _options_fetchPolicy = options.fetchPolicy, fetchPolicy = _options_fetchPolicy === void 0 ? 'swr' : _options_fetchPolicy, matcher = options.matcher, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -191,6 +191,15 @@ function useQuery(serviceName) {
         throw new Error("Bad fetchPolicy option, must be one of ".concat([
             fetchPolicies
         ].join(', ')));
+    }
+    if (config.defaultPageSizeWhenFetchingAll && allPages && (!params.query || !params.query.$limit)) {
+        params = _object_spread({}, params);
+        params.query = params.query || {};
+        params.query.$limit = config.defaultPageSizeWhenFetchingAll;
+    } else if (config.defaultPageSize && (!params.query || !params.query.$limit)) {
+        params = _object_spread({}, params);
+        params.query = params.query || {};
+        params.query.$limit = config.defaultPageSize;
     }
     var queryId = useQueryHash({
         serviceName: serviceName,

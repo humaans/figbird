@@ -79,7 +79,7 @@ function _object_without_properties_loose(source, excluded) {
 }
 import { useReducer, useEffect, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
-import { useFeathers } from './core';
+import { useFigbird } from './core';
 import { useRealtime } from './useRealtime';
 import { useCache } from './cache';
 import { fetch } from './fetch';
@@ -115,7 +115,7 @@ function reducer(state, action) {
 /**
  * A generic abstraction of both get and find
  */ export function useQuery(serviceName, options = {}, queryHookOptions = {}) {
-    const feathers = useFeathers();
+    const { config, feathers } = useFigbird();
     let { skip, allPages, parallel, parallelLimit, optimisticParallelLimit, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
         "skip",
         "allPages",
@@ -136,6 +136,15 @@ function reducer(state, action) {
         throw new Error(`Bad fetchPolicy option, must be one of ${[
             fetchPolicies
         ].join(', ')}`);
+    }
+    if (config.defaultPageSizeWhenFetchingAll && allPages && (!params.query || !params.query.$limit)) {
+        params = _object_spread({}, params);
+        params.query = params.query || {};
+        params.query.$limit = config.defaultPageSizeWhenFetchingAll;
+    } else if (config.defaultPageSize && (!params.query || !params.query.$limit)) {
+        params = _object_spread({}, params);
+        params.query = params.query || {};
+        params.query.$limit = config.defaultPageSize;
     }
     const queryId = useQueryHash({
         serviceName,
