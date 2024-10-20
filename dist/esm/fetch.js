@@ -53,7 +53,7 @@ function _object_spread_props(target, source) {
 import { inflight } from './helpers';
 const get = inflight((service, id, params, options)=>`${service.path}/${options.queryId}`, getter);
 const find = inflight((service, params, options)=>`${service.path}/${options.queryId}`, finder);
-export function fetch(feathers, serviceName, method, id, params, { queryId, allPages, parallel, parallelLimit = 4, optimisticParallelLimit = 2, transformResponse }) {
+export function fetch(feathers, serviceName, method, id, params, { queryId, allPages, parallel, parallelLimit = 4, transformResponse }) {
     const service = feathers.service(serviceName);
     const result = method === 'get' ? get(service, id, params, {
         queryId
@@ -61,15 +61,14 @@ export function fetch(feathers, serviceName, method, id, params, { queryId, allP
         queryId,
         allPages,
         parallel,
-        parallelLimit,
-        optimisticParallelLimit
+        parallelLimit
     });
     return result.then(transformResponse);
 }
 function getter(service, id, params) {
     return service.get(id, params);
 }
-function finder(service, params, { allPages, parallel, parallelLimit, optimisticParallelLimit }) {
+function finder(service, params, { allPages, parallel, parallelLimit }) {
     if (!allPages) {
         return service.find(params);
     }
@@ -107,7 +106,7 @@ function finder(service, params, { allPages, parallel, parallelLimit, optimistic
             //    we optimised a bit and we keep fetching more
             //  - if all or some parallel requests return blank - it's ok
             //    we accept the trade off of trying to paralellise
-            const requiredFetches = isTotalAvailable(result) ? Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit) : optimisticParallelLimit;
+            const requiredFetches = Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit);
             if (requiredFetches > 0) {
                 Promise.all(new Array(requiredFetches).fill().map((_, idx)=>doFind(skip + idx * result.limit))).then((results)=>{
                     const [lastResult] = results.slice(-1);
@@ -121,7 +120,7 @@ function finder(service, params, { allPages, parallel, parallelLimit, optimistic
             }
         }
         function fetchNext() {
-            if (typeof result.limit !== 'undefined' && parallel === true) {
+            if (typeof result.limit !== 'undefined' && isTotalAvailable(result) && parallel === true) {
                 fetchNextParallel();
             } else {
                 doFind(skip).then((res)=>{

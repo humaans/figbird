@@ -116,12 +116,11 @@ function reducer(state, action) {
  * A generic abstraction of both get and find
  */ export function useQuery(serviceName, options = {}, queryHookOptions = {}) {
     const { config, feathers } = useFigbird();
-    let { skip, allPages, parallel, parallelLimit, optimisticParallelLimit, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
+    let { skip, allPages, parallel, parallelLimit, realtime = 'merge', fetchPolicy = 'swr', matcher } = options, params = _object_without_properties(options, [
         "skip",
         "allPages",
         "parallel",
         "parallelLimit",
-        "optimisticParallelLimit",
         "realtime",
         "fetchPolicy",
         "matcher"
@@ -185,7 +184,6 @@ function reducer(state, action) {
             allPages,
             parallel,
             parallelLimit,
-            optimisticParallelLimit,
             transformResponse
         }).then((res)=>{
             if (reqRef === requestRef.current) {
@@ -216,7 +214,6 @@ function reducer(state, action) {
         allPages,
         parallel,
         parallelLimit,
-        optimisticParallelLimit,
         updateCache,
         isPending,
         isCacheSufficient

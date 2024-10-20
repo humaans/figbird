@@ -2,7 +2,7 @@
 
 ## 0.17.0
 
-- Introduce support for endpoints that do not respond with `result.total` or `result.total` as -1 when using `allPages: true` to indicate that the endpoint is not counting the total available results, instead figbird will keep paging over the API until all data is gathered. Use `optimisticParallelLimit` to control how many requests to trigger when using in conjunction with `parallel`.
+- Introduce support for endpoints that do not respond with `result.total` or `result.total` as -1 when using `allPages: true` to indicate that the endpoint is not counting the total available results, instead figbird will keep paging over the API until all data is gathered
 - Introduce a new option `parallelLimit` to `useFind` to limit max number of requests, default value is 4
 - Introduce a new option on `Provider` for `defaultPageSize` and `defaultPageSizeWhenFetchingAll`
 - Upgrade all dependencies to address security alerts.

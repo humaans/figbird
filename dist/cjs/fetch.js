@@ -114,7 +114,7 @@ var find = (0, _helpers.inflight)(function(service, params, options) {
     return "".concat(service.path, "/").concat(options.queryId);
 }, finder);
 function fetch(feathers, serviceName, method, id, params, param) {
-    var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel, _param_parallelLimit = param.parallelLimit, parallelLimit = _param_parallelLimit === void 0 ? 4 : _param_parallelLimit, _param_optimisticParallelLimit = param.optimisticParallelLimit, optimisticParallelLimit = _param_optimisticParallelLimit === void 0 ? 2 : _param_optimisticParallelLimit, transformResponse = param.transformResponse;
+    var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel, _param_parallelLimit = param.parallelLimit, parallelLimit = _param_parallelLimit === void 0 ? 4 : _param_parallelLimit, transformResponse = param.transformResponse;
     var service = feathers.service(serviceName);
     var result = method === 'get' ? get(service, id, params, {
         queryId: queryId
@@ -122,8 +122,7 @@ function fetch(feathers, serviceName, method, id, params, param) {
         queryId: queryId,
         allPages: allPages,
         parallel: parallel,
-        parallelLimit: parallelLimit,
-        optimisticParallelLimit: optimisticParallelLimit
+        parallelLimit: parallelLimit
     });
     return result.then(transformResponse);
 }
@@ -131,7 +130,7 @@ function getter(service, id, params) {
     return service.get(id, params);
 }
 function finder(service, params, param) {
-    var allPages = param.allPages, parallel = param.parallel, parallelLimit = param.parallelLimit, optimisticParallelLimit = param.optimisticParallelLimit;
+    var allPages = param.allPages, parallel = param.parallel, parallelLimit = param.parallelLimit;
     if (!allPages) {
         return service.find(params);
     }
@@ -163,7 +162,7 @@ function finder(service, params, param) {
             //    we optimised a bit and we keep fetching more
             //  - if all or some parallel requests return blank - it's ok
             //    we accept the trade off of trying to paralellise
-            var requiredFetches = isTotalAvailable(result) ? Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit) : optimisticParallelLimit;
+            var requiredFetches = Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit);
             if (requiredFetches > 0) {
                 Promise.all(new Array(requiredFetches).fill().map(function(_, idx) {
                     return doFind(skip + idx * result.limit);
@@ -181,7 +180,7 @@ function finder(service, params, param) {
             }
         };
         var fetchNext = function fetchNext() {
-            if (typeof result.limit !== 'undefined' && parallel === true) {
+            if (typeof result.limit !== 'undefined' && isTotalAvailable(result) && parallel === true) {
                 fetchNextParallel();
             } else {
                 doFind(skip).then(function(res) {
