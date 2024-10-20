@@ -110,14 +110,20 @@ var Provider = function(_param) {
     }
     var idField = useIdField(props.idField);
     var updatedAtField = useUpdatedAtField(props.updatedAtField);
+    var defaultPageSize = props.defaultPageSize;
+    var defaultPageSizeWhenFetchingAll = props.defaultPageSizeWhenFetchingAll;
     var config = (0, _react.useMemo)(function() {
         return {
             idField: idField,
-            updatedAtField: updatedAtField
+            updatedAtField: updatedAtField,
+            defaultPageSize: defaultPageSize,
+            defaultPageSizeWhenFetchingAll: defaultPageSizeWhenFetchingAll
         };
     }, [
         idField,
-        updatedAtField
+        updatedAtField,
+        defaultPageSize,
+        defaultPageSizeWhenFetchingAll
     ]);
     var figbird = (0, _react.useMemo)(function() {
         return {

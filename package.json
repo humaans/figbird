@@ -12,7 +12,9 @@
     "watch": "node ./tasks/build.js -w",
     "release": "np",
     "release:beta": "np --tag=beta",
-    "release:docs": "hugo -s docs && gh-pages -d docs/public"
+    "docs:build": "hugo -s docs",
+    "docs:watch": "hugo server -s docs",
+    "docs:release": "hugo -s docs && gh-pages -d docs/public"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -24,17 +26,16 @@
     "sift": "^17.1.3"
   },
   "devDependencies": {
-    "@swc-node/register": "^1.10.3",
+    "@swc-node/register": "^1.10.9",
     "@swc/cli": "^0.4.0",
-    "@swc/core": "^1.6.13",
+    "@swc/core": "^1.7.36",
     "ava": "^6.1.3",
-    "chokidar": "^3.6.0",
-    "execa": "^9.3.0",
-    "gh-pages": "^6.1.1",
+    "execa": "^9.4.1",
+    "gh-pages": "^6.2.0",
     "healthier": "^7.0.0",
-    "jsdom": "^24.1.0",
-    "nyc": "^17.0.0",
-    "prettier": "^3.3.2",
+    "jsdom": "^25.0.1",
+    "nyc": "^17.1.0",
+    "prettier": "^3.3.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

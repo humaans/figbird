@@ -3,8 +3,9 @@ import test from 'ava'
 import { dom, mockFeathers, swallowErrors } from './helpers'
 import { Provider, useGet, useFind, useMutation, useFeathers, createStore } from '../lib'
 
-const createFeathers = () =>
+const createFeathers = ({ skipTotal } = {}) =>
   mockFeathers({
+    skipTotal,
     notes: {
       data: {
         1: {
@@ -776,6 +777,34 @@ test('useFind with allPages', async t => {
   unmount()
 })
 
+test('useFind with allPages without total', async t => {
+  const { render, flush, unmount, $all } = dom()
+  function Note() {
+    const notes = useFind('notes', { query: { $limit: 1 }, allPages: true })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers({ skipTotal: true })
+
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello', 'doc', 'dmc'],
+  )
+
+  unmount()
+})
+
 test('useFind with allPages and parallel', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
@@ -871,6 +900,38 @@ test('useFind - realtime merge', async t => {
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
     ['doc'],
+  )
+
+  unmount()
+})
+
+test('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
+  const { render, flush, unmount, $all } = dom()
+  function Note() {
+    const notes = useFind('notes', { allPages: true })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+
+  t.is(feathers.service('notes').counts.find, 0)
+
+  render(
+    <App feathers={feathers} config={{ defaultPageSizeWhenFetchingAll: 1 }}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(feathers.service('notes').counts.find, 3)
+
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello', 'doc', 'dmc'],
   )
 
   unmount()

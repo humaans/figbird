@@ -114,14 +114,15 @@ var find = (0, _helpers.inflight)(function(service, params, options) {
     return "".concat(service.path, "/").concat(options.queryId);
 }, finder);
 function fetch(feathers, serviceName, method, id, params, param) {
-    var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel, transformResponse = param.transformResponse;
+    var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel, _param_parallelLimit = param.parallelLimit, parallelLimit = _param_parallelLimit === void 0 ? 4 : _param_parallelLimit, transformResponse = param.transformResponse;
     var service = feathers.service(serviceName);
     var result = method === 'get' ? get(service, id, params, {
         queryId: queryId
     }) : find(service, params, {
         queryId: queryId,
         allPages: allPages,
-        parallel: parallel
+        parallel: parallel,
+        parallelLimit: parallelLimit
     });
     return result.then(transformResponse);
 }
@@ -129,7 +130,7 @@ function getter(service, id, params) {
     return service.get(id, params);
 }
 function finder(service, params, param) {
-    var queryId = param.queryId, allPages = param.allPages, parallel = param.parallel;
+    var allPages = param.allPages, parallel = param.parallel, parallelLimit = param.parallelLimit;
     if (!allPages) {
         return service.find(params);
     }
@@ -142,7 +143,7 @@ function finder(service, params, param) {
             }));
         };
         var resolveOrFetchNext = function resolveOrFetchNext(res) {
-            if (res.data.length === 0 || result.data.length >= result.total) {
+            if (res.data.length === 0 || res.data.length < res.limit || isTotalAvailable(res) && result.data.length >= res.total) {
                 resolve(result);
             } else {
                 skip = result.data.length;
@@ -150,7 +151,18 @@ function finder(service, params, param) {
             }
         };
         var fetchNextParallel = function fetchNextParallel() {
-            var requiredFetches = Math.ceil((result.total - result.data.length) / result.limit);
+            // If result.total is available, we
+            //  - compute total number of pages to fetch
+            //  - but limit that to parallelLimit which is 4 by default
+            //  - to avoid overloading the server
+            // If result.total is not available, we
+            //  - optimistically attempt to make more requests that might
+            //    be needed
+            //  - if all parallel requests return data - good,
+            //    we optimised a bit and we keep fetching more
+            //  - if all or some parallel requests return blank - it's ok
+            //    we accept the trade off of trying to paralellise
+            var requiredFetches = Math.min(Math.ceil((result.total - result.data.length) / result.limit), parallelLimit);
             if (requiredFetches > 0) {
                 Promise.all(new Array(requiredFetches).fill().map(function(_, idx) {
                     return doFind(skip + idx * result.limit);
@@ -168,7 +180,7 @@ function finder(service, params, param) {
             }
         };
         var fetchNext = function fetchNext() {
-            if (typeof result.total !== 'undefined' && typeof result.limit !== 'undefined' && parallel === true) {
+            if (typeof result.limit !== 'undefined' && isTotalAvailable(result) && parallel === true) {
                 fetchNextParallel();
             } else {
                 doFind(skip).then(function(res) {
@@ -186,4 +198,9 @@ function finder(service, params, param) {
         };
         fetchNext();
     });
+}
+// allow total to be undefined or -1 to indicate
+// that total will not be available on this endpoint
+function isTotalAvailable(res) {
+    return typeof res.total === 'number' && res.total >= 0;
 }

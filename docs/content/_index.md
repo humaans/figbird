@@ -135,6 +135,7 @@ const { data, status, isFetching, error, refetch } = useFind(serviceName, params
 - `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
 - `allPages` - fetch all pages
 - `parallel` - when used in combination with `allPages` will fetch all pages in parallel
+- `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
 - `matcher` - custom matcher function of signature `(defaultMatcher) => (query) => (item): bool`, used when merging realtime events into local query cache
 
 **Returns**
@@ -188,6 +189,8 @@ Get the feathers instance passed to `Provider`.
 - `feathers` - feathers instance
 - `idField` - string or function, defaults to `item => item.id || item._id`
 - `updatedAtField` - string or function, defaults to `item => item.updatedAt || item.updated_at`, used to avoid overwriting newer data in cache with older data when `get` or realtime `patched` requests are racing
+- `defaultPageSize` - a default page size in `query.$limit` to use when fetching, unset by default so that the server gets to decide
+- `defaultPageSizeWhenFetchingAll` - a default page size to use in `query.$limit` when fetching using `allPages: true`, unset by default so that the server gets to decide
 - `store` - custom store instance - allows inspecting cache contents
 
 ### `createStore`

@@ -44,12 +44,18 @@ const defaultUpdatedAtField = (item)=>item.updatedAt || item.updated_at;
     }
     const idField = useIdField(props.idField);
     const updatedAtField = useUpdatedAtField(props.updatedAtField);
+    const defaultPageSize = props.defaultPageSize;
+    const defaultPageSizeWhenFetchingAll = props.defaultPageSizeWhenFetchingAll;
     const config = useMemo(()=>({
             idField,
-            updatedAtField
+            updatedAtField,
+            defaultPageSize,
+            defaultPageSizeWhenFetchingAll
         }), [
         idField,
-        updatedAtField
+        updatedAtField,
+        defaultPageSize,
+        defaultPageSizeWhenFetchingAll
     ]);
     const figbird = useMemo(()=>({
             feathers,
