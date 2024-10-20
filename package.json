@@ -12,7 +12,9 @@
     "watch": "node ./tasks/build.js -w",
     "release": "np",
     "release:beta": "np --tag=beta",
-    "release:docs": "hugo -s docs && gh-pages -d docs/public"
+    "docs:build": "hugo -s docs",
+    "docs:watch": "hugo server -s docs",
+    "docs:release": "hugo -s docs && gh-pages -d docs/public"
   },
   "engines": {
     "node": ">=18.0.0"
