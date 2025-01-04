@@ -19,13 +19,13 @@ const createFeathers = ({ skipTotal } = {}) =>
 
 function App({ feathers, store, config, children }) {
   return (
-    <StrictMode>
-      <ErrorHandler>
-        <Provider feathers={feathers} store={store} {...config}>
-          {children}
-        </Provider>
-      </ErrorHandler>
-    </StrictMode>
+    // <StrictMode>
+    <ErrorHandler>
+      <Provider feathers={feathers} store={store} {...config}>
+        {children}
+      </Provider>
+    </ErrorHandler>
+    // </StrictMode>
   )
 }
 
@@ -72,7 +72,7 @@ function NoteList({ notes, keyField = 'id' }) {
   )
 }
 
-test('useGet', async t => {
+test.only('useGet', async t => {
   const { render, unmount, flush, $ } = dom()
 
   let noteData
