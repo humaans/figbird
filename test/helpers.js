@@ -1,8 +1,8 @@
 import util from 'util'
 import { JSDOM } from 'jsdom'
 import EventEmitter from 'events'
+import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { act } from 'react-dom/test-utils'
 
 export function dom() {
   const dom = new JSDOM('<!doctype html><div id="root"></div>')
