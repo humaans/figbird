@@ -777,7 +777,7 @@ test('useFind with allPages', async t => {
   unmount()
 })
 
-test.only('useFind with allPages without total', async t => {
+test('useFind with allPages without total', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { $limit: 1 }, allPages: true })
@@ -1104,7 +1104,7 @@ test('useFind - fetchPolicy swr', async t => {
   unmount()
 })
 
-test('useFind - fetchPolicy cache-first', async t => {
+test.only('useFind - fetchPolicy cache-first', async t => {
   const { render, flush, flushRealtime, unmount, $all } = dom()
   let renderNote
 
