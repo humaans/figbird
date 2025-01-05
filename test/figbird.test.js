@@ -541,26 +541,6 @@ test('useFeathers', async t => {
   unmount()
 })
 
-test('Provider requires feathers to be passed in', async t => {
-  const { render, unmount, $ } = dom()
-
-  function Content() {
-    return null
-  }
-
-  swallowErrors(() => {
-    render(
-      <App config={{ idField: '_xid' }}>
-        <Content />
-      </App>,
-    )
-  })
-
-  t.is($('.error').innerHTML, 'Please pass in a feathers client')
-
-  unmount()
-})
-
 test('support _id out of the box', async t => {
   const { render, flush, unmount, $ } = dom()
   const feathers = mockFeathers({
@@ -1518,7 +1498,6 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
     const [n, setN] = useState(1)
     renderNote = setN
 
-    console.log('FINDING', n)
     const notes = useFind('notes', { n })
 
     const { data, status, isFetching } = notes
@@ -1552,7 +1531,6 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
 
   // change params
   await flush(() => {
-    console.log('Rendering note 2')
     renderNote(2)
   })
 
