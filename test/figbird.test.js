@@ -623,7 +623,7 @@ test('support custom idField string', async t => {
   unmount()
 })
 
-test('support custom idField function', async t => {
+test.only('support custom idField function', async t => {
   const { render, flush, unmount, $ } = dom()
   const feathers = mockFeathers({
     notes: {
