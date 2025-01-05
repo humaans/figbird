@@ -72,7 +72,7 @@ function NoteList({ notes, keyField = 'id' }) {
   )
 }
 
-test.only('useGet', async t => {
+test('useGet', async t => {
   const { render, unmount, flush, $ } = dom()
 
   let noteData
@@ -654,7 +654,7 @@ test('support custom idField function', async t => {
   unmount()
 })
 
-test('useFind error', async t => {
+test.only('useFind error', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
@@ -679,7 +679,7 @@ test('useFind error', async t => {
   unmount()
 })
 
-test('useFind with skip', async t => {
+test.only('useFind with skip', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
