@@ -623,7 +623,7 @@ test('support custom idField string', async t => {
   unmount()
 })
 
-test.only('support custom idField function', async t => {
+test('support custom idField function', async t => {
   const { render, flush, unmount, $ } = dom()
   const feathers = mockFeathers({
     notes: {
@@ -654,7 +654,7 @@ test.only('support custom idField function', async t => {
   unmount()
 })
 
-test.only('useFind error', async t => {
+test('useFind error', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
@@ -679,7 +679,7 @@ test.only('useFind error', async t => {
   unmount()
 })
 
-test.only('useFind with skip', async t => {
+test('useFind with skip', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
@@ -777,7 +777,7 @@ test('useFind with allPages', async t => {
   unmount()
 })
 
-test('useFind with allPages without total', async t => {
+test.only('useFind with allPages without total', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { $limit: 1 }, allPages: true })
