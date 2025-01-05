@@ -19,13 +19,13 @@ const createFeathers = ({ skipTotal } = {}) =>
 
 function App({ feathers, store, config, children }) {
   return (
-    // <StrictMode>
-    <ErrorHandler>
-      <Provider feathers={feathers} store={store} {...config}>
-        {children}
-      </Provider>
-    </ErrorHandler>
-    // </StrictMode>
+    <StrictMode>
+      <ErrorHandler>
+        <Provider feathers={feathers} store={store} {...config}>
+          {children}
+        </Provider>
+      </ErrorHandler>
+    </StrictMode>
   )
 }
 
@@ -1082,11 +1082,13 @@ test('useFind - fetchPolicy swr', async t => {
   // a 2nd find happened in the background
   t.is(feathers.service('notes').counts.find, 2)
 
-  // but we see old note at first
-  t.deepEqual(
-    $all('.note').map(n => n.innerHTML),
-    ['hello'],
-  )
+  // but we see old note at first - TODO - we don't,
+  // because we now always incorporate realtime events into the cache
+  // even if the components are unmounted!
+  // t.deepEqual(
+  //   $all('.note').map(n => n.innerHTML),
+  //   ['hello'],
+  // )
 
   // and then after a while
   await flush(async () => {
@@ -1150,10 +1152,10 @@ test('useFind - fetchPolicy cache-first', async t => {
   // no find happened this time, we used cache!
   t.is(feathers.service('notes').counts.find, 1)
 
-  // we see old note
+  // we see new, patched note!
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['hello'],
+    ['doc'],
   )
 
   unmount()
@@ -1440,19 +1442,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'find:wdooyTIAAAA=': true,
+          'q:QUW0nYAAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'find:wdooyTIAAAA=': true,
+          'q:QUW0nYAAAAA=': true,
         },
         size: 1,
       },
       3: {
         queries: {
-          'find:wdooyTIAAAA=': true,
+          'q:QUW0nYAAAAA=': true,
         },
         size: 1,
       },
@@ -1489,13 +1491,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'find:wdooyTIAAAA=': true,
+          'q:QUW0nYAAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'find:wdooyTIAAAA=': true,
+          'q:QUW0nYAAAAA=': true,
         },
         size: 1,
       },
@@ -1516,6 +1518,7 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
     const [n, setN] = useState(1)
     renderNote = setN
 
+    console.log('FINDING', n)
     const notes = useFind('notes', { n })
 
     const { data, status, isFetching } = notes
@@ -1549,6 +1552,7 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
 
   // change params
   await flush(() => {
+    console.log('Rendering note 2')
     renderNote(2)
   })
 
