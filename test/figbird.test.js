@@ -1,6 +1,6 @@
 import React, { useState, useEffect, StrictMode } from 'react'
 import test from 'ava'
-import { dom, mockFeathers, swallowErrors } from './helpers'
+import { dom, mockFeathers } from './helpers'
 import { Provider, useGet, useFind, useMutation, useFeathers, createStore } from '../lib'
 
 const createFeathers = ({ skipTotal } = {}) =>
@@ -431,27 +431,14 @@ test('useMutation - multicreate updates cache correctly', async t => {
 test('useMutation patch updates the get binding', async t => {
   const { render, flush, unmount, $ } = dom()
   let setContent
+  let _patch
 
   function Note() {
     const note = useGet('notes', 1)
     const { patch } = useMutation('notes')
     const [content, _setContent] = useState('hi1')
     setContent = _setContent
-
-    const [loaded, setLoaded] = useState(false)
-
-    useEffect(() => {
-      if (note.data && !loaded) {
-        setLoaded(true)
-      }
-    }, [note.data, loaded])
-
-    useEffect(() => {
-      if (loaded) {
-        patch(1, { content })
-      }
-    }, [patch, loaded, content])
-
+    _patch = patch
     return <NoteList notes={note} />
   }
 
@@ -462,14 +449,14 @@ test('useMutation patch updates the get binding', async t => {
     </App>,
   )
 
-  await flush()
-
+  await flush(async () => {
+    await _patch(1, { content: 'hi1' })
+  })
   t.is($('.note').innerHTML, 'hi1')
 
-  await flush(() => {
-    setContent('hi2')
+  await flush(async () => {
+    await _patch(1, { content: 'hi2' })
   })
-
   t.is($('.note').innerHTML, 'hi2')
 
   unmount()
