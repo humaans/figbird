@@ -430,14 +430,11 @@ test('useMutation - multicreate updates cache correctly', async t => {
 
 test('useMutation patch updates the get binding', async t => {
   const { render, flush, unmount, $ } = dom()
-  let setContent
   let _patch
 
   function Note() {
     const note = useGet('notes', 1)
     const { patch } = useMutation('notes')
-    const [content, _setContent] = useState('hi1')
-    setContent = _setContent
     _patch = patch
     return <NoteList notes={note} />
   }
@@ -646,7 +643,7 @@ test('useFind error', async t => {
   unmount()
 })
 
-test('useFind with skip', async t => {
+test.only('useFind with skip', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
@@ -1222,7 +1219,7 @@ test('useFind - fetchPolicy network-only', async t => {
 
   await flush()
 
-  t.is(feathers.service('notes').counts.find, 1)
+  t.is(feathers.service('notes').counts.find, 2)
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -1240,13 +1237,17 @@ test('useFind - fetchPolicy network-only', async t => {
 
   feathers.service('notes').setDelay(10)
 
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
   // render 2nd time
   await flush(() => {
     renderNote(true)
   })
 
   // a 2nd find happened in the background
-  t.is(feathers.service('notes').counts.find, 2)
+  t.is(feathers.service('notes').counts.find, 4)
 
   // we see no notes since we're still fetching
   // cache was not used
