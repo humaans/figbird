@@ -643,7 +643,7 @@ test('useFind error', async t => {
   unmount()
 })
 
-test.only('useFind with skip', async t => {
+test('useFind with skip', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
