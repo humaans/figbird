@@ -997,7 +997,7 @@ test('useFind - realtime disabled', async t => {
   unmount()
 })
 
-test.skip('useFind - fetchPolicy swr', async t => {
+test('useFind - fetchPolicy swr', async t => {
   const { render, flush, flushRealtime, unmount, $all } = dom()
   let renderNote
 
@@ -1508,7 +1508,6 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
 
   t.deepEqual(seq, [
     { data: null, isFetching: true, status: 'loading' },
-    { data: null, isFetching: true, status: 'loading' }, // effects trigger twice on mount in strict mode
     {
       data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
       isFetching: false,
@@ -1570,7 +1569,6 @@ test('useFind - state sequencing for fetchPolicy network-only', async t => {
 
   t.deepEqual(seq, [
     { data: null, isFetching: true, status: 'loading' },
-    { data: null, isFetching: true, status: 'loading' }, // strict mode runs mount effect twice
     {
       data: [{ content: 'hello', id: 1, updatedAt: 1706832000000 }],
       isFetching: false,

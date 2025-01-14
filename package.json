@@ -26,17 +26,17 @@
   },
   "devDependencies": {
     "@swc-node/register": "^1.10.9",
-    "@swc/cli": "^0.5.2",
-    "@swc/core": "^1.10.4",
+    "@swc/cli": "^0.6.0",
+    "@swc/core": "^1.10.7",
     "ava": "^6.2.0",
     "execa": "^9.5.2",
     "gh-pages": "^6.3.0",
     "healthier": "^7.0.0",
-    "jsdom": "^25.0.1",
+    "jsdom": "^26.0.0",
     "nyc": "^17.1.0",
     "prettier": "^3.4.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "sideEffects": false,
   "healthier": {
