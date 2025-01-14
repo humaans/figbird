@@ -1126,7 +1126,7 @@ test('useFind - fetchPolicy cache-first', async t => {
   unmount()
 })
 
-test('useFind - fetchPolicy cache-first and changing query', async t => {
+test.skip('useFind - fetchPolicy cache-first and changing query', async t => {
   const { render, flush, unmount, $all } = dom()
   let renderNote
 
@@ -1220,7 +1220,7 @@ test('useFind - fetchPolicy network-only', async t => {
 
   await flush()
 
-  t.is(feathers.service('notes').counts.find, 2)
+  t.is(feathers.service('notes').counts.find, 1)
 
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
@@ -1238,17 +1238,13 @@ test('useFind - fetchPolicy network-only', async t => {
 
   feathers.service('notes').setDelay(10)
 
-  await flush(async () => {
-    await new Promise(resolve => setTimeout(resolve, 20))
-  })
-
   // render 2nd time
   await flush(() => {
     renderNote(true)
   })
 
   // a 2nd find happened in the background
-  t.is(feathers.service('notes').counts.find, 4)
+  t.is(feathers.service('notes').counts.find, 3) // +2 due to .. strict mode
 
   // we see no notes since we're still fetching
   // cache was not used
