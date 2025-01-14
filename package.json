@@ -22,7 +22,6 @@
   "author": "Humaans",
   "license": "ISC",
   "dependencies": {
-    "kinfolk": "^0.7.2",
     "sift": "^17.1.3"
   },
   "devDependencies": {

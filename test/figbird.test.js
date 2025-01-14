@@ -1,7 +1,7 @@
 import React, { useState, useEffect, StrictMode } from 'react'
 import test from 'ava'
 import { dom, mockFeathers } from './helpers'
-import { Provider, useGet, useFind, useMutation, useFeathers, createStore } from '../lib'
+import { Provider, useGet, useFind, useMutation, useFeathers, createFigbird } from '../lib'
 
 const createFeathers = ({ skipTotal } = {}) =>
   mockFeathers({
@@ -17,13 +17,14 @@ const createFeathers = ({ skipTotal } = {}) =>
     },
   })
 
-function App({ feathers, store, config, children }) {
+function App({ feathers, Provider: SpecificProvider, config, children }) {
+  const TheProvider = SpecificProvider || Provider
   return (
     <StrictMode>
       <ErrorHandler>
-        <Provider feathers={feathers} store={store} {...config}>
+        <TheProvider feathers={feathers} {...config}>
           {children}
-        </Provider>
+        </TheProvider>
       </ErrorHandler>
     </StrictMode>
   )
@@ -312,8 +313,6 @@ test('useFind binding updates after realtime patch with no query', async t => {
 test('useRealtime listeners are correctly disposed of', async t => {
   const { render, flush, unmount, $, $all } = dom()
 
-  const store = createStore()
-
   function Note1() {
     const notes = useFind('notes')
     return <div className='note1'>{notes.data && notes.data[0].content}</div>
@@ -363,8 +362,10 @@ test('useRealtime listeners are correctly disposed of', async t => {
   }
 
   const feathers = createFeathers()
+  const figbird = createFigbird({ feathers })
+
   render(
-    <App feathers={feathers} store={store}>
+    <App feathers={feathers} Provider={figbird.Provider}>
       <Notes />
     </App>,
   )
@@ -372,12 +373,12 @@ test('useRealtime listeners are correctly disposed of', async t => {
   await flush()
 
   t.is($('.note2').innerHTML, 'hello')
-  t.is(store.debug().figbird.entities.notes[1].content, 'hello')
+  t.is(figbird.queryManager.debug().entities.notes[1].content, 'hello')
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
-  t.is(store.debug().figbird.entities.notes[1].content, 'real')
+  t.is(figbird.queryManager.debug().entities.notes[1].content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -391,7 +392,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
   })
 
   // should not have updated!
-  t.is(store.debug().figbird.entities.notes[1].content, 'real')
+  t.is(figbird.queryManager.debug().entities.notes[1].content, 'real')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
@@ -998,6 +999,7 @@ test('useFind - realtime disabled', async t => {
 
 test('useFind - fetchPolicy swr', async t => {
   const { render, flush, unmount, $all } = dom()
+
   let renderNote
 
   function Content() {
@@ -1140,10 +1142,10 @@ test('useFind - fetchPolicy cache-first and changing query', async t => {
     return <NoteList notes={notes} />
   }
 
-  const store = createStore()
   const feathers = createFeathers()
+  const figbird = createFigbird({ feathers })
   render(
-    <App feathers={feathers} store={store}>
+    <App feathers={feathers} Provider={figbird.Provider}>
       <Content />
     </App>,
   )
@@ -1351,7 +1353,7 @@ test('useFind - with custom matcher', async t => {
 test('item gets deleted from cache if it is updated and no longer relevant to a query', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const feathers = createFeathers()
-  const store = createStore()
+  const figbird = createFigbird({ feathers })
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'post' } })
@@ -1359,7 +1361,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
   }
 
   render(
-    <App feathers={feathers} store={store} config={{ noUpdatedAt: true }}>
+    <App feathers={feathers} Provider={figbird.Provider} config={{ noUpdatedAt: true }}>
       <Note />
     </App>,
   )
@@ -1383,7 +1385,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2', 'doc 3'],
   )
 
-  t.deepEqual(store.debug().figbird.entities, {
+  t.deepEqual(figbird.queryManager.debug().entities, {
     notes: {
       1: {
         id: 1,
@@ -1406,7 +1408,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(store.debug().figbird.index, {
+  t.deepEqual(figbird.queryManager.debug().index, {
     notes: {
       1: {
         queries: {
@@ -1438,7 +1440,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2'],
   )
 
-  t.deepEqual(store.debug().figbird.entities, {
+  t.deepEqual(figbird.queryManager.debug().entities, {
     notes: {
       1: {
         id: 1,
@@ -1455,7 +1457,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(store.debug().figbird.index, {
+  t.deepEqual(figbird.queryManager.debug().index, {
     notes: {
       1: {
         queries: {
