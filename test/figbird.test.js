@@ -371,12 +371,12 @@ test('useRealtime listeners are correctly disposed of', async t => {
   await flush()
 
   t.is($('.note2').innerHTML, 'hello')
-  t.is(figbird.debug().entities.notes[1].content, 'hello')
+  t.is(figbird.getState().entities.notes[1].content, 'hello')
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
-  t.is(figbird.debug().entities.notes[1].content, 'real')
+  t.is(figbird.getState().entities.notes[1].content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -390,7 +390,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
   })
 
   // should not have updated!
-  t.is(figbird.debug().entities.notes[1].content, 'real')
+  t.is(figbird.getState().entities.notes[1].content, 'real')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
@@ -1379,7 +1379,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2', 'doc 3'],
   )
 
-  t.deepEqual(figbird.debug().entities, {
+  t.deepEqual(figbird.getState().entities, {
     notes: {
       1: {
         id: 1,
@@ -1402,7 +1402,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(figbird.debug().index, {
+  t.deepEqual(figbird.getState().index, {
     notes: {
       1: {
         queries: {
@@ -1434,7 +1434,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2'],
   )
 
-  t.deepEqual(figbird.debug().entities, {
+  t.deepEqual(figbird.getState().entities, {
     notes: {
       1: {
         id: 1,
@@ -1451,7 +1451,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(figbird.debug().index, {
+  t.deepEqual(figbird.getState().index, {
     notes: {
       1: {
         queries: {
