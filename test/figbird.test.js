@@ -1242,7 +1242,7 @@ test('useFind - fetchPolicy network-only', async t => {
   })
 
   // a 2nd find happened in the background
-  t.is(feathers.service('notes').counts.find, 3) // +2 due to .. strict mode
+  t.is(feathers.service('notes').counts.find, 2)
 
   // we see no notes since we're still fetching
   // cache was not used
@@ -1405,19 +1405,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'q:QUW0nYAAAAA=': true,
+          'q:QdjJTGwAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'q:QUW0nYAAAAA=': true,
+          'q:QdjJTGwAAAA=': true,
         },
         size: 1,
       },
       3: {
         queries: {
-          'q:QUW0nYAAAAA=': true,
+          'q:QdjJTGwAAAA=': true,
         },
         size: 1,
       },
@@ -1454,13 +1454,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'q:QUW0nYAAAAA=': true,
+          'q:QdjJTGwAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'q:QUW0nYAAAAA=': true,
+          'q:QdjJTGwAAAA=': true,
         },
         size: 1,
       },
