@@ -1590,3 +1590,52 @@ test('useFind - state sequencing for fetchPolicy network-only', async t => {
 
   unmount()
 })
+
+test('subscribeToStateChanges', async t => {
+  const { render, flush, unmount } = dom()
+
+  function Note() {
+    const notes = useFind('notes', { query: { tag: 'post' } })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const figbird = new Figbird({ feathers })
+
+  render(
+    <App feathers={feathers} figbird={figbird}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  let state
+  figbird.subscribeToStateChanges(s => {
+    state = JSON.parse(JSON.stringify(s))
+    // Remove updatedAt fields from all entities
+    Object.values(state.entities).forEach(service => {
+      Object.values(service).forEach(entity => {
+        delete entity.updatedAt
+      })
+    })
+    // Remove updatedAt fields from all query data
+    Object.values(state.queries).forEach(query => {
+      const data = query.state.data
+      if (Array.isArray(data)) {
+        data.forEach(item => delete item.updatedAt)
+      } else if (data && typeof data === 'object') {
+        delete data.updatedAt
+      }
+    })
+  })
+
+  await flush(async () => {
+    await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2' })
+    await feathers.service('notes').patch(2, { content: 'doc 2 updated' })
+  })
+
+  t.snapshot(state)
+
+  unmount()
+})
