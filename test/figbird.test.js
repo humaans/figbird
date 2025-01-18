@@ -1420,22 +1420,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
   t.deepEqual(figbird.getState().index, {
     notes: {
       1: {
-        queries: {
-          'q/QbxqDzsAAAA=': true,
-        },
-        size: 1,
+        'q/QbxqDzsAAAA=': true,
       },
       2: {
-        queries: {
-          'q/QbxqDzsAAAA=': true,
-        },
-        size: 1,
+        'q/QbxqDzsAAAA=': true,
       },
       3: {
-        queries: {
-          'q/QbxqDzsAAAA=': true,
-        },
-        size: 1,
+        'q/QbxqDzsAAAA=': true,
       },
     },
   })
@@ -1469,16 +1460,10 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
   t.deepEqual(figbird.getState().index, {
     notes: {
       1: {
-        queries: {
-          'q/QbxqDzsAAAA=': true,
-        },
-        size: 1,
+        'q/QbxqDzsAAAA=': true,
       },
       2: {
-        queries: {
-          'q/QbxqDzsAAAA=': true,
-        },
-        size: 1,
+        'q/QbxqDzsAAAA=': true,
       },
     },
   })
