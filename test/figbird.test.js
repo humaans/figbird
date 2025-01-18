@@ -1,7 +1,15 @@
 import React, { useState, useEffect, StrictMode } from 'react'
 import test from 'ava'
 import { dom, mockFeathers } from './helpers'
-import { Figbird, Provider, useGet, useFind, useMutation, useFeathers } from '../lib'
+import {
+  Figbird,
+  Provider,
+  FeathersAdapter,
+  useGet,
+  useFind,
+  useMutation,
+  useFeathers,
+} from '../lib'
 
 const createFeathers = ({ skipTotal } = {}) =>
   mockFeathers({
@@ -18,7 +26,8 @@ const createFeathers = ({ skipTotal } = {}) =>
   })
 
 function App({ feathers, figbird, config, children }) {
-  figbird = figbird || new Figbird({ feathers, ...config })
+  const adapter = new FeathersAdapter(feathers, config)
+  figbird = figbird || new Figbird({ adapter })
   return (
     <StrictMode>
       <ErrorHandler>
@@ -360,7 +369,8 @@ test('realtime listeners continue updating the store even if queries are unmount
   }
 
   const feathers = createFeathers()
-  const figbird = new Figbird({ feathers })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter })
 
   render(
     <App feathers={feathers} figbird={figbird}>
@@ -868,7 +878,7 @@ test('useFind - realtime merge', async t => {
   unmount()
 })
 
-test('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
+test('useFind with allPages and defaultPageSize', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { allPages: true })
@@ -883,7 +893,7 @@ test('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
   t.is(feathers.service('notes').counts.find, 0)
 
   render(
-    <App feathers={feathers} config={{ defaultPageSizeWhenFetchingAll: 1 }}>
+    <App feathers={feathers} config={{ defaultPageSize: 1 }}>
       <Note />
     </App>,
   )
@@ -1140,7 +1150,8 @@ test('useFind - fetchPolicy cache-first and changing query', async t => {
   }
 
   const feathers = createFeathers()
-  const figbird = new Figbird({ feathers })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter })
   render(
     <App feathers={feathers} figbird={figbird}>
       <Content />
@@ -1211,7 +1222,8 @@ test('useFind - fetchPolicy network-only', async t => {
   }
 
   const feathers = createFeathers()
-  const figbird = new Figbird({ feathers })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter })
   render(
     <App feathers={feathers} figbird={figbird}>
       <Content />
@@ -1348,7 +1360,8 @@ test('useFind - with custom matcher', async t => {
 test('item gets deleted from cache if it is updated and no longer relevant to a query', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const feathers = createFeathers()
-  const figbird = new Figbird({ feathers })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter })
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'post' } })
@@ -1599,7 +1612,8 @@ test('subscribeToStateChanges', async t => {
   }
 
   const feathers = createFeathers()
-  const figbird = new Figbird({ feathers })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter })
 
   render(
     <App feathers={feathers} figbird={figbird}>
