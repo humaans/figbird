@@ -1244,7 +1244,7 @@ test('useFind - fetchPolicy network-only', async t => {
   })
 
   // a 2nd find happened in the background
-  t.is(feathers.service('notes').counts.find, 2)
+  t.is(feathers.service('notes').counts.find, 3) // re-mounting in <StrictMode /> double subscribes
 
   // we see no notes since we're still fetching
   // cache was not used
