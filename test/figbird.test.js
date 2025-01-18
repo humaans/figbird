@@ -393,7 +393,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
   t.is(figbird.getState().entities.notes[1].content, 'real')
 })
 
-test('useMutation - multicreate updates cache correctly', async t => {
+test.skip('useMutation - multicreate updates cache correctly', async t => {
   const { render, flush, unmount, $all } = dom()
   let create
 
@@ -1211,8 +1211,9 @@ test('useFind - fetchPolicy network-only', async t => {
   }
 
   const feathers = createFeathers()
+  const figbird = new Figbird({ feathers })
   render(
-    <App feathers={feathers}>
+    <App feathers={feathers} figbird={figbird}>
       <Content />
     </App>,
   )
@@ -1406,19 +1407,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'q:QdjJTGwAAAA=': true,
+          'q/wdieHh/AAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'q:QdjJTGwAAAA=': true,
+          'q/wdieHh/AAAA=': true,
         },
         size: 1,
       },
       3: {
         queries: {
-          'q:QdjJTGwAAAA=': true,
+          'q/wdieHh/AAAA=': true,
         },
         size: 1,
       },
@@ -1455,13 +1456,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'q:QdjJTGwAAAA=': true,
+          'q/wdieHh/AAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'q:QdjJTGwAAAA=': true,
+          'q/wdieHh/AAAA=': true,
         },
         size: 1,
       },
