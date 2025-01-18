@@ -55,19 +55,11 @@ export function dom() {
       if (fn) {
         await fn()
       }
+      await waitForEmissions()
     })
   }
 
-  async function flushRealtime(fn) {
-    await act(async () => {
-      if (fn) {
-        await fn()
-      }
-      await new Promise(resolve => setTimeout(resolve, 1))
-    })
-  }
-
-  return { root, render, unmount, click, flush, flushRealtime, $, $all, act }
+  return { root, render, unmount, click, flush, $, $all, act }
 }
 
 export const swallowErrors = yourTestFn => {
@@ -139,9 +131,7 @@ class Service {
       this.data = { ...this.data }
       for (const datum of data) {
         this.data[datum.id] = { ...datum, updatedAt: datum.updatedAt || Date.now() }
-        setTimeout(() => {
-          this.emit('created', this.data[datum.id])
-        }, 1)
+        queueTask(() => this.emit('created', this.data[datum.id]))
       }
       return Promise.all(ids.map(id => this.get(id)))
     }
@@ -149,9 +139,7 @@ class Service {
     const { id } = data
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
     const mutatedItem = this.data[id]
-    setTimeout(() => {
-      this.emit('created', mutatedItem)
-    }, 1)
+    queueTask(() => this.emit('created', mutatedItem))
     return this.get(id)
   }
 
@@ -162,9 +150,7 @@ class Service {
       [id]: { ...this.data[id], ...data, updatedAt: data.updatedAt || Date.now() },
     }
     const mutatedItem = this.data[id]
-    setTimeout(() => {
-      this.emit('patched', mutatedItem)
-    }, 1)
+    queueTask(() => this.emit('patched', mutatedItem))
     return this.get(id)
   }
 
@@ -172,9 +158,7 @@ class Service {
     this.counts.update++
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
     const mutatedItem = this.data[id]
-    setTimeout(() => {
-      this.emit('updated', mutatedItem)
-    }, 1)
+    queueTask(() => this.emit('updated', mutatedItem))
     return this.get(id)
   }
 
@@ -183,15 +167,48 @@ class Service {
     this.data = { ...this.data }
     const mutatedItem = this.data[id]
     delete this.data[id]
-    setTimeout(() => {
-      this.emit('removed', mutatedItem)
-    }, 1)
+    queueTask(() => this.emit('removed', mutatedItem))
     // TODO - check if feathers throws 404 in this case
     return Promise.resolve(mutatedItem)
   }
 }
 
 util.inherits(Service, EventEmitter)
+
+async function queueTask(task) {
+  if (!global.__pendingEmissions) {
+    global.__pendingEmissions = new Set()
+  }
+
+  if (!global.__emissionsResolves) {
+    global.__emissionsResolves = new Set()
+  }
+
+  const emissionId = {}
+
+  global.__pendingEmissions.add(emissionId)
+
+  setTimeout(() => {
+    task()
+
+    global.__pendingEmissions.delete(emissionId)
+    if (global.__pendingEmissions.size === 0 && global.__emissionsResolves.size > 0) {
+      global.__emissionsResolves.forEach(resolve => resolve())
+      global.__emissionsResolves.clear()
+    }
+  }, 1)
+}
+
+async function waitForEmissions() {
+  if (!global.__pendingEmissions?.size) return
+  await new Promise(resolve => {
+    if (global.__pendingEmissions.size === 0) {
+      resolve()
+    } else {
+      global.__emissionsResolves.add(resolve)
+    }
+  })
+}
 
 export function service(name, details, options) {
   return new Service(name, details.data, options)
