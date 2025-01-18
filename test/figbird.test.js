@@ -308,7 +308,7 @@ test('useFind binding updates after realtime patch with no query', async t => {
   unmount()
 })
 
-test('useRealtime listeners are correctly disposed of', async t => {
+test('realtime listeners continue updating the store even if queries are unmounted', async t => {
   const { render, flush, unmount, $, $all } = dom()
 
   function Note1() {
@@ -386,14 +386,14 @@ test('useRealtime listeners are correctly disposed of', async t => {
   unmount()
 
   await flush(async () => {
-    await feathers.service('notes').patch(1, { content: 'nomo' })
+    await feathers.service('notes').patch(1, { content: 'still updating' })
   })
 
-  // should not have updated!
-  t.is(figbird.getState().entities.notes[1].content, 'real')
+  // should have updated
+  t.is(figbird.getState().entities.notes[1].content, 'still updating')
 })
 
-test.skip('useMutation - multicreate updates cache correctly', async t => {
+test('useMutation - multicreate updates cache correctly', async t => {
   const { render, flush, unmount, $all } = dom()
   let create
 
@@ -412,8 +412,8 @@ test.skip('useMutation - multicreate updates cache correctly', async t => {
     </App>,
   )
 
-  await flush(() => {
-    create([
+  await flush(async () => {
+    await create([
       { id: 2, content: 'hi2' },
       { id: 3, content: 'hi3' },
     ])
@@ -1125,7 +1125,7 @@ test('useFind - fetchPolicy cache-first', async t => {
   unmount()
 })
 
-test.skip('useFind - fetchPolicy cache-first and changing query', async t => {
+test('useFind - fetchPolicy cache-first and changing query', async t => {
   const { render, flush, unmount, $all } = dom()
   let renderNote
 
@@ -1150,43 +1150,44 @@ test.skip('useFind - fetchPolicy cache-first and changing query', async t => {
 
   await flush()
 
+  // fetched once and got the default hello note
   t.is(feathers.service('notes').counts.find, 1)
-
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
     ['hello'],
   )
 
+  // unrender!
   await flush(() => {
     renderNote(0)
   })
 
-  // update note in the meantime
-  await feathers.service('notes').patch(1, { content: 'hello-2', tag: 'idea' })
+  // update note 1 in the meantime
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'hello-2', superduper: true, tag: 'idea' })
+  })
 
   // render 2nd time
   await flush(() => {
     renderNote(2)
   })
 
-  // we do a second find because we changed n param to 2
+  // we did a second find because we changed n param to 2
   t.is(feathers.service('notes').counts.find, 2)
-
   // we see the updated note
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
     ['hello-2'],
   )
 
-  // render 3rd time
+  // render with n=1 again, we want to hit cache here!
   await flush(() => {
     renderNote(1)
   })
 
   // no find happened this time, we used cache, even though we changed n!
   t.is(feathers.service('notes').counts.find, 2)
-
-  // we see old note
+  // we see the new note due to cache sharing
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
     ['hello-2'],
@@ -1407,19 +1408,19 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'q/wdieHh/AAAA=': true,
+          'q/QbxqDzsAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'q/wdieHh/AAAA=': true,
+          'q/QbxqDzsAAAA=': true,
         },
         size: 1,
       },
       3: {
         queries: {
-          'q/wdieHh/AAAA=': true,
+          'q/QbxqDzsAAAA=': true,
         },
         size: 1,
       },
@@ -1456,13 +1457,13 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     notes: {
       1: {
         queries: {
-          'q/wdieHh/AAAA=': true,
+          'q/QbxqDzsAAAA=': true,
         },
         size: 1,
       },
       2: {
         queries: {
-          'q/wdieHh/AAAA=': true,
+          'q/QbxqDzsAAAA=': true,
         },
         size: 1,
       },
