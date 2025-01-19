@@ -1452,9 +1452,9 @@ test('items get updated in cache even if not currently relevant to any query', a
   })
 
   t.deepEqual(serialize(figbird.getState().notes.itemQueryIndex), {
-    1: ['q/QbxqDzsAAAA='],
-    2: ['q/QbxqDzsAAAA='],
-    3: ['q/QbxqDzsAAAA='],
+    1: ['q/BTSlpA=='],
+    2: ['q/BTSlpA=='],
+    3: ['q/BTSlpA=='],
   })
 
   await flush(async () => {
@@ -1488,8 +1488,8 @@ test('items get updated in cache even if not currently relevant to any query', a
   })
 
   t.deepEqual(serialize(figbird.getState().notes.itemQueryIndex), {
-    1: ['q/QbxqDzsAAAA='],
-    2: ['q/QbxqDzsAAAA='],
+    1: ['q/BTSlpA=='],
+    2: ['q/BTSlpA=='],
     3: [],
   })
 
