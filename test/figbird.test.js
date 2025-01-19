@@ -381,12 +381,12 @@ test('realtime listeners continue updating the store even if queries are unmount
   await flush()
 
   t.is($('.note2').innerHTML, 'hello')
-  t.is(figbird.getState().notes.entities[1].content, 'hello')
+  t.is(figbird.getState().notes.entities.get(1).content, 'hello')
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
-  t.is(figbird.getState().notes.entities[1].content, 'real')
+  t.is(figbird.getState().notes.entities.get(1).content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -400,7 +400,7 @@ test('realtime listeners continue updating the store even if queries are unmount
   })
 
   // should have updated
-  t.is(figbird.getState().notes.entities[1].content, 'still updating')
+  t.is(figbird.getState().notes.entities.get(1).content, 'still updating')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
@@ -1392,7 +1392,7 @@ test('useFind - with custom matcher', async t => {
   unmount()
 })
 
-test('item gets deleted from cache if it is updated and no longer relevant to a query', async t => {
+test('items get updated in cache even if not currently relevant to any query', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
@@ -1417,8 +1417,9 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     await feathers.service('notes').patch(1, { updatedAt: null })
   })
 
+  const t1 = Date.now()
   await flush(async () => {
-    await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: 1 })
+    await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: t1 })
     await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', updatedAt: 2 })
     await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', updatedAt: 3 })
   })
@@ -1428,12 +1429,12 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2', 'doc 3'],
   )
 
-  t.deepEqual(figbird.getState().notes.entities, {
+  t.deepEqual(serialize(figbird.getState().notes.entities), {
     1: {
       id: 1,
       tag: 'post',
       content: 'doc 1',
-      updatedAt: 1,
+      updatedAt: t1,
     },
     2: {
       id: 2,
@@ -1449,20 +1450,14 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(figbird.getState().notes.itemQueryIndex, {
-    1: {
-      'q/QbxqDzsAAAA=': true,
-    },
-    2: {
-      'q/QbxqDzsAAAA=': true,
-    },
-    3: {
-      'q/QbxqDzsAAAA=': true,
-    },
+  t.deepEqual(serialize(figbird.getState().notes.itemQueryIndex), {
+    1: ['q/QbxqDzsAAAA='],
+    2: ['q/QbxqDzsAAAA='],
+    3: ['q/QbxqDzsAAAA='],
   })
 
   await flush(async () => {
-    await feathers.service('notes').patch(3, { tag: 'draft' })
+    await feathers.service('notes').patch(3, { tag: 'draft', updatedAt: 4 })
   })
 
   t.deepEqual(
@@ -1470,12 +1465,12 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2'],
   )
 
-  t.deepEqual(figbird.getState().notes.entities, {
+  t.deepEqual(serialize(figbird.getState().notes.entities), {
     1: {
       id: 1,
       tag: 'post',
       content: 'doc 1',
-      updatedAt: 1,
+      updatedAt: t1,
     },
     2: {
       id: 2,
@@ -1483,15 +1478,18 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
       content: 'doc 2',
       updatedAt: 2,
     },
+    3: {
+      id: 3,
+      tag: 'draft',
+      content: 'doc 3',
+      updatedAt: 4,
+    },
   })
 
-  t.deepEqual(figbird.getState().notes.itemQueryIndex, {
-    1: {
-      'q/QbxqDzsAAAA=': true,
-    },
-    2: {
-      'q/QbxqDzsAAAA=': true,
-    },
+  t.deepEqual(serialize(figbird.getState().notes.itemQueryIndex), {
+    1: ['q/QbxqDzsAAAA='],
+    2: ['q/QbxqDzsAAAA='],
+    3: [],
   })
 
   unmount()
@@ -1637,7 +1635,7 @@ test('subscribeToStateChanges', async t => {
 
   let state
   figbird.subscribeToStateChanges(s => {
-    state = JSON.parse(JSON.stringify(s))
+    state = JSON.parse(JSON.stringify(serialize(s)))
     // Remove updatedAt fields from all entities
     Object.values(state.notes.entities).forEach(entity => {
       delete entity.updatedAt
@@ -1662,3 +1660,41 @@ test('subscribeToStateChanges', async t => {
 
   unmount()
 })
+
+test('recursive serializer for maps and sets', async t => {
+  t.deepEqual(
+    serialize(
+      new Map([
+        ['a', 1],
+        ['b', new Set([1, 2, 3])],
+        ['c', new Map([['d', 4]])],
+      ]),
+    ),
+    {
+      a: 1,
+      b: [1, 2, 3],
+      c: { d: 4 },
+    },
+  )
+})
+
+function serialize(input) {
+  if (input instanceof Map) {
+    const obj = {}
+    for (const [key, value] of input) {
+      obj[key] = serialize(value)
+    }
+    return obj
+  } else if (input instanceof Set) {
+    return Array.from(input).map(serialize)
+  } else if (Array.isArray(input)) {
+    return input.map(serialize)
+  } else if (input && typeof input === 'object') {
+    const obj = {}
+    for (const [key, value] of Object.entries(input)) {
+      obj[key] = serialize(value)
+    }
+    return obj
+  }
+  return input
+}
