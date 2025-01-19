@@ -5,7 +5,7 @@
   "main": "dist/cjs",
   "module": "dist/esm",
   "scripts": {
-    "test": "npm run build && eslint && prettier --check '**/*.{js,css,yml}' && nyc ava",
+    "test": "eslint && prettier --check '**/*.{js,css,yml}' && nyc ava",
     "format": "prettier --write '**/*.{js,css,yml}'",
     "coverage": "nyc --reporter=html ava",
     "build": "node ./tasks/build.js",
