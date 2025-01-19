@@ -1664,6 +1664,117 @@ test('subscribeToStateChanges', async t => {
   unmount()
 })
 
+test('useFind - multiple queries against the same service', async t => {
+  const { render, flush, unmount, $all } = dom()
+
+  function NoteList1() {
+    const notes = useFind('notes', { query: { tag: 'post' } })
+    return (
+      <div className='list1'>
+        <NoteList notes={notes} />
+      </div>
+    )
+  }
+
+  function NoteList2() {
+    const notes = useFind('notes', { query: { tag: 'draft' } })
+    return (
+      <div className='list2'>
+        <NoteList notes={notes} />
+      </div>
+    )
+  }
+
+  function Lists() {
+    return (
+      <>
+        <NoteList1 />
+        <NoteList2 />
+      </>
+    )
+  }
+
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers}>
+      <Lists />
+    </App>,
+  )
+
+  await flush()
+
+  t.deepEqual(
+    $all('.list1 .note').map(n => n.innerHTML),
+    ['hello'],
+  )
+
+  t.deepEqual(
+    $all('.list2 .note').map(n => n.innerHTML),
+    ['hello'],
+  )
+
+  await flush(async () => {
+    await feathers.service('notes').create({ id: 2, tag: 'post', content: 'post note' })
+    await feathers.service('notes').create({ id: 3, tag: 'draft', content: 'draft note' })
+  })
+
+  t.deepEqual(
+    $all('.list1 .note').map(n => n.innerHTML),
+    ['hello', 'post note'],
+  )
+
+  t.deepEqual(
+    $all('.list2 .note').map(n => n.innerHTML),
+    ['hello', 'draft note'],
+  )
+
+  unmount()
+})
+
+test('useFind - stale realtime event is ignored', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  t.is($('.note').innerHTML, 'hello')
+
+  // Patch with old timestamp
+  await flush(async () => {
+    await feathers.service('notes').patch(1, {
+      content: 'old update',
+      updatedAt: new Date('2024-01-01').getTime(),
+    })
+  })
+
+  // Old update should be ignored
+  t.is($('.note').innerHTML, 'hello')
+
+  // Patch with newer timestamp
+  await flush(async () => {
+    await feathers.service('notes').patch(1, {
+      content: 'new update',
+      updatedAt: new Date('2024-03-01').getTime(),
+    })
+  })
+
+  // New update should be applied
+  t.is($('.note').innerHTML, 'new update')
+
+  unmount()
+})
+
 test('recursive serializer for maps and sets', async t => {
   t.deepEqual(
     serialize(
