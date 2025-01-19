@@ -381,12 +381,12 @@ test('realtime listeners continue updating the store even if queries are unmount
   await flush()
 
   t.is($('.note2').innerHTML, 'hello')
-  t.is(figbird.getState().entities.notes[1].content, 'hello')
+  t.is(figbird.getState().notes.entities[1].content, 'hello')
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
-  t.is(figbird.getState().entities.notes[1].content, 'real')
+  t.is(figbird.getState().notes.entities[1].content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -400,7 +400,7 @@ test('realtime listeners continue updating the store even if queries are unmount
   })
 
   // should have updated
-  t.is(figbird.getState().entities.notes[1].content, 'still updating')
+  t.is(figbird.getState().notes.entities[1].content, 'still updating')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
@@ -1429,40 +1429,36 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2', 'doc 3'],
   )
 
-  t.deepEqual(figbird.getState().entities, {
-    notes: {
-      1: {
-        id: 1,
-        tag: 'post',
-        content: 'doc 1',
-        updatedAt: 1,
-      },
-      2: {
-        id: 2,
-        tag: 'post',
-        content: 'doc 2',
-        updatedAt: 2,
-      },
-      3: {
-        id: 3,
-        tag: 'post',
-        content: 'doc 3',
-        updatedAt: 3,
-      },
+  t.deepEqual(figbird.getState().notes.entities, {
+    1: {
+      id: 1,
+      tag: 'post',
+      content: 'doc 1',
+      updatedAt: 1,
+    },
+    2: {
+      id: 2,
+      tag: 'post',
+      content: 'doc 2',
+      updatedAt: 2,
+    },
+    3: {
+      id: 3,
+      tag: 'post',
+      content: 'doc 3',
+      updatedAt: 3,
     },
   })
 
-  t.deepEqual(figbird.getState().itemQueryIndex, {
-    notes: {
-      1: {
-        'q/QbxqDzsAAAA=': true,
-      },
-      2: {
-        'q/QbxqDzsAAAA=': true,
-      },
-      3: {
-        'q/QbxqDzsAAAA=': true,
-      },
+  t.deepEqual(figbird.getState().notes.itemQueryIndex, {
+    1: {
+      'q/QbxqDzsAAAA=': true,
+    },
+    2: {
+      'q/QbxqDzsAAAA=': true,
+    },
+    3: {
+      'q/QbxqDzsAAAA=': true,
     },
   })
 
@@ -1475,31 +1471,27 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     ['doc 1', 'doc 2'],
   )
 
-  t.deepEqual(figbird.getState().entities, {
-    notes: {
-      1: {
-        id: 1,
-        tag: 'post',
-        content: 'doc 1',
-        updatedAt: 1,
-      },
-      2: {
-        id: 2,
-        tag: 'post',
-        content: 'doc 2',
-        updatedAt: 2,
-      },
+  t.deepEqual(figbird.getState().notes.entities, {
+    1: {
+      id: 1,
+      tag: 'post',
+      content: 'doc 1',
+      updatedAt: 1,
+    },
+    2: {
+      id: 2,
+      tag: 'post',
+      content: 'doc 2',
+      updatedAt: 2,
     },
   })
 
-  t.deepEqual(figbird.getState().itemQueryIndex, {
-    notes: {
-      1: {
-        'q/QbxqDzsAAAA=': true,
-      },
-      2: {
-        'q/QbxqDzsAAAA=': true,
-      },
+  t.deepEqual(figbird.getState().notes.itemQueryIndex, {
+    1: {
+      'q/QbxqDzsAAAA=': true,
+    },
+    2: {
+      'q/QbxqDzsAAAA=': true,
     },
   })
 
@@ -1648,13 +1640,11 @@ test('subscribeToStateChanges', async t => {
   figbird.subscribeToStateChanges(s => {
     state = JSON.parse(JSON.stringify(s))
     // Remove updatedAt fields from all entities
-    Object.values(state.entities).forEach(service => {
-      Object.values(service).forEach(entity => {
-        delete entity.updatedAt
-      })
+    Object.values(state.notes.entities).forEach(entity => {
+      delete entity.updatedAt
     })
     // Remove updatedAt fields from all query data
-    Object.values(state.queries.notes).forEach(query => {
+    Object.values(state.notes.queries).forEach(query => {
       const data = query.state.data
       if (Array.isArray(data)) {
         data.forEach(item => delete item.updatedAt)
