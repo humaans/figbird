@@ -1451,7 +1451,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(figbird.getState().index, {
+  t.deepEqual(figbird.getState().itemQueryIndex, {
     notes: {
       1: {
         'q/QbxqDzsAAAA=': true,
@@ -1491,7 +1491,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  t.deepEqual(figbird.getState().index, {
+  t.deepEqual(figbird.getState().itemQueryIndex, {
     notes: {
       1: {
         'q/QbxqDzsAAAA=': true,
@@ -1653,7 +1653,7 @@ test('subscribeToStateChanges', async t => {
       })
     })
     // Remove updatedAt fields from all query data
-    Object.values(state.queries).forEach(query => {
+    Object.values(state.queries.notes).forEach(query => {
       const data = query.state.data
       if (Array.isArray(data)) {
         data.forEach(item => delete item.updatedAt)
