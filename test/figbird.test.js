@@ -655,26 +655,29 @@ test('useFind error', async t => {
 test('useFind with skip', async t => {
   const { render, flush, unmount, $ } = dom()
 
+  let setSkip
+
   function Note() {
-    const notes = useFind('notes', {
-      skip: true,
-    })
-    return <div className='data'>{notes.data ? 'yes' : 'no'}</div>
+    const [skip, _setSkip] = useState(true)
+    setSkip = _setSkip
+    const notes = useFind('notes', { skip })
+    return <div className='data'>{notes.status}</div>
   }
 
   const feathers = createFeathers()
-  feathers.service('notes').find = () => {
-    throw new Error('Should not be called')
-  }
   render(
     <App feathers={feathers}>
       <Note />
     </App>,
   )
 
-  await flush()
+  t.is($('.data').innerHTML, 'idle')
 
-  t.is($('.data').innerHTML, 'no')
+  await flush(() => {
+    setSkip(false)
+  })
+
+  t.is($('.data').innerHTML, 'success')
 
   unmount()
 })
