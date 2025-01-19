@@ -910,6 +910,38 @@ test('useFind with allPages and defaultPageSize', async t => {
   unmount()
 })
 
+test('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
+  const { render, flush, unmount, $all } = dom()
+  function Note() {
+    const notes = useFind('notes', { allPages: true })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
+  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
+
+  t.is(feathers.service('notes').counts.find, 0)
+
+  render(
+    <App feathers={feathers} config={{ defaultPageSizeWhenFetchingAll: 1 }}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(feathers.service('notes').counts.find, 3)
+
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello', 'doc', 'dmc'],
+  )
+
+  unmount()
+})
+
 test('useFind - realtime refetch', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
