@@ -89,7 +89,7 @@ class Service {
     this.delay = delay
   }
 
-  get(id, params) {
+  get(id) {
     this.counts.get++
     return Promise.resolve(this.data[id])
   }
@@ -124,7 +124,7 @@ class Service {
     )
   }
 
-  create(data, params) {
+  create(data) {
     if (Array.isArray(data)) {
       this.counts.create += data.length
       const ids = data.map(datum => datum.id)
@@ -143,7 +143,7 @@ class Service {
     return this.get(id)
   }
 
-  patch(id, data, params) {
+  patch(id, data) {
     this.counts.patch++
     this.data = {
       ...this.data,
@@ -154,7 +154,7 @@ class Service {
     return this.get(id)
   }
 
-  update(id, data, params) {
+  update(id, data) {
     this.counts.update++
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
     const mutatedItem = this.data[id]
@@ -162,7 +162,7 @@ class Service {
     return this.get(id)
   }
 
-  remove(id, params) {
+  remove(id) {
     this.counts.remove++
     this.data = { ...this.data }
     const mutatedItem = this.data[id]
