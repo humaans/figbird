@@ -2,17 +2,12 @@
   "sourceMaps": true,
   "jsc": {
     "parser": {
-      "syntax": "ecmascript",
-      "jsx": true
+      "syntax": "typescript",
+      "jsx": true,
+      "tsx": true,
     }
   },
   "module": {
     "type": "commonjs"
-  },
-  "env": {
-    "targets": [
-      "last 2 versions",
-      "IE >= 9"
-    ]
   }
 }

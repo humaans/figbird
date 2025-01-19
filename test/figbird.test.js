@@ -1774,6 +1774,45 @@ test('useFind - stale realtime event is ignored', async t => {
   unmount()
 })
 
+test('useMutation - error state', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  let create
+
+  function Note() {
+    const notes = useFind('notes')
+    const { status, error, create: _create } = useMutation('notes')
+    create = _create
+    return (
+      <>
+        <NoteList notes={notes} />
+        {status === 'error' && <div className='mutation-error'>{error.message}</div>}
+      </>
+    )
+  }
+
+  const feathers = createFeathers()
+  feathers.service('notes').create = () => Promise.reject(new Error('cannot create note'))
+
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await flush(async () => {
+    try {
+      await create({ content: 'new note' })
+    } catch (err) {
+      // Expected error
+    }
+  })
+
+  t.is($('.mutation-error').innerHTML, 'cannot create note')
+
+  unmount()
+})
+
 test('recursive serializer for maps and sets', async t => {
   t.deepEqual(
     serialize(
