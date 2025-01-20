@@ -1,5 +1,5 @@
 // Creates a hash of an object and returns it as a base64 string
-export function hashObject(obj) {
+export function hashObject(obj: any): string {
   try {
     let hash = 0
     const str = JSON.stringify(obj)
@@ -24,7 +24,7 @@ export function hashObject(obj) {
   }
 }
 
-function numberToBase64(num) {
+function numberToBase64(num: number): string {
   // Convert number to byte array and then to base64
   const bytes = new Uint8Array(4)
   bytes[0] = num >> 24

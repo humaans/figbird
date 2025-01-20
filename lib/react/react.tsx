@@ -1,18 +1,27 @@
-import React, { useContext, createContext } from 'react'
+import React, { useContext, createContext, ReactNode } from 'react'
+import type { Figbird } from '../core/figbird'
+import type { Schema } from '../core/schema'
 
-const FigbirdContext = createContext()
+const FigbirdContext = createContext<Figbird<any> | undefined>(undefined)
 
-export function useFigbird() {
-  return useContext(FigbirdContext)
+export function useFigbird<S extends Schema<any>>() {
+  return useContext(FigbirdContext as unknown as React.Context<Figbird<S>>)
 }
 
 /**
- * @deprecated Will be removed in the future
+ * @returns An adapter specific helper, might remove in the future
  */
 export function useFeathers() {
-  return useContext(FigbirdContext)?.adapter.feathers
+  return (useContext(FigbirdContext)?.adapter as any).feathers
 }
 
-export function Provider({ figbird, children }) {
-  return <FigbirdContext.Provider value={figbird}>{children}</FigbirdContext.Provider>
+interface ProviderProps<S extends Schema<any>> {
+  figbird: Figbird<S>
+  children: ReactNode
+}
+
+export function Provider<S extends Schema<any>>({ figbird, children }: ProviderProps<S>) {
+  return (
+    <FigbirdContext.Provider value={figbird as Figbird<any>}>{children}</FigbirdContext.Provider>
+  )
 }
