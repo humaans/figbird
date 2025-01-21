@@ -1,0 +1,1 @@
+export { Figbird } from './figbird'
