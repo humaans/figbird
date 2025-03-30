@@ -1350,8 +1350,10 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 
 test('useFind - with custom matcher', async t => {
   const { render, flush, unmount, $, $all } = dom()
-  const customMatcher = (query, defaultMatcher) => item => {
-    return defaultMatcher(item) && item.foo
+  const { matcher: defaultMatcher } = await import('../lib/adapters/matcher')
+  const customMatcher = query => item => {
+    const match = defaultMatcher(query)
+    return match(item) && item.foo
   }
 
   function Note() {
