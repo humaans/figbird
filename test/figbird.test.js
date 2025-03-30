@@ -100,7 +100,7 @@ test('useGet', async t => {
 })
 
 test('useGet updates after realtime patch', async t => {
-  const { render, flush, flushRealtime, unmount, $ } = dom()
+  const { render, flush, unmount, $ } = dom()
 
   function Note() {
     const note = useGet('notes', 1)
@@ -121,7 +121,7 @@ test('useGet updates after realtime patch', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'realtime' })
   })
 
@@ -153,7 +153,7 @@ test('useFind', async t => {
 })
 
 test('useFind binding updates after realtime create', async t => {
-  const { render, flush, flushRealtime, unmount, $, $all } = dom()
+  const { render, flush, unmount, $, $all } = dom()
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
@@ -171,7 +171,7 @@ test('useFind binding updates after realtime create', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
     await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
   })
@@ -185,7 +185,7 @@ test('useFind binding updates after realtime create', async t => {
 })
 
 test('useFind binding updates after realtime patch', async t => {
-  const { render, flush, flushRealtime, unmount, $ } = dom()
+  const { render, flush, unmount, $ } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
     return <NoteList notes={notes} />
@@ -202,7 +202,7 @@ test('useFind binding updates after realtime patch', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -212,7 +212,7 @@ test('useFind binding updates after realtime patch', async t => {
 })
 
 test('useFind binding updates after realtime update', async t => {
-  const { render, flush, flushRealtime, unmount, $all } = dom()
+  const { render, flush, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
     return <NoteList notes={notes} />
@@ -232,7 +232,7 @@ test('useFind binding updates after realtime update', async t => {
     ['hello'],
   )
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').update(1, { id: 1, content: 'doc', tag: 'idea' })
   })
 
@@ -245,7 +245,7 @@ test('useFind binding updates after realtime update', async t => {
 })
 
 test('useFind binding updates after realtime remove', async t => {
-  const { render, flush, flushRealtime, unmount, $all } = dom()
+  const { render, flush, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' } })
     return <NoteList notes={notes} />
@@ -267,7 +267,7 @@ test('useFind binding updates after realtime remove', async t => {
     ['hello', 'doc'],
   )
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').remove(1)
   })
 
@@ -280,7 +280,7 @@ test('useFind binding updates after realtime remove', async t => {
 })
 
 test('useFind binding updates after realtime patch with no query', async t => {
-  const { render, flush, flushRealtime, unmount, $, $all } = dom()
+  const { render, flush, unmount, $, $all } = dom()
   function Note() {
     const notes = useFind('notes')
     return <NoteList notes={notes} />
@@ -297,7 +297,7 @@ test('useFind binding updates after realtime patch with no query', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -310,7 +310,7 @@ test('useFind binding updates after realtime patch with no query', async t => {
 })
 
 test('useRealtime listeners are correctly disposed of', async t => {
-  const { render, flush, flushRealtime, unmount, $, $all } = dom()
+  const { render, flush, unmount, $, $all } = dom()
 
   const store = createStore()
 
@@ -374,7 +374,7 @@ test('useRealtime listeners are correctly disposed of', async t => {
   t.is($('.note2').innerHTML, 'hello')
   t.is(store.debug().figbird.entities.notes[1].content, 'hello')
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
   t.is(store.debug().figbird.entities.notes[1].content, 'real')
@@ -867,7 +867,7 @@ test('useFind with allPages and parallel where limit is not wholly divisible by 
 })
 
 test('useFind - realtime merge', async t => {
-  const { render, flush, flushRealtime, unmount, $all } = dom()
+  const { render, flush, unmount, $all } = dom()
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'merge' })
@@ -890,7 +890,7 @@ test('useFind - realtime merge', async t => {
     ['hello'],
   )
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -938,7 +938,7 @@ test('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
 })
 
 test('useFind - realtime refetch', async t => {
-  const { render, flush, flushRealtime, unmount, $all } = dom()
+  const { render, flush, unmount, $all } = dom()
   function Note() {
     const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'refetch' })
     return <NoteList notes={notes} />
@@ -960,7 +960,7 @@ test('useFind - realtime refetch', async t => {
     ['hello'],
   )
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -1033,7 +1033,7 @@ test('useFind - realtime disabled', async t => {
 })
 
 test('useFind - fetchPolicy swr', async t => {
-  const { render, flush, flushRealtime, unmount, $all } = dom()
+  const { render, flush, unmount, $all } = dom()
   let renderNote
 
   function Content() {
@@ -1068,7 +1068,7 @@ test('useFind - fetchPolicy swr', async t => {
   })
 
   // update note in the meantime
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -1105,7 +1105,7 @@ test('useFind - fetchPolicy swr', async t => {
 })
 
 test('useFind - fetchPolicy cache-first', async t => {
-  const { render, flush, flushRealtime, unmount, $all } = dom()
+  const { render, flush, unmount, $all } = dom()
   let renderNote
 
   function Content() {
@@ -1143,7 +1143,7 @@ test('useFind - fetchPolicy cache-first', async t => {
   await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
 
   // render 2nd time
-  await flushRealtime(() => {
+  await flush(() => {
     renderNote(true)
   })
 
@@ -1230,7 +1230,7 @@ test('useFind - fetchPolicy cache-first and changing query', async t => {
 })
 
 test('useFind - fetchPolicy network-only', async t => {
-  const { render, flush, flushRealtime, unmount, $all } = dom()
+  const { render, flush, unmount, $all } = dom()
   let renderNote
 
   function Content() {
@@ -1265,7 +1265,7 @@ test('useFind - fetchPolicy network-only', async t => {
   })
 
   // update note in the meantime
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
   })
 
@@ -1303,7 +1303,7 @@ test('useFind - fetchPolicy network-only', async t => {
 })
 
 test('useFind - updates correctly after a sequence of create+patch', async t => {
-  const { render, flush, flushRealtime, unmount, $, $all } = dom()
+  const { render, flush, unmount, $, $all } = dom()
   function Note() {
     const notes = useFind('notes')
     return <NoteList notes={notes} />
@@ -1320,7 +1320,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').create({ id: 2, content: 'doc' })
     await feathers.service('notes').patch(2, { content: 'doc updated' })
   })
@@ -1334,7 +1334,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 })
 
 test('useFind - with custom matcher', async t => {
-  const { render, flush, flushRealtime, unmount, $, $all } = dom()
+  const { render, flush, unmount, $, $all } = dom()
   const customMatcher = matcher => query => item => {
     return matcher(query)(item) && item.foo
   }
@@ -1355,7 +1355,7 @@ test('useFind - with custom matcher', async t => {
 
   t.is($('.note').innerHTML, 'hello')
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', foo: false })
     await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', foo: true })
     await feathers.service('notes').create({ id: 4, tag: 'draft', content: 'doc 4', foo: true })
@@ -1366,7 +1366,7 @@ test('useFind - with custom matcher', async t => {
     ['hello', 'doc 3'],
   )
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(4, { tag: 'post' })
   })
 
@@ -1379,7 +1379,7 @@ test('useFind - with custom matcher', async t => {
 })
 
 test('item gets deleted from cache if it is updated and no longer relevant to a query', async t => {
-  const { render, flush, flushRealtime, unmount, $, $all } = dom()
+  const { render, flush, unmount, $, $all } = dom()
   const feathers = createFeathers()
   const store = createStore()
 
@@ -1402,7 +1402,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     await feathers.service('notes').patch(1, { updatedAt: null })
   })
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(1, { tag: 'post', content: 'doc 1', updatedAt: 1 })
     await feathers.service('notes').create({ id: 2, tag: 'post', content: 'doc 2', updatedAt: 2 })
     await feathers.service('notes').create({ id: 3, tag: 'post', content: 'doc 3', updatedAt: 3 })
@@ -1459,7 +1459,7 @@ test('item gets deleted from cache if it is updated and no longer relevant to a 
     },
   })
 
-  await flushRealtime(async () => {
+  await flush(async () => {
     await feathers.service('notes').patch(3, { tag: 'draft' })
   })
 
