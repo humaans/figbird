@@ -402,31 +402,29 @@ function updateQueries(curr, { serviceName, method, item: itemOrItems }, { idFie
                 matches = matcher(query.params.query)(item);
             }
             if (index.queries[queryId]) {
-                if (!matches) {
+                if (!matches && query.data.includes(itemId)) {
                     updateCount++;
                     queries[queryId] = _object_spread_props(_object_spread({}, query), {
-                        meta: _object_spread_props(_object_spread({}, query.meta), {
-                            total: query.meta.total - 1
-                        }),
                         data: query.data.filter((id)=>id !== itemId)
                     });
+                    if (typeof query.meta.total === 'number' && query.meta.total >= 0) {
+                        query.meta = _object_spread({}, query.meta);
+                        query.meta.total = Math.max(query.meta.total - 1, 0);
+                    }
                     delete index.queries[queryId];
                     index.size -= 1;
                 }
             } else {
-                // only add if query has fetched all of the data..
-                // if it hasn't fetched all of the data then leave this
-                // up to the consumer of the figbird to decide if data
-                // should be refetched
-                if (matches && query.data.length <= query.meta.total) {
+                if (matches && !query.data.includes(itemId)) {
                     updateCount++;
                     // TODO - sort
                     queries[queryId] = _object_spread_props(_object_spread({}, query), {
-                        meta: _object_spread_props(_object_spread({}, query.meta), {
-                            total: query.meta.total + 1
-                        }),
                         data: query.data.concat(itemId)
                     });
+                    if (typeof query.meta.total === 'number' && query.meta.total >= 0) {
+                        query.meta = _object_spread({}, query.meta);
+                        query.meta.total = Math.max(query.meta.total + 1, 0);
+                    }
                     index.queries[queryId] = true;
                     index.size += 1;
                 }

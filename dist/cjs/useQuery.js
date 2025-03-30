@@ -193,11 +193,11 @@ function useQuery(serviceName) {
     }
     if (config.defaultPageSizeWhenFetchingAll && allPages && (!params.query || !params.query.$limit)) {
         params = _object_spread({}, params);
-        params.query = params.query || {};
+        params.query = _object_spread({}, params.query);
         params.query.$limit = config.defaultPageSizeWhenFetchingAll;
     } else if (config.defaultPageSize && (!params.query || !params.query.$limit)) {
         params = _object_spread({}, params);
-        params.query = params.query || {};
+        params.query = _object_spread({}, params.query);
         params.query.$limit = config.defaultPageSize;
     }
     var queryId = useQueryHash({

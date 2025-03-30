@@ -1,5 +1,10 @@
 # Figbird Changelog
 
+## 0.19.0
+
+- Fix - remove a dependency on `result.total` when merging realtime events in
+- Upgrade all dependencies to address security alerts.
+
 ## 0.18.0
 
 - Introduce support for endpoints that do not respond with `result.total` or `result.total` as -1 when using `allPages: true` to indicate that the endpoint is not counting the total available results, instead figbird will keep paging over the API until all data is gathered
