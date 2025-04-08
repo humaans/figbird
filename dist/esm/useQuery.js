@@ -98,17 +98,21 @@ function reducer(state, action) {
     switch(action.type){
         case 'success':
             return _object_spread_props(_object_spread({}, state), {
-                status: 'success'
+                status: 'success',
+                dirty: false
             });
         case 'error':
             return _object_spread_props(_object_spread({}, state), {
                 status: 'error',
-                error: action.error
+                error: action.error,
+                dirty: false
             });
         case 'reset':
+            var _action_dirty;
             return _object_spread_props(_object_spread({}, state), {
                 status: 'pending',
-                error: null
+                error: null,
+                dirty: (_action_dirty = action.dirty) !== null && _action_dirty !== void 0 ? _action_dirty : state.dirty || state.status === 'pending'
             });
     }
 }
@@ -169,9 +173,11 @@ function reducer(state, action) {
     const isCacheSufficient = fetchPolicy === 'cache-first' && !!cachedResult;
     const [state, dispatch] = useReducer(reducer, {
         status: isCacheSufficient ? 'success' : 'pending',
+        dirty: false,
         error: null
     });
     const isPending = state.status === 'pending';
+    const initialisedRef = useRef(false);
     const requestRef = useRef(0);
     useEffect(()=>{
         if (skip) return;
@@ -186,7 +192,12 @@ function reducer(state, action) {
             parallelLimit,
             transformResponse
         }).then((res)=>{
-            if (reqRef === requestRef.current) {
+            if (state.dirty) {
+                dispatch({
+                    type: 'reset',
+                    dirty: false
+                });
+            } else if (reqRef === requestRef.current) {
                 flushSync(()=>{
                     updateCache(res);
                     dispatch({
@@ -195,12 +206,20 @@ function reducer(state, action) {
                 });
             }
         }).catch((error)=>{
+            if (state.dirty) {
+                dispatch({
+                    type: 'reset',
+                    dirty: false
+                });
+            }
             if (reqRef === requestRef.current) {
                 dispatch({
                     type: 'error',
                     error
                 });
             }
+        }).finally(()=>{
+            initialisedRef.current = true;
         });
     }, [
         feathers,
@@ -216,7 +235,8 @@ function reducer(state, action) {
         parallelLimit,
         updateCache,
         isPending,
-        isCacheSufficient
+        isCacheSufficient,
+        state.dirty
     ]);
     const refetch = useCallback(()=>dispatch({
             type: 'reset'
@@ -225,7 +245,7 @@ function reducer(state, action) {
     ]);
     // refetch if the query changes
     useEffect(()=>{
-        if (!isCacheSufficient) {
+        if (!isCacheSufficient && initialisedRef.current) {
             refetch();
         }
     }, [

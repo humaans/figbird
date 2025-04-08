@@ -975,6 +975,59 @@ test('useFind - realtime refetch', async t => {
   unmount()
 })
 
+test('useFind - realtime refetch gets last result correctly after several resets', async t => {
+  const { render, flush, unmount, $all } = dom()
+  function Note() {
+    const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'refetch' })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+  t.is(feathers.service('notes').counts.find, 1)
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello'],
+  )
+
+  feathers.service('notes').setDelay(10) // Keep consistent delay
+
+  // First patch
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'invalid', tag: 'idea' })
+  })
+
+  // Second patch
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'doc', tag: 'idea' })
+  })
+
+  // Wait for component to settle using repeated flush - allows for 3 state updates
+  let content = []
+  for (let i = 0; i < 3; i++) {
+    await flush(async () => {
+      content = $all('.note').map(n => n.innerHTML)
+      if (content[0] === 'doc') return
+      await new Promise(resolve => setTimeout(resolve, 10))
+    })
+
+    if (content[0] === 'doc') break // If we finally have doc, it mean we got the last state already
+  }
+
+  // Final assertion
+  t.deepEqual(content, ['doc'])
+
+  feathers.service('notes').setDelay(0)
+  unmount()
+})
+
 test('useFind - realtime disabled', async t => {
   const { render, flush, unmount, $all } = dom()
   let notes

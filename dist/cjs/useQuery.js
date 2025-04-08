@@ -154,17 +154,21 @@ function reducer(state, action) {
     switch(action.type){
         case 'success':
             return _object_spread_props(_object_spread({}, state), {
-                status: 'success'
+                status: 'success',
+                dirty: false
             });
         case 'error':
             return _object_spread_props(_object_spread({}, state), {
                 status: 'error',
-                error: action.error
+                error: action.error,
+                dirty: false
             });
         case 'reset':
+            var _action_dirty;
             return _object_spread_props(_object_spread({}, state), {
                 status: 'pending',
-                error: null
+                error: null,
+                dirty: (_action_dirty = action.dirty) !== null && _action_dirty !== void 0 ? _action_dirty : state.dirty || state.status === 'pending'
             });
     }
 }
@@ -226,9 +230,11 @@ function useQuery(serviceName) {
     var isCacheSufficient = fetchPolicy === 'cache-first' && !!cachedResult;
     var _useReducer = _sliced_to_array((0, _react.useReducer)(reducer, {
         status: isCacheSufficient ? 'success' : 'pending',
+        dirty: false,
         error: null
     }), 2), state = _useReducer[0], dispatch = _useReducer[1];
     var isPending = state.status === 'pending';
+    var initialisedRef = (0, _react.useRef)(false);
     var requestRef = (0, _react.useRef)(0);
     (0, _react.useEffect)(function() {
         if (skip) return;
@@ -243,7 +249,12 @@ function useQuery(serviceName) {
             parallelLimit: parallelLimit,
             transformResponse: transformResponse
         }).then(function(res) {
-            if (reqRef === requestRef.current) {
+            if (state.dirty) {
+                dispatch({
+                    type: 'reset',
+                    dirty: false
+                });
+            } else if (reqRef === requestRef.current) {
                 (0, _reactdom.flushSync)(function() {
                     updateCache(res);
                     dispatch({
@@ -252,12 +263,20 @@ function useQuery(serviceName) {
                 });
             }
         }).catch(function(error) {
+            if (state.dirty) {
+                dispatch({
+                    type: 'reset',
+                    dirty: false
+                });
+            }
             if (reqRef === requestRef.current) {
                 dispatch({
                     type: 'error',
                     error: error
                 });
             }
+        }).finally(function() {
+            initialisedRef.current = true;
         });
     }, [
         feathers,
@@ -273,7 +292,8 @@ function useQuery(serviceName) {
         parallelLimit,
         updateCache,
         isPending,
-        isCacheSufficient
+        isCacheSufficient,
+        state.dirty
     ]);
     var refetch = (0, _react.useCallback)(function() {
         return dispatch({
@@ -284,7 +304,7 @@ function useQuery(serviceName) {
     ]);
     // refetch if the query changes
     (0, _react.useEffect)(function() {
-        if (!isCacheSufficient) {
+        if (!isCacheSufficient && initialisedRef.current) {
             refetch();
         }
     }, [
