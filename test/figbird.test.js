@@ -1677,3 +1677,86 @@ test('useFind - state sequencing for fetchPolicy network-only', async t => {
 
   unmount()
 })
+test('useFind - refetch during an inflight request initiates a fresh request after completion', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  // To track the request sequence
+  const requestResults = []
+  let refetchFunction
+  let resolveFirst, resolveSecond
+
+  function Note() {
+    const notes = useFind('notes')
+    refetchFunction = notes.refetch
+    return <div className='data'>{notes.data && notes.data[0].content}</div>
+  }
+
+  const feathers = createFeathers()
+
+  // Create controlled promises for each request
+  let requestCount = 0
+  feathers.service('notes').find = () => {
+    const currentRequest = ++requestCount
+    const result = {
+      data: [
+        {
+          id: 1,
+          content: `request-${currentRequest}`,
+          updatedAt: Date.now(),
+        },
+      ],
+    }
+
+    requestResults.push(`started-${currentRequest}`)
+
+    return new Promise(resolve => {
+      if (currentRequest === 1) {
+        resolveFirst = () => {
+          requestResults.push(`completed-${currentRequest}`)
+          resolve(result)
+        }
+      } else {
+        resolveSecond = () => {
+          requestResults.push(`completed-${currentRequest}`)
+          resolve(result)
+        }
+      }
+    })
+  }
+
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  // First request starts automatically
+  await flush()
+  t.deepEqual(requestResults, ['started-1'])
+
+  // Call refetch while first request is still in flight
+  await flush(() => {
+    refetchFunction()
+  })
+
+  // Verify second request was not initiated yet
+  t.deepEqual(requestResults, ['started-1'])
+
+  // Resolve requests in order
+  await flush(() => {
+    resolveFirst()
+  })
+
+  t.is($('.data').innerHTML, '')
+
+  await flush(() => {
+    resolveSecond()
+  })
+
+  // Verify both requests completed and only the second result is shown
+  t.deepEqual(requestResults, ['started-1', 'completed-1', 'started-2', 'completed-2'])
+  t.is($('.data').innerHTML, 'request-2')
+  t.is(requestCount, 2, 'Two requests should have been made')
+
+  unmount()
+})
