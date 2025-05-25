@@ -725,6 +725,64 @@ test('useFind with refetch', async t => {
   t.is(calls, 2)
 })
 
+test('useFind with refetch while already fetching', async t => {
+  const { render, flush, unmount, $ } = dom()
+  let refetch
+
+  function Note() {
+    const notes = useFind('notes')
+    refetch = notes.refetch
+    return <div className='data'>{notes.data && notes.data[0].id}</div>
+  }
+
+  const results = [{ data: [{ id: 1 }] }, { data: [{ id: 2 }] }, { data: [{ id: 3 }] }]
+  const feathers = createFeathers()
+
+  let calls = 0
+  feathers.service('notes').find = () => {
+    calls++
+    const res = results.shift()
+    if (calls === 1) {
+      // First call is slow
+      return new Promise(resolve => setTimeout(() => resolve(res), 20))
+    }
+    // Subsequent calls are fast
+    return Promise.resolve(res)
+  }
+
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  // Wait a bit to ensure first fetch has started
+  await new Promise(resolve => setTimeout(resolve, 5))
+
+  t.is(calls, 1, 'First fetch should have started')
+
+  // Call refetch while the first fetch is still in progress
+  refetch()
+
+  // Wait for both fetches to complete
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 30))
+  })
+
+  t.is(calls, 2, 'Should have fetched twice')
+  t.is($('.data').innerHTML, '2', 'Should show result from second fetch')
+
+  // Call refetch again after everything is done
+  await flush(() => {
+    refetch()
+  })
+
+  t.is(calls, 3, 'Should have fetched a third time')
+  t.is($('.data').innerHTML, '3', 'Should show result from third fetch')
+
+  unmount()
+})
+
 test('useFind with allPages', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
