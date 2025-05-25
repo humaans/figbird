@@ -69,6 +69,11 @@ function NoteList({ notes, keyField = 'id' }) {
     return <div className='spinner'>loading...</div>
   }
 
+  // Handle cases where data is null (e.g., when skip:true and status is 'idle')
+  if (!notes.data) {
+    return null
+  }
+
   return (
     <>
       {(Array.isArray(notes.data) ? notes.data : [notes.data]).map(note => (
@@ -1850,6 +1855,328 @@ test('recursive serializer for maps and sets', async t => {
       c: { d: 4 },
     },
   )
+})
+
+test('useFind handles rapid query parameter changes without showing stale data', async t => {
+  const { render, flush, unmount, $ } = dom()
+  let setTag
+
+  function SearchableNotes() {
+    const [tag, _setTag] = useState('')
+    setTag = _setTag
+
+    const notes = useFind('notes', {
+      query: { tag },
+      skip: !tag,
+    })
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        <div className='fetching'>{notes.isFetching ? 'true' : 'false'}</div>
+        {notes.data && <div className='count'>{notes.data.length}</div>}
+        <NoteList notes={notes} />
+      </div>
+    )
+  }
+
+  const feathers = createFeathers()
+
+  // Add more test data
+  await feathers.service('notes').create({ id: 2, content: 'javascript tutorial', tag: 'slow' })
+  await feathers.service('notes').create({ id: 3, content: 'react hooks guide', tag: 'react' })
+  await feathers.service('notes').create({ id: 4, content: 'nodejs basics', tag: 'node' })
+
+  // Mock delays based on tag
+  const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
+  let findCallCount = 0
+  feathers.service('notes').find = async params => {
+    findCallCount++
+    const tag = params.query?.tag
+    if (tag === 'slow') {
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    const result = await originalFind(params)
+    // Filter by tag if provided
+    if (tag) {
+      result.data = result.data.filter(item => item.tag === tag)
+      result.total = result.data.length
+    }
+    return result
+  }
+
+  render(
+    <App feathers={feathers}>
+      <SearchableNotes />
+    </App>,
+  )
+
+  t.is($('.status').innerHTML, 'idle')
+
+  // Rapid changes: slow query followed by fast query
+  await flush(() => {
+    setTag('slow') // This will take 50ms
+  })
+
+  // Immediately change to a faster query
+  await flush(() => {
+    setTag('react') // This should complete faster
+  })
+
+  // Wait for all queries to settle
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  })
+
+  // Should show results for 'react', not 'slow'
+  t.is($('.count').innerHTML, '1')
+  t.is($('.note').innerHTML, 'react hooks guide')
+
+  // At least 2 queries should have been initiated (might be more due to StrictMode)
+  t.true(findCallCount >= 2, `Expected at least 2 find calls, got ${findCallCount}`)
+
+  unmount()
+})
+
+test('useFind recovers gracefully from errors on refetch', async t => {
+  const { render, flush, unmount, $ } = dom()
+  let refetch
+  let failCount = 0
+
+  function Notes() {
+    const notes = useFind('notes')
+    refetch = notes.refetch
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        <div className='fetching'>{notes.isFetching ? 'true' : 'false'}</div>
+        {notes.error && <div className='error'>{notes.error.message}</div>}
+        <NoteList notes={notes} />
+      </div>
+    )
+  }
+
+  const feathers = createFeathers()
+
+  // Make the service fail first 2 times, then succeed
+  const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
+  feathers.service('notes').find = async params => {
+    failCount++
+    if (failCount <= 2) {
+      throw new Error('Network error')
+    }
+    return originalFind(params)
+  }
+
+  render(
+    <App feathers={feathers}>
+      <Notes />
+    </App>,
+  )
+
+  // Initial load fails
+  await flush()
+  t.is($('.status').innerHTML, 'error')
+  t.is($('.error').innerHTML, 'Network error')
+  t.is($('.fetching').innerHTML, 'false')
+
+  // First retry fails
+  await flush(() => {
+    refetch()
+  })
+
+  t.is($('.status').innerHTML, 'error')
+  t.is($('.fetching').innerHTML, 'false')
+
+  // Second retry succeeds
+  await flush(() => {
+    refetch()
+  })
+
+  t.is($('.status').innerHTML, 'success')
+  t.is($('.note').innerHTML, 'hello')
+  t.is($('.fetching').innerHTML, 'false')
+
+  unmount()
+})
+
+test('concurrent mutations maintain data consistency', async t => {
+  const { render, flush, unmount, $all } = dom()
+  let hasFiredMutations = false
+
+  const feathers = createFeathers()
+
+  // Add delays to simulate network latency
+  const originalPatch = feathers.service('notes').patch.bind(feathers.service('notes'))
+  feathers.service('notes').patch = async (id, data) => {
+    if (data.content === 'update1') {
+      await new Promise(resolve => setTimeout(resolve, 30))
+    } else if (data.content === 'update2') {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    return originalPatch(id, data)
+  }
+
+  function Notes() {
+    const notes = useFind('notes')
+    const { patch: patch1 } = useMutation('notes')
+    const { patch: patch2 } = useMutation('notes')
+
+    React.useEffect(() => {
+      if (notes.data && notes.data.length > 0 && !hasFiredMutations) {
+        hasFiredMutations = true
+        // Fire two mutations concurrently on the same item
+        const id = notes.data[0].id
+
+        // Fire both mutations
+        patch1(id, { content: 'update1', version: 1 })
+        patch2(id, { content: 'update2', version: 2 })
+      }
+    }, [notes.data, patch1, patch2])
+
+    return <NoteList notes={notes} />
+  }
+
+  render(
+    <App feathers={feathers}>
+      <Notes />
+    </App>,
+  )
+
+  // Wait for both mutations to complete
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  })
+
+  // The last update to complete should win (update1 because it has longer delay)
+  t.is($all('.note').length, 1)
+  t.is($all('.note')[0].innerHTML, 'update1')
+
+  unmount()
+})
+
+test('handles component unmounting during active requests without warnings', async t => {
+  const { render, flush, unmount } = dom()
+  let unmountNotes
+  const warnings = []
+
+  // Capture console warnings
+  const originalWarn = console.warn
+  console.warn = (...args) => warnings.push(args.join(' '))
+
+  function Container() {
+    const [showNotes, setShowNotes] = useState(true)
+    unmountNotes = () => setShowNotes(false)
+
+    return showNotes ? <Notes /> : <div>Unmounted</div>
+  }
+
+  function Notes() {
+    const notes = useFind('notes')
+    const { create } = useMutation('notes')
+
+    React.useEffect(() => {
+      // Start a mutation that will complete after component unmounts
+      create({ id: 999, content: 'created after unmount' })
+    }, [create])
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  // Add delay to create to ensure it completes after unmount
+  const originalCreate = feathers.service('notes').create.bind(feathers.service('notes'))
+  feathers.service('notes').create = async data => {
+    await new Promise(resolve => setTimeout(resolve, 20))
+    return originalCreate(data)
+  }
+
+  render(
+    <App feathers={feathers}>
+      <Container />
+    </App>,
+  )
+
+  // Let the effect run and start the mutation
+  await flush()
+
+  // Unmount while mutation is in flight
+  await flush(() => {
+    unmountNotes()
+  })
+
+  // Wait for mutation to complete
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 30))
+  })
+
+  // Restore console.warn
+  console.warn = originalWarn
+
+  // Should not have any warnings about updating unmounted components
+  const reactWarnings = warnings.filter(
+    w => w.includes('unmounted component') || w.includes("Can't perform a React state update"),
+  )
+  t.is(reactWarnings.length, 0, 'No React unmount warnings')
+
+  unmount()
+})
+
+test('allPages handles errors gracefully during pagination', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  function Notes() {
+    const notes = useFind('notes', {
+      query: { $limit: 2 },
+      allPages: true,
+    })
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        {notes.error && <div className='error'>{notes.error.message}</div>}
+        <div className='count'>{notes.data ? notes.data.length : 0}</div>
+      </div>
+    )
+  }
+
+  const feathers = createFeathers()
+
+  // Add more data
+  await feathers.service('notes').create({ id: 2, content: 'note2' })
+  await feathers.service('notes').create({ id: 3, content: 'note3' })
+  await feathers.service('notes').create({ id: 4, content: 'note4' })
+  await feathers.service('notes').create({ id: 5, content: 'note5' })
+
+  // Make the third page fail
+  let callCount = 0
+  const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
+  feathers.service('notes').find = async params => {
+    callCount++
+    if (callCount === 3) {
+      // Third page
+      throw new Error('Network error on page 3')
+    }
+    return originalFind(params)
+  }
+
+  render(
+    <App feathers={feathers}>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  // Should show error status
+  t.is($('.status').innerHTML, 'error')
+  t.is($('.error').innerHTML, 'Network error on page 3')
+  // Should not have any partial data
+  t.is($('.count').innerHTML, '0')
+
+  unmount()
 })
 
 function serialize(input) {
