@@ -677,12 +677,14 @@ test('useFind with skip', async t => {
   )
 
   t.is($('.data').innerHTML, 'idle')
+  t.is(feathers.service('notes').counts.find, 0, 'No find() calls when skip=true')
 
   await flush(() => {
     setSkip(false)
   })
 
   t.is($('.data').innerHTML, 'success')
+  t.is(feathers.service('notes').counts.find, 1, 'One find() call when skip=false')
 
   unmount()
 })
