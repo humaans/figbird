@@ -2181,6 +2181,144 @@ test('allPages handles errors gracefully during pagination', async t => {
   unmount()
 })
 
+test('useFind with custom query operators does not crash when realtime is not merge', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  function Notes() {
+    // Using a custom operator that would normally require a custom matcher
+    const notes = useFind('notes', {
+      query: { $customOperator: 'value' },
+      realtime: 'refetch', // Not 'merge', so matcher shouldn't be computed
+    })
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        <div className='count'>{notes.data?.length || 0}</div>
+      </div>
+    )
+  }
+
+  const feathers = createFeathers()
+
+  render(
+    <App feathers={feathers}>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  // Should successfully load without crashing (the query still works even with custom operators)
+  t.is($('.status').innerHTML, 'success')
+  t.true(parseInt($('.count').innerHTML) >= 0) // Just verify it loaded without crashing
+
+  unmount()
+})
+
+test('mutations work correctly when no queries are active', async t => {
+  const { render, flush, unmount } = dom()
+  let createResult, patchResult, removeResult
+  let mutationsCompleted = false
+
+  function MutateOnly() {
+    const { create, patch, remove } = useMutation('notes')
+
+    useEffect(() => {
+      // Perform mutations without any queries being active
+      ;(async () => {
+        createResult = await create({ id: 100, content: 'new note' })
+        patchResult = await patch(100, { content: 'patched note' })
+        removeResult = await remove(100)
+        mutationsCompleted = true
+      })()
+    }, [])
+
+    return <div>Mutations only - no queries</div>
+  }
+
+  const feathers = createFeathers()
+
+  // Render component that only performs mutations, no queries
+  render(
+    <App feathers={feathers}>
+      <MutateOnly />
+    </App>,
+  )
+
+  await flush()
+
+  // Verify mutations completed successfully
+  t.true(mutationsCompleted)
+
+  // Verify the mutations returned values
+  t.is(createResult.id, 100)
+  t.is(patchResult.content, 'patched note')
+  t.is(removeResult.id, 100)
+
+  // Verify final state - item was created then removed
+  const allNotes = await feathers.service('notes').find()
+  t.is(allNotes.total, 1) // Still original 1 note (created then removed)
+  t.falsy(allNotes.data.find(note => note.id === 100)) // Item was removed
+
+  unmount()
+})
+
+test('mutate methods return the mutated item', async t => {
+  const { render, flush, unmount } = dom()
+  let createResult, patchResult, updateResult, removeResult
+
+  function Notes() {
+    const { create, patch, update, remove } = useMutation('notes')
+
+    useEffect(() => {
+      ;(async () => {
+        // Test create returns the created item
+        createResult = await create({ id: 101, content: 'test create' })
+
+        // Test patch returns the patched item
+        patchResult = await patch(101, { content: 'test patch' })
+
+        // Test update returns the updated item
+        updateResult = await update(101, { id: 101, content: 'test update' })
+
+        // Test remove returns the removed item
+        removeResult = await remove(101)
+      })()
+    }, [])
+
+    return <div>Testing mutations</div>
+  }
+
+  const feathers = createFeathers()
+  render(
+    <App feathers={feathers}>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  // Verify all mutation methods returned the expected items
+  t.is(createResult.id, 101)
+  t.is(createResult.content, 'test create')
+  t.truthy(createResult.updatedAt)
+
+  t.is(patchResult.id, 101)
+  t.is(patchResult.content, 'test patch')
+  t.truthy(patchResult.updatedAt)
+
+  t.is(updateResult.id, 101)
+  t.is(updateResult.content, 'test update')
+  t.truthy(updateResult.updatedAt)
+
+  t.is(removeResult.id, 101)
+  t.is(removeResult.content, 'test update') // Remove returns the item before deletion
+  t.truthy(removeResult.updatedAt)
+
+  unmount()
+})
+
 function serialize(input) {
   if (input instanceof Map) {
     const obj = {}
