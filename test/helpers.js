@@ -175,7 +175,7 @@ class Service {
 
 util.inherits(Service, EventEmitter)
 
-async function queueTask(task) {
+export function queueTask(task) {
   if (!global.__pendingEmissions) {
     global.__pendingEmissions = new Set()
   }
