@@ -9,9 +9,8 @@
     "type": "commonjs"
   },
   "env": {
-    "targets": [
-      "last 2 versions",
-      "IE >= 9"
-    ]
+    "targets": {
+      "browsers": ["extends browserslist-config-baseline"]
+    }
   }
 }

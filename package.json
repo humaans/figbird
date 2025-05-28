@@ -2,8 +2,17 @@
   "name": "figbird",
   "version": "0.20.0-3",
   "description": "Effortless realtime data management for React + Feathers applications.",
-  "main": "dist/cjs",
-  "module": "dist/esm",
+  "type": "module",
+  "exports": {
+    ".": {
+      "require": "./dist/cjs/index.js",
+      "import": "./dist/esm/index.js"
+    },
+    "./*": {
+      "require": "./dist/cjs/*.js",
+      "import": "./dist/esm/*.js"
+    }
+  },
   "scripts": {
     "test": "eslint && prettier --check '**/*.{js,css,yml}' && nyc ava",
     "format": "prettier --write '**/*.{js,css,yml}'",
@@ -17,7 +26,7 @@
     "docs:release": "hugo -s docs && gh-pages -d docs/public"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "author": "Humaans",
   "license": "ISC",
@@ -30,6 +39,7 @@
     "@swc/cli": "^0.7.7",
     "@swc/core": "^1.11.29",
     "ava": "^6.3.0",
+    "browserslist-config-baseline": "^0.4.0",
     "eslint": "^9.27.0",
     "eslint-plugin-react": "^7.37.5",
     "execa": "^9.6.0",
@@ -47,8 +57,10 @@
     "files": [
       "test/*.test.js"
     ],
+    "nodeArguments": [
+      "--import=@swc-node/register/esm-register"
+    ],
     "require": [
-      "@swc-node/register",
       "./test/setup.js"
     ]
   },
