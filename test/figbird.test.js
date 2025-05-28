@@ -2320,7 +2320,7 @@ test('mutate methods return the mutated item', async t => {
 })
 
 test('realtime events are batched to reduce re-renders', async t => {
-  const { render, flush, unmount, $all, act } = dom()
+  const { render, flush, unmount, $all } = dom()
   let renderLog = []
 
   function Notes() {
