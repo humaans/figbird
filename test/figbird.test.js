@@ -1324,7 +1324,7 @@ test('useFind - fetchPolicy network-only', async t => {
 
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ adapter, eventBatchProcessingInterval: 0 })
+  const figbird = new Figbird({ adapter })
   render(
     <App feathers={feathers} figbird={figbird}>
       <Content />
