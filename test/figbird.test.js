@@ -1,6 +1,6 @@
 import React, { useState, useEffect, StrictMode } from 'react'
 import test from 'ava'
-import { dom, mockFeathers } from './helpers'
+import { dom, mockFeathers, queueTask } from './helpers'
 import {
   Figbird,
   Provider,
@@ -27,7 +27,7 @@ const createFeathers = ({ skipTotal } = {}) =>
 
 function App({ feathers, figbird, config, children }) {
   const adapter = new FeathersAdapter(feathers, config)
-  figbird = figbird || new Figbird({ adapter })
+  figbird = figbird || new Figbird({ adapter, eventBatchProcessingInterval: 0 })
   return (
     <StrictMode>
       <ErrorHandler>
@@ -375,7 +375,7 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ adapter })
+  const figbird = new Figbird({ adapter, eventBatchProcessingInterval: 0 })
 
   render(
     <App feathers={feathers} figbird={figbird}>
@@ -1252,7 +1252,7 @@ test('useFind - fetchPolicy cache-first and changing query', async t => {
 
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ adapter })
+  const figbird = new Figbird({ adapter, eventBatchProcessingInterval: 0 })
   render(
     <App feathers={feathers} figbird={figbird}>
       <Content />
@@ -1464,7 +1464,7 @@ test('items get updated in cache even if not currently relevant to any query', a
   const { render, flush, unmount, $, $all } = dom()
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ adapter })
+  const figbird = new Figbird({ adapter, eventBatchProcessingInterval: 0 })
 
   function Note() {
     const notes = useFind('notes', { query: { tag: 'post' } })
@@ -1691,7 +1691,7 @@ test('subscribeToStateChanges', async t => {
 
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ adapter })
+  const figbird = new Figbird({ adapter, eventBatchProcessingInterval: 0 })
 
   render(
     <App feathers={feathers} figbird={figbird}>
@@ -2315,6 +2315,106 @@ test('mutate methods return the mutated item', async t => {
   t.is(removeResult.id, 101)
   t.is(removeResult.content, 'test update') // Remove returns the item before deletion
   t.truthy(removeResult.updatedAt)
+
+  unmount()
+})
+
+test('realtime events are batched to reduce re-renders', async t => {
+  const { render, flush, unmount, $all, act } = dom()
+  let renderLog = []
+
+  function Notes() {
+    const notes = useFind('notes')
+
+    // Track renders with data snapshots
+    useEffect(() => {
+      if (notes.data) {
+        renderLog.push(notes.data.map(n => n.content))
+      }
+    })
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter, eventBatchProcessingInterval: 100 })
+
+  // Start with 3 notes
+  await feathers.service('notes').create({ id: 2, content: 'note 2' })
+  await feathers.service('notes').create({ id: 3, content: 'note 3' })
+
+  render(
+    <App feathers={feathers} figbird={figbird}>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  // Clear render log after initial load
+  renderLog = []
+
+  // Test Case 1: Single event processes immediately
+  await flush(async () => {
+    queueTask(() =>
+      feathers
+        .service('notes')
+        .emit('patched', { id: 1, content: 'immediate update', updatedAt: Date.now() }),
+    )
+  })
+
+  t.is(renderLog.length, 0, 'Events will only be processed as a batch later')
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello', 'note 2', 'note 3'],
+  )
+
+  // Emit 4 events in rapid succession
+  const startTime = Date.now()
+  await flush(async () => {
+    queueTask(() => {
+      feathers
+        .service('notes')
+        .emit('patched', { id: 1, content: 'batch 1', updatedAt: Date.now() })
+      feathers
+        .service('notes')
+        .emit('patched', { id: 2, content: 'batch 2', updatedAt: Date.now() + 1 })
+      feathers
+        .service('notes')
+        .emit('patched', { id: 3, content: 'batch 3', updatedAt: Date.now() + 2 })
+      feathers
+        .service('notes')
+        .emit('created', { id: 4, content: 'batch 4', updatedAt: Date.now() + 3 })
+    })
+  })
+
+  // Wait a bit to check nothing was rendered yet
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  })
+
+  t.is(renderLog.length, 0, 'Events will only be processed as a batch later')
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['hello', 'note 2', 'note 3'],
+  )
+
+  // Wait for batch timeout (100ms from start)
+  await flush(async () => {
+    const elapsed = Date.now() - startTime
+    const remaining = Math.max(0, 100 - elapsed)
+    await new Promise(resolve => setTimeout(resolve, remaining))
+  })
+
+  t.is(renderLog.length, 1, 'First event in batch should process immediately')
+  t.deepEqual(renderLog[0], ['batch 1', 'batch 2', 'batch 3', 'batch 4'])
+
+  // Verify final DOM state
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    ['batch 1', 'batch 2', 'batch 3', 'batch 4'],
+  )
 
   unmount()
 })
