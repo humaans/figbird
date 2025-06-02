@@ -790,6 +790,76 @@ test('useFind with refetch while already fetching', async t => {
   unmount()
 })
 
+test('refetch only works with active listeners', async t => {
+  let refetch
+  let calls = 0
+
+  function Note() {
+    const notes = useFind('notes')
+    refetch = notes.refetch
+    return <div className='data'>{notes.data && notes.data[0].id}</div>
+  }
+
+  const results = [
+    { data: [{ id: 1 }] },
+    { data: [{ id: 2 }] },
+    { data: [{ id: 3 }] },
+    { data: [{ id: 4 }] },
+  ]
+
+  const feathers = createFeathers()
+  feathers.service('notes').find = async () => {
+    calls++
+    return results[calls - 1]
+  }
+
+  // First mount
+  const dom1 = dom()
+  dom1.render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await dom1.flush(() => {})
+
+  t.is(calls, 1, 'Should have fetched once')
+  t.is(dom1.$('.data').innerHTML, '1', 'Should show first result')
+
+  // Unmount component (removes listeners)
+  dom1.unmount()
+
+  // Try to refetch by hand
+  await dom1.flush(() => {
+    refetch()
+  })
+
+  t.is(calls, 2, 'Should have refetched')
+
+  // Remount component with new dom instance
+  const dom2 = dom()
+  dom2.render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await dom2.flush(() => {})
+
+  t.is(calls, 3, 'Should have fetched again on mount')
+  t.is(dom2.$('.data').innerHTML, '3', 'Should show third result')
+
+  // Refetch should work now that component is mounted
+  await dom2.flush(() => {
+    refetch()
+  })
+
+  t.is(calls, 4, 'Should have refetched with active listeners')
+  t.is(dom2.$('.data').innerHTML, '4', 'Should show fourth result')
+
+  dom2.unmount()
+})
+
 test('useFind with allPages', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
@@ -1046,6 +1116,75 @@ test('useFind - realtime refetch', async t => {
   )
 
   unmount()
+})
+
+test('useFind - realtime refetch only with active listeners', async t => {
+  let findCallCount = 0
+
+  function Note() {
+    const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'refetch' })
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+  const originalFind = feathers.service('notes').find
+  feathers.service('notes').find = async (...args) => {
+    findCallCount++
+    return originalFind.apply(feathers.service('notes'), args)
+  }
+
+  // First mount
+  const dom1 = dom()
+  dom1.render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await dom1.flush()
+
+  t.is(findCallCount, 1, 'Should have fetched once on mount')
+
+  t.deepEqual(
+    dom1.$all('.note').map(n => n.innerHTML),
+    ['hello'],
+  )
+
+  // Unmount component (removes listeners)
+  dom1.unmount()
+
+  // Trigger a realtime event - should NOT refetch since no listeners
+  await dom1.flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'updated', tag: 'idea' })
+  })
+
+  t.is(findCallCount, 1, 'Should not have refetched without listeners')
+
+  // Remount component with new dom instance
+  const dom2 = dom()
+  dom2.render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await dom2.flush()
+
+  t.is(findCallCount, 2, 'Should have fetched again on remount')
+
+  // Now trigger another realtime event - should refetch since we have listeners
+  await dom2.flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'updated again', tag: 'idea' })
+  })
+
+  t.is(findCallCount, 3, 'Should have refetched with active listeners')
+
+  t.deepEqual(
+    dom2.$all('.note').map(n => n.innerHTML),
+    ['updated again'],
+  )
+
+  dom2.unmount()
 })
 
 test('useFind - realtime disabled', async t => {
