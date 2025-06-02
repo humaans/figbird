@@ -52,7 +52,7 @@ $ npm install figbird
 import React, { useState } from 'react'
 import io from 'socket.io-client'
 import feathers from '@feathersjs/client'
-import { Provider, useFind } from 'figbird'
+import { Provider, Figbird, FeathersAdapter, useFind } from 'figbird'
 
 const socket = io('http://localhost:3030')
 const client = feathers()
@@ -64,16 +64,19 @@ client.configure(
   }),
 )
 
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ adapter })
+
 function App() {
   return (
-    <Provider feathers={client}>
+    <Provider figbird={figbird}>
       <Notes />
     </Provider>
   )
 }
 
 function Notes({ tag }) {
-  const { status, data, total } = useFind('notes', { query: { tag } })
+  const { status, data, meta } = useFind('notes', { query: { tag } })
 
   if (status === 'loading') {
     return 'Loading...'
@@ -83,7 +86,7 @@ function Notes({ tag }) {
 
   return (
     <div>
-      Showing {data.length} notes of {total}
+      Showing {data.length} notes of {meta.total}
     </div>
   )
 }
@@ -94,7 +97,7 @@ function Notes({ tag }) {
 ### `useGet`
 
 ```js
-const { data, status, isFetching, error, refetch } = useGet(serviceName, id, params)
+const { data, meta, status, isFetching, error, refetch } = useGet(serviceName, id, params)
 ```
 
 **Arguments**
@@ -136,21 +139,16 @@ const { data, status, isFetching, error, refetch } = useFind(serviceName, params
 - `allPages` - fetch all pages
 - `parallel` - when used in combination with `allPages` will fetch all pages in parallel
 - `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
-- `matcher` - custom matcher function of signature `(defaultMatcher) => (query) => (item): bool`, used when merging realtime events into local query cache
+- `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache
 
 **Returns**
 
 - `data` - starts of as `null` and is set to the fetch result, usually an array
+- `meta` - adapter specific metadata from the `find` envelope, e.g. `{ total, limit, skip }`
 - `status` - one of `loading`, `success` or `error`
 - `isFetching` - true if fetching data for the first time or in the background
 - `error` - error object if request failed
 - `refetch` - function to refetch data
-
-The return object also has the rest of the Feathers response mixed, typically:
-
-- `total` - total number of records
-- `limit` - max number of items per page
-- `skip` - number of skipped items (offset)
 
 ### `useMutation`
 
@@ -186,39 +184,36 @@ Get the feathers instance passed to `Provider`.
 <Provider feathers={feathers}>{children}</Provider>
 ```
 
-- `feathers` - feathers instance
-- `idField` - string or function, defaults to `item => item.id || item._id`
-- `updatedAtField` - string or function, defaults to `item => item.updatedAt || item.updated_at`, used to avoid overwriting newer data in cache with older data when `get` or realtime `patched` requests are racing
-- `defaultPageSize` - a default page size in `query.$limit` to use when fetching, unset by default so that the server gets to decide
-- `defaultPageSizeWhenFetchingAll` - a default page size to use in `query.$limit` when fetching using `allPages: true`, unset by default so that the server gets to decide
-- `store` - custom store instance - allows inspecting cache contents
+- `figbird` - figbird instance
 
-### `createStore`
+### `Figbird`
 
 ```js
-const store = createStore()
+const figbird = new Figbird({ adapter )
 ```
 
-Create a custom store - helpful for inspecting contents of the cache.
+- `adapter` - an instance of a data fetching adapter
 
-### `cache`
+### `FeathersAdapter`
+
+A Feathers.js API specific adapter.
 
 ```js
-import { createStore, cache } from 'figbird'
-
-const store = createStore()
-
-store.get(cache)
-store.set(cache, val => { ...val, a: 1 })
+const adapter = new FeathersAdapter(feathers, options)
 ```
 
-Get the cache atom for manipulating via the store API.
+- `feathers` - feathers client
+- `options`
+  - `idField` - string or function, defaults to `item => item.id || item._id`
+  - `updatedAtField` - string or function, defaults to `item => item.updatedAt || item.updated_at`, used to avoid overwriting newer data in cache with older data when `get` or realtime `patched` requests are racing
+  - `defaultPageSize` - a default page size in `query.$limit` to use when fetching, unset by default so that the server gets to decide
+  - `defaultPageSizeWhenFetchingAll` - a default page size to use in `query.$limit` when fetching using `allPages: true`, unset by default so that the server gets to decide
 
 ## Realtime
 
 Figbird is compatible with the Feathers realtime model out of the box. The moment you mount a component with a `useFind` or `useGet` hook, Figbird will start listening to realtime events for the services in use. It will only at most subscribe once per service. All realtime events will get processed in the following manner:
 
-- `created` - check if the created object matches any of the cached `find` queries, if so, push it at the end of the array, discard otherwise, note: the created object is only pushed if `data.length === total`, that is if the query has full data set, if the query is paginated and has only a slice of data, the created object will not be pushed, consider using `realtime: 'refetch'` mode for such cases
+- `created` - check if the created object matches any of the cached `find` queries, if so, push it at the end of the array, discard otherwise
 - `updated` and `patched` - check if this object is in cache, if so, update
 - `removed` - remove this object from cache and any `find` queries referencing it
 
@@ -236,7 +231,7 @@ In `refetch` mode, the `useGet` and `useFind` results are not shared with other 
 
 ### `disabled`
 
-Setting `realtime` to `disabled` will store the `useGet` and `useFind` results locally and will not share them with components that are in `realtime` or `refetch` mode. This way, the results will stay as they are even as realtime events are received. You can still manually trigger a refetch using the `refetch` function which is returned by the `useGet` and `useFind` hooks.
+Setting `realtime` to `disabled` will not share them with components that are in `realtime` or `refetch` mode. This way, the results will stay as they are even as realtime events are received. You can still manually trigger a refetch using the `refetch` function which is returned by the `useGet` and `useFind` hooks.
 
 ## Fetch Policies
 
@@ -254,110 +249,61 @@ With this policy, Figbird will show cached data if possible upon mounting the co
 
 With this policy, Figbird will never show cached data on mount and will always fetch on component mount.
 
-## Architecture
-
-The idea behind Figbird is rather simple. Fetch all the data requested by the hooks, index all items by id in the cache, listen to realtime events and update all items/queries as neccessary.
-
-Let's take a look at an example. Say, component X uses `useFind('comments')` hook, and component Y uses `useGet('comments/5')` hook. Figbird fetches this data and caches in a structure similar to:
-
-```js
-{
-  entities: {
-    comments: {
-      2: { id: 2, content: 'a' },
-      4: { id: 4, content: 'b' },
-      5: { id: 5, content: 'c' },
-      7: { id: 7, content: 'd' },
-    }
-  }
-  queries: {
-    comments: {
-      'f223315': {
-        method: 'find',
-        data: [2, 4, 5, 7],
-        params: {},
-        meta: { total: 4, limit: 100, skip: 0 }
-      },
-      'g742218': {
-        method: 'get',
-        id: 5,
-        data: [5]
-      }
-    }
-  }
-}
-```
-
-Now if some other user/client/server makes a modification to the resource already referenced, the cache will be updated. For example, if we receive the following realtime event:
-
-`["comments patched",{"id":4,"content":"b2"}]`.
-
-The entities get updated:
-
-```js
-{
-  entities: {
-    comments: {
-      2: { id: 2, content: 'a' },
-      4: { id: 4, content: 'b2' }, // updated
-      5: { id: 5, content: 'c' },
-      7: { id: 7, content: 'd' },
-    }
-  }
-  queries: {
-    // ...same as before
-  }
-}
-```
-
-And now the component that was using `useFind` gets rerendered since it's data has been updated, but component using `useGet` does not, since it is not referencing the changed comment.
-
-Hopefully this small example gives you more clarity in how to fit Figbird into your application.
-
 ## Advanced usage
 
 ### Inspect cache contents
 
-If you want to have a looke at the cache contents for debugging reasons, you can do so as shown above. You can also update the store using this direct access. See [`kinfolk` docs](https://github.com/KidkArolis/kinfolk/#createstore) for full API docs.
+If you want to have a look at the cache contents for debugging reasons, you can do so as shown above.
 
 ```jsx
 import React, { useState } from 'react'
 import createFeathersClient from '@feathersjs/feathers'
-import { Provider, createStore, cache } from 'figbird'
+import { Figbird, FeathersAdapter, Provider } from 'figbird'
 
-const store = (window.store = createStore())
 const feathers = createFeathersClient()
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ adapter })
 
 export function App({ children }) {
   return (
-    <Provider feathers={feathers} store={store}>
+    <Provider figbird={figbird}>
       {children}
     </Provider>
   )
 }
 
-// inspect contents of the entire store, the figbird
-// cache atom will be namespaced under the "figbird" key
-console.log(window.store.debug())
+// inspect the state of all of the queries in figbird
+console.log(figbird.getState())
 
-// inspect the contents of the figbird cache directly
-console.log(window.store.get(cache)))
-
-// update contents
-window.store.set(cache, val => { ...val, a: 1 })
+// subscribe to figbird state changes
+figbird.subscribeToStateChanges(state => {})
 ```
 
-### Use with existing kinfolk store
+### Run queries outside of React
 
-Figbird is using [kinfolk](https://github.com/KidkArolis/kinfolk) for it's cache. This allows for a succint implementation and efficient bindings from cached data to components. It is possible to pass in a shared `kinfolk` store to `figbird` if you're already using `kinfolk` in your app you'd like to create a selector that depends on figbird cache and your application state. Note - that is advanced usage and is entirely optional.
+```js
+import React, { useState } from 'react'
+import createFeathersClient from '@feathersjs/feathers'
+import { Figbird, FeathersAdapter } from 'figbird'
 
-### Use without Feathers.js
+const feathers = createFeathersClient()
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ adapter })
 
-In principle, you could use Figbird with any REST API as long as several conventions are followed or are mapped to. Feathers is a collection of patterns as much as it is a library. In fact, Figbird does not have any code dependencies on Feathers. It's only the Feathers patterns and conventions that the library is designed for. In short, those conventions are:
+const q = figbird.query({ serviceName: 'notes', method: 'find' })
+const unsub = q.subscribe(state => console.log(state)) // fetches data and listens to realtime updates
+q.getSnapshot() // read the current state, result is of shape { data, meta, status, isFetching, error }
+q.refetch() // manually refetch the query
+```
 
-1. Structure your API around resources
-2. Where the resources support operations: `find`, `get`, `create`, `update`, `patch`, `remove`
-3. The server should emit a websocket event after each operation (see [Service Events](https://docs.feathersjs.com/api/events.html#service-events))
+
+### Use with a custom API
+
+In principle, you could use Figbird with any REST / Websocket / RPC API as long as you wrap your API into a Figbird compatible adapter.
+
+1. Structure your API around services or resources
+2. Where the services support operations: `find`, `get`, `create`, `update`, `patch`, `remove`
+3. For realtime events, the server should emit a event after each mutation `created`, `patched`, `updated`, `removed`.
 
 For example, if you have a `comments` resource in your application, you would have some or all of the following endpoints:
 
@@ -368,4 +314,4 @@ For example, if you have a `comments` resource in your application, you would ha
 - `PATCH /comments/:id`
 - `DELETE /comments/id`
 
-The result of the `find` operation or `GET /comments` would be an object of shape `{ data, total, limit, skip }` (Note: the pagination envolope will be customizable in Figbird in the future, but it's current fixed to this format).
+The result of the `find` operation or `GET /comments` would be an object of shape `{ data, total, limit, skip }` or similar. You can customise how all this gets mapped to your API by implementing a custom Adapter. See `adapters/feathers.js` for an example.

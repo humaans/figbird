@@ -1,17 +1,13 @@
 {
+  "sourceMaps": true,
   "jsc": {
     "parser": {
       "syntax": "ecmascript",
       "jsx": true
-    }
+    },
+    "target": "es2024"
   },
   "module": {
-    "type": "commonjs"
-  },
-  "env": {
-    "targets": [
-      "last 2 versions",
-      "IE >= 9"
-    ]
+    "type": "es6"
   }
 }
