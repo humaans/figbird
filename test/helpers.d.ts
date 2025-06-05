@@ -1,23 +1,27 @@
 export function dom(): {
-  root: any
-  render: (el: any) => void
+  root: HTMLElement
+  render: (el: React.ReactElement) => void
   unmount: () => void
-  click: (el: any) => void
-  flush: (fn: any) => Promise<void>
-  $: (sel: any) => any
-  $all: (sel: any) => any[]
-  act: any
+  click: (el: HTMLElement) => void
+  flush: (fn: () => void | Promise<void>) => Promise<void>
+  $: (sel: string) => HTMLElement | null
+  $all: (sel: string) => HTMLElement[]
+  act: (fn: () => void | Promise<void>) => Promise<void>
 }
-export function queueTask(task: any): void
-export function service(name: any, details: any, options: any): Service
-export function mockFeathers(services: any): {
-  service(name: any): any
+export function queueTask(task: () => void): void
+export function service(
+  name: string,
+  details: Record<string, unknown>[],
+  options?: Record<string, unknown>,
+): Service
+export function mockFeathers(services: Record<string, Service>): {
+  service(name: string): Service
 }
-export function swallowErrors(yourTestFn: any): void
+export function swallowErrors(yourTestFn: () => void | Promise<void>): void
 declare class Service {
-  constructor(name: any, data: any, options?: {})
-  name: any
-  data: any
+  constructor(name: string, data: Record<string, unknown>[], options?: Record<string, unknown>)
+  name: string
+  data: Record<string, unknown>[]
   counts: {
     get: number
     find: number
@@ -27,27 +31,27 @@ declare class Service {
     remove: number
   }
   delay: number
-  options: {}
-  setDelay(delay: any): void
-  get(id: any): Promise<any>
-  find(params?: {}): Promise<
+  options: Record<string, unknown>
+  setDelay(delay: number): void
+  get(id: string | number): Promise<Record<string, unknown>>
+  find(params?: Record<string, unknown>): Promise<
     | {
-        limit: any
-        skip: any
-        data: any[]
+        limit: number
+        skip: number
+        data: Record<string, unknown>[]
         total?: undefined
       }
     | {
         total: number
-        limit: any
-        skip: any
-        data: any[]
+        limit: number
+        skip: number
+        data: Record<string, unknown>[]
       }
   >
-  create(data: any): Promise<any>
-  patch(id: any, data: any): Promise<any>
-  update(id: any, data: any): Promise<any>
-  remove(id: any): Promise<any>
+  create(data: Record<string, unknown>): Promise<Record<string, unknown>>
+  patch(id: string | number, data: Record<string, unknown>): Promise<Record<string, unknown>>
+  update(id: string | number, data: Record<string, unknown>): Promise<Record<string, unknown>>
+  remove(id: string | number): Promise<Record<string, unknown>>
 }
 export {}
 //# sourceMappingURL=helpers.d.ts.map

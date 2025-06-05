@@ -1,11 +1,22 @@
 import { hashObject } from './hash.js'
+import type {
+  ServiceItem,
+  FeathersParams,
+  FeathersFindMeta,
+  FigbirdError,
+  EventType,
+  EventHandlers,
+  ItemMatcher,
+  ServiceResponse,
+  FindResponse,
+} from '../types.js'
 
 // Type definitions
 export interface QueryDescriptor {
   serviceName: string
   method: 'get' | 'find'
   resourceId?: string | number
-  params?: any
+  params?: FeathersParams
 }
 
 export interface QueryConfig {
@@ -13,15 +24,15 @@ export interface QueryConfig {
   realtime?: 'merge' | 'refetch' | 'disabled'
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
   allPages?: boolean
-  matcher?: (query: any) => (item: any) => boolean
+  matcher?: <T>(query: Record<string, unknown>) => ItemMatcher<T>
 }
 
 interface QueryState<T> {
   data: T | null
-  meta: Record<string, any>
+  meta: FeathersFindMeta
   status: 'idle' | 'loading' | 'success' | 'error'
   isFetching: boolean
-  error: any
+  error: FigbirdError
 }
 
 interface Query<T> {
@@ -40,44 +51,39 @@ interface ServiceState<T> {
   itemQueryIndex: Map<string | number, Set<string>>
 }
 
-interface Event {
-  type: 'created' | 'updated' | 'patched' | 'removed'
-  item: any
+interface Event<T = ServiceItem> {
+  type: EventType
+  item: T
 }
 
-interface QueuedEvent {
+interface QueuedEvent<T = ServiceItem> {
   serviceName: string
-  type: 'created' | 'updated' | 'patched' | 'removed'
-  items: any[]
+  type: EventType
+  items: T[]
 }
 
-interface Adapter {
+interface Adapter<T extends ServiceItem = ServiceItem> {
   get(
     serviceName: string,
     resourceId: string | number,
-    params?: any,
-  ): Promise<{ data: any; meta: any }>
-  find(serviceName: string, params?: any): Promise<{ data: any[]; meta: any }>
-  findAll(serviceName: string, params?: any): Promise<{ data: any[]; meta: any }>
-  mutate(serviceName: string, method: string, args: any[]): Promise<any>
-  subscribe(
-    serviceName: string,
-    handlers: {
-      created: (item: any) => void
-      updated: (item: any) => void
-      patched: (item: any) => void
-      removed: (item: any) => void
-    },
-  ): () => void
-  getId(item: any): string | number | undefined
-  isItemStale(currItem: any, nextItem: any): boolean
-  matcher(query: any, options?: any): (item: any) => boolean
-  itemAdded(meta: any): any
-  itemRemoved(meta: any): any
+    params?: FeathersParams,
+  ): Promise<ServiceResponse<T>>
+  find(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>>
+  findAll(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>>
+  mutate(serviceName: string, method: string, args: unknown[]): Promise<T>
+  subscribe(serviceName: string, handlers: EventHandlers<T>): () => void
+  getId(item: T): string | number | undefined
+  isItemStale(currItem: T, nextItem: T): boolean
+  matcher(
+    query: Record<string, unknown> | null | undefined,
+    options?: Record<string, unknown>,
+  ): ItemMatcher<T>
+  itemAdded(meta: FeathersFindMeta): FeathersFindMeta
+  itemRemoved(meta: FeathersFindMeta): FeathersFindMeta
 }
 
 interface CombinedConfig extends QueryDescriptor, QueryConfig {
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /**
@@ -122,15 +128,15 @@ export class Figbird {
     return new QueryRef<T>({ desc, config: config || {}, queryStore: this.queryStore! })
   }
 
-  mutate({
+  mutate<T extends ServiceItem = ServiceItem>({
     serviceName,
     method,
     args,
   }: {
     serviceName: string
     method: string
-    args: any[]
-  }): Promise<any> {
+    args: unknown[]
+  }): Promise<T> {
     return this.queryStore!.mutate({ serviceName, method, args })
   }
 
@@ -235,16 +241,16 @@ class QueryRef<T> {
 }
 
 class QueryStore {
-  #adapter: Adapter
+  #adapter: Adapter<ServiceItem>
 
   #realtime: Set<string> = new Set()
-  #listeners: Map<string, Set<(state: QueryState<any>) => void>> = new Map()
+  #listeners: Map<string, Set<(state: QueryState<unknown>) => void>> = new Map()
   #globalListeners: Set<(state: Map<string, ServiceState<unknown>>) => void> = new Set()
 
   #state: Map<string, ServiceState<unknown>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
 
-  #eventQueue: QueuedEvent[] = []
+  #eventQueue: QueuedEvent<ServiceItem>[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number = 100
 
@@ -252,7 +258,7 @@ class QueryStore {
     adapter,
     eventBatchProcessingInterval = 100,
   }: {
-    adapter: Adapter
+    adapter: Adapter<ServiceItem>
     eventBatchProcessingInterval?: number
   }) {
     this.#adapter = adapter
@@ -289,7 +295,9 @@ class QueryStore {
             config,
             pending: !config.skip,
             dirty: false,
-            filterItem: this.#createItemFilter(desc, config),
+            filterItem: this.#createItemFilter<ServiceItem>(desc, config) as (
+              item: unknown,
+            ) => boolean,
             state: config.skip
               ? {
                   data: null,
@@ -312,7 +320,10 @@ class QueryStore {
     }
   }
 
-  #createItemFilter(desc: QueryDescriptor, config: QueryConfig): (item: any) => boolean {
+  #createItemFilter<T extends ServiceItem>(
+    desc: QueryDescriptor,
+    config: QueryConfig,
+  ): ItemMatcher<T> {
     // if this query is not using the realtime mode
     // we will never be merging events into the cache
     // and will never call the matcher, so to avoid
@@ -325,19 +336,19 @@ class QueryStore {
     }
 
     return config.matcher
-      ? config.matcher(desc.params?.query)
-      : this.#adapter.matcher(desc.params?.query)
+      ? config.matcher(desc.params?.query || {})
+      : (this.#adapter.matcher(desc.params?.query || {}) as ItemMatcher<T>)
   }
 
   #addListener<T>(queryId: string, fn: (state: QueryState<T>) => void): () => void {
     if (!this.#listeners.has(queryId)) {
       this.#listeners.set(queryId, new Set())
     }
-    this.#listeners.get(queryId)!.add(fn)
+    this.#listeners.get(queryId)!.add(fn as (state: QueryState<unknown>) => void)
     return () => {
       const listeners = this.#listeners.get(queryId)
       if (listeners) {
-        listeners.delete(fn)
+        listeners.delete(fn as (state: QueryState<unknown>) => void)
         if (listeners.size === 0) {
           this.#listeners.delete(queryId)
         }
@@ -431,7 +442,7 @@ class QueryStore {
     }
   }
 
-  #fetch(queryId: string): Promise<{ data: any; meta: any }> {
+  #fetch(queryId: string): Promise<ServiceResponse<unknown>> {
     const query = this.#getQuery(queryId)
     if (!query) {
       return Promise.reject(new Error('Query not found'))
@@ -449,16 +460,16 @@ class QueryStore {
     }
   }
 
-  mutate({
+  mutate<T extends ServiceItem = ServiceItem>({
     serviceName,
     method,
     args,
   }: {
     serviceName: string
     method: string
-    args: any[]
-  }): Promise<any> {
-    const updaters: Record<string, (item: any) => void> = {
+    args: unknown[]
+  }): Promise<T> {
+    const updaters: Record<string, (item: ServiceItem) => void> = {
       create: item => this.#processEvent(serviceName, { type: 'created', item }),
       update: item => this.#processEvent(serviceName, { type: 'updated', item }),
       patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
@@ -467,7 +478,7 @@ class QueryStore {
 
     return this.#adapter.mutate(serviceName, method, args).then(item => {
       updaters[method]?.(item)
-      return item
+      return item as T
     })
   }
 
@@ -482,10 +493,10 @@ class QueryStore {
       return
     }
 
-    const created = (item: any) => this.#queueEvent(serviceName, { type: 'created', item })
-    const updated = (item: any) => this.#queueEvent(serviceName, { type: 'updated', item })
-    const patched = (item: any) => this.#queueEvent(serviceName, { type: 'patched', item })
-    const removed = (item: any) => this.#queueEvent(serviceName, { type: 'removed', item })
+    const created = (item: ServiceItem) => this.#queueEvent(serviceName, { type: 'created', item })
+    const updated = (item: ServiceItem) => this.#queueEvent(serviceName, { type: 'updated', item })
+    const patched = (item: ServiceItem) => this.#queueEvent(serviceName, { type: 'patched', item })
+    const removed = (item: ServiceItem) => this.#queueEvent(serviceName, { type: 'removed', item })
 
     this.#adapter.subscribe(serviceName, {
       created,
@@ -496,7 +507,7 @@ class QueryStore {
     this.#realtime.add(serviceName)
   }
 
-  #processEvent(serviceName: string, event: Event): void {
+  #processEvent(serviceName: string, event: Event<ServiceItem>): void {
     this.#eventQueue.push({
       serviceName,
       type: event.type,
@@ -506,7 +517,7 @@ class QueryStore {
     this.#processQueuedEvents()
   }
 
-  #queueEvent(serviceName: string, event: Event): void {
+  #queueEvent(serviceName: string, event: Event<ServiceItem>): void {
     this.#eventQueue.push({
       serviceName,
       type: event.type,
@@ -557,7 +568,7 @@ class QueryStore {
               const itemId = this.#adapter.getId(item)
               if (itemId !== undefined) {
                 const currItem = service.entities.get(itemId)
-                if (!currItem || !this.#adapter.isItemStale(currItem, item)) {
+                if (!currItem || !this.#adapter.isItemStale(currItem as ServiceItem, item)) {
                   service.entities.set(itemId, item)
                   appliedEvents.push(event)
                 }
@@ -629,8 +640,8 @@ class QueryStore {
                 data:
                   query.desc.method === 'get'
                     ? null
-                    : (query.state.data as any[]).filter(
-                        (x: any) => this.#adapter.getId(x) !== itemId,
+                    : (query.state.data as unknown[]).filter(
+                        (x: unknown) => this.#adapter.getId(x as ServiceItem) !== itemId,
                       ),
               },
             })
@@ -645,8 +656,8 @@ class QueryStore {
                 data:
                   query.desc.method === 'get'
                     ? item
-                    : (query.state.data as any[]).map((x: any) =>
-                        this.#adapter.getId(x) === itemId ? item : x,
+                    : (query.state.data as unknown[]).map((x: unknown) =>
+                        this.#adapter.getId(x as ServiceItem) === itemId ? item : x,
                       ),
               },
             })
@@ -657,7 +668,7 @@ class QueryStore {
               state: {
                 ...query.state,
                 meta: this.#adapter.itemAdded(query.state.meta),
-                data: (query.state.data as any[]).concat(item),
+                data: (query.state.data as unknown[]).concat(item),
               },
             })
             itemQueryIndex.add(queryId)
@@ -767,7 +778,7 @@ class QueryStore {
     })
   }
 
-  #fetched({ queryId, result }: { queryId: string; result: { data: any; meta: any } }): void {
+  #fetched({ queryId, result }: { queryId: string; result: ServiceResponse<unknown> }): void {
     let shouldRefetch = false
 
     this.#transactOverService(queryId, (service, query) => {
@@ -806,7 +817,7 @@ class QueryStore {
     }
   }
 
-  #fetchFailed({ queryId, error }: { queryId: string; error: any }): void {
+  #fetchFailed({ queryId, error }: { queryId: string; error: FigbirdError }): void {
     let shouldRefetch = false
 
     this.#transactOverService(queryId, (service, query) => {
@@ -838,7 +849,7 @@ class QueryStore {
         if (query) {
           if (query.state.data) {
             for (const item of getItems(query)) {
-              const id = this.#adapter.getId(item)
+              const id = this.#adapter.getId(item as ServiceItem)
               if (id !== undefined && service.itemQueryIndex.has(id)) {
                 service.itemQueryIndex.get(id)!.delete(queryId)
               }
