@@ -1,17 +1,16 @@
 import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useFigbird } from './react.js'
-import type { FigbirdError, Item } from '../types.js'
 
 interface MutationState<T> {
   status: 'idle' | 'loading' | 'success' | 'error'
   data: T | null
-  error: FigbirdError
+  error: unknown
 }
 
 type MutationAction<T> =
   | { type: 'mutating' }
   | { type: 'success'; payload: T }
-  | { type: 'error'; payload: FigbirdError }
+  | { type: 'error'; payload: unknown }
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
@@ -22,7 +21,7 @@ interface UseMutationResult<T> {
   remove: (...args: unknown[]) => Promise<T>
   data: T | null
   status: 'idle' | 'loading' | 'success' | 'error'
-  error: FigbirdError
+  error: unknown
 }
 
 /**
@@ -34,7 +33,7 @@ interface UseMutationResult<T> {
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation<T extends Item>(serviceName: string): UseMutationResult<T> {
+export function useMutation<T>(serviceName: string): UseMutationResult<T> {
   const figbird = useFigbird()
 
   const [state, dispatch] = useReducer(mutationReducer<T>, {
@@ -62,7 +61,7 @@ export function useMutation<T extends Item>(serviceName: string): UseMutationRes
         return item
       } catch (err) {
         if (mountedRef.current) {
-          dispatch({ type: 'error', payload: err as FigbirdError })
+          dispatch({ type: 'error', payload: err })
         }
         throw err
       }
