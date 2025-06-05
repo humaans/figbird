@@ -1,8 +1,8 @@
 import { hashObject } from './hash.js'
 import type {
   ServiceItem,
-  FeathersParams,
-  FeathersFindMeta,
+  FigbirdParams,
+  FigbirdFindMeta,
   FigbirdError,
   EventType,
   EventHandlers,
@@ -16,7 +16,7 @@ export interface QueryDescriptor {
   serviceName: string
   method: 'get' | 'find'
   resourceId?: string | number
-  params?: FeathersParams
+  params?: FigbirdParams
 }
 
 export interface QueryConfig {
@@ -29,7 +29,7 @@ export interface QueryConfig {
 
 interface QueryState<T> {
   data: T | null
-  meta: FeathersFindMeta
+  meta: FigbirdFindMeta
   status: 'idle' | 'loading' | 'success' | 'error'
   isFetching: boolean
   error: FigbirdError
@@ -66,10 +66,10 @@ interface Adapter<T extends ServiceItem = ServiceItem> {
   get(
     serviceName: string,
     resourceId: string | number,
-    params?: FeathersParams,
+    params?: FigbirdParams,
   ): Promise<ServiceResponse<T>>
-  find(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>>
-  findAll(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>>
+  find(serviceName: string, params?: FigbirdParams): Promise<FindResponse<T>>
+  findAll(serviceName: string, params?: FigbirdParams): Promise<FindResponse<T>>
   mutate(serviceName: string, method: string, args: unknown[]): Promise<T>
   subscribe(serviceName: string, handlers: EventHandlers<T>): () => void
   getId(item: T): string | number | undefined
@@ -78,8 +78,8 @@ interface Adapter<T extends ServiceItem = ServiceItem> {
     query: Record<string, unknown> | null | undefined,
     options?: Record<string, unknown>,
   ): ItemMatcher<T>
-  itemAdded(meta: FeathersFindMeta): FeathersFindMeta
-  itemRemoved(meta: FeathersFindMeta): FeathersFindMeta
+  itemAdded(meta: FigbirdFindMeta): FigbirdFindMeta
+  itemRemoved(meta: FigbirdFindMeta): FigbirdFindMeta
 }
 
 interface CombinedConfig extends QueryDescriptor, QueryConfig {
