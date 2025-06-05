@@ -15,6 +15,7 @@ export default [
     settings: {
       react: {
         version: 'detect', // Automatically detects the React version
+        runtime: 'automatic', // Using new JSX transform
       },
     },
   },
@@ -35,6 +36,7 @@ export default [
     settings: {
       react: {
         version: 'detect', // Automatically detects the React version
+        runtime: 'automatic', // Using new JSX transform
       },
     },
   },
@@ -51,6 +53,7 @@ export default [
   {
     rules: {
       'react/prop-types': 'off',
+      'react/react-in-jsx-scope': 'off',
     },
   },
 ]

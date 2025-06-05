@@ -1,6 +1,29 @@
 import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useFigbird } from './react.js'
 
+interface MutationState {
+  status: 'idle' | 'loading' | 'success' | 'error'
+  data: any
+  error: any
+}
+
+type MutationAction =
+  | { type: 'mutating' }
+  | { type: 'success'; payload: any }
+  | { type: 'error'; payload: any }
+
+type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
+
+interface UseMutationResult {
+  create: (...args: any[]) => Promise<any>
+  update: (...args: any[]) => Promise<any>
+  patch: (...args: any[]) => Promise<any>
+  remove: (...args: any[]) => Promise<any>
+  data: any
+  status: 'idle' | 'loading' | 'success' | 'error'
+  error: any
+}
+
 /**
  * Simple mutation hook exposing crud methods
  * of any feathers service. The resulting state
@@ -10,7 +33,7 @@ import { useFigbird } from './react.js'
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation(serviceName) {
+export function useMutation(serviceName: string): UseMutationResult {
   const figbird = useFigbird()
 
   const [state, dispatch] = useReducer(mutationReducer, {
@@ -28,7 +51,7 @@ export function useMutation(serviceName) {
   }, [])
 
   const mutate = useCallback(
-    async (method, ...args) => {
+    async (method: MutationMethod, ...args: any[]): Promise<any> => {
       dispatch({ type: 'mutating' })
       try {
         const item = await figbird.mutate({ serviceName, method, args })
@@ -46,10 +69,10 @@ export function useMutation(serviceName) {
     [figbird, serviceName, dispatch, mountedRef],
   )
 
-  const create = useCallback((...args) => mutate('create', ...args), [mutate])
-  const update = useCallback((...args) => mutate('update', ...args), [mutate])
-  const patch = useCallback((...args) => mutate('patch', ...args), [mutate])
-  const remove = useCallback((...args) => mutate('remove', ...args), [mutate])
+  const create = useCallback((...args: any[]) => mutate('create', ...args), [mutate])
+  const update = useCallback((...args: any[]) => mutate('update', ...args), [mutate])
+  const patch = useCallback((...args: any[]) => mutate('patch', ...args), [mutate])
+  const remove = useCallback((...args: any[]) => mutate('remove', ...args), [mutate])
 
   return useMemo(
     () => ({
@@ -65,7 +88,7 @@ export function useMutation(serviceName) {
   )
 }
 
-function mutationReducer(state, action) {
+function mutationReducer(state: MutationState, action: MutationAction): MutationState {
   switch (action.type) {
     case 'mutating':
       return { ...state, status: 'loading', data: null, error: null }
@@ -73,5 +96,7 @@ function mutationReducer(state, action) {
       return { ...state, status: 'success', data: action.payload }
     case 'error':
       return { ...state, status: 'error', error: action.payload }
+    default:
+      return state
   }
 }

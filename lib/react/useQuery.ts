@@ -2,12 +2,25 @@ import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig } from '../core/figbird.js'
 import { useFigbird } from './react.js'
 
-export function useGet(serviceName, resourceId, params = {}) {
+interface QueryResult {
+  data: any
+  meta: Record<string, any>
+  status: 'idle' | 'loading' | 'success' | 'error'
+  isFetching: boolean
+  error: any
+  refetch: () => void
+}
+
+export function useGet(
+  serviceName: string,
+  resourceId: string | number,
+  params: Record<string, any> = {},
+): QueryResult {
   const { desc, config } = splitConfig({ serviceName, method: 'get', resourceId, ...params })
   return useQuery(desc, config)
 }
 
-export function useFind(serviceName, params = {}) {
+export function useFind(serviceName: string, params: Record<string, any> = {}): QueryResult {
   const { desc, config } = splitConfig({ serviceName, method: 'find', ...params })
   return useQuery(desc, config)
 }
@@ -24,14 +37,14 @@ let _seq = 0
   })
 
 */
-export function useQuery(desc, config) {
+export function useQuery(desc: any, config: any): QueryResult {
   const figbird = useFigbird()
 
   // a slightly hacky workaround for network-only queries where we want to keep
   // the query.hash() stable between re-renders for this component, but unique
   // to each component - network-only queries are not shared between components
   // - they could be, and we might change that in the future
-  const seqRef = useRef()
+  const seqRef = useRef<number | undefined>(undefined)
   if (seqRef.current === undefined && config.fetchPolicy === 'network-only') {
     seqRef.current = _seq++
   }
@@ -49,12 +62,12 @@ export function useQuery(desc, config) {
   // a bit of React foo to create stable fn references
   const q = useMemo(() => _q, [_q.hash()])
   const refetch = useCallback(() => q.refetch(), [q])
-  const subscribe = useCallback(fn => q.subscribe(fn), [q])
+  const subscribe = useCallback((fn: (state: any) => void) => q.subscribe(fn), [q])
   const getSnapshot = useCallback(() => q.getSnapshot(), [q])
 
   // we subscribe to the query state changes, this includes both going from
   // loading -> success state, but also for any realtime data updates
   const queryResult = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-  return useMemo(() => ({ ...queryResult, refetch }), [queryResult, refetch])
+  return useMemo(() => ({ ...queryResult, refetch }) as QueryResult, [queryResult, refetch])
 }
