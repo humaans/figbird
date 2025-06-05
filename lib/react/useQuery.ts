@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
-import { splitConfig } from '../core/figbird.js'
+import { splitConfig, type QueryDescriptor, type QueryConfig } from '../core/figbird.js'
 import { useFigbird } from './react.js'
 
 interface QueryResult<T> {
@@ -40,7 +40,7 @@ let _seq = 0
   })
 
 */
-export function useQuery<T>(desc: any, config: any): QueryResult<T> {
+export function useQuery<T>(desc: QueryDescriptor, config: QueryConfig): QueryResult<T> {
   const figbird = useFigbird()
 
   // a slightly hacky workaround for network-only queries where we want to keep
