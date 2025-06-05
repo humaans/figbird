@@ -3,12 +3,15 @@
   "version": "0.20.0-6",
   "description": "Effortless realtime data management for React + Feathers applications.",
   "type": "module",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/esm/index.d.ts",
       "require": "./dist/cjs/index.js",
       "import": "./dist/esm/index.js"
     },
     "./*": {
+      "types": "./dist/esm/*.d.ts",
       "require": "./dist/cjs/*.js",
       "import": "./dist/esm/*.js"
     }
