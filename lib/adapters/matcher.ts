@@ -6,7 +6,7 @@ interface Query {
 
 type QueryValue = string | number | boolean | null | undefined | Query | Query[]
 
-interface PrepareQueryOptions {
+export interface PrepareQueryOptions {
   filters?: string[]
   operators?: string[]
 }
@@ -58,12 +58,13 @@ function isObject(obj: unknown): obj is Query {
   return typeof obj === 'object' && obj !== null && !Array.isArray(obj)
 }
 
-export function matcher<T = any>(
+export function matcher<T>(
   query: Query | null | undefined,
   options?: PrepareQueryOptions,
 ): (item: T) => boolean {
   if (!query || Object.keys(query).length === 0) return () => true
   const preparedQuery = prepareQuery(query, options)
-  const sifter = sift(preparedQuery as any)
+  if (!preparedQuery) return () => true
+  const sifter = sift(preparedQuery)
   return (item: T) => sifter(item)
 }

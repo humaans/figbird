@@ -1,6 +1,12 @@
 import { useContext, createContext, ReactNode } from 'react'
 import { Figbird } from '../core/figbird.js'
 
+// Type for the Feathers client object
+interface FeathersClientLike {
+  service(name: string): unknown
+  [key: string]: unknown
+}
+
 const FigbirdContext = createContext<Figbird | undefined>(undefined)
 
 export function useFigbird(): Figbird {
@@ -14,9 +20,10 @@ export function useFigbird(): Figbird {
 /**
  * Specific to Feathers adapter. Might remove in the future.
  */
-export function useFeathers(): any {
+export function useFeathers(): FeathersClientLike | undefined {
   const figbird = useFigbird()
-  return (figbird.adapter as any)?.feathers
+  const adapter = figbird.adapter as { feathers?: FeathersClientLike }
+  return adapter?.feathers
 }
 
 interface ProviderProps {

@@ -1,20 +1,21 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig, type QueryDescriptor, type QueryConfig } from '../core/figbird.js'
 import { useFigbird } from './react.js'
+import type { FeathersFindMeta, FigbirdError } from '../types.js'
 
 interface QueryResult<T> {
   data: T | null
-  meta: Record<string, any>
+  meta: FeathersFindMeta
   status: 'idle' | 'loading' | 'success' | 'error'
   isFetching: boolean
-  error: any
+  error: FigbirdError
   refetch: () => void
 }
 
 export function useGet<T>(
   serviceName: string,
   resourceId: string | number,
-  params: Record<string, any> = {},
+  params: Record<string, unknown> = {},
 ): QueryResult<T> {
   const { desc, config } = splitConfig({ serviceName, method: 'get', resourceId, ...params })
   return useQuery<T>(desc, config)
@@ -22,7 +23,7 @@ export function useGet<T>(
 
 export function useFind<T>(
   serviceName: string,
-  params: Record<string, any> = {},
+  params: Record<string, unknown> = {},
 ): QueryResult<T[]> {
   const { desc, config } = splitConfig({ serviceName, method: 'find', ...params })
   return useQuery<T[]>(desc, config)
@@ -65,7 +66,7 @@ export function useQuery<T>(desc: QueryDescriptor, config: QueryConfig): QueryRe
   // a bit of React foo to create stable fn references
   const q = useMemo(() => _q, [_q.hash()])
   const refetch = useCallback(() => q.refetch(), [q])
-  const subscribe = useCallback((fn: (state: any) => void) => q.subscribe(fn), [q])
+  const subscribe = useCallback((fn: (state: unknown) => void) => q.subscribe(fn), [q])
   const getSnapshot = useCallback(() => q.getSnapshot(), [q])
 
   // we subscribe to the query state changes, this includes both going from
