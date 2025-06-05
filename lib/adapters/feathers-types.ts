@@ -1,7 +1,5 @@
 // Feathers-specific types for the Feathers adapter
 
-import type { Item, FindMeta, QueryParams } from '../types.js'
-
 /**
  * Feathers query parameters
  */
@@ -18,30 +16,33 @@ export interface FeathersQuery {
 /**
  * Feathers service method parameters
  */
-export interface FeathersParams extends QueryParams {
+export interface FeathersParams {
   query?: FeathersQuery
   paginate?: boolean | { default?: boolean; max?: number }
   provider?: string
   route?: Record<string, string>
   connection?: unknown
   headers?: Record<string, string>
+  [key: string]: unknown
 }
 
 /**
  * Feathers-specific metadata for find operations
  */
-export interface FeathersFindMeta extends FindMeta {
+export interface FeathersFindMeta {
   total?: number
   limit?: number
   skip?: number
+  [key: string]: unknown
 }
 
 /**
  * Feathers item with standard id fields
  */
-export interface FeathersItem extends Item {
+export interface FeathersItem {
   id?: string | number
   _id?: string | number
+  [key: string]: unknown
 }
 
 /**

@@ -7,13 +7,11 @@ import type {
   FeathersService,
   FeathersClient,
 } from './feathers-types.js'
-import type {
-  EventHandlers,
-  IdExtractor,
-  UpdatedAtExtractor,
-  ServiceResponse,
-  FindResponse,
-} from '../types.js'
+import type { Response, EventHandlers } from '../types.js'
+import type { InternalAdapter } from '../core/internal-types.js'
+
+type IdExtractor<T> = (item: T) => string | number | undefined
+type UpdatedAtExtractor<T> = (item: T) => string | Date | number | undefined
 
 type IdFieldType<T = FeathersItem> = string | IdExtractor<T>
 type UpdatedAtFieldType<T = FeathersItem> = string | UpdatedAtExtractor<T>
@@ -25,7 +23,9 @@ interface FeathersAdapterOptions<T = FeathersItem> {
   defaultPageSizeWhenFetchingAll?: number
 }
 
-export class FeathersAdapter<T extends FeathersItem = FeathersItem> {
+export class FeathersAdapter<T extends FeathersItem = FeathersItem>
+  implements InternalAdapter<T, FeathersParams>
+{
   feathers?: FeathersClient
   #idField: IdFieldType<T>
   #updatedAtField: UpdatedAtFieldType<T>
@@ -57,12 +57,12 @@ export class FeathersAdapter<T extends FeathersItem = FeathersItem> {
     serviceName: string,
     resourceId: string | number,
     params?: FeathersParams,
-  ): Promise<ServiceResponse<T>> {
+  ): Promise<Response<T>> {
     const res = await this.#service(serviceName).get(resourceId, params)
     return { data: res, meta: {} }
   }
 
-  async #_find(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>> {
+  async #_find(serviceName: string, params?: FeathersParams): Promise<Response<T[]>> {
     const res = await this.#service(serviceName).find(params)
     if (Array.isArray(res)) {
       return { data: res, meta: {} }
@@ -72,7 +72,7 @@ export class FeathersAdapter<T extends FeathersItem = FeathersItem> {
     }
   }
 
-  async find(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>> {
+  async find(serviceName: string, params?: FeathersParams): Promise<Response<T[]>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
       params.query = { ...params.query, $limit: this.#defaultPageSize }
@@ -80,7 +80,7 @@ export class FeathersAdapter<T extends FeathersItem = FeathersItem> {
     return this.#_find(serviceName, params)
   }
 
-  findAll(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>> {
+  findAll(serviceName: string, params?: FeathersParams): Promise<Response<T[]>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     if (defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
@@ -89,18 +89,21 @@ export class FeathersAdapter<T extends FeathersItem = FeathersItem> {
 
     return new Promise((resolve, reject) => {
       let $skip = 0
-      const result: FindResponse<T> = {
+      const result: Response<T[]> = {
         data: [],
         meta: { skip: 0 },
       }
 
-      const resolveOrFetchNext = ({ data, meta }: FindResponse<T>) => {
+      const resolveOrFetchNext = ({ data, meta }: Response<T[]>) => {
         if (
           data.length === 0 ||
-          (typeof meta.limit === 'number' && meta.limit >= 0 && data.length < meta.limit) ||
+          (meta && typeof meta.limit === 'number' && meta.limit >= 0 && data.length < meta.limit) ||
           // allow total to be undefined or -1 to indicate
           // that total will not be available on this endpoint
-          (typeof meta.total === 'number' && meta.total >= 0 && result.data.length >= meta.total)
+          (meta &&
+            typeof meta.total === 'number' &&
+            meta.total >= 0 &&
+            result.data.length >= meta.total)
         ) {
           resolve(result)
         } else {
@@ -115,10 +118,10 @@ export class FeathersAdapter<T extends FeathersItem = FeathersItem> {
           query: { ...params?.query, $skip },
         })
           .then(({ data, meta }) => {
-            if (meta.limit !== undefined) {
+            if (meta && meta.limit !== undefined && result.meta) {
               result.meta.limit = meta.limit
             }
-            if (meta.total !== undefined) {
+            if (meta && meta.total !== undefined && result.meta) {
               result.meta.total = meta.total
             }
             result.data = result.data.concat(data)
