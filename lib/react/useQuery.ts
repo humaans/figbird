@@ -1,14 +1,13 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig, type QueryDescriptor, type QueryConfig } from '../core/figbird.js'
 import { useFigbird } from './react.js'
-import type { FindMeta, FigbirdError } from '../types.js'
 
 interface QueryResult<T> {
   data: T | null
-  meta: FindMeta
+  meta: Record<string, unknown>
   status: 'idle' | 'loading' | 'success' | 'error'
   isFetching: boolean
-  error: FigbirdError
+  error: unknown
   refetch: () => void
 }
 
