@@ -3,15 +3,18 @@
   "version": "0.20.0-8",
   "description": "Effortless realtime data management for React + Feathers applications.",
   "type": "module",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
     "./package-lock.json": "./package-lock.json",
     "./tsconfig.json": "./tsconfig.json",
     ".": {
+      "types": "./dist/esm/index.d.ts",
       "require": "./dist/cjs/index.js",
       "import": "./dist/esm/index.js"
     },
     "./*": {
+      "types": "./dist/esm/*.d.ts",
       "require": "./dist/cjs/*.js",
       "import": "./dist/esm/*.js"
     }
