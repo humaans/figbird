@@ -1,10 +1,13 @@
 import { matcher, type PrepareQueryOptions } from './matcher.js'
 import type {
-  ServiceItem,
+  FeathersItem,
   TimestampedItem,
-  FigbirdParams,
-  FigbirdFindMeta,
-  EventHandler,
+  FeathersParams,
+  FeathersFindMeta,
+  FeathersService,
+  FeathersClient,
+} from './feathers-types.js'
+import type {
   EventHandlers,
   IdExtractor,
   UpdatedAtExtractor,
@@ -12,36 +15,17 @@ import type {
   FindResponse,
 } from '../types.js'
 
-// Type definitions
-interface FeathersService<T = ServiceItem> {
-  get(id: string | number, params?: FigbirdParams): Promise<T>
-  find(
-    params?: FigbirdParams,
-  ): Promise<{ data: T[]; total?: number; limit?: number; skip?: number } | T[]>
-  create(data: Partial<T>, params?: FigbirdParams): Promise<T>
-  update(id: string | number, data: Partial<T>, params?: FigbirdParams): Promise<T>
-  patch(id: string | number, data: Partial<T>, params?: FigbirdParams): Promise<T>
-  remove(id: string | number, params?: FigbirdParams): Promise<T>
-  on(event: string, listener: EventHandler<T>): void
-  off(event: string, listener: EventHandler<T>): void
-  [method: string]: unknown
-}
+type IdFieldType<T = FeathersItem> = string | IdExtractor<T>
+type UpdatedAtFieldType<T = FeathersItem> = string | UpdatedAtExtractor<T>
 
-interface FeathersClient {
-  service(name: string): FeathersService
-}
-
-type IdFieldType<T = ServiceItem> = string | IdExtractor<T>
-type UpdatedAtFieldType<T = ServiceItem> = string | UpdatedAtExtractor<T>
-
-interface FeathersAdapterOptions<T = ServiceItem> {
+interface FeathersAdapterOptions<T = FeathersItem> {
   idField?: IdFieldType<T>
   updatedAtField?: UpdatedAtFieldType<T>
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
 }
 
-export class FeathersAdapter<T extends ServiceItem = ServiceItem> {
+export class FeathersAdapter<T extends FeathersItem = FeathersItem> {
   feathers?: FeathersClient
   #idField: IdFieldType<T>
   #updatedAtField: UpdatedAtFieldType<T>
@@ -72,13 +56,13 @@ export class FeathersAdapter<T extends ServiceItem = ServiceItem> {
   async get(
     serviceName: string,
     resourceId: string | number,
-    params?: FigbirdParams,
+    params?: FeathersParams,
   ): Promise<ServiceResponse<T>> {
     const res = await this.#service(serviceName).get(resourceId, params)
     return { data: res, meta: {} }
   }
 
-  async #_find(serviceName: string, params?: FigbirdParams): Promise<FindResponse<T>> {
+  async #_find(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>> {
     const res = await this.#service(serviceName).find(params)
     if (Array.isArray(res)) {
       return { data: res, meta: {} }
@@ -88,7 +72,7 @@ export class FeathersAdapter<T extends ServiceItem = ServiceItem> {
     }
   }
 
-  async find(serviceName: string, params?: FigbirdParams): Promise<FindResponse<T>> {
+  async find(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
       params.query = { ...params.query, $limit: this.#defaultPageSize }
@@ -96,7 +80,7 @@ export class FeathersAdapter<T extends ServiceItem = ServiceItem> {
     return this.#_find(serviceName, params)
   }
 
-  findAll(serviceName: string, params?: FigbirdParams): Promise<FindResponse<T>> {
+  findAll(serviceName: string, params?: FeathersParams): Promise<FindResponse<T>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     if (defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
@@ -159,16 +143,16 @@ export class FeathersAdapter<T extends ServiceItem = ServiceItem> {
   subscribe(serviceName: string, handlers: EventHandlers<T>): () => void {
     const service = this.#service(serviceName)
 
-    service.on('created', handlers.created)
-    service.on('updated', handlers.updated)
-    service.on('patched', handlers.patched)
-    service.on('removed', handlers.removed)
+    service.on('created', handlers.created as (data: T) => void)
+    service.on('updated', handlers.updated as (data: T) => void)
+    service.on('patched', handlers.patched as (data: T) => void)
+    service.on('removed', handlers.removed as (data: T) => void)
 
     return () => {
-      service.off('created', handlers.created)
-      service.off('updated', handlers.updated)
-      service.off('patched', handlers.patched)
-      service.off('removed', handlers.removed)
+      service.off('created', handlers.created as (data: T) => void)
+      service.off('updated', handlers.updated as (data: T) => void)
+      service.off('patched', handlers.patched as (data: T) => void)
+      service.off('removed', handlers.removed as (data: T) => void)
     }
   }
 
@@ -204,7 +188,7 @@ export class FeathersAdapter<T extends ServiceItem = ServiceItem> {
     return matcher<T>(query as Parameters<typeof matcher>[0], options)
   }
 
-  itemAdded(meta: FigbirdFindMeta): FigbirdFindMeta {
+  itemAdded(meta: FeathersFindMeta): FeathersFindMeta {
     if (meta?.total && typeof meta.total === 'number' && meta?.total >= 0) {
       return { ...meta, total: meta.total + 1 }
     } else {
@@ -212,7 +196,7 @@ export class FeathersAdapter<T extends ServiceItem = ServiceItem> {
     }
   }
 
-  itemRemoved(meta: FigbirdFindMeta): FigbirdFindMeta {
+  itemRemoved(meta: FeathersFindMeta): FeathersFindMeta {
     if (meta?.total && typeof meta.total === 'number' && meta?.total > 0) {
       return { ...meta, total: meta.total - 1 }
     } else {

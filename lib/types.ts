@@ -1,69 +1,36 @@
 // Common types used throughout the Figbird library
 
 /**
- * Represents a query parameter structure for Feathers services
+ * Generic query parameters that adapters can extend
  */
-export interface FeathersQuery {
-  $limit?: number
-  $skip?: number
-  $sort?: Record<string, 1 | -1>
-  $select?: string[]
-  $or?: Array<Record<string, unknown>>
-  $and?: Array<Record<string, unknown>>
+export interface QueryParams {
+  query?: Record<string, unknown>
   [key: string]: unknown
 }
 
 /**
- * Represents the params object passed to Feathers service methods
+ * Generic metadata returned from find operations
  */
-export interface FigbirdParams {
-  query?: FeathersQuery
-  paginate?: boolean | { default?: boolean; max?: number }
-  provider?: string
-  route?: Record<string, string>
-  connection?: unknown
-  headers?: Record<string, string>
+export interface FindMeta {
   [key: string]: unknown
 }
 
 /**
- * Represents metadata returned from Feathers find operations
+ * Base interface for items. Adapters should extend this with their own ID requirements
  */
-export interface FigbirdFindMeta {
-  total?: number
-  limit?: number
-  skip?: number
+export interface Item {
   [key: string]: unknown
-}
-
-/**
- * Base interface for service items with an ID
- */
-export interface ServiceItem {
-  id?: string | number
-  _id?: string | number
-  [key: string]: unknown
-}
-
-/**
- * Interface for items with timestamps
- */
-export interface TimestampedItem extends ServiceItem {
-  updatedAt?: string | Date | number
-  updated_at?: string | Date | number
-  createdAt?: string | Date | number
-  created_at?: string | Date | number
 }
 
 /**
  * Type for ID extraction functions
  */
-export type IdExtractor<T = ServiceItem> = (item: T) => string | number | undefined
+export type IdExtractor<T = Item> = (item: T) => string | number | undefined
 
 /**
  * Type for updatedAt extraction functions
  */
-export type UpdatedAtExtractor<T = ServiceItem> = (item: T) => string | Date | number | undefined
+export type UpdatedAtExtractor<T = Item> = (item: T) => string | Date | number | undefined
 
 /**
  * Event types supported by Figbird
@@ -73,7 +40,7 @@ export type EventType = 'created' | 'updated' | 'patched' | 'removed'
 /**
  * Event payload structure
  */
-export interface EventPayload<T = ServiceItem> {
+export interface EventPayload<T = Item> {
   type: EventType
   item: T
 }
@@ -84,27 +51,6 @@ export interface EventPayload<T = ServiceItem> {
 export type CrudMethod = 'create' | 'update' | 'patch' | 'remove'
 
 /**
- * Method arguments for different CRUD operations
- */
-export type CreateArgs<T = ServiceItem> = [data: Partial<T>, params?: FigbirdParams]
-export type UpdateArgs<T = ServiceItem> = [
-  id: string | number,
-  data: Partial<T>,
-  params?: FigbirdParams,
-]
-export type PatchArgs<T = ServiceItem> = [
-  id: string | number,
-  data: Partial<T>,
-  params?: FigbirdParams,
-]
-export type RemoveArgs = [id: string | number, params?: FigbirdParams]
-
-/**
- * Union type for all CRUD arguments
- */
-export type CrudArgs<T = ServiceItem> = CreateArgs<T> | UpdateArgs<T> | PatchArgs<T> | RemoveArgs
-
-/**
  * Type for error objects
  */
 export type FigbirdError = Error | { message?: string; code?: number | string } | unknown
@@ -112,8 +58,7 @@ export type FigbirdError = Error | { message?: string; code?: number | string } 
 /**
  * Type for matcher functions
  */
-export type ItemMatcher<T = ServiceItem> = (item: T) => boolean
-
+export type ItemMatcher<T = Item> = (item: T) => boolean
 /**
  * Generic service response wrapper
  */
@@ -127,18 +72,18 @@ export interface ServiceResponse<T> {
  */
 export interface FindResponse<T> {
   data: T[]
-  meta: FigbirdFindMeta
+  meta: FindMeta
 }
 
 /**
  * Event handler function type
  */
-export type EventHandler<T = ServiceItem> = (item: T) => void
+export type EventHandler<T = Item> = (item: T) => void
 
 /**
  * Event handlers map
  */
-export interface EventHandlers<T = ServiceItem> {
+export interface EventHandlers<T = Item> {
   created: EventHandler<T>
   updated: EventHandler<T>
   patched: EventHandler<T>
