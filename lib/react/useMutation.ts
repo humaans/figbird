@@ -1,6 +1,6 @@
 import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useFigbird } from './react.js'
-import type { FigbirdError, ServiceItem } from '../types.js'
+import type { FigbirdError, Item } from '../types.js'
 
 interface MutationState<T> {
   status: 'idle' | 'loading' | 'success' | 'error'
@@ -34,7 +34,7 @@ interface UseMutationResult<T> {
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation<T extends ServiceItem>(serviceName: string): UseMutationResult<T> {
+export function useMutation<T extends Item>(serviceName: string): UseMutationResult<T> {
   const figbird = useFigbird()
 
   const [state, dispatch] = useReducer(mutationReducer<T>, {
