@@ -1,14 +1,14 @@
 import { hashObject } from './hash.js'
 
 // Type definitions
-interface QueryDescriptor {
+export interface QueryDescriptor {
   serviceName: string
   method: 'get' | 'find'
   resourceId?: string | number
   params?: any
 }
 
-interface QueryConfig {
+export interface QueryConfig {
   skip?: boolean
   realtime?: 'merge' | 'refetch' | 'disabled'
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
