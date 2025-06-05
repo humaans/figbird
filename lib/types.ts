@@ -16,7 +16,7 @@ export interface FeathersQuery {
 /**
  * Represents the params object passed to Feathers service methods
  */
-export interface FeathersParams {
+export interface FigbirdParams {
   query?: FeathersQuery
   paginate?: boolean | { default?: boolean; max?: number }
   provider?: string
@@ -29,7 +29,7 @@ export interface FeathersParams {
 /**
  * Represents metadata returned from Feathers find operations
  */
-export interface FeathersFindMeta {
+export interface FigbirdFindMeta {
   total?: number
   limit?: number
   skip?: number
@@ -86,18 +86,18 @@ export type CrudMethod = 'create' | 'update' | 'patch' | 'remove'
 /**
  * Method arguments for different CRUD operations
  */
-export type CreateArgs<T = ServiceItem> = [data: Partial<T>, params?: FeathersParams]
+export type CreateArgs<T = ServiceItem> = [data: Partial<T>, params?: FigbirdParams]
 export type UpdateArgs<T = ServiceItem> = [
   id: string | number,
   data: Partial<T>,
-  params?: FeathersParams,
+  params?: FigbirdParams,
 ]
 export type PatchArgs<T = ServiceItem> = [
   id: string | number,
   data: Partial<T>,
-  params?: FeathersParams,
+  params?: FigbirdParams,
 ]
-export type RemoveArgs = [id: string | number, params?: FeathersParams]
+export type RemoveArgs = [id: string | number, params?: FigbirdParams]
 
 /**
  * Union type for all CRUD arguments
@@ -127,7 +127,7 @@ export interface ServiceResponse<T> {
  */
 export interface FindResponse<T> {
   data: T[]
-  meta: FeathersFindMeta
+  meta: FigbirdFindMeta
 }
 
 /**
