@@ -1,25 +1,25 @@
 import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useFigbird } from './react.js'
 
-interface MutationState {
+interface MutationState<T> {
   status: 'idle' | 'loading' | 'success' | 'error'
-  data: any
+  data: T | null
   error: any
 }
 
-type MutationAction =
+type MutationAction<T> =
   | { type: 'mutating' }
-  | { type: 'success'; payload: any }
+  | { type: 'success'; payload: T }
   | { type: 'error'; payload: any }
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
-interface UseMutationResult {
-  create: (...args: any[]) => Promise<any>
-  update: (...args: any[]) => Promise<any>
-  patch: (...args: any[]) => Promise<any>
-  remove: (...args: any[]) => Promise<any>
-  data: any
+interface UseMutationResult<T> {
+  create: (...args: any[]) => Promise<T>
+  update: (...args: any[]) => Promise<T>
+  patch: (...args: any[]) => Promise<T>
+  remove: (...args: any[]) => Promise<T>
+  data: T | null
   status: 'idle' | 'loading' | 'success' | 'error'
   error: any
 }
@@ -33,10 +33,10 @@ interface UseMutationResult {
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation(serviceName: string): UseMutationResult {
+export function useMutation<T>(serviceName: string): UseMutationResult<T> {
   const figbird = useFigbird()
 
-  const [state, dispatch] = useReducer(mutationReducer, {
+  const [state, dispatch] = useReducer(mutationReducer<T>, {
     status: 'idle',
     data: null,
     error: null,
@@ -51,7 +51,7 @@ export function useMutation(serviceName: string): UseMutationResult {
   }, [])
 
   const mutate = useCallback(
-    async (method: MutationMethod, ...args: any[]): Promise<any> => {
+    async (method: MutationMethod, ...args: any[]): Promise<T> => {
       dispatch({ type: 'mutating' })
       try {
         const item = await figbird.mutate({ serviceName, method, args })
@@ -88,7 +88,7 @@ export function useMutation(serviceName: string): UseMutationResult {
   )
 }
 
-function mutationReducer(state: MutationState, action: MutationAction): MutationState {
+function mutationReducer<T>(state: MutationState<T>, action: MutationAction<T>): MutationState<T> {
   switch (action.type) {
     case 'mutating':
       return { ...state, status: 'loading', data: null, error: null }

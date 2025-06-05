@@ -2,8 +2,8 @@ import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig } from '../core/figbird.js'
 import { useFigbird } from './react.js'
 
-interface QueryResult {
-  data: any
+interface QueryResult<T> {
+  data: T | null
   meta: Record<string, any>
   status: 'idle' | 'loading' | 'success' | 'error'
   isFetching: boolean
@@ -11,18 +11,21 @@ interface QueryResult {
   refetch: () => void
 }
 
-export function useGet(
+export function useGet<T>(
   serviceName: string,
   resourceId: string | number,
   params: Record<string, any> = {},
-): QueryResult {
+): QueryResult<T> {
   const { desc, config } = splitConfig({ serviceName, method: 'get', resourceId, ...params })
-  return useQuery(desc, config)
+  return useQuery<T>(desc, config)
 }
 
-export function useFind(serviceName: string, params: Record<string, any> = {}): QueryResult {
+export function useFind<T>(
+  serviceName: string,
+  params: Record<string, any> = {},
+): QueryResult<T[]> {
   const { desc, config } = splitConfig({ serviceName, method: 'find', ...params })
-  return useQuery(desc, config)
+  return useQuery<T[]>(desc, config)
 }
 
 let _seq = 0
@@ -37,7 +40,7 @@ let _seq = 0
   })
 
 */
-export function useQuery(desc: any, config: any): QueryResult {
+export function useQuery<T>(desc: any, config: any): QueryResult<T> {
   const figbird = useFigbird()
 
   // a slightly hacky workaround for network-only queries where we want to keep
@@ -69,5 +72,5 @@ export function useQuery(desc: any, config: any): QueryResult {
   // loading -> success state, but also for any realtime data updates
   const queryResult = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-  return useMemo(() => ({ ...queryResult, refetch }) as QueryResult, [queryResult, refetch])
+  return useMemo(() => ({ ...queryResult, refetch }) as QueryResult<T>, [queryResult, refetch])
 }
