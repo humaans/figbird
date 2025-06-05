@@ -16,27 +16,27 @@ interface QueryConfig {
   matcher?: (query: any) => (item: any) => boolean
 }
 
-interface QueryState {
-  data: any
+interface QueryState<T> {
+  data: T | null
   meta: Record<string, any>
   status: 'idle' | 'loading' | 'success' | 'error'
   isFetching: boolean
   error: any
 }
 
-interface Query {
+interface Query<T> {
   queryId: string
   desc: QueryDescriptor
   config: QueryConfig
   pending: boolean
   dirty: boolean
-  filterItem: (item: any) => boolean
-  state: QueryState
+  filterItem: (item: T) => boolean
+  state: QueryState<T>
 }
 
-interface ServiceState {
-  entities: Map<string | number, any>
-  queries: Map<string, Query>
+interface ServiceState<T> {
+  entities: Map<string | number, T>
+  queries: Map<string, Query<T>>
   itemQueryIndex: Map<string | number, Set<string>>
 }
 
@@ -114,12 +114,12 @@ export class Figbird {
     this.queryStore = new QueryStore({ adapter, eventBatchProcessingInterval })
   }
 
-  getState(): Map<string, ServiceState> {
+  getState(): Map<string, ServiceState<unknown>> {
     return this.queryStore!.getState()
   }
 
-  query(desc: QueryDescriptor, config?: QueryConfig): QueryRef {
-    return new QueryRef({ desc, config: config || {}, queryStore: this.queryStore! })
+  query<T>(desc: QueryDescriptor, config?: QueryConfig): QueryRef<T> {
+    return new QueryRef<T>({ desc, config: config || {}, queryStore: this.queryStore! })
   }
 
   mutate({
@@ -134,7 +134,7 @@ export class Figbird {
     return this.queryStore!.mutate({ serviceName, method, args })
   }
 
-  subscribeToStateChanges(fn: (state: Map<string, ServiceState>) => void): () => void {
+  subscribeToStateChanges(fn: (state: Map<string, ServiceState<unknown>>) => void): () => void {
     return this.queryStore!.subscribeToStateChanges(fn)
   }
 }
@@ -185,7 +185,7 @@ export function splitConfig(combinedConfig: CombinedConfig): {
 // subscribe to state changes and read query data
 // this is only a ref and does not contain state itself, it instead
 // references all the state from the shared figbird query state
-class QueryRef {
+class QueryRef<T> {
   #queryId: string
   #desc: QueryDescriptor
   #config: QueryConfig
@@ -218,14 +218,14 @@ class QueryRef {
     return this.#queryId
   }
 
-  subscribe(fn: (state: QueryState) => void): () => void {
+  subscribe(fn: (state: QueryState<T>) => void): () => void {
     this.#queryStore.materialize(this)
-    return this.#queryStore.subscribe(this.#queryId, fn)
+    return this.#queryStore.subscribe<T>(this.#queryId, fn)
   }
 
-  getSnapshot(): QueryState | undefined {
+  getSnapshot(): QueryState<T> | undefined {
     this.#queryStore.materialize(this)
-    return this.#queryStore.getQueryState(this.#queryId)
+    return this.#queryStore.getQueryState<T>(this.#queryId)
   }
 
   refetch(): void {
@@ -238,10 +238,10 @@ class QueryStore {
   #adapter: Adapter
 
   #realtime: Set<string> = new Set()
-  #listeners: Map<string, Set<(state: QueryState) => void>> = new Map()
-  #globalListeners: Set<(state: Map<string, ServiceState>) => void> = new Set()
+  #listeners: Map<string, Set<(state: QueryState<any>) => void>> = new Map()
+  #globalListeners: Set<(state: Map<string, ServiceState<unknown>>) => void> = new Set()
 
-  #state: Map<string, ServiceState> = new Map()
+  #state: Map<string, ServiceState<unknown>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
 
   #eventQueue: QueuedEvent[] = []
@@ -259,22 +259,22 @@ class QueryStore {
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
   }
 
-  #getQuery(queryId: string): Query | undefined {
+  #getQuery<T>(queryId: string): Query<T> | undefined {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName) {
       const service = this.getState().get(serviceName)
       if (service) {
-        return service.queries.get(queryId)
+        return service.queries.get(queryId) as Query<T> | undefined
       }
     }
     return undefined
   }
 
-  getQueryState(queryId: string): QueryState | undefined {
-    return this.#getQuery(queryId)?.state
+  getQueryState<T>(queryId: string): QueryState<T> | undefined {
+    return this.#getQuery<T>(queryId)?.state
   }
 
-  materialize(queryRef: QueryRef): void {
+  materialize<T>(queryRef: QueryRef<T>): void {
     const { queryId, desc, config } = queryRef.details()
 
     if (!this.#getQuery(queryId)) {
@@ -329,7 +329,7 @@ class QueryStore {
       : this.#adapter.matcher(desc.params?.query)
   }
 
-  #addListener(queryId: string, fn: (state: QueryState) => void): () => void {
+  #addListener<T>(queryId: string, fn: (state: QueryState<T>) => void): () => void {
     if (!this.#listeners.has(queryId)) {
       this.#listeners.set(queryId, new Set())
     }
@@ -355,7 +355,7 @@ class QueryStore {
     }
   }
 
-  #addGlobalListener(fn: (state: Map<string, ServiceState>) => void): () => void {
+  #addGlobalListener(fn: (state: Map<string, ServiceState<unknown>>) => void): () => void {
     this.#globalListeners.add(fn)
     return () => {
       this.#globalListeners.delete(fn)
@@ -371,7 +371,7 @@ class QueryStore {
     return this.#listeners.get(queryId)?.size || 0
   }
 
-  subscribe(queryId: string, fn: (state: QueryState) => void): () => void {
+  subscribe<T>(queryId: string, fn: (state: QueryState<T>) => void): () => void {
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
 
@@ -396,7 +396,7 @@ class QueryStore {
     }
   }
 
-  subscribeToStateChanges(fn: (state: Map<string, ServiceState>) => void): () => void {
+  subscribeToStateChanges(fn: (state: Map<string, ServiceState<unknown>>) => void): () => void {
     return this.#addGlobalListener(fn)
   }
 
@@ -586,7 +586,7 @@ class QueryStore {
   }
 
   #updateQueriesFromEvents(
-    service: ServiceState,
+    service: ServiceState<unknown>,
     appliedEvents: QueuedEvent[],
     touch: (queryId: string) => void,
   ): void {
@@ -629,7 +629,9 @@ class QueryStore {
                 data:
                   query.desc.method === 'get'
                     ? null
-                    : query.state.data.filter((x: any) => this.#adapter.getId(x) !== itemId),
+                    : (query.state.data as any[]).filter(
+                        (x: any) => this.#adapter.getId(x) !== itemId,
+                      ),
               },
             })
             itemQueryIndex.delete(queryId)
@@ -643,7 +645,7 @@ class QueryStore {
                 data:
                   query.desc.method === 'get'
                     ? item
-                    : query.state.data.map((x: any) =>
+                    : (query.state.data as any[]).map((x: any) =>
                         this.#adapter.getId(x) === itemId ? item : x,
                       ),
               },
@@ -655,7 +657,7 @@ class QueryStore {
               state: {
                 ...query.state,
                 meta: this.#adapter.itemAdded(query.state.meta),
-                data: query.state.data.concat(item),
+                data: (query.state.data as any[]).concat(item),
               },
             })
             itemQueryIndex.add(queryId)
@@ -677,12 +679,12 @@ class QueryStore {
     }
   }
 
-  getState(): Map<string, ServiceState> {
+  getState(): Map<string, ServiceState<unknown>> {
     return this.#state
   }
 
   #updateState(
-    mutate: (state: Map<string, ServiceState>, touch: (queryId: string) => void) => void,
+    mutate: (state: Map<string, ServiceState<unknown>>, touch: (queryId: string) => void) => void,
     { silent = false } = {},
   ): void {
     const modifiedQueries = new Set<string>()
@@ -702,7 +704,11 @@ class QueryStore {
 
   #transactOverService(
     queryId: string,
-    fn: (service: ServiceState, query?: Query, touch?: (queryId: string) => void) => void,
+    fn: (
+      service: ServiceState<unknown>,
+      query?: Query<unknown>,
+      touch?: (queryId: string) => void,
+    ) => void,
     options?: { silent?: boolean },
   ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
@@ -720,7 +726,7 @@ class QueryStore {
 
   #transactOverServiceByName(
     serviceName: string,
-    fn: (service: ServiceState, touch: (queryId: string) => void) => void,
+    fn: (service: ServiceState<unknown>, touch: (queryId: string) => void) => void,
     { silent = false } = {},
   ): void {
     if (serviceName) {
@@ -847,6 +853,10 @@ class QueryStore {
   }
 }
 
-function getItems(query: Query): any[] {
-  return Array.isArray(query.state.data) ? query.state.data : [query.state.data]
+function getItems<T>(query: Query<T>): T[] {
+  return Array.isArray(query.state.data)
+    ? query.state.data
+    : query.state.data
+      ? [query.state.data]
+      : []
 }
