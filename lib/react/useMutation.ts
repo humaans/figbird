@@ -1,27 +1,28 @@
 import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useFigbird } from './react.js'
+import type { FigbirdError, ServiceItem } from '../types.js'
 
 interface MutationState<T> {
   status: 'idle' | 'loading' | 'success' | 'error'
   data: T | null
-  error: any
+  error: FigbirdError
 }
 
 type MutationAction<T> =
   | { type: 'mutating' }
   | { type: 'success'; payload: T }
-  | { type: 'error'; payload: any }
+  | { type: 'error'; payload: FigbirdError }
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
 interface UseMutationResult<T> {
-  create: (...args: any[]) => Promise<T>
-  update: (...args: any[]) => Promise<T>
-  patch: (...args: any[]) => Promise<T>
-  remove: (...args: any[]) => Promise<T>
+  create: (...args: unknown[]) => Promise<T>
+  update: (...args: unknown[]) => Promise<T>
+  patch: (...args: unknown[]) => Promise<T>
+  remove: (...args: unknown[]) => Promise<T>
   data: T | null
   status: 'idle' | 'loading' | 'success' | 'error'
-  error: any
+  error: FigbirdError
 }
 
 /**
@@ -33,7 +34,7 @@ interface UseMutationResult<T> {
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation<T>(serviceName: string): UseMutationResult<T> {
+export function useMutation<T extends ServiceItem>(serviceName: string): UseMutationResult<T> {
   const figbird = useFigbird()
 
   const [state, dispatch] = useReducer(mutationReducer<T>, {
@@ -51,17 +52,17 @@ export function useMutation<T>(serviceName: string): UseMutationResult<T> {
   }, [])
 
   const mutate = useCallback(
-    async (method: MutationMethod, ...args: any[]): Promise<T> => {
+    async (method: MutationMethod, ...args: unknown[]): Promise<T> => {
       dispatch({ type: 'mutating' })
       try {
-        const item = await figbird.mutate({ serviceName, method, args })
+        const item = await figbird.mutate<T>({ serviceName, method, args })
         if (mountedRef.current) {
           dispatch({ type: 'success', payload: item })
         }
         return item
       } catch (err) {
         if (mountedRef.current) {
-          dispatch({ type: 'error', payload: err })
+          dispatch({ type: 'error', payload: err as FigbirdError })
         }
         throw err
       }
@@ -69,10 +70,10 @@ export function useMutation<T>(serviceName: string): UseMutationResult<T> {
     [figbird, serviceName, dispatch, mountedRef],
   )
 
-  const create = useCallback((...args: any[]) => mutate('create', ...args), [mutate])
-  const update = useCallback((...args: any[]) => mutate('update', ...args), [mutate])
-  const patch = useCallback((...args: any[]) => mutate('patch', ...args), [mutate])
-  const remove = useCallback((...args: any[]) => mutate('remove', ...args), [mutate])
+  const create = useCallback((...args: unknown[]) => mutate('create', ...args), [mutate])
+  const update = useCallback((...args: unknown[]) => mutate('update', ...args), [mutate])
+  const patch = useCallback((...args: unknown[]) => mutate('patch', ...args), [mutate])
+  const remove = useCallback((...args: unknown[]) => mutate('remove', ...args), [mutate])
 
   return useMemo(
     () => ({
