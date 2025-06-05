@@ -16,7 +16,7 @@
 // - Query descriptors appear to have a consistent structure (`serviceName`, `method`, `params`, etc.)
 // - The hash is used as a cache key, not for security purposes
 // - The base64 encoding produces clean, readable query IDs like `q/AAAA
-export function hashObject(obj) {
+export function hashObject(obj: unknown): string {
   try {
     let hash = 0
     const str = JSON.stringify(obj)
@@ -41,12 +41,12 @@ export function hashObject(obj) {
   }
 }
 
-function numberToBase64(num) {
+function numberToBase64(num: number): string {
   // Convert number to byte array and then to base64
   const bytes = new Uint8Array(4)
   bytes[0] = num >> 24
   bytes[1] = num >> 16
   bytes[2] = num >> 8
   bytes[3] = num
-  return btoa(String.fromCharCode(...bytes))
+  return btoa(String.fromCharCode(...Array.from(bytes)))
 }
