@@ -36,10 +36,10 @@ export interface Adapter<T = unknown, TParams = unknown> {
   // Optional real-time support
   subscribe?(serviceName: string, handlers: EventHandlers<T>): () => void
 
-  // Optional internal methods for advanced features
-  getId?(item: T): string | number | undefined
-  isItemStale?(currItem: T, nextItem: T): boolean
-  matcher?(query: unknown, options?: unknown): (item: T) => boolean
-  itemAdded?(meta: Record<string, unknown>): Record<string, unknown>
-  itemRemoved?(meta: Record<string, unknown>): Record<string, unknown>
+  // Required internal methods
+  getId(item: T): string | number | undefined
+  isItemStale(currItem: T, nextItem: T): boolean
+  matcher(query: unknown, options?: unknown): (item: T) => boolean
+  itemAdded(meta: Record<string, unknown>): Record<string, unknown>
+  itemRemoved(meta: Record<string, unknown>): Record<string, unknown>
 }
