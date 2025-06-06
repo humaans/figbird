@@ -186,34 +186,6 @@ class QueryStore {
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number = 100
 
-  // Default implementations for optional adapter methods
-  #defaultGetId = (item: unknown): string | number | undefined => {
-    const obj = item as Record<string, unknown>
-    return (obj?.id as string | number | undefined) || (obj?._id as string | number | undefined)
-  }
-
-  #defaultIsItemStale = (_currItem: unknown, _nextItem: unknown): boolean => {
-    return false // Conservative default - never consider items stale
-  }
-
-  #defaultMatcher = (_query: unknown): ((item: unknown) => boolean) => {
-    return () => true // Default matches everything
-  }
-
-  #defaultItemAdded = (meta: Record<string, unknown>): Record<string, unknown> => {
-    if (meta?.total && typeof meta.total === 'number' && meta.total >= 0) {
-      return { ...meta, total: meta.total + 1 }
-    }
-    return meta
-  }
-
-  #defaultItemRemoved = (meta: Record<string, unknown>): Record<string, unknown> => {
-    if (meta?.total && typeof meta.total === 'number' && meta.total > 0) {
-      return { ...meta, total: meta.total - 1 }
-    }
-    return meta
-  }
-
   constructor({
     adapter,
     eventBatchProcessingInterval = 100,
@@ -294,10 +266,7 @@ class QueryStore {
     if (config.matcher) {
       return config.matcher(query)
     }
-    const matcher = this.#adapter.matcher
-      ? (q: unknown) => this.#adapter.matcher!(q)
-      : this.#defaultMatcher
-    return matcher(query) as ItemMatcher<T>
+    return this.#adapter.matcher(query) as ItemMatcher<T>
   }
 
   #addListener<T>(queryId: string, fn: (state: QueryState<T>) => void): () => void {
@@ -516,12 +485,8 @@ class QueryStore {
       eventsByService[event.serviceName]!.push(event)
     }
 
-    const getId = this.#adapter.getId
-      ? (item: unknown) => this.#adapter.getId!(item)
-      : this.#defaultGetId
-    const isItemStale = this.#adapter.isItemStale
-      ? (curr: unknown, next: unknown) => this.#adapter.isItemStale!(curr, next)
-      : this.#defaultIsItemStale
+    const getId = (item: unknown) => this.#adapter.getId(item)
+    const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
 
     for (const [serviceName, events] of Object.entries(eventsByService)) {
       this.#transactOverServiceByName(serviceName, (service, touch) => {
@@ -572,15 +537,9 @@ class QueryStore {
     appliedEvents: QueuedEvent[],
     touch: (queryId: string) => void,
   ): void {
-    const getId = this.#adapter.getId
-      ? (item: unknown) => this.#adapter.getId!(item)
-      : this.#defaultGetId
-    const itemAdded = this.#adapter.itemAdded
-      ? (meta: Record<string, unknown>) => this.#adapter.itemAdded!(meta)
-      : this.#defaultItemAdded
-    const itemRemoved = this.#adapter.itemRemoved
-      ? (meta: Record<string, unknown>) => this.#adapter.itemRemoved!(meta)
-      : this.#defaultItemRemoved
+    const getId = (item: unknown) => this.#adapter.getId(item)
+    const itemAdded = (meta: Record<string, unknown>) => this.#adapter.itemAdded(meta)
+    const itemRemoved = (meta: Record<string, unknown>) => this.#adapter.itemRemoved(meta)
     for (const { type, items } of appliedEvents) {
       for (const item of items) {
         const itemId = getId(item)
@@ -760,9 +719,7 @@ class QueryStore {
 
       const { data, meta } = result
       const items = Array.isArray(data) ? data : [data]
-      const getId = this.#adapter.getId
-        ? (item: unknown) => this.#adapter.getId!(item)
-        : this.#defaultGetId
+      const getId = (item: unknown) => this.#adapter.getId(item)
 
       for (const item of items) {
         const itemId = getId(item)
@@ -825,9 +782,7 @@ class QueryStore {
       (service, query) => {
         if (query) {
           if (query.state.data) {
-            const getId = this.#adapter.getId
-              ? (item: unknown) => this.#adapter.getId!(item)
-              : this.#defaultGetId
+            const getId = (item: unknown) => this.#adapter.getId(item)
             for (const item of getItems(query)) {
               const id = getId(item)
               if (id !== undefined && service.itemQueryIndex.has(id)) {
