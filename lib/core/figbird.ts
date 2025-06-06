@@ -1,5 +1,5 @@
 import { hashObject } from './hash.js'
-import type { Response, EventHandlers } from '../types.js'
+import type { Response, Adapter } from '../types.js'
 import type {
   Event,
   QueuedEvent,
@@ -10,20 +10,10 @@ import type {
   QueryConfig,
   CombinedConfig,
   ItemMatcher,
-  InternalAdapter,
 } from './internal-types.js'
 
 // Re-export for backward compatibility
 export type { QueryDescriptor, QueryConfig } from './internal-types.js'
-
-// Public adapter interface - minimal and clean
-export interface Adapter<T = unknown, TParams = unknown> {
-  get(serviceName: string, resourceId: string | number, params?: TParams): Promise<Response<T>>
-  find(serviceName: string, params?: TParams): Promise<Response<T[]>>
-  findAll(serviceName: string, params?: TParams): Promise<Response<T[]>>
-  mutate(serviceName: string, method: string, args: unknown[]): Promise<T>
-  subscribe?(serviceName: string, handlers: EventHandlers<T>): () => void
-}
 
 /**
     Usage:
@@ -57,12 +47,12 @@ export class Figbird {
   }) {
     this.adapter = adapter
     this.queryStore = new QueryStore({
-      adapter: adapter as InternalAdapter,
+      adapter,
       eventBatchProcessingInterval,
     })
   }
 
-  getState(): Map<string, ServiceState<unknown>> {
+  getState(): Map<string, ServiceState> {
     return this.queryStore!.getState()
   }
 
@@ -82,7 +72,7 @@ export class Figbird {
     return this.queryStore!.mutate({ serviceName, method, args })
   }
 
-  subscribeToStateChanges(fn: (state: Map<string, ServiceState<unknown>>) => void): () => void {
+  subscribeToStateChanges(fn: (state: Map<string, ServiceState>) => void): () => void {
     return this.queryStore!.subscribeToStateChanges(fn)
   }
 }
@@ -183,43 +173,71 @@ class QueryRef<T> {
 }
 
 class QueryStore {
-  #adapter: InternalAdapter<unknown, unknown>
+  #adapter: Adapter<unknown, unknown>
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown>) => void>> = new Map()
-  #globalListeners: Set<(state: Map<string, ServiceState<unknown>>) => void> = new Set()
+  #globalListeners: Set<(state: Map<string, ServiceState>) => void> = new Set()
 
-  #state: Map<string, ServiceState<unknown>> = new Map()
+  #state: Map<string, ServiceState> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
 
-  #eventQueue: QueuedEvent<unknown>[] = []
+  #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number = 100
+
+  // Default implementations for optional adapter methods
+  #defaultGetId = (item: unknown): string | number | undefined => {
+    const obj = item as Record<string, unknown>
+    return (obj?.id as string | number | undefined) || (obj?._id as string | number | undefined)
+  }
+
+  #defaultIsItemStale = (_currItem: unknown, _nextItem: unknown): boolean => {
+    return false // Conservative default - never consider items stale
+  }
+
+  #defaultMatcher = (_query: unknown): ((item: unknown) => boolean) => {
+    return () => true // Default matches everything
+  }
+
+  #defaultItemAdded = (meta: Record<string, unknown>): Record<string, unknown> => {
+    if (meta?.total && typeof meta.total === 'number' && meta.total >= 0) {
+      return { ...meta, total: meta.total + 1 }
+    }
+    return meta
+  }
+
+  #defaultItemRemoved = (meta: Record<string, unknown>): Record<string, unknown> => {
+    if (meta?.total && typeof meta.total === 'number' && meta.total > 0) {
+      return { ...meta, total: meta.total - 1 }
+    }
+    return meta
+  }
 
   constructor({
     adapter,
     eventBatchProcessingInterval = 100,
   }: {
-    adapter: InternalAdapter<unknown, unknown>
+    adapter: Adapter<unknown, unknown>
     eventBatchProcessingInterval?: number
   }) {
     this.#adapter = adapter
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
   }
 
-  #getQuery<T>(queryId: string): Query<T> | undefined {
+  #getQuery(queryId: string): Query | undefined {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName) {
       const service = this.getState().get(serviceName)
       if (service) {
-        return service.queries.get(queryId) as Query<T> | undefined
+        return service.queries.get(queryId)
       }
     }
     return undefined
   }
 
   getQueryState<T>(queryId: string): QueryState<T> | undefined {
-    return this.#getQuery<T>(queryId)?.state
+    return this.#getQuery(queryId)?.state as QueryState<T> | undefined
   }
 
   materialize<T>(queryRef: QueryRef<T>): void {
@@ -273,7 +291,13 @@ class QueryStore {
     }
 
     const query = (desc.params as Record<string, unknown>)?.query || null
-    return config.matcher ? config.matcher(query) : (this.#adapter.matcher(query) as ItemMatcher<T>)
+    if (config.matcher) {
+      return config.matcher(query)
+    }
+    const matcher = this.#adapter.matcher
+      ? (q: unknown) => this.#adapter.matcher!(q)
+      : this.#defaultMatcher
+    return matcher(query) as ItemMatcher<T>
   }
 
   #addListener<T>(queryId: string, fn: (state: QueryState<T>) => void): () => void {
@@ -302,7 +326,7 @@ class QueryStore {
     }
   }
 
-  #addGlobalListener(fn: (state: Map<string, ServiceState<unknown>>) => void): () => void {
+  #addGlobalListener(fn: (state: Map<string, ServiceState>) => void): () => void {
     this.#globalListeners.add(fn)
     return () => {
       this.#globalListeners.delete(fn)
@@ -343,7 +367,7 @@ class QueryStore {
     }
   }
 
-  subscribeToStateChanges(fn: (state: Map<string, ServiceState<unknown>>) => void): () => void {
+  subscribeToStateChanges(fn: (state: Map<string, ServiceState>) => void): () => void {
     return this.#addGlobalListener(fn)
   }
 
@@ -374,7 +398,7 @@ class QueryStore {
       const result = await this.#fetch(queryId)
       this.#fetched({ queryId, result })
     } catch (err) {
-      this.#fetchFailed({ queryId, error: err })
+      this.#fetchFailed({ queryId, error: err instanceof Error ? err : new Error(String(err)) })
     }
   }
 
@@ -412,7 +436,7 @@ class QueryStore {
       remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
     }
 
-    return this.#adapter.mutate(serviceName, method, args).then(item => {
+    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
       updaters[method]?.(item)
       return item as T
     })
@@ -429,12 +453,16 @@ class QueryStore {
       return
     }
 
+    if (!this.#adapter.subscribe) {
+      return // Real-time not supported by this adapter
+    }
+
     const created = (item: unknown) => this.#queueEvent(serviceName, { type: 'created', item })
     const updated = (item: unknown) => this.#queueEvent(serviceName, { type: 'updated', item })
     const patched = (item: unknown) => this.#queueEvent(serviceName, { type: 'patched', item })
     const removed = (item: unknown) => this.#queueEvent(serviceName, { type: 'removed', item })
 
-    this.#adapter.subscribe!(serviceName, {
+    this.#adapter.subscribe(serviceName, {
       created,
       updated,
       patched,
@@ -443,7 +471,7 @@ class QueryStore {
     this.#realtime.add(serviceName)
   }
 
-  #processEvent(serviceName: string, event: Event<unknown>): void {
+  #processEvent(serviceName: string, event: Event): void {
     this.#eventQueue.push({
       serviceName,
       type: event.type,
@@ -453,7 +481,7 @@ class QueryStore {
     this.#processQueuedEvents()
   }
 
-  #queueEvent(serviceName: string, event: Event<unknown>): void {
+  #queueEvent(serviceName: string, event: Event): void {
     this.#eventQueue.push({
       serviceName,
       type: event.type,
@@ -480,7 +508,7 @@ class QueryStore {
     }
 
     // Group events by service
-    const eventsByService: Record<string, QueuedEvent<unknown>[]> = {}
+    const eventsByService: Record<string, QueuedEvent[]> = {}
     for (const event of this.#eventQueue) {
       if (!eventsByService[event.serviceName]) {
         eventsByService[event.serviceName] = []
@@ -488,29 +516,36 @@ class QueryStore {
       eventsByService[event.serviceName]!.push(event)
     }
 
+    const getId = this.#adapter.getId
+      ? (item: unknown) => this.#adapter.getId!(item)
+      : this.#defaultGetId
+    const isItemStale = this.#adapter.isItemStale
+      ? (curr: unknown, next: unknown) => this.#adapter.isItemStale!(curr, next)
+      : this.#defaultIsItemStale
+
     for (const [serviceName, events] of Object.entries(eventsByService)) {
       this.#transactOverServiceByName(serviceName, (service, touch) => {
-        const appliedEvents: QueuedEvent<unknown>[] = []
+        const appliedEvents: QueuedEvent[] = []
         for (const event of events) {
           const { type, items } = event
           for (const item of items) {
             if (type === 'created') {
-              const itemId = this.#adapter.getId(item)
+              const itemId = getId(item)
               if (itemId !== undefined) {
                 service.entities.set(itemId, item)
                 appliedEvents.push(event)
               }
             } else if (type === 'updated' || type === 'patched') {
-              const itemId = this.#adapter.getId(item)
+              const itemId = getId(item)
               if (itemId !== undefined) {
                 const currItem = service.entities.get(itemId)
-                if (!currItem || !this.#adapter.isItemStale(currItem as unknown, item)) {
+                if (!currItem || !isItemStale(currItem, item)) {
                   service.entities.set(itemId, item)
                   appliedEvents.push(event)
                 }
               }
             } else if (type === 'removed') {
-              const itemId = this.#adapter.getId(item)
+              const itemId = getId(item)
               if (itemId !== undefined) {
                 service.entities.delete(itemId)
                 appliedEvents.push(event)
@@ -533,13 +568,22 @@ class QueryStore {
   }
 
   #updateQueriesFromEvents(
-    service: ServiceState<unknown>,
-    appliedEvents: QueuedEvent<unknown>[],
+    service: ServiceState,
+    appliedEvents: QueuedEvent[],
     touch: (queryId: string) => void,
   ): void {
+    const getId = this.#adapter.getId
+      ? (item: unknown) => this.#adapter.getId!(item)
+      : this.#defaultGetId
+    const itemAdded = this.#adapter.itemAdded
+      ? (meta: Record<string, unknown>) => this.#adapter.itemAdded!(meta)
+      : this.#defaultItemAdded
+    const itemRemoved = this.#adapter.itemRemoved
+      ? (meta: Record<string, unknown>) => this.#adapter.itemRemoved!(meta)
+      : this.#defaultItemRemoved
     for (const { type, items } of appliedEvents) {
       for (const item of items) {
-        const itemId = this.#adapter.getId(item)
+        const itemId = getId(item)
         if (itemId === undefined) continue
 
         if (!service.itemQueryIndex.has(itemId)) {
@@ -572,13 +616,11 @@ class QueryStore {
               ...query,
               state: {
                 ...query.state,
-                meta: this.#adapter.itemRemoved(query.state.meta),
+                meta: itemRemoved(query.state.meta),
                 data:
                   query.desc.method === 'get'
                     ? null
-                    : (query.state.data as unknown[]).filter(
-                        (x: unknown) => this.#adapter.getId(x as unknown) !== itemId,
-                      ),
+                    : (query.state.data as unknown[]).filter((x: unknown) => getId(x) !== itemId),
               },
             })
             itemQueryIndex.delete(queryId)
@@ -593,7 +635,7 @@ class QueryStore {
                   query.desc.method === 'get'
                     ? item
                     : (query.state.data as unknown[]).map((x: unknown) =>
-                        this.#adapter.getId(x as unknown) === itemId ? item : x,
+                        getId(x) === itemId ? item : x,
                       ),
               },
             })
@@ -603,7 +645,7 @@ class QueryStore {
               ...query,
               state: {
                 ...query.state,
-                meta: this.#adapter.itemAdded(query.state.meta),
+                meta: itemAdded(query.state.meta),
                 data: (query.state.data as unknown[]).concat(item),
               },
             })
@@ -626,12 +668,12 @@ class QueryStore {
     }
   }
 
-  getState(): Map<string, ServiceState<unknown>> {
+  getState(): Map<string, ServiceState> {
     return this.#state
   }
 
   #updateState(
-    mutate: (state: Map<string, ServiceState<unknown>>, touch: (queryId: string) => void) => void,
+    mutate: (state: Map<string, ServiceState>, touch: (queryId: string) => void) => void,
     { silent = false } = {},
   ): void {
     const modifiedQueries = new Set<string>()
@@ -651,11 +693,7 @@ class QueryStore {
 
   #transactOverService(
     queryId: string,
-    fn: (
-      service: ServiceState<unknown>,
-      query?: Query<unknown>,
-      touch?: (queryId: string) => void,
-    ) => void,
+    fn: (service: ServiceState, query?: Query, touch?: (queryId: string) => void) => void,
     options?: { silent?: boolean },
   ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
@@ -673,7 +711,7 @@ class QueryStore {
 
   #transactOverServiceByName(
     serviceName: string,
-    fn: (service: ServiceState<unknown>, touch: (queryId: string) => void) => void,
+    fn: (service: ServiceState, touch: (queryId: string) => void) => void,
     { silent = false } = {},
   ): void {
     if (serviceName) {
@@ -722,9 +760,12 @@ class QueryStore {
 
       const { data, meta } = result
       const items = Array.isArray(data) ? data : [data]
+      const getId = this.#adapter.getId
+        ? (item: unknown) => this.#adapter.getId!(item)
+        : this.#defaultGetId
 
       for (const item of items) {
-        const itemId = this.#adapter.getId(item)
+        const itemId = getId(item)
         if (itemId !== undefined) {
           service.entities.set(itemId, item)
           if (!service.itemQueryIndex.has(itemId)) {
@@ -753,7 +794,7 @@ class QueryStore {
     }
   }
 
-  #fetchFailed({ queryId, error }: { queryId: string; error: unknown }): void {
+  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
     let shouldRefetch = false
 
     this.#transactOverService(queryId, (service, query) => {
@@ -784,8 +825,11 @@ class QueryStore {
       (service, query) => {
         if (query) {
           if (query.state.data) {
+            const getId = this.#adapter.getId
+              ? (item: unknown) => this.#adapter.getId!(item)
+              : this.#defaultGetId
             for (const item of getItems(query)) {
-              const id = this.#adapter.getId(item)
+              const id = getId(item)
               if (id !== undefined && service.itemQueryIndex.has(id)) {
                 service.itemQueryIndex.get(id)!.delete(queryId)
               }
@@ -800,7 +844,7 @@ class QueryStore {
   }
 }
 
-function getItems<T>(query: Query<T>): T[] {
+function getItems(query: Query): unknown[] {
   return Array.isArray(query.state.data)
     ? query.state.data
     : query.state.data

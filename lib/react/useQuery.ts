@@ -7,7 +7,7 @@ interface QueryResult<T> {
   meta: Record<string, unknown>
   status: 'idle' | 'loading' | 'success' | 'error'
   isFetching: boolean
-  error: unknown
+  error: Error | null
   refetch: () => void
 }
 
