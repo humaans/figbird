@@ -1,14 +1,12 @@
 import { matcher, type PrepareQueryOptions } from './matcher.js'
 import type {
   FeathersItem,
-  TimestampedItem,
   FeathersParams,
   FeathersFindMeta,
   FeathersService,
   FeathersClient,
 } from './feathers-types.js'
-import type { Response, EventHandlers } from '../types.js'
-import type { InternalAdapter } from '../core/internal-types.js'
+import type { Response, EventHandlers, Adapter } from '../types.js'
 
 type IdExtractor<T> = (item: T) => string | number | undefined
 type UpdatedAtExtractor<T> = (item: T) => string | Date | number | undefined
@@ -23,9 +21,7 @@ interface FeathersAdapterOptions<T = FeathersItem> {
   defaultPageSizeWhenFetchingAll?: number
 }
 
-export class FeathersAdapter<T extends FeathersItem = FeathersItem>
-  implements InternalAdapter<T, FeathersParams>
-{
+export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> {
   feathers?: FeathersClient
   #idField: IdFieldType<T>
   #updatedAtField: UpdatedAtFieldType<T>
@@ -35,9 +31,9 @@ export class FeathersAdapter<T extends FeathersItem = FeathersItem>
   constructor(
     feathers: FeathersClient,
     {
-      idField = (item: T) => item.id || item._id,
+      idField = (item: T) => (item as FeathersItem).id || (item as FeathersItem)._id,
       updatedAtField = (item: T) =>
-        (item as TimestampedItem).updatedAt || (item as TimestampedItem).updated_at,
+        (item as FeathersItem).updatedAt || (item as FeathersItem).updated_at,
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
     }: FeathersAdapterOptions<T> = {},

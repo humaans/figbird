@@ -37,22 +37,16 @@ export interface FeathersFindMeta {
 }
 
 /**
- * Feathers item with standard id fields
+ * Feathers item with standard id and timestamp fields
  */
 export interface FeathersItem {
   id?: string | number
   _id?: string | number
-  [key: string]: unknown
-}
-
-/**
- * Feathers item with timestamp fields
- */
-export interface TimestampedItem extends FeathersItem {
   updatedAt?: string | Date | number
   updated_at?: string | Date | number
   createdAt?: string | Date | number
   created_at?: string | Date | number
+  [key: string]: unknown
 }
 
 /**

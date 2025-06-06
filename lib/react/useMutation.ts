@@ -4,13 +4,13 @@ import { useFigbird } from './react.js'
 interface MutationState<T> {
   status: 'idle' | 'loading' | 'success' | 'error'
   data: T | null
-  error: unknown
+  error: Error | null
 }
 
 type MutationAction<T> =
   | { type: 'mutating' }
   | { type: 'success'; payload: T }
-  | { type: 'error'; payload: unknown }
+  | { type: 'error'; payload: Error }
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
@@ -21,7 +21,7 @@ interface UseMutationResult<T> {
   remove: (...args: unknown[]) => Promise<T>
   data: T | null
   status: 'idle' | 'loading' | 'success' | 'error'
-  error: unknown
+  error: Error | null
 }
 
 /**
@@ -60,10 +60,11 @@ export function useMutation<T>(serviceName: string): UseMutationResult<T> {
         }
         return item
       } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err))
         if (mountedRef.current) {
-          dispatch({ type: 'error', payload: err })
+          dispatch({ type: 'error', payload: error })
         }
-        throw err
+        throw error
       }
     },
     [figbird, serviceName, dispatch, mountedRef],
