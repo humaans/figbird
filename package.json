@@ -68,14 +68,18 @@
   "ava": {
     "serial": true,
     "files": [
-      "test/*.test.js",
-      "test/*.test.ts"
+      "test/*.test.{js,ts,tsx}"
     ],
+    "extensions": {
+      "js": true,
+      "ts": "module",
+      "tsx": "module"
+    },
     "nodeArguments": [
       "--import=@swc-node/register/esm-register"
     ],
     "require": [
-      "./test/setup.js"
+      "./test/setup.ts"
     ]
   },
   "np": {
