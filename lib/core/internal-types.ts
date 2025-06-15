@@ -19,13 +19,15 @@ export interface QueuedEvent {
   items: unknown[]
 }
 
+export type QueryStatus = 'idle' | 'loading' | 'success' | 'error'
+
 /**
  * Query state representation
  */
 export interface QueryState<T> {
   data: T | null
   meta: Record<string, unknown>
-  status: 'idle' | 'loading' | 'success' | 'error'
+  status: QueryStatus
   isFetching: boolean
   error: Error | null
 }

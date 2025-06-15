@@ -5,11 +5,13 @@ import {
   Figbird,
   FigbirdProvider,
   FeathersAdapter,
+  FeathersClient,
   useGet,
   useFind,
   useMutation,
   useFeathers,
 } from '../lib'
+import type { QueryStatus, QueryResult } from '../lib'
 
 interface Note {
   id: number
@@ -516,7 +518,7 @@ test('useMutation patch updates the get binding', async t => {
 test('useMutation handles errors', async t => {
   const { render, flush, unmount, $ } = dom()
 
-  let handled: string | boolean = false
+  let handled: string = ''
 
   function Note() {
     const note = useGet<Note>('notes', 1)
@@ -547,7 +549,7 @@ test('useMutation handles errors', async t => {
 
   t.is($('.error')!.innerHTML, 'unexpected')
 
-  t.is(handled as any, 'unexpected')
+  t.is(handled, 'unexpected')
 
   unmount()
 })
@@ -555,7 +557,7 @@ test('useMutation handles errors', async t => {
 test('useFeathers', async t => {
   const { render, unmount } = dom()
 
-  let feathersFromHook: any
+  let feathersFromHook: FeathersClient | undefined
 
   function Content() {
     const feathers = useFeathers()
@@ -1229,7 +1231,7 @@ test('useFind - realtime refetch only with active listeners', async t => {
 
 test('useFind - realtime disabled', async t => {
   const { render, flush, unmount, $all } = dom()
-  let notes: any
+  let notes: QueryResult<Note[]>
 
   function Note() {
     const _notes = useFind<Note>('notes', { query: { tag: 'idea' }, realtime: 'disabled' })
@@ -1287,7 +1289,7 @@ test('useFind - realtime disabled', async t => {
 test('useFind - fetchPolicy swr', async t => {
   const { render, flush, unmount, $all } = dom()
 
-  let renderNote: any
+  let renderNote: React.Dispatch<React.SetStateAction<boolean>>
 
   function Content() {
     const [shouldRenderNote, setRenderNote] = useState(true)
@@ -1361,7 +1363,7 @@ test('useFind - fetchPolicy swr', async t => {
 
 test('useFind - fetchPolicy cache-first', async t => {
   const { render, flush, unmount, $all } = dom()
-  let renderNote: any
+  let renderNote: React.Dispatch<React.SetStateAction<boolean>>
 
   function Content() {
     const [shouldRenderNote, setRenderNote] = useState(true)
@@ -1416,7 +1418,7 @@ test('useFind - fetchPolicy cache-first', async t => {
 
 test('useFind - fetchPolicy cache-first and changing query', async t => {
   const { render, flush, unmount, $all } = dom()
-  let renderNote: any
+  let renderNote: React.Dispatch<React.SetStateAction<number>>
 
   function Content() {
     const [n, setRenderNote] = useState(1)
@@ -1488,7 +1490,7 @@ test('useFind - fetchPolicy cache-first and changing query', async t => {
 
 test('useFind - fetchPolicy network-only', async t => {
   const { render, flush, unmount, $all } = dom()
-  let renderNote: any
+  let renderNote: React.Dispatch<React.SetStateAction<boolean>>
 
   function Content() {
     const [shouldRenderNote, setRenderNote] = useState(true)
@@ -1766,9 +1768,14 @@ test('items get updated in cache even if not currently relevant to any query', a
 test('useFind - state sequencing for fetchPolicy swr', async t => {
   const { render, flush, unmount } = dom()
 
-  let seq: any[] = []
+  type Seq = {
+    data: Note[] | null
+    status: QueryStatus
+    isFetching: boolean
+  }
+  let seq: Seq[] = []
 
-  let renderNote: any
+  let renderNote: React.Dispatch<React.SetStateAction<number>>
 
   function Note() {
     const [n, setN] = useState(1)
@@ -1824,9 +1831,14 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
 test('useFind - state sequencing for fetchPolicy network-only', async t => {
   const { render, flush, unmount } = dom()
 
-  let seq: any[] = []
+  type Seq = {
+    data: Note[] | null
+    status: QueryStatus
+    isFetching: boolean
+  }
+  let seq: Seq[] = []
 
-  let renderNote: any
+  let renderNote: React.Dispatch<React.SetStateAction<number>>
 
   function Content() {
     const [n, setRenderNote] = useState(1)
@@ -2264,12 +2276,12 @@ test('concurrent mutations maintain data consistency', async t => {
 
 test('handles component unmounting during active requests without warnings', async t => {
   const { render, flush, unmount } = dom()
-  let unmountNotes: any
+  let unmountNotes: React.Dispatch<React.SetStateAction<void>>
   const warnings: string[] = []
 
   // Capture console warnings
   const originalWarn = console.warn
-  console.warn = (...args: any[]) => warnings.push(args.join(' '))
+  console.warn = (...args: Parameters<Console['warn']>) => warnings.push(args.join(' '))
 
   function Container() {
     const [showNotes, setShowNotes] = useState(true)
@@ -2294,7 +2306,7 @@ test('handles component unmounting during active requests without warnings', asy
 
   // Add delay to create to ensure it completes after unmount
   const originalCreate = feathers.service('notes').create.bind(feathers.service('notes'))
-  feathers.service('notes').create = async (data: any) => {
+  feathers.service('notes').create = async data => {
     await new Promise(resolve => setTimeout(resolve, 20))
     return originalCreate(data)
   }
