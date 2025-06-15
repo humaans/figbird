@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom'
 import EventEmitter from 'events'
 import { act, ReactElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
+import type { FeathersClient } from '../lib/index.js'
 
 interface DomHelpers {
   root: Root
@@ -283,7 +284,7 @@ interface MockFeathersServices {
   [serviceName: string]: ServiceDetails | boolean | undefined
 }
 
-interface MockFeathers {
+interface MockFeathers extends FeathersClient {
   service(name: string): Service
 }
 

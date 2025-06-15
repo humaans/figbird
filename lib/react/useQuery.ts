@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig, type QueryDescriptor, type QueryConfig } from '../core/figbird.js'
+import type { QueryStatus } from '../core/internal-types.js'
 import { useFigbird } from './react.js'
 
 export interface QueryResult<T> {
   data: T | null
   meta: Record<string, unknown>
-  status: 'idle' | 'loading' | 'success' | 'error'
+  status: QueryStatus
   isFetching: boolean
   error: Error | null
   refetch: () => void
