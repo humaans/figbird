@@ -15,6 +15,7 @@ export type { Response, EventType, EventHandlers, Adapter } from './types.js'
 
 // Query-related types for advanced usage
 export type { QueryDescriptor, QueryConfig } from './core/figbird.js'
+export type { QueryStatus } from './core/internal-types.js'
 
 // React hook result types (already exported but let's be complete)
 export type { QueryResult } from './react/useQuery.js'

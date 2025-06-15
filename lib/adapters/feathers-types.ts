@@ -71,4 +71,5 @@ export interface FeathersService<T = FeathersItem> {
  */
 export interface FeathersClient {
   service(name: string): FeathersService
+  [key: string]: unknown
 }
