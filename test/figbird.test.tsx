@@ -20,7 +20,6 @@ interface Note {
   _id?: number
   _xid?: number
   _foo?: number
-  [key: string]: any
 }
 
 interface CreateFeathersOptions {
@@ -114,7 +113,7 @@ function NoteList({ notes, keyField = 'id' }: NoteListProps) {
   return (
     <>
       {(Array.isArray(notes.data) ? notes.data : [notes.data]).map(note => (
-        <div key={note[keyField]} className='note'>
+        <div key={note[keyField as keyof Note] as number} className='note'>
           {note.content}
         </div>
       ))}
@@ -626,7 +625,7 @@ test('support custom idField string', async t => {
 
   function Note() {
     const notes = useFind<Note>('notes')
-    return <NoteList notes={notes as any} keyField='_xid' />
+    return <NoteList notes={notes} keyField='_xid' />
   }
 
   render(
@@ -657,7 +656,7 @@ test('support custom idField function', async t => {
 
   function Note() {
     const notes = useFind<Note>('notes')
-    return <NoteList notes={notes as any} keyField='_foo' />
+    return <NoteList notes={notes} keyField='_foo' />
   }
 
   render(
