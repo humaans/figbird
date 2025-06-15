@@ -3,7 +3,7 @@ import test from 'ava'
 import { dom, mockFeathers, queueTask } from './helpers'
 import {
   Figbird,
-  Provider,
+  FigbirdProvider,
   FeathersAdapter,
   useGet,
   useFind,
@@ -54,7 +54,7 @@ function App({ feathers, figbird, config, children }: AppProps) {
   return (
     <StrictMode>
       <ErrorHandler>
-        <Provider figbird={figbird}>{children}</Provider>
+        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
       </ErrorHandler>
     </StrictMode>
   )
