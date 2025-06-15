@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig, type QueryDescriptor, type QueryConfig } from '../core/figbird.js'
 import { useFigbird } from './react.js'
 
-interface QueryResult<T> {
+export interface QueryResult<T> {
   data: T | null
   meta: Record<string, unknown>
   status: 'idle' | 'loading' | 'success' | 'error'

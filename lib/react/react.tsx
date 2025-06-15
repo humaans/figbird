@@ -26,11 +26,11 @@ export function useFeathers(): FeathersClientLike | undefined {
   return adapter?.feathers
 }
 
-interface ProviderProps {
+interface FigbirdProviderProps {
   figbird: Figbird
   children: ReactNode
 }
 
-export function Provider({ figbird, children }: ProviderProps) {
+export function FigbirdProvider({ figbird, children }: FigbirdProviderProps) {
   return <FigbirdContext.Provider value={figbird}>{children}</FigbirdContext.Provider>
 }

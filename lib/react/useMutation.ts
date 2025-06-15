@@ -14,7 +14,7 @@ type MutationAction<T> =
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
-interface UseMutationResult<T> {
+export interface UseMutationResult<T> {
   create: (...args: unknown[]) => Promise<T>
   update: (...args: unknown[]) => Promise<T>
   patch: (...args: unknown[]) => Promise<T>
