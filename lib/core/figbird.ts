@@ -36,7 +36,7 @@ export type { QueryDescriptor, QueryConfig } from './internal-types.js'
 */
 export class Figbird {
   adapter: Adapter<unknown, unknown> | null = null
-  queryStore: QueryStore | null = null
+  queryStore: QueryStore
 
   constructor({
     adapter,
@@ -53,11 +53,11 @@ export class Figbird {
   }
 
   getState(): Map<string, ServiceState> {
-    return this.queryStore!.getState()
+    return this.queryStore.getState()
   }
 
   query<T>(desc: QueryDescriptor, config?: QueryConfig): QueryRef<T> {
-    return new QueryRef<T>({ desc, config: config || {}, queryStore: this.queryStore! })
+    return new QueryRef<T>({ desc, config: config || {}, queryStore: this.queryStore })
   }
 
   mutate<T = unknown>({
@@ -69,11 +69,11 @@ export class Figbird {
     method: string
     args: unknown[]
   }): Promise<T> {
-    return this.queryStore!.mutate({ serviceName, method, args })
+    return this.queryStore.mutate({ serviceName, method, args })
   }
 
   subscribeToStateChanges(fn: (state: Map<string, ServiceState>) => void): () => void {
-    return this.queryStore!.subscribeToStateChanges(fn)
+    return this.queryStore.subscribeToStateChanges(fn)
   }
 }
 
