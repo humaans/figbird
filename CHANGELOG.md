@@ -1,5 +1,12 @@
 # Figbird Changelog
 
+## 0.20.0
+
+- A full rewrite of the internals to simplify the code and especially React bindings. Figbird now has a core implementation in pure JavaScript that is independent from React and allows creating queries and interacting with them directly via the figbird class methods. The React hooks API remains largely unchanged. With this the feathers specific bindings are also extracted into a dedicated feathers adapter module. This allows adapting figbird to other frameworks and libraries.
+- Continue listening to realtime events and incorporating them into cache even if the query is not currently mounted.
+- Ingest realtime events in 100ms batches to reduce the number of re-renders.
+- Make sure we refetch queries marked with `realtime 'refetch'` if they got stale during a previous fetch.
+
 ## 0.19.0
 
 - Fix - remove a dependency on `result.total` when merging realtime events in
