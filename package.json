@@ -4,6 +4,9 @@
   "description": "Effortless realtime data management for React + Feathers applications.",
   "type": "module",
   "exports": {
+    "./package.json": "./package.json",
+    "./package-lock.json": "./package-lock.json",
+    "./tsconfig.json": "./tsconfig.json",
     ".": {
       "require": "./dist/cjs/index.js",
       "import": "./dist/esm/index.js"
