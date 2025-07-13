@@ -1,6 +1,6 @@
 {
   "name": "figbird",
-  "version": "0.20.0-6",
+  "version": "0.20.0-7",
   "description": "Effortless realtime data management for React + Feathers applications.",
   "type": "module",
   "exports": {
