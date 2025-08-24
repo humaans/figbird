@@ -13,12 +13,11 @@ export interface QueryResult<T> {
   refetch: () => void
 }
 
-export function useGet<N extends string>(
-  serviceName: N,
+export function useGet<T = any>(
+  serviceName: string,
   resourceId: string | number,
   params: Record<string, unknown> = {},
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): QueryResult<any> {
+): QueryResult<T> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
@@ -28,14 +27,13 @@ export function useGet<N extends string>(
     resourceId,
     ...params,
   })
-  return useQuery(desc, config)
+  return useQuery<T>(desc, config)
 }
 
-export function useFind<N extends string>(
-  serviceName: N,
+export function useFind<T = any[]>(
+  serviceName: string,
   params: Record<string, unknown> = {},
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): QueryResult<any[]> {
+): QueryResult<T> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
@@ -44,10 +42,18 @@ export function useFind<N extends string>(
     method: 'find',
     ...params,
   })
-  return useQuery(desc, config)
+  return useQuery<T>(desc, config)
 }
 
 let _seq = 0
+
+const initialQueryResult = {
+  data: null,
+  meta: {},
+  status: 'loading' as const,
+  isFetching: true,
+  error: null,
+}
 
 /**
 
@@ -84,12 +90,13 @@ export function useQuery<T>(desc: QueryDescriptor, config: QueryConfig): QueryRe
   // a bit of React foo to create stable fn references
   const q = useMemo(() => _q, [_q.hash()])
   const refetch = useCallback(() => q.refetch(), [q])
-  const subscribe = useCallback((fn: (state: unknown) => void) => q.subscribe(fn), [q])
-  const getSnapshot = useCallback(() => q.getSnapshot(), [q])
+  const subscribe = useCallback((onStoreChange: () => void) => q.subscribe(onStoreChange), [q])
+
+  const getSnapshot = useCallback(() => q.getSnapshot() ?? initialQueryResult, [q])
 
   // we subscribe to the query state changes, this includes both going from
   // loading -> success state, but also for any realtime data updates
   const queryResult = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-  return useMemo(() => ({ ...queryResult, refetch }) as QueryResult<T>, [queryResult, refetch])
+  return useMemo(() => ({ ...queryResult, refetch }), [queryResult, refetch])
 }

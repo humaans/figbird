@@ -1,5 +1,6 @@
 import { splitConfig } from '../core/figbird.js'
 import type {
+  AnySchema,
   Schema,
   ServiceItem,
   ServiceMethods,
@@ -12,27 +13,30 @@ import { useMutation as useBaseMutation, type UseMutationResult } from './useMut
 import { useQuery, type QueryResult } from './useQuery.js'
 
 /**
- * This interface defines the shape of the returned hooks object.
- * Using overloaded function signatures with generics on the properties
- * themselves allows TypeScript to correctly infer the specific service type
- * from the literal string passed as `serviceName`.
+ * Strongly-typed call signatures per service name.
+ * Using a union of call signatures (one per service) gives the best inference:
+ * passing a literal service name narrows the return type to that service.
  */
-interface TypedHooks<S extends Schema> {
-  useGet: <N extends ServiceNames<S>>(
+type UseGetForSchema<S extends Schema> = {
+  [N in ServiceNames<S>]: (
     serviceName: N,
     resourceId: string | number,
     params?: ServiceQuery<S, N>,
   ) => QueryResult<ServiceItem<S, N>>
+}[ServiceNames<S>]
 
-  useFind: <N extends ServiceNames<S>>(
+type UseFindForSchema<S extends Schema> = {
+  [N in ServiceNames<S>]: (
     serviceName: N,
     params?: ServiceQuery<S, N>,
   ) => QueryResult<ServiceItem<S, N>[]>
+}[ServiceNames<S>]
 
-  useMutation: <N extends ServiceNames<S>>(
+type UseMutationForSchema<S extends Schema> = {
+  [N in ServiceNames<S>]: (
     serviceName: N,
   ) => UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
-}
+}[ServiceNames<S>]
 
 /**
  * Creates typed hooks for a specific schema.
@@ -53,52 +57,49 @@ interface TypedHooks<S extends Schema> {
  * }
  * ```
  */
-export function createHooks<S extends Schema>(): TypedHooks<S> {
+export function createHooks<S extends Schema = AnySchema>(): {
+  useGet: UseGetForSchema<S>
+  useFind: UseFindForSchema<S>
+  useMutation: UseMutationForSchema<S>
+} {
   // The internal implementations are weakly typed with `string` for serviceName.
   // The strong typing is enforced by the `TypedHooks<S>` return type signature,
   // which correctly narrows the types based on the literal service name provided.
 
-  function useTypedGet(
-    serviceName: string,
+  function useTypedGet<N extends ServiceNames<S>>(
+    serviceName: N,
     resourceId: string | number,
-    params?: Record<string, unknown>,
+    params?: ServiceQuery<S, N>,
   ) {
     const figbird = useFigbird<S>()
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    const { desc, config } = splitConfig({
-      serviceName: actualServiceName,
-      method: 'get',
-      resourceId,
-      ...params,
-    })
-    // The generic here is not strictly necessary for the implementation but helps
-    // align it with the expected return type, reducing the need for `as any`.
-    return useQuery(desc, config)
+    const { desc, config } = splitConfig(
+      Object.assign({ serviceName: actualServiceName, method: 'get', resourceId }, params),
+    )
+    return useQuery<ServiceItem<S, N>>(desc, config)
   }
 
-  function useTypedFind(serviceName: string, params?: Record<string, unknown>) {
+  function useTypedFind<N extends ServiceNames<S>>(serviceName: N, params?: ServiceQuery<S, N>) {
     const figbird = useFigbird<S>()
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    const { desc, config } = splitConfig({
-      serviceName: actualServiceName,
-      method: 'find',
-      ...params,
-    })
-    return useQuery(desc, config)
+    const { desc, config } = splitConfig(
+      Object.assign({ serviceName: actualServiceName, method: 'find' }, params),
+    )
+    return useQuery<ServiceItem<S, N>[]>(desc, config)
   }
 
-  function useTypedMutation(serviceName: string) {
+  function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
     const figbird = useFigbird<S>()
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    return useBaseMutation(actualServiceName)
+    return useBaseMutation<ServiceItem<S, N>, ServiceMethods<S, N>>(actualServiceName)
   }
 
   return {
-    useGet: useTypedGet as TypedHooks<S>['useGet'],
-    useFind: useTypedFind as TypedHooks<S>['useFind'],
-    useMutation: useTypedMutation as unknown as TypedHooks<S>['useMutation'],
+    useGet: useTypedGet as UseGetForSchema<S>,
+    useFind: useTypedFind as UseFindForSchema<S>,
+    useMutation: useTypedMutation as UseMutationForSchema<S>,
   }
 }
