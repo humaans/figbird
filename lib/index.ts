@@ -3,6 +3,7 @@ export { Figbird } from './core/figbird.js'
 
 // schema
 export {
+  createSchema,
   findServiceByName,
   hasSchema,
   service,

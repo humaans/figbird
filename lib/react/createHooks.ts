@@ -1,5 +1,11 @@
 import { splitConfig } from '../core/figbird.js'
-import type { Schema, ServiceItem, ServiceMethods, ServiceQuery } from '../schema/types.js'
+import type {
+  Schema,
+  ServiceItem,
+  ServiceMethods,
+  ServiceNames,
+  ServiceQuery,
+} from '../schema/types.js'
 import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
@@ -25,7 +31,7 @@ import { useQuery, type QueryResult } from './useQuery.js'
  * ```
  */
 export function createHooks<S extends Schema>() {
-  function useTypedGet<N extends string>(
+  function useTypedGet<N extends ServiceNames<S>>(
     serviceName: N,
     resourceId: string | number,
     params?: ServiceQuery<S, N>,
@@ -39,10 +45,10 @@ export function createHooks<S extends Schema>() {
       resourceId,
       ...params,
     })
-    return useQuery(desc, config) as QueryResult<ServiceItem<S, N>>
+    return useQuery<ServiceItem<S, N>>(desc, config)
   }
 
-  function useTypedFind<N extends string>(
+  function useTypedFind<N extends ServiceNames<S>>(
     serviceName: N,
     params?: ServiceQuery<S, N>,
   ): QueryResult<ServiceItem<S, N>[]> {
@@ -54,16 +60,16 @@ export function createHooks<S extends Schema>() {
       method: 'find',
       ...params,
     })
-    return useQuery(desc, config) as QueryResult<ServiceItem<S, N>[]>
+    return useQuery<ServiceItem<S, N>[]>(desc, config)
   }
 
-  function useTypedMutation<N extends string>(
+  function useTypedMutation<N extends ServiceNames<S>>(
     serviceName: N,
   ): UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>> {
     const figbird = useFigbird<S>()
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    return useBaseMutation(actualServiceName) as unknown as UseMutationResult<
+    return useBaseMutation<ServiceItem<S, N>>(actualServiceName) as unknown as UseMutationResult<
       ServiceItem<S, N>,
       ServiceMethods<S, N>
     >
