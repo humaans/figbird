@@ -1,17 +1,17 @@
-import React, { useState, useEffect, StrictMode } from 'react'
 import test from 'ava'
-import { dom, mockFeathers, queueTask } from './helpers'
+import React, { StrictMode, useEffect, useState } from 'react'
+import type { QueryResult, QueryStatus } from '../lib'
 import {
-  Figbird,
-  FigbirdProvider,
   FeathersAdapter,
   FeathersClient,
-  useGet,
-  useFind,
-  useMutation,
+  Figbird,
+  FigbirdProvider,
   useFeathers,
+  useFind,
+  useGet,
+  useMutation,
 } from '../lib'
-import type { QueryStatus, QueryResult } from '../lib'
+import { dom, mockFeathers, queueTask } from './helpers'
 
 interface Note {
   id: number
@@ -22,6 +22,7 @@ interface Note {
   _id?: number
   _xid?: number
   _foo?: number
+  version?: number
 }
 
 interface CreateFeathersOptions {

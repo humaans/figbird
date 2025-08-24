@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
-import { splitConfig, type QueryDescriptor, type QueryConfig } from '../core/figbird.js'
+import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import type { QueryStatus } from '../core/internal-types.js'
+import type { Schema, ServiceItem, ServiceNames, ServiceQuery } from '../schema/types.js'
+import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 
 export interface QueryResult<T> {
@@ -12,21 +14,66 @@ export interface QueryResult<T> {
   refetch: () => void
 }
 
-export function useGet<T>(
+// Overload for schema-aware usage
+export function useGet<S extends Schema, N extends ServiceNames<S>>(
+  serviceName: N,
+  resourceId: string | number,
+  params?: ServiceQuery<S, N>,
+): QueryResult<ServiceItem<S, N>>
+// Overload for legacy/untyped usage
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
+export function useGet<T = any>(
+  serviceName: string,
+  resourceId: string | number,
+  params?: Record<string, unknown>,
+): QueryResult<T>
+// Implementation
+// eslint-disable-next-line no-redeclare
+export function useGet(
   serviceName: string,
   resourceId: string | number,
   params: Record<string, unknown> = {},
-): QueryResult<T> {
-  const { desc, config } = splitConfig({ serviceName, method: 'get', resourceId, ...params })
-  return useQuery<T>(desc, config)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): QueryResult<any> {
+  const figbird = useFigbird()
+  const service = findServiceByName(figbird.schema, serviceName)
+  const actualServiceName = service?.name ?? serviceName
+  const { desc, config } = splitConfig({
+    serviceName: actualServiceName,
+    method: 'get',
+    resourceId,
+    ...params,
+  })
+  return useQuery(desc, config)
 }
 
-export function useFind<T>(
+// Overload for schema-aware usage
+export function useFind<S extends Schema, N extends ServiceNames<S>>(
+  serviceName: N,
+  params?: ServiceQuery<S, N>,
+): QueryResult<ServiceItem<S, N>[]>
+// Overload for legacy/untyped usage
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
+export function useFind<T = any>(
+  serviceName: string,
+  params?: Record<string, unknown>,
+): QueryResult<T[]>
+// Implementation
+// eslint-disable-next-line no-redeclare
+export function useFind(
   serviceName: string,
   params: Record<string, unknown> = {},
-): QueryResult<T[]> {
-  const { desc, config } = splitConfig({ serviceName, method: 'find', ...params })
-  return useQuery<T[]>(desc, config)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): QueryResult<any[]> {
+  const figbird = useFigbird()
+  const service = findServiceByName(figbird.schema, serviceName)
+  const actualServiceName = service?.name ?? serviceName
+  const { desc, config } = splitConfig({
+    serviceName: actualServiceName,
+    method: 'find',
+    ...params,
+  })
+  return useQuery(desc, config)
 }
 
 let _seq = 0

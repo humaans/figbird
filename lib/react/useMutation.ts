@@ -1,4 +1,6 @@
-import { useReducer, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import type { Schema, ServiceItem, ServiceMethods, ServiceNames } from '../schema/types.js'
+import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 
 interface MutationState<T> {
@@ -14,14 +16,18 @@ type MutationAction<T> =
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
-export interface UseMutationResult<T> {
-  create: (...args: unknown[]) => Promise<T>
-  update: (...args: unknown[]) => Promise<T>
-  patch: (...args: unknown[]) => Promise<T>
-  remove: (...args: unknown[]) => Promise<T>
-  data: T | null
+export interface UseMutationResult<T, TMethods = Record<string, never>> {
+  create: (data: Partial<T> | Partial<T>[], params?: unknown) => Promise<T | T[]>
+  update: (id: string | number, data: Partial<T>, params?: unknown) => Promise<T>
+  patch: (id: string | number, data: Partial<T>, params?: unknown) => Promise<T>
+  remove: (id: string | number, params?: unknown) => Promise<T>
+  data: T | T[] | null
   status: 'idle' | 'loading' | 'success' | 'error'
   error: Error | null
+  // Custom methods
+  mutate: (method: string, ...args: unknown[]) => Promise<unknown>
+  // Typed custom methods (when schema is available)
+  methods: TMethods
 }
 
 /**
@@ -33,10 +39,25 @@ export interface UseMutationResult<T> {
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation<T>(serviceName: string): UseMutationResult<T> {
-  const figbird = useFigbird()
 
-  const [state, dispatch] = useReducer(mutationReducer<T>, {
+// Overload for schema-aware usage
+export function useMutation<S extends Schema, N extends ServiceNames<S>>(
+  serviceName: N,
+): UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
+// Overload for legacy/untyped usage
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
+export function useMutation<T = any>(
+  serviceName: string,
+): UseMutationResult<T, Record<string, never>>
+// Implementation
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
+export function useMutation(serviceName: string): UseMutationResult<any, any> {
+  const figbird = useFigbird()
+  const service = findServiceByName(figbird.schema, serviceName)
+  const actualServiceName = service?.name ?? serviceName
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [state, dispatch] = useReducer(mutationReducer<any>, {
     status: 'idle',
     data: null,
     error: null,
@@ -51,10 +72,16 @@ export function useMutation<T>(serviceName: string): UseMutationResult<T> {
   }, [])
 
   const mutate = useCallback(
-    async (method: MutationMethod, ...args: unknown[]): Promise<T> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async (method: MutationMethod | string, ...args: unknown[]): Promise<any> => {
       dispatch({ type: 'mutating' })
       try {
-        const item = await figbird.mutate<T>({ serviceName, method, args })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const item = await figbird.mutate<any>({
+          serviceName: actualServiceName,
+          method,
+          args,
+        })
         if (mountedRef.current) {
           dispatch({ type: 'success', payload: item })
         }
@@ -67,13 +94,44 @@ export function useMutation<T>(serviceName: string): UseMutationResult<T> {
         throw error
       }
     },
-    [figbird, serviceName, dispatch, mountedRef],
+    [figbird, actualServiceName, dispatch, mountedRef],
   )
 
-  const create = useCallback((...args: unknown[]) => mutate('create', ...args), [mutate])
-  const update = useCallback((...args: unknown[]) => mutate('update', ...args), [mutate])
-  const patch = useCallback((...args: unknown[]) => mutate('patch', ...args), [mutate])
-  const remove = useCallback((...args: unknown[]) => mutate('remove', ...args), [mutate])
+  const create = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (data: any, params?: unknown) => mutate('create', data, params),
+    [mutate],
+  )
+  const update = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (id: string | number, data: any, params?: unknown) => mutate('update', id, data, params),
+    [mutate],
+  )
+  const patch = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (id: string | number, data: any, params?: unknown) => mutate('patch', id, data, params),
+    [mutate],
+  )
+  const remove = useCallback(
+    (id: string | number, params?: unknown) => mutate('remove', id, params),
+    [mutate],
+  )
+
+  // Create typed methods proxy for custom service methods
+  const methods = useMemo(() => {
+    if (!service || !service._phantom?.methods) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return {} as any
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const methodsProxy: any = {}
+    // This is just for typing, actual methods are called via mutate
+    for (const methodName in service._phantom.methods) {
+      methodsProxy[methodName] = (...args: unknown[]) => mutate(methodName, ...args)
+    }
+    return methodsProxy
+  }, [service, mutate])
 
   return useMemo(
     () => ({
@@ -84,8 +142,10 @@ export function useMutation<T>(serviceName: string): UseMutationResult<T> {
       data: state.data,
       status: state.status,
       error: state.error,
+      mutate,
+      methods,
     }),
-    [create, update, patch, remove, state],
+    [create, update, patch, remove, state, mutate, methods],
   )
 }
 

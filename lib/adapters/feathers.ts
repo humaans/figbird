@@ -1,12 +1,12 @@
-import { matcher, type PrepareQueryOptions } from './matcher.js'
+import type { Adapter, EventHandlers, Response } from '../types.js'
 import type {
+  FeathersClient,
+  FeathersFindMeta,
   FeathersItem,
   FeathersParams,
-  FeathersFindMeta,
   FeathersService,
-  FeathersClient,
 } from './feathers-types.js'
-import type { Response, EventHandlers, Adapter } from '../types.js'
+import { matcher, type PrepareQueryOptions } from './matcher.js'
 
 type IdExtractor<T> = (item: T) => string | number | undefined
 type UpdatedAtExtractor<T> = (item: T) => string | Date | number | undefined
@@ -184,7 +184,40 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     query: Record<string, unknown> | null | undefined,
     options?: PrepareQueryOptions,
   ): (item: T) => boolean {
-    return matcher<T>(query as Parameters<typeof matcher>[0], options)
+    // Extract custom operators from the query ($ prefixed keys that aren't standard)
+    const customOperators: string[] = []
+    if (query) {
+      for (const key of Object.keys(query)) {
+        if (
+          key.startsWith('$') &&
+          ![
+            '$limit',
+            '$skip',
+            '$sort',
+            '$select',
+            '$or',
+            '$and',
+            '$in',
+            '$nin',
+            '$lt',
+            '$lte',
+            '$gt',
+            '$gte',
+            '$ne',
+          ].includes(key)
+        ) {
+          customOperators.push(key)
+        }
+      }
+    }
+
+    // Merge custom operators with any provided in options
+    const enhancedOptions: PrepareQueryOptions = {
+      ...options,
+      operators: [...(options?.operators || []), ...customOperators],
+    }
+
+    return matcher<T>(query as Parameters<typeof matcher>[0], enhancedOptions)
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {

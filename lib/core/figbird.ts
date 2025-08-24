@@ -1,19 +1,20 @@
+import type { AnySchema, Schema } from '../schema/types.js'
+import type { Adapter, Response } from '../types.js'
 import { hashObject } from './hash.js'
-import type { Response, Adapter } from '../types.js'
 import type {
-  Event,
-  QueuedEvent,
-  QueryState,
-  Query,
-  ServiceState,
-  QueryDescriptor,
-  QueryConfig,
   CombinedConfig,
+  Event,
   ItemMatcher,
+  Query,
+  QueryConfig,
+  QueryDescriptor,
+  QueryState,
+  QueuedEvent,
+  ServiceState,
 } from './internal-types.js'
 
 // Re-export for backward compatibility
-export type { QueryDescriptor, QueryConfig } from './internal-types.js'
+export type { QueryConfig, QueryDescriptor } from './internal-types.js'
 
 /**
     Usage:
@@ -34,18 +35,22 @@ export type { QueryDescriptor, QueryConfig } from './internal-types.js'
     // Multiple queries can safely reference the same cached state.
     unsub()
 */
-export class Figbird {
+export class Figbird<S extends Schema = AnySchema> {
   adapter: Adapter<unknown, unknown> | null = null
   queryStore: QueryStore
+  schema?: S
 
   constructor({
     adapter,
     eventBatchProcessingInterval,
+    schema,
   }: {
     adapter: Adapter<unknown, unknown>
     eventBatchProcessingInterval?: number
+    schema?: S
   }) {
     this.adapter = adapter
+    this.schema = schema
     this.queryStore = new QueryStore({
       adapter,
       eventBatchProcessingInterval,
