@@ -1,5 +1,5 @@
-import { JSDOM } from 'jsdom'
 import EventEmitter from 'events'
+import { JSDOM } from 'jsdom'
 import { act, ReactElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import type { FeathersClient } from '../lib/index.js'
