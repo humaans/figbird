@@ -58,24 +58,22 @@ export function service<
 
 // Schema definition - using a mapped type for better inference
 export interface Schema {
-  services: Record<string, Service<any, any, any, string>>
+  services: Record<string, Service>
 }
 
 // Helper to create a schema from an array of services
-export function createSchema<
-  TServices extends ReadonlyArray<Service<any, any, any, string>>,
->(config: {
+export function createSchema<const TServices extends ReadonlyArray<Service>>(config: {
   services: TServices
 }): {
   services: {
     [K in TServices[number] as K['name']]: K
   }
 } {
-  const serviceMap = {} as any
-  for (const service of config.services) {
-    serviceMap[service.name] = service
+  return {
+    services: Object.fromEntries(config.services.map(s => [s.name, s])) as {
+      [K in TServices[number] as K['name']]: K
+    },
   }
-  return { services: serviceMap }
 }
 
 // Type helpers to extract types from schema
@@ -83,29 +81,47 @@ export type ServiceNames<S extends Schema> = keyof S['services'] & string
 
 export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = S['services'][N]
 
-export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
-  S['services'][N] extends Service<infer I, any, any, any> ? I : never
+export type ServiceItem<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
+  S,
+  N
+>['_phantom'] extends {
+  item: infer I
+}
+  ? I
+  : BaseItem
 
-export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
-  S['services'][N] extends Service<any, infer Q, any, any> ? Q : never
+export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
+  S,
+  N
+>['_phantom'] extends {
+  query: infer Q
+}
+  ? Q
+  : Record<string, unknown>
 
-export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
-  S['services'][N] extends Service<any, any, infer M, any> ? M : never
+export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
+  S,
+  N
+>['_phantom'] extends {
+  methods: infer M
+}
+  ? M
+  : Record<string, never>
 
 // Utility type to extract item type from a service
-export type Item<S> = S extends Service<infer I, any, any, any> ? I : never
+export type Item<S> = S extends { _phantom?: { item: infer I } } ? I : BaseItem
 
 // Utility type to extract query type from a service
-export type Query<S> = S extends Service<any, infer Q, any, any> ? Q : never
+export type Query<S> = S extends { _phantom?: { query: infer Q } } ? Q : Record<string, unknown>
 
 // Utility type to extract methods from a service
-export type Methods<S> = S extends Service<any, any, infer M, any> ? M : never
+export type Methods<S> = S extends { _phantom?: { methods: infer M } } ? M : Record<string, never>
 
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(
   schema: S | undefined,
   name: string,
-): Service<any, any, any, string> | undefined {
+): Service | undefined {
   if (!schema) return undefined
   return schema.services[name]
 }

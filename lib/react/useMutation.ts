@@ -39,9 +39,9 @@ export interface UseMutationResult<T, TMethods = Record<string, never>> {
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useMutation<T = any>(
+export function useMutation<T = any, TMethods = Record<string, never>>(
   serviceName: string,
-): UseMutationResult<T, Record<string, never>> {
+): UseMutationResult<T, TMethods> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
@@ -110,17 +110,15 @@ export function useMutation<T = any>(
   // Create typed methods proxy for custom service methods
   const methods = useMemo(() => {
     if (!service || !service._phantom?.methods) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return {} as any
+      return {} as TMethods
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const methodsProxy: any = {}
+    const methodsProxy: Record<string, (...args: unknown[]) => Promise<unknown>> = {}
     // This is just for typing, actual methods are called via mutate
     for (const methodName in service._phantom.methods) {
       methodsProxy[methodName] = (...args: unknown[]) => mutate(methodName, ...args)
     }
-    return methodsProxy
+    return methodsProxy as TMethods
   }, [service, mutate])
 
   return useMemo(
