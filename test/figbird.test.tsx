@@ -8,8 +8,10 @@ import {
   FigbirdProvider,
   useFeathers,
   useFind,
-  useGet,
   useMutation,
+  createHooks,
+  createSchema,
+  service,
 } from '../lib'
 import { dom, mockFeathers, queueTask } from './helpers'
 
@@ -23,7 +25,16 @@ interface Note {
   _xid?: number
   _foo?: number
   version?: number
+  [key: string]: unknown
 }
+
+// Create schema for typed hooks
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const schema = createSchema({
+  services: [service<Note, 'notes'>('notes')],
+})
+
+const { useGet: useTypedGet, useFind: useTypedFind, useMutation: useTypedMutation } = createHooks<typeof schema>()
 
 interface CreateFeathersOptions {
   skipTotal?: boolean
@@ -130,7 +141,8 @@ test('useGet', async t => {
   let noteData: Note | null
 
   function Note() {
-    const note = useGet('notes', 1)
+    // Use schema-based typed hook - this provides full type inference
+    const note = useTypedGet('notes', 1)
     noteData = note.data
     return <NoteList notes={note} />
   }
@@ -156,7 +168,7 @@ test('useGet updates after realtime patch', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
-    const note = useGet('notes', 1)
+    const note = useTypedGet('notes', 1)
     return <NoteList notes={note} />
   }
 
@@ -187,7 +199,7 @@ test('useFind', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
-    const notes = useFind('notes')
+    const notes = useTypedFind('notes')
     return <NoteList notes={notes} />
   }
 
@@ -490,8 +502,8 @@ test('useMutation patch updates the get binding', async t => {
   let _patch: any
 
   function Note() {
-    const note = useGet('notes', 1)
-    const { patch } = useMutation<Note>('notes')
+    const note = useTypedGet('notes', 1)
+    const { patch } = useTypedMutation('notes')
     _patch = patch
     return <NoteList notes={note} />
   }
@@ -522,8 +534,8 @@ test('useMutation handles errors', async t => {
   let handled: string = ''
 
   function Note() {
-    const note = useGet('notes', 1)
-    const { patch, error } = useMutation<Note>('notes')
+    const note = useTypedGet('notes', 1)
+    const { patch, error } = useTypedMutation('notes')
 
     useEffect(() => {
       patch(1, {
