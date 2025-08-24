@@ -76,7 +76,7 @@ export function useQuery<T>(desc: QueryDescriptor, config: QueryConfig): QueryRe
   // the q.subscribe and q.getSnapshot stable and avoid unsubbing and resubbing
   // you don't need to do this outside React where you can more easily create a
   // stable reference to a query and use it for as long as you want
-  const _q = figbird.query(desc, {
+  const _q = figbird.query<T>(desc, {
     ...config,
     ...(config.fetchPolicy === 'network-only' ? { seq: seqRef.current } : {}),
   })

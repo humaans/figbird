@@ -2,6 +2,7 @@ import test from 'ava'
 import { useEffect, useState } from 'react'
 import {
   createHooks,
+  createSchema,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
@@ -50,13 +51,13 @@ interface TaskQuery {
 }
 
 // Define schema with typed services
-const schema = {
+const schema = createSchema({
   services: [
     service<Person>('api/people'),
     service<Task, TaskQuery>('api/tasks'),
     service<Project>('api/projects'),
   ],
-} as const
+})
 
 type AppSchema = typeof schema
 
@@ -293,9 +294,9 @@ test('schema with array of services', t => {
   const { render, unmount, flush, $ } = dom()
 
   // Services are defined in an array
-  const schema = {
+  const schema = createSchema({
     services: [service<Person>('api/people'), service<Task>('api/tasks')],
-  } as const
+  })
 
   type AppSchema = typeof schema
 

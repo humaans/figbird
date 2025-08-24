@@ -55,70 +55,58 @@ export function service<
   return new Service<TItem, TQuery, Record<string, never>, TName>(name)
 }
 
-// Schema definition
-export interface Schema<
-  TServices extends ReadonlyArray<
-    Service<BaseItem, Record<string, unknown>, Record<string, never>, string>
-  > = ReadonlyArray<Service<BaseItem, Record<string, unknown>, Record<string, never>, string>>,
-> {
+// Schema definition - using a mapped type for better inference
+export interface Schema {
+  services: Record<string, Service<any, any, any, string>>
+}
+
+// Helper to create a schema from an array of services
+export function createSchema<
+  TServices extends ReadonlyArray<Service<any, any, any, string>>,
+>(config: {
   services: TServices
-  // Future: relationships
+}): {
+  services: {
+    [K in TServices[number] as K['name']]: K
+  }
+} {
+  const serviceMap = {} as any
+  for (const service of config.services) {
+    serviceMap[service.name] = service
+  }
+  return { services: serviceMap }
 }
 
 // Type helpers to extract types from schema
-export type ServiceNames<S extends Schema> =
-  S['services'][number] extends Service<
-    BaseItem,
-    Record<string, unknown>,
-    Record<string, never>,
-    infer N
-  >
-    ? N
-    : never
+export type ServiceNames<S extends Schema> = keyof S['services'] & string
 
-export type ServiceByName<S extends Schema, N extends string> = Extract<
-  S['services'][number],
-  Service<BaseItem, Record<string, unknown>, Record<string, never>, N>
->
+export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = S['services'][N]
 
-export type ServiceItem<S extends Schema, N extends string> =
-  ServiceByName<S, N> extends Service<infer I, Record<string, unknown>, Record<string, never>, N>
-    ? I
-    : never
+export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends Service<infer I, any, any, any> ? I : never
 
-export type ServiceQuery<S extends Schema, N extends string> =
-  ServiceByName<S, N> extends Service<BaseItem, infer Q, Record<string, never>, N> ? Q : never
+export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends Service<any, infer Q, any, any> ? Q : never
 
-export type ServiceMethods<S extends Schema, N extends string> =
-  ServiceByName<S, N> extends Service<BaseItem, Record<string, unknown>, infer M, N> ? M : never
+export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends Service<any, any, infer M, any> ? M : never
 
 // Utility type to extract item type from a service
-export type Item<S> =
-  S extends Service<infer I, Record<string, unknown>, Record<string, never>, string> ? I : never
+export type Item<S> = S extends Service<infer I, any, any, any> ? I : never
 
 // Utility type to extract query type from a service
-export type Query<S> =
-  S extends Service<BaseItem, infer Q, Record<string, never>, string> ? Q : never
+export type Query<S> = S extends Service<any, infer Q, any, any> ? Q : never
 
 // Utility type to extract methods from a service
-export type Methods<S> =
-  S extends Service<BaseItem, Record<string, unknown>, infer M, string> ? M : never
+export type Methods<S> = S extends Service<any, any, infer M, any> ? M : never
 
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(
   schema: S | undefined,
   name: string,
-): Service<BaseItem, Record<string, unknown>, Record<string, never>, string> | undefined {
+): Service<any, any, any, string> | undefined {
   if (!schema) return undefined
-
-  // Search through array of services by name
-  for (const service of schema.services) {
-    if (service.name === name) {
-      return service
-    }
-  }
-
-  return undefined
+  return schema.services[name]
 }
 
 // Type guard to check if schema is defined
@@ -127,9 +115,7 @@ export function hasSchema<S extends Schema>(schema: S | undefined): schema is S 
 }
 
 // Default schema type when no schema is provided
-export type AnySchema = Schema<
-  ReadonlyArray<Service<BaseItem, Record<string, unknown>, Record<string, never>, string>>
->
+export type AnySchema = Schema
 
 // Type for untyped services (backward compatibility)
 export type UntypedService = Service<
