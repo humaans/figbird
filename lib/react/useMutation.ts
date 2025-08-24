@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import type { Schema, ServiceItem, ServiceMethods, ServiceNames } from '../schema/types.js'
+import type { Schema, ServiceItem, ServiceMethods } from '../schema/types.js'
 import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 
@@ -41,7 +41,7 @@ export interface UseMutationResult<T, TMethods = Record<string, never>> {
  */
 
 // Overload for schema-aware usage
-export function useMutation<S extends Schema, N extends ServiceNames<S>>(
+export function useMutation<S extends Schema, N extends string>(
   serviceName: N,
 ): UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
 // Overload for legacy/untyped usage

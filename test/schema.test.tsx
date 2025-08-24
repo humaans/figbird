@@ -50,12 +50,12 @@ interface TaskQuery {
 
 // Define schema with typed services
 const schema = {
-  services: {
-    people: service<Person>('api/people'),
-    tasks: service<Task, TaskQuery>('api/tasks'),
-    projects: service<Project>('api/projects'),
-  },
-}
+  services: [
+    service<Person>('api/people'),
+    service<Task, TaskQuery>('api/tasks'),
+    service<Project>('api/projects'),
+  ],
+} as const
 
 type AppSchema = typeof schema
 
@@ -106,10 +106,10 @@ test('schema-based type inference', t => {
 
   function PersonList() {
     // Type is inferred as QueryResult<Person[]>
-    const people = useFind<AppSchema, 'people'>('people')
+    const people = useFind<AppSchema, 'api/people'>('api/people')
 
     // This would be a TypeScript error if uncommented:
-    // const wrongService = useFind<AppSchema, 'people'>('nonexistent')
+    // const wrongService = useFind<AppSchema>('nonexistent')
 
     useEffect(() => {
       if (people.data) {
@@ -132,8 +132,8 @@ test('schema-based type inference', t => {
     return (
       <div>
         {people.data.map(person => (
-          <div key={person.id} className='person'>
-            {person.name} - {person.role}
+          <div key={(person as Person).id} className='person'>
+            {(person as Person).name} - {(person as Person).role}
           </div>
         ))}
       </div>
@@ -142,23 +142,24 @@ test('schema-based type inference', t => {
 
   function TaskDetail() {
     // Type is inferred as QueryResult<Task>
-    const task = useGet<AppSchema, 'tasks'>('tasks', 't1')
+    const task = useGet<AppSchema, 'api/tasks'>('api/tasks', 't1')
 
     if (!task.data) return <div>Loading...</div>
 
     // TypeScript knows all the Task properties
+    const taskData = task.data as Task
     return (
       <div className='task'>
-        <h3>{task.data.title}</h3>
-        <p>Priority: {task.data.priority}</p>
-        <p>Tags: {task.data.tags.join(', ')}</p>
-        <p>Status: {task.data.completed ? 'Done' : 'Pending'}</p>
+        <h3>{taskData.title}</h3>
+        <p>Priority: {taskData.priority}</p>
+        <p>Tags: {taskData.tags.join(', ')}</p>
+        <p>Status: {taskData.completed ? 'Done' : 'Pending'}</p>
       </div>
     )
   }
 
   function TaskManager() {
-    const { create, update, patch, remove } = useMutation<AppSchema, 'tasks'>('tasks')
+    const { create, update, patch, remove } = useMutation<AppSchema, 'api/tasks'>('api/tasks')
     const [creating, setCreating] = useState(false)
 
     const handleCreate = async () => {
@@ -217,7 +218,7 @@ test('schema-based type inference', t => {
 
   function ProjectsWithCustomQuery() {
     // Custom query parameters can be used
-    const tasks = useFind<AppSchema, 'tasks'>('tasks', {
+    const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks', {
       query: {
         completed: false,
         priority: 1,
@@ -284,16 +285,13 @@ test('schema-based type inference', t => {
   })
 })
 
-test('schema with service name mapping', t => {
+test('schema with array of services', t => {
   const { render, unmount, flush, $ } = dom()
 
-  // Services can have different internal names than their schema keys
+  // Services are defined in an array
   const schema = {
-    services: {
-      users: service<Person>('api/people'), // 'users' in schema, 'api/people' in feathers
-      todos: service<Task>('api/tasks'), // 'todos' in schema, 'api/tasks' in feathers
-    },
-  }
+    services: [service<Person>('api/people'), service<Task>('api/tasks')],
+  } as const
 
   type AppSchema = typeof schema
 
@@ -320,14 +318,14 @@ test('schema with service name mapping', t => {
   const figbird = new Figbird({ adapter, schema })
 
   function App() {
-    // Use the schema key, not the service name
-    const users = useFind<AppSchema, 'users'>('users')
-    const todos = useFind<AppSchema, 'todos'>('todos')
+    // Use the actual service names
+    const people = useFind<AppSchema, 'api/people'>('api/people')
+    const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks')
 
     return (
       <div>
-        <div className='users-count'>{users.data?.length ?? 0} users</div>
-        <div className='todos-count'>{todos.data?.length ?? 0} todos</div>
+        <div className='people-count'>{people.data?.length ?? 0} people</div>
+        <div className='tasks-count'>{tasks.data?.length ?? 0} tasks</div>
       </div>
     )
   }
@@ -339,10 +337,10 @@ test('schema with service name mapping', t => {
   )
 
   return flush().then(() => {
-    const usersCount = $('.users-count')
-    const todosCount = $('.todos-count')
-    t.is(usersCount?.textContent, '1 users')
-    t.is(todosCount?.textContent, '1 todos')
+    const peopleCount = $('.people-count')
+    const tasksCount = $('.tasks-count')
+    t.is(peopleCount?.textContent, '1 people')
+    t.is(tasksCount?.textContent, '1 tasks')
     unmount()
   })
 })
@@ -369,13 +367,6 @@ test('backward compatibility - untyped usage still works', t => {
     const note = useGet('notes', 1)
     useMutation('notes') // Just testing that untyped usage works
 
-    useEffect(() => {
-      // Data is untyped (any)
-      if (notes.data) {
-        console.log(notes.data)
-      }
-    }, [notes.data])
-
     return (
       <div>
         <div className='notes-count'>{notes.data?.length ?? 0}</div>
@@ -399,7 +390,7 @@ test('backward compatibility - untyped usage still works', t => {
 
 test('type extraction utilities', t => {
   // Test that type extraction utilities work correctly
-  type PersonService = typeof schema.services.people
+  type PersonService = (typeof schema.services)[0]
   type PersonItem = import('../lib').Item<PersonService>
 
   // These assertions are compile-time only, but we can test runtime behavior
@@ -414,7 +405,7 @@ test('type extraction utilities', t => {
   t.is(person.role, 'user')
 
   // Query type includes custom extensions
-  type TaskService = typeof schema.services.tasks
+  type TaskService = (typeof schema.services)[1]
   type TaskQueryType = import('../lib').Query<TaskService>
 
   const query: TaskQueryType = {

@@ -61,10 +61,10 @@ interface Task {
 
 // Create the schema
 export const schema = {
-  services: {
-    people: service<Person>('api/people'),
-    tasks: service<Task>('api/tasks'),
-  },
+  services: [
+    service<Person>('api/people'),
+    service<Task>('api/tasks'),
+  ],
 }
 
 export type AppSchema = typeof schema
@@ -101,13 +101,14 @@ import type { AppSchema } from './schema'
 
 function MyComponent() {
   // TypeScript knows people is QueryResult<Person[]>
-  const people = useFind<AppSchema, 'people'>('people')
+  // Note: Both type parameters are required for proper type inference
+  const people = useFind<AppSchema, 'api/people'>('api/people')
   
   // TypeScript knows task is QueryResult<Task>
-  const task = useGet<AppSchema, 'tasks'>('tasks', 'task-id')
+  const task = useGet<AppSchema, 'api/tasks'>('api/tasks', 'task-id')
   
   // All mutations are typed
-  const { create, update, patch, remove } = useMutation<AppSchema, 'tasks'>('tasks')
+  const { create, update, patch, remove } = useMutation<AppSchema, 'api/tasks'>('api/tasks')
   
   // TypeScript enforces correct property types
   const handleCreate = async () => {
@@ -132,6 +133,59 @@ function MyComponent() {
 }
 ```
 
+### Creating Custom Hooks to Simplify Usage
+
+To avoid repeating the service name twice, you can create custom hooks for your services:
+
+```typescript
+// hooks/useServices.ts
+import { useFind, useGet, useMutation } from 'figbird'
+import type { AppSchema } from '../schema'
+
+// Create typed hooks for each service
+export function usePeople(params?: Parameters<typeof useFind>[1]) {
+  return useFind<AppSchema, 'api/people'>('api/people', params)
+}
+
+export function usePerson(id: string | number, params?: Parameters<typeof useGet>[2]) {
+  return useGet<AppSchema, 'api/people'>('api/people', id, params)
+}
+
+export function usePeopleMutation() {
+  return useMutation<AppSchema, 'api/people'>('api/people')
+}
+
+export function useTasks(params?: Parameters<typeof useFind>[1]) {
+  return useFind<AppSchema, 'api/tasks'>('api/tasks', params)
+}
+
+export function useTask(id: string | number, params?: Parameters<typeof useGet>[2]) {
+  return useGet<AppSchema, 'api/tasks'>('api/tasks', id, params)
+}
+
+export function useTaskMutation() {
+  return useMutation<AppSchema, 'api/tasks'>('api/tasks')
+}
+```
+
+Now in your components, usage becomes much cleaner:
+
+```typescript
+import { usePeople, usePerson, useTaskMutation } from '../hooks/useServices'
+
+function MyComponent() {
+  // Clean, typed API without repetition
+  const people = usePeople()
+  const person = usePerson('person-123')
+  const { create, patch } = useTaskMutation()
+  
+  // All types are inferred correctly
+  if (people.data) {
+    people.data.forEach(p => console.log(p.name)) // ✅ TypeScript knows p.name is string
+  }
+}
+```
+
 ## Advanced Features
 
 ### Custom Query Parameters
@@ -146,13 +200,13 @@ interface TaskQuery {
 }
 
 const schema = {
-  services: {
-    tasks: service<Task, TaskQuery>('api/tasks'),
-  },
+  services: [
+    service<Task, TaskQuery>('api/tasks'),
+  ],
 }
 
 // Now you can use custom query parameters
-const tasks = useFind<AppSchema, 'tasks'>('tasks', {
+const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks', {
   query: {
     completed: false,
     $search: 'urgent', // ✅ Custom parameter is recognized
@@ -161,20 +215,22 @@ const tasks = useFind<AppSchema, 'tasks'>('tasks', {
 })
 ```
 
-### Service Name Mapping
+### Direct Service Names
 
-Map friendly names in your schema to actual service names:
+Services are defined in an array and referenced by their actual names:
 
 ```typescript
 const schema = {
-  services: {
-    users: service<Person>('api/people'),     // 'users' in code
-    todos: service<Task>('api/tasks'),        // 'todos' in code
-  },
+  services: [
+    service<Person>('api/people'),
+    service<Task>('api/tasks'),
+  ],
 }
 
-// Use the friendly name in your components
-const users = useFind<AppSchema, 'users'>('users') // Maps to 'api/people'
+// Use the actual service name in your components
+// Both type parameters are needed for type inference
+const people = useFind<AppSchema, 'api/people'>('api/people')
+const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks')
 ```
 
 ### Type Extraction Utilities
@@ -184,8 +240,12 @@ Extract types from your schema for use elsewhere:
 ```typescript
 import { Item, Query } from 'figbird'
 
-type PersonItem = Item<typeof schema.services.people>
-type TaskQuery = Query<typeof schema.services.tasks>
+// Extract types from services in the array
+type PersonService = (typeof schema.services)[0]
+type PersonItem = Item<PersonService>
+
+type TaskService = (typeof schema.services)[1]  
+type TaskQuery = Query<TaskService>
 ```
 
 ### Direct Query API
@@ -245,8 +305,9 @@ Custom operators (like `$search`, `$asOf`) are automatically detected and handle
 
 Make sure you:
 1. Pass the schema to `new Figbird({ adapter, schema })`
-2. Use the schema type parameter in hooks: `useFind<AppSchema, 'serviceName'>`
+2. Use both type parameters in hooks: `useFind<AppSchema, 'service-name'>('service-name')`
 3. Import types from the correct location
+4. Use `as const` assertion when defining the schema
 
 ## Examples
 
