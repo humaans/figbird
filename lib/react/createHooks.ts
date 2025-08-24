@@ -1,9 +1,38 @@
 import { splitConfig } from '../core/figbird.js'
-import type { Schema, ServiceNames, ServiceQuery } from '../schema/types.js'
+import type {
+  Schema,
+  ServiceItem,
+  ServiceMethods,
+  ServiceNames,
+  ServiceQuery,
+} from '../schema/types.js'
 import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import { useQuery, type QueryResult } from './useQuery.js'
+
+/**
+ * This interface defines the shape of the returned hooks object.
+ * Using overloaded function signatures with generics on the properties
+ * themselves allows TypeScript to correctly infer the specific service type
+ * from the literal string passed as `serviceName`.
+ */
+interface TypedHooks<S extends Schema> {
+  useGet: <N extends ServiceNames<S>>(
+    serviceName: N,
+    resourceId: string | number,
+    params?: ServiceQuery<S, N>,
+  ) => QueryResult<ServiceItem<S, N>>
+
+  useFind: <N extends ServiceNames<S>>(
+    serviceName: N,
+    params?: ServiceQuery<S, N>,
+  ) => QueryResult<ServiceItem<S, N>[]>
+
+  useMutation: <N extends ServiceNames<S>>(
+    serviceName: N,
+  ) => UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
+}
 
 /**
  * Creates typed hooks for a specific schema.
@@ -20,31 +49,20 @@ import { useQuery, type QueryResult } from './useQuery.js'
  * import { useFind } from './hooks'
  *
  * function MyComponent() {
- *   const people = useFind('api/people') // Fully typed!
+ *   const people = useFind('api/people') // Fully typed to QueryResult<Person[]>
  * }
  * ```
  */
-export function createHooks<S extends Schema>() {
-  // Create a mapped type that narrows based on the literal string
-  type FindSignature = <N extends ServiceNames<S>>(
-    serviceName: N,
-    params?: ServiceQuery<S, N>,
-  ) => QueryResult<Array<S['services'][N] extends Service<infer I, any, any, any> ? I : never>>
+export function createHooks<S extends Schema>(): TypedHooks<S> {
+  // The internal implementations are weakly typed with `string` for serviceName.
+  // The strong typing is enforced by the `TypedHooks<S>` return type signature,
+  // which correctly narrows the types based on the literal service name provided.
 
-  type GetSignature = <N extends ServiceNames<S>>(
-    serviceName: N,
+  function useTypedGet(
+    serviceName: string,
     resourceId: string | number,
-    params?: ServiceQuery<S, N>,
-  ) => QueryResult<S['services'][N] extends Service<infer I, any, any, any> ? I : never>
-
-  type MutationSignature = <N extends ServiceNames<S>>(
-    serviceName: N,
-  ) => UseMutationResult<
-    S['services'][N] extends Service<infer I, any, any, any> ? I : never,
-    S['services'][N] extends Service<any, any, infer M, any> ? M : Record<string, never>
-  >
-
-  const useTypedGet: GetSignature = (serviceName, resourceId, params) => {
+    params?: Record<string, unknown>,
+  ) {
     const figbird = useFigbird<S>()
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
@@ -54,10 +72,12 @@ export function createHooks<S extends Schema>() {
       resourceId,
       ...params,
     })
+    // The generic here is not strictly necessary for the implementation but helps
+    // align it with the expected return type, reducing the need for `as any`.
     return useQuery(desc, config)
   }
 
-  const useTypedFind: FindSignature = (serviceName, params) => {
+  function useTypedFind(serviceName: string, params?: Record<string, unknown>) {
     const figbird = useFigbird<S>()
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
@@ -69,19 +89,16 @@ export function createHooks<S extends Schema>() {
     return useQuery(desc, config)
   }
 
-  const useTypedMutation: MutationSignature = serviceName => {
+  function useTypedMutation(serviceName: string) {
     const figbird = useFigbird<S>()
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    return useBaseMutation(actualServiceName) as any
+    return useBaseMutation(actualServiceName)
   }
 
   return {
-    useGet: useTypedGet,
-    useFind: useTypedFind,
-    useMutation: useTypedMutation,
+    useGet: useTypedGet as TypedHooks<S>['useGet'],
+    useFind: useTypedFind as TypedHooks<S>['useFind'],
+    useMutation: useTypedMutation as unknown as TypedHooks<S>['useMutation'],
   }
 }
-
-// Re-export Service for convenience
-import type { Service } from '../schema/types.js'

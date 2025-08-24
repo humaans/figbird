@@ -1,10 +1,9 @@
 import test from 'ava'
+import { randomBytes } from 'crypto'
 import { existsSync, unlinkSync, writeFileSync } from 'fs'
-import { dirname, join } from 'path'
+import * as os from 'os'
+import { join } from 'path'
 import * as ts from 'typescript'
-import { fileURLToPath } from 'url'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Helper to get type at a specific position in source code
 function getTypeAtPosition(
@@ -13,7 +12,7 @@ function getTypeAtPosition(
   tsConfigOptions: ts.CompilerOptions = {},
 ): string {
   // Create a temporary file
-  const tempFile = join(__dirname, '__temp_type_test.ts')
+  const tempFile = join(os.tmpdir(), `figbird-test-${randomBytes(16).toString('hex')}.ts`)
   writeFileSync(tempFile, source)
 
   try {
@@ -255,7 +254,7 @@ const invalid = useFind('api/invalid-service')
 `
 
   // Create a temporary file
-  const tempFile = join(__dirname, '__temp_error_test.ts')
+  const tempFile = join(os.tmpdir(), `figbird-test-${randomBytes(16).toString('hex')}.ts`)
   writeFileSync(tempFile, source)
 
   try {
@@ -324,7 +323,7 @@ const tasks = useFind('api/tasks', {
 `
 
   // This should compile without errors
-  const tempFile = join(__dirname, '__temp_query_test.ts')
+  const tempFile = join(os.tmpdir(), `figbird-test-${randomBytes(16).toString('hex')}.ts`)
   writeFileSync(tempFile, source)
 
   try {
