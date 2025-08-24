@@ -2,23 +2,20 @@
 export { Figbird } from './core/figbird.js'
 
 // schema
-export {
-  createSchema,
-  findServiceByName,
-  hasSchema,
-  service,
+export { createSchema, findServiceByName, hasSchema, service } from './schema/types.js'
+export type {
+  AnySchema,
+  BaseItem,
+  Item,
+  Methods,
+  Query,
+  Schema,
   Service,
-  type AnySchema,
-  type BaseItem,
-  type Item,
-  type Methods,
-  type Query,
-  type Schema,
-  type ServiceItem,
-  type ServiceMethods,
-  type ServiceNames,
-  type ServiceQuery,
-  type UntypedService,
+  ServiceItem,
+  ServiceMethods,
+  ServiceNames,
+  ServiceQuery,
+  UntypedService,
 } from './schema/types.js'
 
 // adapters
