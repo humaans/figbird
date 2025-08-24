@@ -9,7 +9,7 @@ interface Person {
 }
 
 export const schema = createSchema({
-  services: [service<Person>('api/people')],
+  services: [service<Person, 'api/people'>('api/people')],
 })
 
 type AppSchema = typeof schema

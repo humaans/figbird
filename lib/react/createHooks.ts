@@ -17,26 +17,20 @@ import { useQuery, type QueryResult } from './useQuery.js'
  * Using a union of call signatures (one per service) gives the best inference:
  * passing a literal service name narrows the return type to that service.
  */
-type UseGetForSchema<S extends Schema> = {
-  [N in ServiceNames<S>]: (
-    serviceName: N,
-    resourceId: string | number,
-    params?: ServiceQuery<S, N>,
-  ) => QueryResult<ServiceItem<S, N>>
-}[ServiceNames<S>]
+type UseGetForSchema<S extends Schema> = <N extends ServiceNames<S>>(
+  serviceName: N,
+  resourceId: string | number,
+  params?: ServiceQuery<S, N>,
+) => QueryResult<ServiceItem<S, N>>
 
-type UseFindForSchema<S extends Schema> = {
-  [N in ServiceNames<S>]: (
-    serviceName: N,
-    params?: ServiceQuery<S, N>,
-  ) => QueryResult<ServiceItem<S, N>[]>
-}[ServiceNames<S>]
+type UseFindForSchema<S extends Schema> = <N extends ServiceNames<S>>(
+  serviceName: N,
+  params?: ServiceQuery<S, N>,
+) => QueryResult<ServiceItem<S, N>[]>
 
-type UseMutationForSchema<S extends Schema> = {
-  [N in ServiceNames<S>]: (
-    serviceName: N,
-  ) => UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
-}[ServiceNames<S>]
+type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
+  serviceName: N,
+) => UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
 
 /**
  * Creates typed hooks for a specific schema.

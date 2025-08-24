@@ -53,9 +53,9 @@ interface TaskQuery {
 // Define schema with typed services
 const schema = createSchema({
   services: [
-    service<Person>('api/people'),
-    service<Task, TaskQuery>('api/tasks'),
-    service<Project>('api/projects'),
+    service<Person, 'api/people'>('api/people'),
+    service<Task, 'api/tasks', TaskQuery>('api/tasks'),
+    service<Project, 'api/projects'>('api/projects'),
   ],
 })
 
@@ -136,7 +136,7 @@ test('schema-based type inference', t => {
 
     return (
       <div>
-        {(people.data as Person[] | null)?.map(person => (
+        {people.data.map(person => (
           <div key={person.id} className='person'>
             {person.name} - {person.role}
           </div>
@@ -151,14 +151,12 @@ test('schema-based type inference', t => {
 
     if (!task.data) return <div>Loading...</div>
 
-    // TypeScript knows all the Task properties
-    const taskData = task.data as Task
     return (
       <div className='task'>
-        <h3>{taskData.title}</h3>
-        <p>Priority: {taskData.priority}</p>
-        <p>Tags: {taskData.tags.join(', ')}</p>
-        <p>Status: {taskData.completed ? 'Done' : 'Pending'}</p>
+        <h3>{task.data.title}</h3>
+        <p>Priority: {task.data.priority}</p>
+        <p>Tags: {task.data.tags.join(', ')}</p>
+        <p>Status: {task.data.completed ? 'Done' : 'Pending'}</p>
       </div>
     )
   }
@@ -295,7 +293,10 @@ test('schema with array of services', t => {
 
   // Services are defined in an array
   const schema = createSchema({
-    services: [service<Person>('api/people'), service<Task>('api/tasks')],
+    services: [
+      service<Person, 'api/people'>('api/people'),
+      service<Task, 'api/tasks'>('api/tasks'),
+    ],
   })
 
   type AppSchema = typeof schema
@@ -403,7 +404,7 @@ test('backward compatibility - untyped usage still works', t => {
 
 test('type extraction utilities', t => {
   // Test that type extraction utilities work correctly
-  type PersonService = (typeof schema.services)[0]
+  type PersonService = (typeof schema.services)['api/people']
   type PersonItem = import('../lib').Item<PersonService>
 
   // These assertions are compile-time only, but we can test runtime behavior
@@ -418,7 +419,7 @@ test('type extraction utilities', t => {
   t.is(person.role, 'user')
 
   // Query type includes custom extensions
-  type TaskService = (typeof schema.services)[1]
+  type TaskService = (typeof schema.services)['api/tasks']
   type TaskQueryType = import('../lib').Query<TaskService>
 
   const query: TaskQueryType = {

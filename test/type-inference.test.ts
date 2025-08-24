@@ -72,8 +72,51 @@ test('useFind returns correct type for Person service', t => {
 
   t.is(
     serviceByNameType,
-    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, Record<string, never>, string>',
+    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, Record<string, never>, "api/people">',
   )
   t.is(serviceItemType, 'Person')
   t.is(peopleType, 'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[]>')
+})
+
+test('type narrowing works correctly with multiple services', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'multi-service-inference.ts')
+
+  // Check Person service types
+  const personServiceType = getTypeAtPosition(fixturePath, 'PersonServiceByName')
+  const personItemType = getTypeAtPosition(fixturePath, 'PersonServiceItem')
+  const peopleType = getTypeAtPosition(fixturePath, 'people')
+
+  // Check Task service types
+  const taskServiceType = getTypeAtPosition(fixturePath, 'TaskServiceByName')
+  const taskItemType = getTypeAtPosition(fixturePath, 'TaskServiceItem')
+  const tasksType = getTypeAtPosition(fixturePath, 'tasks')
+
+  console.log('PersonServiceByName:', personServiceType)
+  console.log('PersonServiceItem:', personItemType)
+  console.log('People useFind:', peopleType)
+  console.log('TaskServiceByName:', taskServiceType)
+  console.log('TaskServiceItem:', taskItemType)
+  console.log('Tasks useFind:', tasksType)
+
+  // Test that the key types are working correctly
+  t.is(
+    personServiceType,
+    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, Record<string, never>, "api/people">',
+  )
+  t.is(
+    taskServiceType,
+    'import("/Users/karolis/projects/figbird/lib/index").Service<Task, Record<string, unknown>, Record<string, never>, "api/tasks">',
+  )
+
+  // Test that ServiceItem extraction is working
+  t.is(personItemType, 'Person')
+  t.is(taskItemType, 'Task')
+
+  // Test that useFind correctly narrows to specific types (no more unions!)
+  t.is(peopleType, 'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[]>')
+  t.is(tasksType, 'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[]>')
+
+  // Verify type narrowing - ensure services don't cross-contaminate
+  t.not(peopleType, tasksType, 'People and tasks should have different types')
+  t.not(personItemType, taskItemType, 'Person and Task item types should be distinct')
 })

@@ -10,50 +10,30 @@ export interface BaseItem {
   [key: string]: unknown
 }
 
-// Service definition with custom methods
-export class Service<
+// Service definition with custom methods - simplified for better type inference
+export interface Service<
   TItem extends BaseItem = BaseItem,
   TQuery extends Record<string, unknown> = Record<string, unknown>,
   TMethods extends Record<string, (...args: unknown[]) => unknown> = Record<string, never>,
   TName extends string = string,
 > {
-  public readonly name: TName
-  public readonly _phantom?: {
+  readonly name: TName
+  readonly _phantom?: {
     item: TItem
     query: TQuery
     methods: TMethods
   }
-
-  constructor(name: TName) {
-    this.name = name
-  }
-
-  methods<M extends Record<string, (...args: unknown[]) => unknown>>(): Service<
-    TItem,
-    TQuery,
-    M,
-    TName
-  > {
-    return new Service(this.name) as Service<TItem, TQuery, M, TName>
-  }
-
-  queryExtensions<Q extends Record<string, unknown>>(): Service<
-    TItem,
-    TQuery & Q,
-    TMethods,
-    TName
-  > {
-    return new Service(this.name) as Service<TItem, TQuery & Q, TMethods, TName>
-  }
 }
 
-// Helper to create a service
+// Helper to create a service with proper literal type preservation
 export function service<
   TItem extends BaseItem,
+  TName extends string,
   TQuery extends Record<string, unknown> = Record<string, unknown>,
-  TName extends string = string,
 >(name: TName): Service<TItem, TQuery, Record<string, never>, TName> {
-  return new Service<TItem, TQuery, Record<string, never>, TName>(name)
+  return {
+    name,
+  } as Service<TItem, TQuery, Record<string, never>, TName>
 }
 
 // Schema definition - using a mapped type for better inference
@@ -61,25 +41,19 @@ export interface Schema {
   services: Record<string, Service>
 }
 
-// Helper to create a schema from an array of services
+// Helper to create a schema from an array of services using Extract-based narrowing
 export function createSchema<const TServices extends ReadonlyArray<Service>>(config: {
   services: TServices
 }): {
   services: {
-    [K in TServices[number] as K['name']]: K
+    readonly [K in TServices[number]['name']]: Extract<TServices[number], { name: K }>
   }
 } {
-  // Build the services object manually to preserve types better
-  const services = {} as {
-    [K in TServices[number] as K['name']]: K
-  }
-
+  const serviceMap = {} as any
   for (const service of config.services) {
-    // @ts-expect-error - we know this is safe due to the mapped type
-    services[service.name] = service
+    serviceMap[service.name] = service
   }
-
-  return { services }
+  return { services: serviceMap }
 }
 
 // Type helpers to extract types from schema
