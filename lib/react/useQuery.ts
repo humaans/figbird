@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import type { QueryStatus } from '../core/internal-types.js'
-import type { Schema, ServiceItem, ServiceNames, ServiceQuery } from '../schema/types.js'
+import type { Schema, ServiceItem, ServiceQuery } from '../schema/types.js'
 import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 
@@ -15,7 +15,7 @@ export interface QueryResult<T> {
 }
 
 // Overload for schema-aware usage
-export function useGet<S extends Schema, N extends ServiceNames<S>>(
+export function useGet<S extends Schema, N extends string>(
   serviceName: N,
   resourceId: string | number,
   params?: ServiceQuery<S, N>,
@@ -48,7 +48,7 @@ export function useGet(
 }
 
 // Overload for schema-aware usage
-export function useFind<S extends Schema, N extends ServiceNames<S>>(
+export function useFind<S extends Schema, N extends string>(
   serviceName: N,
   params?: ServiceQuery<S, N>,
 ): QueryResult<ServiceItem<S, N>[]>
