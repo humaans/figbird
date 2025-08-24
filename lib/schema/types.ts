@@ -17,15 +17,16 @@ export class Service<
   TMethods extends Record<string, (...args: unknown[]) => unknown> = Record<string, never>,
   TName extends string = string,
 > {
-  constructor(
-    public readonly name: TName,
-    public readonly _phantom?: {
-      item: TItem
-      query: TQuery
-      methods: TMethods
-      name: TName
-    },
-  ) {}
+  public readonly name: TName
+  public readonly _phantom?: {
+    item: TItem
+    query: TQuery
+    methods: TMethods
+  }
+
+  constructor(name: TName) {
+    this.name = name
+  }
 
   methods<M extends Record<string, (...args: unknown[]) => unknown>>(): Service<
     TItem,
@@ -83,13 +84,13 @@ export type ServiceNames<S extends Schema> = keyof S['services'] & string
 export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = S['services'][N]
 
 export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends Service<infer I, any, any, any> ? I : never
+  S['services'][N] extends Service<infer I, any, any, any> ? I : never
 
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends Service<any, infer Q, any, any> ? Q : never
+  S['services'][N] extends Service<any, infer Q, any, any> ? Q : never
 
 export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends Service<any, any, infer M, any> ? M : never
+  S['services'][N] extends Service<any, any, infer M, any> ? M : never
 
 // Utility type to extract item type from a service
 export type Item<S> = S extends Service<infer I, any, any, any> ? I : never
