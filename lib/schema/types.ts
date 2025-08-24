@@ -3,16 +3,9 @@
  * These types enable type-safe service definitions and query inference
  */
 
-// Base service item type - all items should have an id
-export interface BaseItem {
-  id?: string | number
-  _id?: string | number
-  [key: string]: unknown
-}
-
 // Service definition with custom methods - simplified for better type inference
 export interface Service<
-  TItem extends BaseItem = BaseItem,
+  TItem = Record<string, unknown>,
   TQuery extends Record<string, unknown> = Record<string, unknown>,
   TMethods extends Record<string, (...args: unknown[]) => unknown> = Record<string, never>,
   TName extends string = string,
@@ -27,7 +20,7 @@ export interface Service<
 
 // Helper to create a service with proper literal type preservation
 export function service<
-  TItem extends BaseItem,
+  TItem,
   TName extends string,
   TQuery extends Record<string, unknown> = Record<string, unknown>,
 >(name: TName): Service<TItem, TQuery, Record<string, never>, TName> {
@@ -38,11 +31,13 @@ export function service<
 
 // Schema definition - using a mapped type for better inference
 export interface Schema {
-  services: Record<string, Service>
+  services: Record<string, Service<any, any, any, any>>
 }
 
 // Helper to create a schema from an array of services using Extract-based narrowing
-export function createSchema<const TServices extends ReadonlyArray<Service>>(config: {
+export function createSchema<
+  const TServices extends ReadonlyArray<Service<any, any, any, any>>,
+>(config: {
   services: TServices
 }): {
   services: {
@@ -69,7 +64,7 @@ export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
     string
   >
     ? TItem
-    : BaseItem
+    : Record<string, unknown>
 
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
   S,
@@ -90,7 +85,7 @@ export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> = Servic
   : Record<string, never>
 
 // Utility type to extract item type from a service
-export type Item<S> = S extends { _phantom?: { item: infer I } } ? I : BaseItem
+export type Item<S> = S extends { _phantom?: { item: infer I } } ? I : Record<string, unknown>
 
 // Utility type to extract query type from a service
 export type Query<S> = S extends { _phantom?: { query: infer Q } } ? Q : Record<string, unknown>
@@ -117,7 +112,7 @@ export type AnySchema = Schema
 
 // Type for untyped services (backward compatibility)
 export type UntypedService = Service<
-  BaseItem,
+  Record<string, unknown>,
   Record<string, unknown>,
   Record<string, never>,
   string
