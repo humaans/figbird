@@ -75,7 +75,7 @@ export function createHooks<S extends Schema = AnySchema>(): {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
     const { desc, config } = splitConfig(
-      Object.assign({ serviceName: actualServiceName, method: 'get', resourceId }, params),
+      Object.assign({ serviceName: actualServiceName, method: 'get' as const, resourceId }, params),
     )
     return useQuery<ServiceItem<S, N>>(desc, config)
   }
@@ -85,7 +85,7 @@ export function createHooks<S extends Schema = AnySchema>(): {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
     const { desc, config } = splitConfig(
-      Object.assign({ serviceName: actualServiceName, method: 'find' }, params),
+      Object.assign({ serviceName: actualServiceName, method: 'find' as const }, params),
     )
     return useQuery<ServiceItem<S, N>[]>(desc, config)
   }
