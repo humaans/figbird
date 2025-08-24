@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import type { Schema, ServiceItem, ServiceMethods } from '../schema/types.js'
 import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 
@@ -39,19 +38,10 @@ export interface UseMutationResult<T, TMethods = Record<string, never>> {
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-
-// Overload for schema-aware usage
-export function useMutation<S extends Schema, N extends string>(
-  serviceName: N,
-): UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
-// Overload for legacy/untyped usage
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function useMutation<T = any>(
   serviceName: string,
-): UseMutationResult<T, Record<string, never>>
-// Implementation
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
-export function useMutation(serviceName: string): UseMutationResult<any, any> {
+): UseMutationResult<T, Record<string, never>> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName

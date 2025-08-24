@@ -62,7 +62,11 @@ export class Figbird<S extends Schema = AnySchema> {
   }
 
   query<T>(desc: QueryDescriptor, config?: QueryConfig): QueryRef<T> {
-    return new QueryRef<T>({ desc, config: config || {}, queryStore: this.queryStore })
+    return new QueryRef<T>({
+      desc,
+      config: config || {},
+      queryStore: this.queryStore,
+    })
   }
 
   mutate<T = unknown>({

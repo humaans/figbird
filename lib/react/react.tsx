@@ -1,17 +1,22 @@
-import { createContext, ReactNode, useContext } from 'react'
+import React, { createContext, ReactNode, useContext } from 'react'
 import type { FeathersClient } from '../adapters/feathers-types.js'
 import { Figbird } from '../core/figbird.js'
 import type { AnySchema, Schema } from '../schema/types.js'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const FigbirdContext = createContext<Figbird<any> | undefined>(undefined)
+// Create a generic context factory to maintain type safety
+function createFigbirdContext<S extends Schema = AnySchema>() {
+  return createContext<Figbird<S> | undefined>(undefined)
+}
+
+// Default context for backward compatibility
+const FigbirdContext = createFigbirdContext()
 
 export function useFigbird<S extends Schema = AnySchema>(): Figbird<S> {
-  const context = useContext(FigbirdContext)
+  const context = useContext(FigbirdContext as React.Context<Figbird<S> | undefined>)
   if (!context) {
     throw new Error('useFigbird must be used within a FigbirdProvider')
   }
-  return context as Figbird<S>
+  return context
 }
 
 /**
@@ -32,5 +37,7 @@ export function FigbirdProvider<S extends Schema = AnySchema>({
   figbird,
   children,
 }: FigbirdProviderProps<S>) {
-  return <FigbirdContext.Provider value={figbird}>{children}</FigbirdContext.Provider>
+  // Cast the context to maintain type safety
+  const TypedContext = FigbirdContext as React.Context<Figbird<S> | undefined>
+  return <TypedContext.Provider value={figbird}>{children}</TypedContext.Provider>
 }

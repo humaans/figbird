@@ -68,19 +68,27 @@ export const schema = {
 }
 
 export type AppSchema = typeof schema
-```
 
-### Using the Schema
-
-Pass the schema to Figbird during initialization:
-
-```typescript
-// app.tsx
-import { Figbird, FeathersAdapter, FigbirdProvider } from 'figbird'
-import { schema } from './schema'
-
+// Pass the schema when creating Figbird
 const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ adapter, schema })
+```
+
+### Using the Schema with createHooks
+
+The cleanest approach is to use `createHooks` to create typed versions of the hooks:
+
+```typescript
+// hooks.ts
+import { createHooks } from 'figbird'
+import type { AppSchema } from './schema'
+
+// Create typed hooks once
+export const { useFind, useGet, useMutation } = createHooks<AppSchema>()
+
+// app.tsx
+import { FigbirdProvider } from 'figbird'
+import { figbird } from './setup'
 
 function App() {
   return (
@@ -91,24 +99,23 @@ function App() {
 }
 ```
 
-### Type-Safe Hooks
+### Type-Safe Components
 
-With a schema, all hooks become fully typed:
+With typed hooks, all types flow automatically:
 
 ```typescript
-import { useFind, useGet, useMutation } from 'figbird'
-import type { AppSchema } from './schema'
+// components/MyComponent.tsx
+import { useFind, useGet, useMutation } from './hooks'
 
 function MyComponent() {
   // TypeScript knows people is QueryResult<Person[]>
-  // Note: Both type parameters are required for proper type inference
-  const people = useFind<AppSchema, 'api/people'>('api/people')
+  const people = useFind('api/people')
   
   // TypeScript knows task is QueryResult<Task>
-  const task = useGet<AppSchema, 'api/tasks'>('api/tasks', 'task-id')
+  const task = useGet('api/tasks', 'task-id')
   
   // All mutations are typed
-  const { create, update, patch, remove } = useMutation<AppSchema, 'api/tasks'>('api/tasks')
+  const { create, update, patch, remove } = useMutation('api/tasks')
   
   // TypeScript enforces correct property types
   const handleCreate = async () => {
@@ -133,59 +140,6 @@ function MyComponent() {
 }
 ```
 
-### Creating Custom Hooks to Simplify Usage
-
-To avoid repeating the service name twice, you can create custom hooks for your services:
-
-```typescript
-// hooks/useServices.ts
-import { useFind, useGet, useMutation } from 'figbird'
-import type { AppSchema } from '../schema'
-
-// Create typed hooks for each service
-export function usePeople(params?: Parameters<typeof useFind>[1]) {
-  return useFind<AppSchema, 'api/people'>('api/people', params)
-}
-
-export function usePerson(id: string | number, params?: Parameters<typeof useGet>[2]) {
-  return useGet<AppSchema, 'api/people'>('api/people', id, params)
-}
-
-export function usePeopleMutation() {
-  return useMutation<AppSchema, 'api/people'>('api/people')
-}
-
-export function useTasks(params?: Parameters<typeof useFind>[1]) {
-  return useFind<AppSchema, 'api/tasks'>('api/tasks', params)
-}
-
-export function useTask(id: string | number, params?: Parameters<typeof useGet>[2]) {
-  return useGet<AppSchema, 'api/tasks'>('api/tasks', id, params)
-}
-
-export function useTaskMutation() {
-  return useMutation<AppSchema, 'api/tasks'>('api/tasks')
-}
-```
-
-Now in your components, usage becomes much cleaner:
-
-```typescript
-import { usePeople, usePerson, useTaskMutation } from '../hooks/useServices'
-
-function MyComponent() {
-  // Clean, typed API without repetition
-  const people = usePeople()
-  const person = usePerson('person-123')
-  const { create, patch } = useTaskMutation()
-  
-  // All types are inferred correctly
-  if (people.data) {
-    people.data.forEach(p => console.log(p.name)) // ✅ TypeScript knows p.name is string
-  }
-}
-```
-
 ## Advanced Features
 
 ### Custom Query Parameters
@@ -205,8 +159,8 @@ const schema = {
   ],
 }
 
-// Now you can use custom query parameters
-const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks', {
+// Now you can use custom query parameters with your typed hooks
+const tasks = useFind('api/tasks', {
   query: {
     completed: false,
     $search: 'urgent', // ✅ Custom parameter is recognized
@@ -228,9 +182,8 @@ const schema = {
 }
 
 // Use the actual service name in your components
-// Both type parameters are needed for type inference
-const people = useFind<AppSchema, 'api/people'>('api/people')
-const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks')
+const people = useFind('api/people')
+const tasks = useFind('api/tasks')
 ```
 
 ### Type Extraction Utilities
@@ -283,6 +236,21 @@ const unsubscribe = query.subscribe(state => {
 3. **Use type extraction utilities** to avoid duplicating type definitions
 4. **Gradually adopt** the schema system - you can migrate one service at a time
 
+## Alternative: Using Untyped Hooks
+
+If you prefer not to use `createHooks`, you can still use the standard hooks with less type safety:
+
+```typescript
+import { useFind, useGet, useMutation } from 'figbird'
+
+function MyComponent() {
+  // These return any types
+  const people = useFind('api/people')
+  const task = useGet('api/tasks', 'task-id')
+  const { create } = useMutation('api/tasks')
+}
+```
+
 ## Troubleshooting
 
 ### "Type 'X' does not satisfy the constraint 'BaseItem'"
@@ -305,8 +273,8 @@ Custom operators (like `$search`, `$asOf`) are automatically detected and handle
 
 Make sure you:
 1. Pass the schema to `new Figbird({ adapter, schema })`
-2. Use both type parameters in hooks: `useFind<AppSchema, 'service-name'>('service-name')`
-3. Import types from the correct location
+2. Use `createHooks<AppSchema>()` to create typed hooks
+3. Import the typed hooks in your components
 4. Use `as const` assertion when defining the schema
 
 ## Examples
