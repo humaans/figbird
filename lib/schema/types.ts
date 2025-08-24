@@ -69,11 +69,17 @@ export function createSchema<const TServices extends ReadonlyArray<Service>>(con
     [K in TServices[number] as K['name']]: K
   }
 } {
-  return {
-    services: Object.fromEntries(config.services.map(s => [s.name, s])) as {
-      [K in TServices[number] as K['name']]: K
-    },
+  // Build the services object manually to preserve types better
+  const services = {} as {
+    [K in TServices[number] as K['name']]: K
   }
+
+  for (const service of config.services) {
+    // @ts-expect-error - we know this is safe due to the mapped type
+    services[service.name] = service
+  }
+
+  return { services }
 }
 
 // Type helpers to extract types from schema
@@ -81,14 +87,15 @@ export type ServiceNames<S extends Schema> = keyof S['services'] & string
 
 export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = S['services'][N]
 
-export type ServiceItem<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
-  S,
-  N
->['_phantom'] extends {
-  item: infer I
-}
-  ? I
-  : BaseItem
+export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends Service<
+    infer TItem,
+    Record<string, unknown>,
+    Record<string, (...args: unknown[]) => unknown>,
+    string
+  >
+    ? TItem
+    : BaseItem
 
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
   S,
