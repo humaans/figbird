@@ -384,7 +384,9 @@ test('backward compatibility - untyped usage still works', t => {
     return (
       <div>
         <div className='notes-count'>{notes.data?.length ?? 0}</div>
-        <div className='note-content'>{(note.data as any)?.content ?? 'Loading...'}</div>
+        <div className='note-content'>
+          {String((note.data as Record<string, unknown> | null)?.content ?? 'Loading...')}
+        </div>
       </div>
     )
   }
@@ -427,6 +429,6 @@ test('type extraction utilities', t => {
     $asOf: new Date(),
   } as TaskQueryType
 
-  t.truthy((query as any).$search)
-  t.truthy((query as any).$asOf)
+  t.truthy(query.$search)
+  t.truthy(query.$asOf)
 })
