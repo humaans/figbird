@@ -25,7 +25,6 @@ interface Note {
   _xid?: number
   _foo?: number
   version?: number
-  [key: string]: unknown
 }
 
 // Create schema for typed hooks
@@ -34,7 +33,11 @@ const schema = createSchema({
   services: [service<Note, 'notes'>('notes')],
 })
 
-const { useGet: useTypedGet, useFind: useTypedFind, useMutation: useTypedMutation } = createHooks<typeof schema>()
+const {
+  useGet: useTypedGet,
+  useFind: useTypedFind,
+  useMutation: useTypedMutation,
+} = createHooks<typeof schema>()
 
 interface CreateFeathersOptions {
   skipTotal?: boolean

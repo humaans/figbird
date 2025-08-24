@@ -5,7 +5,6 @@ export { Figbird } from './core/figbird.js'
 export { createSchema, findServiceByName, hasSchema, service } from './schema/types.js'
 export type {
   AnySchema,
-  BaseItem,
   Item,
   Methods,
   Query,

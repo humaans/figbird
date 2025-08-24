@@ -6,7 +6,6 @@ interface Person {
   name: string
   email: string
   role: 'admin' | 'user'
-  [key: string]: unknown
 }
 
 interface Task {
@@ -15,7 +14,6 @@ interface Task {
   completed: boolean
   priority: number
   tags: string[]
-  [key: string]: unknown
 }
 
 // Create services using the service function

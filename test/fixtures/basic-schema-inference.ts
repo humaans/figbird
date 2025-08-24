@@ -5,7 +5,6 @@ interface Person {
   id: string
   name: string
   email: string
-  [key: string]: unknown
 }
 
 export const schema = createSchema({
