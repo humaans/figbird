@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import type { QueryStatus } from '../core/internal-types.js'
-import type { Schema, ServiceItem, ServiceQuery } from '../schema/types.js'
 import { findServiceByName } from '../schema/types.js'
 import { useFigbird } from './react.js'
 
@@ -14,23 +13,8 @@ export interface QueryResult<T> {
   refetch: () => void
 }
 
-// Overload for schema-aware usage
-export function useGet<S extends Schema, N extends string>(
+export function useGet<N extends string>(
   serviceName: N,
-  resourceId: string | number,
-  params?: ServiceQuery<S, N>,
-): QueryResult<ServiceItem<S, N>>
-// Overload for legacy/untyped usage
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
-export function useGet<T = any>(
-  serviceName: string,
-  resourceId: string | number,
-  params?: Record<string, unknown>,
-): QueryResult<T>
-// Implementation
-// eslint-disable-next-line no-redeclare
-export function useGet(
-  serviceName: string,
   resourceId: string | number,
   params: Record<string, unknown> = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,21 +31,8 @@ export function useGet(
   return useQuery(desc, config)
 }
 
-// Overload for schema-aware usage
-export function useFind<S extends Schema, N extends string>(
+export function useFind<N extends string>(
   serviceName: N,
-  params?: ServiceQuery<S, N>,
-): QueryResult<ServiceItem<S, N>[]>
-// Overload for legacy/untyped usage
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, no-redeclare
-export function useFind<T = any>(
-  serviceName: string,
-  params?: Record<string, unknown>,
-): QueryResult<T[]>
-// Implementation
-// eslint-disable-next-line no-redeclare
-export function useFind(
-  serviceName: string,
   params: Record<string, unknown> = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): QueryResult<any[]> {

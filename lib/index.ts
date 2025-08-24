@@ -25,6 +25,7 @@ export { FeathersAdapter } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
 // react hooks
+export { createHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFeathers, useFigbird } from './react/react.js'
 export { useMutation } from './react/useMutation.js'
 export { useFind, useGet } from './react/useQuery.js'

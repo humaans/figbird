@@ -1,14 +1,15 @@
 import test from 'ava'
 import { useEffect, useState } from 'react'
 import {
+  createHooks,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
   service,
   useFigbird,
-  useFind,
-  useGet,
-  useMutation,
+  useFind as useUntypedFind,
+  useGet as useUntypedGet,
+  useMutation as useUntypedMutation,
 } from '../lib'
 import { dom, mockFeathers } from './helpers'
 
@@ -104,9 +105,12 @@ test('schema-based type inference', t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter, schema })
 
+  // Create typed hooks for this schema
+  const { useFind, useGet, useMutation } = createHooks<AppSchema>()
+
   function PersonList() {
     // Type is inferred as QueryResult<Person[]>
-    const people = useFind<AppSchema, 'api/people'>('api/people')
+    const people = useFind('api/people')
 
     // This would be a TypeScript error if uncommented:
     // const wrongService = useFind<AppSchema>('nonexistent')
@@ -131,9 +135,9 @@ test('schema-based type inference', t => {
 
     return (
       <div>
-        {people.data.map(person => (
-          <div key={(person as Person).id} className='person'>
-            {(person as Person).name} - {(person as Person).role}
+        {(people.data as Person[] | null)?.map(person => (
+          <div key={person.id} className='person'>
+            {person.name} - {person.role}
           </div>
         ))}
       </div>
@@ -142,7 +146,7 @@ test('schema-based type inference', t => {
 
   function TaskDetail() {
     // Type is inferred as QueryResult<Task>
-    const task = useGet<AppSchema, 'api/tasks'>('api/tasks', 't1')
+    const task = useGet('api/tasks', 't1')
 
     if (!task.data) return <div>Loading...</div>
 
@@ -159,7 +163,7 @@ test('schema-based type inference', t => {
   }
 
   function TaskManager() {
-    const { create, update, patch, remove } = useMutation<AppSchema, 'api/tasks'>('api/tasks')
+    const { create, update, patch, remove } = useMutation('api/tasks')
     const [creating, setCreating] = useState(false)
 
     const handleCreate = async () => {
@@ -218,7 +222,7 @@ test('schema-based type inference', t => {
 
   function ProjectsWithCustomQuery() {
     // Custom query parameters can be used
-    const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks', {
+    const tasks = useFind('api/tasks', {
       query: {
         completed: false,
         priority: 1,
@@ -317,10 +321,13 @@ test('schema with array of services', t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter, schema })
 
+  // Create typed hooks
+  const { useFind } = createHooks<AppSchema>()
+
   function App() {
     // Use the actual service names
-    const people = useFind<AppSchema, 'api/people'>('api/people')
-    const tasks = useFind<AppSchema, 'api/tasks'>('api/tasks')
+    const people = useFind('api/people')
+    const tasks = useFind('api/tasks')
 
     return (
       <div>
@@ -347,6 +354,11 @@ test('schema with array of services', t => {
 
 test('backward compatibility - untyped usage still works', t => {
   const { render, unmount, flush, $ } = dom()
+
+  // Use the untyped hooks for backward compatibility
+  const useFind = useUntypedFind
+  const useGet = useUntypedGet
+  const useMutation = useUntypedMutation
 
   const feathers = mockFeathers({
     notes: {
