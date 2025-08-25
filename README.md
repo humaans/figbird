@@ -12,6 +12,29 @@ Fetch some data with `const { data } = useFind('notes')` and your components wil
 - `useFind`
 - `useMutation`
 
+### Typed Metadata
+
+Figbird now provides full TypeScript support for adapter-specific metadata. When using the FeathersAdapter, pagination metadata like `total`, `limit`, and `skip` are automatically typed:
+
+```typescript
+const { data, meta } = useFind('todos')
+// meta.total is typed as number | undefined
+// meta.limit is typed as number | undefined  
+// meta.skip is typed as number | undefined
+```
+
+Create hooks with your adapter's meta type for full IntelliSense support:
+
+```typescript
+import { createHooks, FeathersAdapter } from 'figbird'
+import type { FeathersFindMeta } from 'figbird'
+
+// Create typed hooks with FeathersFindMeta
+const { useFind, useGet } = createHooks<MySchema, FeathersFindMeta>()
+```
+
+This feature is adapter-agnostic - custom adapters can provide their own metadata types for cursor-based pagination or other patterns.
+
 ### Live Queries
 
 Works with Feathers realtime events and with local data mutations. Once a record is created/modified/removed all queries referencing this record get updated. For example, if your data is fetched using `useFind('notes', { query: { tag: 'ideas' } })` and you then patch some note with `patch({ tag: 'ideas' })` - the query will updated immediately and rerender all components referencing that query. Adjust behaviour per query:
