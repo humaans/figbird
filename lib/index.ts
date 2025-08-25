@@ -46,7 +46,7 @@ export type {
   FeathersParams,
   FeathersQuery,
   FeathersService,
-} from './adapters/feathers-types.js'
+} from './adapters/feathers.js'
 
 // Adapter options for creating custom adapters
 export type { PrepareQueryOptions } from './adapters/matcher.js'

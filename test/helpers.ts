@@ -1,9 +1,10 @@
 import EventEmitter from 'events'
 import { JSDOM } from 'jsdom'
-import { act } from 'react'
 import type { ReactElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { act } from 'react'
 import type { Root } from 'react-dom/client'
+import { createRoot } from 'react-dom/client'
+import type { FeathersItem } from '../lib/adapters/feathers.js'
 import type { FeathersClient } from '../lib/index.js'
 
 interface DomHelpers {
@@ -86,8 +87,6 @@ export const swallowErrors = (yourTestFn: () => void): void => {
   yourTestFn()
   console.error = error
 }
-
-import type { FeathersItem } from '../lib/adapters/feathers-types.js'
 
 interface ServiceData {
   [key: string]: FeathersItem

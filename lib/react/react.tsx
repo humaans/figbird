@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import React, { createContext, useContext } from 'react'
-import type { FeathersClient } from '../adapters/feathers-types.js'
+import type { FeathersClient } from '../adapters/feathers.js'
 import { Figbird } from '../core/figbird.js'
 import type { AnySchema, Schema } from '../schema/types.js'
 

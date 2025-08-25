@@ -1,11 +1,4 @@
 import type { Adapter, EventHandlers, Response } from '../types.js'
-import type {
-  FeathersClient,
-  FeathersFindMeta,
-  FeathersItem,
-  FeathersParams,
-  FeathersService,
-} from './feathers-types.js'
 import { matcher, type PrepareQueryOptions } from './matcher.js'
 
 type IdExtractor<T> = (item: T) => string | number | undefined
@@ -13,6 +6,83 @@ type UpdatedAtExtractor<T> = (item: T) => string | Date | number | null | undefi
 
 type IdFieldType<T = FeathersItem> = string | IdExtractor<T>
 type UpdatedAtFieldType<T = FeathersItem> = string | UpdatedAtExtractor<T>
+
+// Feathers-specific types for the Feathers adapter
+
+/**
+ * Feathers query parameters
+ */
+export interface FeathersQuery {
+  $limit?: number
+  $skip?: number
+  $sort?: Record<string, 1 | -1>
+  $select?: string[]
+  $or?: Array<Record<string, unknown>>
+  $and?: Array<Record<string, unknown>>
+  [key: string]: unknown
+}
+
+/**
+ * Feathers service method parameters
+ */
+export interface FeathersParams {
+  query?: FeathersQuery
+  paginate?: boolean | { default?: boolean; max?: number }
+  provider?: string
+  route?: Record<string, string>
+  connection?: unknown
+  headers?: Record<string, string>
+  [key: string]: unknown
+}
+
+/**
+ * Feathers-specific metadata for find operations
+ */
+export interface FeathersFindMeta {
+  total?: number
+  limit?: number
+  skip?: number
+  [key: string]: unknown
+}
+
+/**
+ * Feathers item with standard id and timestamp fields
+ */
+export interface FeathersItem {
+  id?: string | number
+  _id?: string | number
+  updatedAt?: string | Date | number | null
+  updated_at?: string | Date | number | null
+  createdAt?: string | Date | number | null
+  created_at?: string | Date | number | null
+  [key: string]: unknown
+}
+
+/**
+ * Feathers service interface
+ */
+export interface FeathersService<T = FeathersItem> {
+  get(id: string | number, params?: FeathersParams): Promise<T>
+  find(
+    params?: FeathersParams,
+  ): Promise<{ data: T[]; total?: number; limit?: number; skip?: number } | T[]>
+  create(data: Partial<T>, params?: FeathersParams): Promise<T>
+  create(data: T[], params?: FeathersParams): Promise<T[]>
+  update(id: string | number, data: Partial<T>, params?: FeathersParams): Promise<T>
+  patch(id: string | number, data: Partial<T>, params?: FeathersParams): Promise<T>
+  remove(id: string | number, params?: FeathersParams): Promise<T>
+  on(event: string, listener: (data: T) => void): void
+  off(event: string, listener: (data: T) => void): void
+  [method: string]: unknown
+}
+
+/**
+ * Feathers client interface
+ */
+export interface FeathersClient {
+  service(name: string): FeathersService
+  [key: string]: unknown
+}
 
 interface FeathersAdapterOptions<T = FeathersItem> {
   idField?: IdFieldType<T>
