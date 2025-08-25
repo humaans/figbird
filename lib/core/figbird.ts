@@ -43,7 +43,7 @@ export interface QueryState<T, TMeta = Record<string, unknown>> {
 export interface Query<T = unknown, TMeta = Record<string, unknown>> {
   queryId: string
   desc: QueryDescriptor
-  config: QueryConfig
+  config: QueryConfig<T>
   pending: boolean
   dirty: boolean
   filterItem: (item: T) => boolean
@@ -72,18 +72,19 @@ export interface QueryDescriptor {
 /**
  * Query configuration
  */
-export interface QueryConfig {
+export interface QueryConfig<TItem = unknown> {
   skip?: boolean
   realtime?: 'merge' | 'refetch' | 'disabled'
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
   allPages?: boolean
-  matcher?: (query: any) => (item: any) => boolean
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  matcher?: (query: any) => (item: TItem) => boolean
 }
 
 /**
  * Combined config for internal use
  */
-export interface CombinedConfig extends QueryDescriptor, QueryConfig {
+export interface CombinedConfig<TItem = unknown> extends QueryDescriptor, QueryConfig<TItem> {
   [key: string]: unknown
 }
 
@@ -141,7 +142,7 @@ export class Figbird<
     return this.queryStore.getState()
   }
 
-  query<T>(desc: QueryDescriptor, config?: QueryConfig): QueryRef<T, TParams, TMeta> {
+  query<T>(desc: QueryDescriptor, config?: QueryConfig<T>): QueryRef<T, TParams, TMeta> {
     return new QueryRef<T, TParams, TMeta>({
       desc,
       config: config || {},
@@ -170,9 +171,11 @@ export class Figbird<
  * A helper to split the properties into a query descriptor `desc` (including 'params')
  * and figbird-specific query configuration `config`
  */
-export function splitConfig(combinedConfig: CombinedConfig): {
+export function splitConfig<TItem = unknown>(
+  combinedConfig: CombinedConfig<TItem>,
+): {
   desc: QueryDescriptor
-  config: QueryConfig
+  config: QueryConfig<TItem>
 } {
   const {
     serviceName,
@@ -197,7 +200,7 @@ export function splitConfig(combinedConfig: CombinedConfig): {
 
   // figbird specific config options that
   // drive the query lifecycle
-  let config: QueryConfig = {
+  let config: QueryConfig<TItem> = {
     skip,
     realtime,
     fetchPolicy,
@@ -219,7 +222,7 @@ class QueryRef<
 > {
   #queryId: string
   #desc: QueryDescriptor
-  #config: QueryConfig
+  #config: QueryConfig<T>
   #queryStore: QueryStore<TParams, TMeta>
 
   constructor({
@@ -228,7 +231,7 @@ class QueryRef<
     queryStore,
   }: {
     desc: QueryDescriptor
-    config: QueryConfig
+    config: QueryConfig<T>
     queryStore: QueryStore<TParams, TMeta>
   }) {
     this.#queryId = `q/${hashObject({ desc, config })}`
@@ -237,7 +240,7 @@ class QueryRef<
     this.#queryStore = queryStore
   }
 
-  details(): { queryId: string; desc: QueryDescriptor; config: QueryConfig } {
+  details(): { queryId: string; desc: QueryDescriptor; config: QueryConfig<T> } {
     return {
       queryId: this.#queryId,
       desc: this.#desc,
@@ -320,10 +323,12 @@ class QueryStore<
           service.queries.set(queryId, {
             queryId,
             desc,
-            config,
+            config: config as QueryConfig<unknown>,
             pending: !config.skip,
             dirty: false,
-            filterItem: this.#createItemFilter<unknown>(desc, config) as (item: unknown) => boolean,
+            filterItem: this.#createItemFilter<unknown>(desc, config as QueryConfig<unknown>) as (
+              item: unknown,
+            ) => boolean,
             state: config.skip
               ? {
                   data: null,
@@ -346,7 +351,7 @@ class QueryStore<
     }
   }
 
-  #createItemFilter<T>(desc: QueryDescriptor, config: QueryConfig): ItemMatcher<T> {
+  #createItemFilter<T>(desc: QueryDescriptor, config: QueryConfig<T>): ItemMatcher<T> {
     // if this query is not using the realtime mode
     // we will never be merging events into the cache
     // and will never call the matcher, so to avoid
@@ -360,7 +365,8 @@ class QueryStore<
 
     const query = (desc.params as Record<string, unknown>)?.query || null
     if (config.matcher) {
-      return config.matcher(query)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return config.matcher(query as any)
     }
     return this.#adapter.matcher(query) as ItemMatcher<T>
   }

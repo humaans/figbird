@@ -7,7 +7,7 @@ import { useQuery, type QueryResult } from './useQuery.js'
 /**
  * Combined params type that includes both Figbird's QueryConfig and adapter params
  */
-type CombinedParams<TParams> = TParams & Partial<QueryConfig>
+type CombinedParams<TParams, TItem = unknown> = TParams & Partial<QueryConfig<TItem>>
 
 /**
  * Strongly-typed call signatures per service name.
@@ -21,7 +21,7 @@ type UseGetForSchema<
 > = <N extends ServiceNames<S>>(
   serviceName: N,
   resourceId: string | number,
-  params?: CombinedParams<TParams>,
+  params?: CombinedParams<TParams, ServiceItem<S, N>>,
 ) => QueryResult<ServiceItem<S, N>, TMeta>
 
 type UseFindForSchema<
@@ -30,7 +30,7 @@ type UseFindForSchema<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 > = <N extends ServiceNames<S>>(
   serviceName: N,
-  params?: CombinedParams<TParams>,
+  params?: CombinedParams<TParams, ServiceItem<S, N>>,
 ) => QueryResult<ServiceItem<S, N>[], TMeta>
 
 type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
@@ -82,11 +82,11 @@ export function createHooks<F extends Figbird<any, any, any>>(
   function useTypedGet<N extends ServiceNames<S>>(
     serviceName: N,
     resourceId: string | number,
-    params?: CombinedParams<TParams>,
+    params?: CombinedParams<TParams, ServiceItem<S, N>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    const { desc, config } = splitConfig(
+    const { desc, config } = splitConfig<ServiceItem<S, N>>(
       Object.assign({ serviceName: actualServiceName, method: 'get' as const, resourceId }, params),
     )
     return useQuery<ServiceItem<S, N>, TMeta>(desc, config)
@@ -94,11 +94,11 @@ export function createHooks<F extends Figbird<any, any, any>>(
 
   function useTypedFind<N extends ServiceNames<S>>(
     serviceName: N,
-    params?: CombinedParams<TParams>,
+    params?: CombinedParams<TParams, ServiceItem<S, N>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    const { desc, config } = splitConfig(
+    const { desc, config } = splitConfig<ServiceItem<S, N>[]>(
       Object.assign({ serviceName: actualServiceName, method: 'find' as const }, params),
     )
     return useQuery<ServiceItem<S, N>[], TMeta>(desc, config)

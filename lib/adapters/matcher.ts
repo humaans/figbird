@@ -1,6 +1,6 @@
 import sift from 'sift'
 
-interface Query {
+export interface Query {
   [key: string]: string | number | boolean | null | undefined | Query | Query[]
 }
 

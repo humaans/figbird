@@ -1673,13 +1673,14 @@ test('useFind - with custom matcher', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers } = app()
   const { matcher: defaultMatcher } = await import('../lib/adapters/matcher')
-  const customMatcher = (query: Parameters<typeof defaultMatcher>[0]) => (item: Note) => {
-    const match = defaultMatcher(query)
-    return match(item) && !!item.foo
-  }
-
   function Note() {
-    const notes = useFind('notes', { query: { tag: 'post' }, matcher: customMatcher })
+    const notes = useFind('notes', {
+      query: { tag: 'post' },
+      matcher: query => item => {
+        const match = defaultMatcher(query)
+        return match(item) && !!item.foo
+      },
+    })
     return <NoteList notes={notes} />
   }
 
