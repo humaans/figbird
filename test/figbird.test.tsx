@@ -566,7 +566,7 @@ test('useMutation handles errors', async t => {
 test('useFeathers', async t => {
   const { render, unmount } = dom()
 
-  let feathersFromHook: FeathersClient | undefined
+  let feathersFromHook: FeathersClient
 
   function Content() {
     const feathers = useFeathers()
@@ -585,7 +585,7 @@ test('useFeathers', async t => {
     </App>,
   )
 
-  t.is(feathersFromHook, feathers)
+  t.is(feathersFromHook!, feathers)
 
   unmount()
 })
@@ -793,7 +793,7 @@ test('useFind with refetch', async t => {
 
 test('useFind with refetch while already fetching', async t => {
   const { render, flush, unmount, $ } = dom()
-  let refetch: (() => void) | undefined
+  let refetch: () => void
 
   function Note() {
     const notes = useFind('notes')
@@ -866,7 +866,7 @@ test('useFind with refetch while already fetching', async t => {
 })
 
 test('refetch only works with active listeners', async t => {
-  let refetch: (() => void) | undefined
+  let refetch: () => void
   let calls = 0
 
   function Note() {
@@ -2483,7 +2483,7 @@ test('useFind with custom query operators does not crash when realtime is not me
 
 test('mutations work correctly when no queries are active', async t => {
   const { render, flush, unmount } = dom()
-  let createResult: Note | undefined, patchResult: Note | undefined, removeResult: Note | undefined
+  let createResult: Note, patchResult: Note, removeResult: Note
   let mutationsCompleted = false
 
   function MutateOnly() {
@@ -2531,10 +2531,7 @@ test('mutations work correctly when no queries are active', async t => {
 
 test('mutate methods return the mutated item', async t => {
   const { render, flush, unmount } = dom()
-  let createResult: Note | undefined,
-    patchResult: Note | undefined,
-    updateResult: Note | undefined,
-    removeResult: Note | undefined
+  let createResult: Note, patchResult: Note, updateResult: Note, removeResult: Note
 
   function Notes() {
     const { create, patch, update, remove } = useMutation('notes')

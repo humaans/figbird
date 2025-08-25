@@ -23,10 +23,15 @@ export function useFigbird<S extends Schema = AnySchema>(): Figbird<S> {
 /**
  * Specific to Feathers adapter. Might remove in the future.
  */
-export function useFeathers(): FeathersClient | undefined {
+export function useFeathers(): FeathersClient {
   const figbird = useFigbird()
   const adapter = figbird.adapter as { feathers?: FeathersClient }
-  return adapter?.feathers
+
+  if (!adapter?.feathers) {
+    throw new Error('useFeathers must be used with a Feathers adapter')
+  }
+
+  return adapter.feathers
 }
 
 interface FigbirdProviderProps<S extends Schema = AnySchema> {
