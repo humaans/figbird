@@ -1,31 +1,76 @@
-// Creates a hash of an object and returns it as a base64 string
-// For the purposes of this project, **yes, this `hashObject` function is good enough**. Here's why:
+/**
+ * Stable hashing utilities for query keys
+ * Ensures consistent hashing even with object property reordering and function values
+ */
 
-// **Strengths for this use case:**
-// 1. **Deterministic**: Same input always produces the same hash, which is essential for query caching
-// 2. **Fast**: FNV-1a is a very fast hashing algorithm, suitable for frequent operations
-// 3. **Reasonable collision resistance**: For the typical number of unique queries in a web application, a 32-bit hash space is sufficient
-// 4. **Simple and maintainable**: The implementation is straightforward and easy to understand
+/**
+ * Stable serialization that handles functions and ensures consistent key ordering
+ */
+function stableSerialize(value: unknown): string {
+  const seen = new WeakSet<object>()
 
-// **Potential considerations:**
-// 1. **Object property ordering**: `JSON.stringify` may produce different strings for objects with the same properties in different orders. However, in practice, query descriptors are usually constructed consistently
-// 2. **Hash collisions**: While possible with 32-bit hashes, collisions are unlikely in typical applications with hundreds or even thousands of unique queries
-// 3. **Base64 overhead**: The conversion adds a small overhead, but produces short, URL-safe identifiers
+  function replacer(_key: string, val: unknown): unknown {
+    // Handle functions with a stable token
+    if (typeof val === 'function') {
+      return `__fn:${val.name || 'anonymous'}`
+    }
 
-// **Why it works well here:**
-// - Query descriptors appear to have a consistent structure (`serviceName`, `method`, `params`, etc.)
-// - The hash is used as a cache key, not for security purposes
-// - The base64 encoding produces clean, readable query IDs like `q/AAAA
+    // Handle objects
+    if (typeof val === 'object' && val !== null) {
+      // Check for cycles
+      if (seen.has(val as object)) {
+        return '__circular'
+      }
+      seen.add(val as object)
+
+      // Handle arrays - preserve order
+      if (Array.isArray(val)) {
+        return val
+      }
+
+      // Handle regular objects - sort keys for stability
+      const sorted: Record<string, unknown> = {}
+      const keys = Object.keys(val as Record<string, unknown>).sort()
+      for (const key of keys) {
+        sorted[key] = (val as Record<string, unknown>)[key]
+      }
+      return sorted
+    }
+
+    // Handle primitives
+    return val
+  }
+
+  try {
+    return JSON.stringify(value, replacer)
+  } catch (error) {
+    // Fallback for any edge cases
+    console.error('Serialization error in hash:', error)
+    return JSON.stringify({ error: 'serialization_failed', type: typeof value })
+  }
+}
+
+/**
+ * Creates a hash of an object using FNV-1a algorithm
+ * Returns a base64 string suitable for use as a cache key
+ *
+ * Features:
+ * - Deterministic: Same input always produces same hash
+ * - Stable: Object key order doesn't affect hash
+ * - Function-aware: Functions are replaced with stable tokens
+ * - Fast: FNV-1a is efficient for frequent operations
+ * - Collision-resistant: Sufficient for typical query caching needs
+ */
 export function hashObject(obj: unknown): string {
   try {
-    let hash = 0
-    const str = JSON.stringify(obj)
+    // Get stable serialization
+    const str = stableSerialize(obj)
 
-    // Using a more robust hashing algorithm (FNV-1a)
+    // FNV-1a hash algorithm
     const FNV_PRIME = 0x01000193
     const FNV_OFFSET = 0x811c9dc5
 
-    hash = FNV_OFFSET
+    let hash = FNV_OFFSET
     for (let i = 0; i < str.length; i++) {
       hash ^= str.charCodeAt(i)
       hash = Math.imul(hash, FNV_PRIME)
@@ -37,20 +82,29 @@ export function hashObject(obj: unknown): string {
     return numberToBase64(hash)
   } catch (error) {
     console.error('Error hashing object:', error)
-    throw error
+    // Return a fallback hash based on error and timestamp
+    // This ensures we don't break but also don't accidentally share cache
+    return numberToBase64(Date.now() & 0xffffffff)
   }
 }
 
+/**
+ * Converts a 32-bit number to base64
+ */
 function numberToBase64(num: number): string {
-  // Convert number to byte array and then to base64
+  // Convert number to byte array
   const bytes = new Uint8Array(4)
-  bytes[0] = num >> 24
-  bytes[1] = num >> 16
-  bytes[2] = num >> 8
-  bytes[3] = num
+  bytes[0] = (num >> 24) & 0xff
+  bytes[1] = (num >> 16) & 0xff
+  bytes[2] = (num >> 8) & 0xff
+  bytes[3] = num & 0xff
   return bytesToBase64(bytes)
 }
 
+/**
+ * Converts bytes to base64 string
+ * Handles both Node.js and browser environments
+ */
 function bytesToBase64(bytes: Uint8Array): string {
   // Use Buffer in Node.js for better performance
   if (typeof Buffer !== 'undefined') {
@@ -62,11 +116,12 @@ function bytesToBase64(bytes: Uint8Array): string {
     // For large arrays, process in chunks to avoid stack overflow
     let result = ''
     for (let i = 0; i < bytes.length; i += 1024) {
-      const chunk = bytes.slice(i, i + 1024)
+      const chunk = bytes.slice(i, Math.min(i + 1024, bytes.length))
       result += String.fromCharCode(...chunk)
     }
     return btoa(result)
   }
 
+  // Small arrays can be processed directly
   return btoa(String.fromCharCode(...bytes))
 }

@@ -24,7 +24,14 @@ export { FeathersAdapter } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
 // Adapter interface and types
-export type { Adapter, EventHandlers, QueryResponse } from './adapters/adapter.js'
+export type {
+  Adapter,
+  AdapterMeta,
+  AdapterParams,
+  AdapterQuery,
+  EventHandlers,
+  QueryResponse,
+} from './adapters/adapter.js'
 
 // react hooks
 export { createHooks } from './react/createHooks.js'

@@ -111,18 +111,18 @@ export function useMutation<T = any, TMethods = Record<string, never>>(
   )
 
   // Create typed methods proxy for custom service methods
+  // Note: The phantom property is only for type inference and doesn't exist at runtime
+  // We create a proxy that will work for any method name passed to it
   const methods = useMemo(() => {
-    if (!service || !service._phantom?.methods) {
-      return {} as TMethods
+    // The actual method names come from the TMethods type parameter
+    // At runtime, we create a proxy that forwards all calls through mutate
+    const handler = {
+      get(_target: unknown, methodName: string) {
+        return (...args: unknown[]) => mutate(methodName, ...args)
+      },
     }
-
-    const methodsProxy: Record<string, (...args: unknown[]) => Promise<unknown>> = {}
-    // This is just for typing, actual methods are called via mutate
-    for (const methodName in service._phantom.methods) {
-      methodsProxy[methodName] = (...args: unknown[]) => mutate(methodName, ...args)
-    }
-    return methodsProxy as TMethods
-  }, [service, mutate])
+    return new Proxy({}, handler) as TMethods
+  }, [mutate])
 
   return useMemo(
     () => ({

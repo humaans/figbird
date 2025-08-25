@@ -1,13 +1,6 @@
 import test from 'ava'
 import React, { StrictMode, useEffect, useState } from 'react'
-import type {
-  FeathersClient,
-  FeathersFindMeta,
-  FeathersParams,
-  QueryResult,
-  QueryStatus,
-  UseMutationResult,
-} from '../lib'
+import type { FeathersClient, QueryResult, QueryStatus, UseMutationResult } from '../lib'
 import {
   createHooks,
   createSchema,
@@ -58,7 +51,8 @@ const createFeathers = ({ skipTotal }: CreateFeathersOptions = {}) =>
 
 interface AppOptions {
   feathers?: ReturnType<typeof mockFeathers>
-  figbird?: Figbird<AppSchema, FeathersParams, FeathersFindMeta>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  figbird?: Figbird<AppSchema, any>
   config?: Record<string, unknown>
 }
 
@@ -66,10 +60,10 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
   feathers = feathers || createFeathers()
   const adapter = new FeathersAdapter(feathers, config)
   // Create a properly typed figbird instance
-  const figbirdInstance: Figbird<AppSchema, FeathersParams, FeathersFindMeta> =
+  const figbirdInstance: Figbird<AppSchema, typeof adapter> =
     figbird || new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
 
-  // Now createHooks can properly infer types from figbirdInstance
+  // Create typed hooks from the figbird instance
   const { useGet, useFind, useMutation } = createHooks(figbirdInstance)
 
   function App({ children }: { children?: React.ReactNode }) {
@@ -1774,9 +1768,9 @@ test('items get updated in cache even if not currently relevant to any query', a
   })
 
   t.deepEqual(serialize(figbird.getState().get('notes')?.itemQueryIndex), {
-    1: ['q/BTSlpA=='],
-    2: ['q/BTSlpA=='],
-    3: ['q/BTSlpA=='],
+    1: ['q/MaxUYg=='],
+    2: ['q/MaxUYg=='],
+    3: ['q/MaxUYg=='],
   })
 
   await flush(async () => {
@@ -1810,8 +1804,8 @@ test('items get updated in cache even if not currently relevant to any query', a
   })
 
   t.deepEqual(serialize(figbird.getState().get('notes')?.itemQueryIndex), {
-    1: ['q/BTSlpA=='],
-    2: ['q/BTSlpA=='],
+    1: ['q/MaxUYg=='],
+    2: ['q/MaxUYg=='],
     3: [],
   })
 
