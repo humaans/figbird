@@ -99,8 +99,7 @@ function toEpochMs(ts: Timestamp): number | null {
   if (ts == null) return null
   if (typeof ts === 'number') return ts
   if (typeof ts === 'string') {
-    const t = Date.parse(ts)
-    return Number.isNaN(t) ? null : t
+    return new Date(ts).getTime()
   }
   return ts instanceof Date ? ts.getTime() : null
 }
