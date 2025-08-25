@@ -59,7 +59,9 @@ export type { QueryResult } from './react/useQuery.js'
 // Feathers-specific types for TypeScript users
 export type {
   FeathersClient,
+  FeathersControls,
   FeathersFindMeta,
+  FeathersFullQuery,
   FeathersItem,
   FeathersParams,
   FeathersQuery,

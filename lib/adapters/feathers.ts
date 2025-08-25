@@ -15,7 +15,7 @@ type Timestamp = string | number | Date | null | undefined
 /**
  * Feathers control fields for queries
  */
-type FeathersControls = {
+export type FeathersControls = {
   $limit?: number
   $skip?: number
   $sort?: Record<string, 1 | -1>
@@ -23,20 +23,53 @@ type FeathersControls = {
 }
 
 /**
- * Feathers query parameters
+ * Feathers query parameters (domain query fields)
  */
-export interface FeathersQuery extends FeathersControls {
+export interface FeathersQuery {
   $or?: Array<Record<string, unknown>>
   $and?: Array<Record<string, unknown>>
   [key: string]: unknown
 }
 
 /**
- * Feathers service method parameters
- * Now generic over TQuery for type-safe query handling
+ * Convenience type that combines domain query with Feathers controls
+ * Useful when you need the full query type including controls
  */
-export interface FeathersParams<TQuery extends Record<string, unknown> = FeathersQuery> {
-  query?: TQuery & FeathersControls
+export type FeathersFullQuery<TDomainQuery extends Record<string, unknown> = FeathersQuery> =
+  TDomainQuery & FeathersControls
+
+/**
+ * Example usage with clean domain query types:
+ * ```typescript
+ * // In your schema, define only domain-specific query fields
+ * interface TodoQuery {
+ *   completed?: boolean
+ *   category?: string
+ *   priority?: 'low' | 'medium' | 'high'
+ * }
+ *
+ * // The adapter automatically adds Feathers controls
+ * const adapter = new FeathersAdapter<TodoQuery>(feathers)
+ *
+ * // Users get full type safety without repeating control fields
+ * const params: FeathersParams<TodoQuery> = {
+ *   query: {
+ *     completed: true,      // Domain field
+ *     priority: 'high',     // Domain field
+ *     $limit: 10,          // Control field (automatically available)
+ *     $skip: 20,           // Control field (automatically available)
+ *     $sort: { createdAt: -1 } // Control field (automatically available)
+ *   }
+ * }
+ * ```
+ */
+
+/**
+ * Feathers service method parameters
+ * Now generic over TDomainQuery for type-safe query handling
+ */
+export interface FeathersParams<TDomainQuery extends Record<string, unknown> = FeathersQuery> {
+  query?: TDomainQuery & FeathersControls
   connection?: unknown
   headers?: Record<string, string>
   [key: string]: unknown
@@ -110,8 +143,8 @@ function toEpochMs(ts: Timestamp): number | null {
   return ts instanceof Date ? ts.getTime() : null
 }
 
-export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQuery>
-  implements Adapter<FeathersParams<TQuery>, FeathersFindMeta, TQuery>
+export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = FeathersQuery>
+  implements Adapter<FeathersParams<TDomainQuery>, FeathersFindMeta, TDomainQuery>
 {
   feathers?: FeathersClient
   #idField: IdFieldType
@@ -123,12 +156,12 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
    * Helper to merge query controls while maintaining type safety
    */
   #mergeQueryControls(
-    params: FeathersParams<TQuery> | undefined,
+    params: FeathersParams<TDomainQuery> | undefined,
     controls: FeathersControls,
-  ): FeathersParams<TQuery> {
+  ): FeathersParams<TDomainQuery> {
     return {
       ...params,
-      query: { ...params?.query, ...controls } as TQuery & FeathersControls,
+      query: { ...params?.query, ...controls } as TDomainQuery & FeathersControls,
     }
   }
 
@@ -156,7 +189,7 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
   async get(
     serviceName: string,
     resourceId: string | number,
-    params?: FeathersParams<TQuery>,
+    params?: FeathersParams<TDomainQuery>,
   ): Promise<QueryResponse<unknown, FeathersFindMeta>> {
     const res = await this.#service(serviceName).get(resourceId, params as FeathersParams)
     return { data: res, meta: { total: 1, limit: 1, skip: 0 } }
@@ -164,7 +197,7 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
 
   async #_find(
     serviceName: string,
-    params?: FeathersParams<TQuery>,
+    params?: FeathersParams<TDomainQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const res = await this.#service(serviceName).find(params as FeathersParams)
     if (Array.isArray(res)) {
@@ -177,7 +210,7 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
 
   async find(
     serviceName: string,
-    params?: FeathersParams<TQuery>,
+    params?: FeathersParams<TDomainQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
       return this.#_find(
@@ -190,7 +223,7 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
 
   async findAll(
     serviceName: string,
-    params?: FeathersParams<TQuery>,
+    params?: FeathersParams<TDomainQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     const baseParams =
@@ -284,7 +317,7 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
   }
 
   matcher(
-    query: TQuery | null | undefined,
+    query: TDomainQuery | null | undefined,
     options?: PrepareQueryOptions,
   ): (item: unknown) => boolean {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
