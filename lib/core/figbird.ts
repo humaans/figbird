@@ -190,7 +190,7 @@ export class Figbird<
 > {
   adapter: A
   queryStore: QueryStore<AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
-  schema?: S
+  schema: S | undefined
 
   constructor({
     adapter,
@@ -205,7 +205,7 @@ export class Figbird<
     this.schema = schema
     this.queryStore = new QueryStore<AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
       adapter,
-      eventBatchProcessingInterval,
+      eventBatchProcessingInterval: eventBatchProcessingInterval,
     })
   }
 
@@ -264,14 +264,6 @@ export function splitConfig<TItem = unknown>(
     ...rest
   } = combinedConfig
 
-  // Build base config (common to both get and find)
-  const baseConfig = {
-    skip,
-    realtime,
-    fetchPolicy,
-    matcher,
-  }
-
   if (method === 'get') {
     const { resourceId, ...params } = rest as CombinedGetConfig<TItem>
 
@@ -282,7 +274,12 @@ export function splitConfig<TItem = unknown>(
       params,
     }
 
-    const config: GetQueryConfig<TItem> = baseConfig
+    const config: GetQueryConfig<TItem> = {
+      ...(skip !== undefined && { skip }),
+      realtime,
+      fetchPolicy,
+      ...(matcher !== undefined && { matcher }),
+    }
 
     return { desc, config }
   } else {
@@ -295,8 +292,11 @@ export function splitConfig<TItem = unknown>(
     }
 
     const config: FindQueryConfig<TItem> = {
-      ...baseConfig,
-      allPages,
+      ...(skip !== undefined && { skip }),
+      realtime,
+      fetchPolicy,
+      ...(matcher !== undefined && { matcher }),
+      ...(allPages !== undefined && { allPages }),
     }
 
     return { desc, config }
@@ -377,14 +377,14 @@ class QueryStore<
 
   #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
-  #eventBatchProcessingInterval: number = 100
+  #eventBatchProcessingInterval: number | undefined = 100
 
   constructor({
     adapter,
     eventBatchProcessingInterval = 100,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
-    eventBatchProcessingInterval?: number
+    eventBatchProcessingInterval?: number | undefined
   }) {
     this.#adapter = adapter
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval

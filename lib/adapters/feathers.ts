@@ -13,13 +13,19 @@ type Timestamp = string | number | Date | null | undefined
 // Feathers-specific types for the Feathers adapter
 
 /**
- * Feathers query parameters
+ * Feathers control fields for queries
  */
-export interface FeathersQuery {
+type FeathersControls = {
   $limit?: number
   $skip?: number
   $sort?: Record<string, 1 | -1>
   $select?: string[]
+}
+
+/**
+ * Feathers query parameters
+ */
+export interface FeathersQuery extends FeathersControls {
   $or?: Array<Record<string, unknown>>
   $and?: Array<Record<string, unknown>>
   [key: string]: unknown
@@ -30,7 +36,7 @@ export interface FeathersQuery {
  * Now generic over TQuery for type-safe query handling
  */
 export interface FeathersParams<TQuery extends Record<string, unknown> = FeathersQuery> {
-  query?: TQuery
+  query?: TQuery & FeathersControls
   connection?: unknown
   headers?: Record<string, string>
   [key: string]: unknown
@@ -110,8 +116,21 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
   feathers?: FeathersClient
   #idField: IdFieldType
   #updatedAtField: UpdatedAtFieldType
-  #defaultPageSize?: number
-  #defaultPageSizeWhenFetchingAll?: number
+  #defaultPageSize: number | undefined
+  #defaultPageSizeWhenFetchingAll: number | undefined
+
+  /**
+   * Helper to merge query controls while maintaining type safety
+   */
+  #mergeQueryControls(
+    params: FeathersParams<TQuery> | undefined,
+    controls: FeathersControls,
+  ): FeathersParams<TQuery> {
+    return {
+      ...params,
+      query: { ...params?.query, ...controls } as TQuery & FeathersControls,
+    }
+  }
 
   constructor(
     feathers: FeathersClient,
@@ -161,8 +180,10 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
     params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
-      params = { ...params }
-      params.query = { ...params.query, $limit: this.#defaultPageSize } as unknown as TQuery
+      return this.#_find(
+        serviceName,
+        this.#mergeQueryControls(params, { $limit: this.#defaultPageSize }),
+      )
     }
     return this.#_find(serviceName, params)
   }
@@ -172,10 +193,10 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
     params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
-    if (defaultPageSize && !params?.query?.$limit) {
-      params = { ...params }
-      params.query = { ...params.query, $limit: defaultPageSize } as unknown as TQuery
-    }
+    const baseParams =
+      defaultPageSize && !params?.query?.$limit
+        ? this.#mergeQueryControls(params, { $limit: defaultPageSize })
+        : params || {}
 
     const result: QueryResponse<unknown[], FeathersFindMeta> = {
       data: [],
@@ -184,10 +205,10 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
     let $skip = 0
 
     while (true) {
-      const { data, meta } = await this.#_find(serviceName, {
-        ...params,
-        query: { ...params?.query, $skip } as unknown as TQuery,
-      })
+      const { data, meta } = await this.#_find(
+        serviceName,
+        this.#mergeQueryControls(baseParams, { $skip }),
+      )
 
       result.meta = { ...result.meta, ...meta }
       result.data.push(...data)
