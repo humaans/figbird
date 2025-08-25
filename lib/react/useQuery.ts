@@ -126,11 +126,17 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
   const refetch = useCallback(() => q.refetch(), [q])
   const subscribe = useCallback((onStoreChange: () => void) => q.subscribe(onStoreChange), [q])
 
+  // Cache empty meta to avoid creating it repeatedly
+  const emptyMetaRef = useRef<TMeta | null>(null)
+  if (emptyMetaRef.current == null) {
+    emptyMetaRef.current = figbird.adapter.emptyMeta() as TMeta
+  }
+
   const getSnapshot = useCallback(
     (): QueryState<T, TMeta> =>
       (q.getSnapshot() as QueryState<T, TMeta> | undefined) ??
-      getInitialQueryResult<T, TMeta>(figbird.adapter.emptyMeta() as TMeta),
-    [q, figbird.adapter],
+      getInitialQueryResult<T, TMeta>(emptyMetaRef.current!),
+    [q],
   )
 
   // we subscribe to the query state changes, this includes both going from
