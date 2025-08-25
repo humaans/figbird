@@ -1,4 +1,4 @@
-import type { Adapter, EventHandlers, Response } from '../types.js'
+import type { Adapter, EventHandlers, QueryResponse } from './adapter.js'
 import { matcher, type PrepareQueryOptions } from './matcher.js'
 
 type IdExtractor<T> = (item: T) => string | number | undefined
@@ -123,12 +123,12 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     serviceName: string,
     resourceId: string | number,
     params?: FeathersParams,
-  ): Promise<Response<T>> {
+  ): Promise<QueryResponse<T>> {
     const res = await this.#service(serviceName).get(resourceId, params)
     return { data: res, meta: {} }
   }
 
-  async #_find(serviceName: string, params?: FeathersParams): Promise<Response<T[]>> {
+  async #_find(serviceName: string, params?: FeathersParams): Promise<QueryResponse<T[]>> {
     const res = await this.#service(serviceName).find(params)
     if (Array.isArray(res)) {
       return { data: res, meta: {} }
@@ -138,7 +138,7 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     }
   }
 
-  async find(serviceName: string, params?: FeathersParams): Promise<Response<T[]>> {
+  async find(serviceName: string, params?: FeathersParams): Promise<QueryResponse<T[]>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
       params.query = { ...params.query, $limit: this.#defaultPageSize }
@@ -146,7 +146,7 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     return this.#_find(serviceName, params)
   }
 
-  findAll(serviceName: string, params?: FeathersParams): Promise<Response<T[]>> {
+  findAll(serviceName: string, params?: FeathersParams): Promise<QueryResponse<T[]>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     if (defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
@@ -155,12 +155,12 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
 
     return new Promise((resolve, reject) => {
       let $skip = 0
-      const result: Response<T[]> = {
+      const result: QueryResponse<T[]> = {
         data: [],
         meta: { skip: 0 },
       }
 
-      const resolveOrFetchNext = ({ data, meta }: Response<T[]>) => {
+      const resolveOrFetchNext = ({ data, meta }: QueryResponse<T[]>) => {
         if (
           data.length === 0 ||
           (meta && typeof meta.limit === 'number' && meta.limit >= 0 && data.length < meta.limit) ||

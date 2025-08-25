@@ -1,6 +1,11 @@
-import type { Adapter, EventType, Response } from '../types.js'
+import type { Adapter, QueryResponse } from '../adapters/adapter.js'
 import { hashObject } from './hash.js'
 import type { AnySchema, Schema } from './schema.js'
+
+/**
+ * Event types supported by Figbird
+ */
+export type EventType = 'created' | 'updated' | 'patched' | 'removed'
 
 /**
  * Internal event representation
@@ -451,7 +456,7 @@ class QueryStore {
     }
   }
 
-  #fetch(queryId: string): Promise<Response<unknown>> {
+  #fetch(queryId: string): Promise<QueryResponse<unknown>> {
     const query = this.#getQuery(queryId)
     if (!query) {
       return Promise.reject(new Error('Query not found'))
@@ -791,7 +796,7 @@ class QueryStore {
     })
   }
 
-  #fetched({ queryId, result }: { queryId: string; result: Response<unknown> }): void {
+  #fetched({ queryId, result }: { queryId: string; result: QueryResponse<unknown> }): void {
     let shouldRefetch = false
 
     this.#transactOverService(queryId, (service, query) => {
