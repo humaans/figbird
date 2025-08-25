@@ -145,14 +145,14 @@ test('FeathersFindMeta type inference works correctly', t => {
   t.is(getMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
 
   // Verify that individual properties have the correct types
-  t.is(findMetaTotal, 'number | undefined')
-  t.is(findMetaLimit, 'number | undefined')
-  t.is(findMetaSkip, 'number | undefined')
+  t.is(findMetaTotal, 'number')
+  t.is(findMetaLimit, 'number')
+  t.is(findMetaSkip, 'number')
 
   // Verify that accessing properties gives the right types
-  t.is(metaTotalType, 'number | undefined')
-  t.is(metaLimitType, 'number | undefined')
-  t.is(metaSkipType, 'number | undefined')
+  t.is(metaTotalType, 'number')
+  t.is(metaLimitType, 'number')
+  t.is(metaSkipType, 'number')
 })
 
 test('meta type is automatically inferred from Figbird instance', t => {
@@ -184,9 +184,9 @@ test('meta type is automatically inferred from Figbird instance', t => {
   t.is(projectMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
 
   // Verify individual meta properties are typed correctly
-  t.is(tasksMetaTotalType, 'number | undefined')
-  t.is(tasksMetaLimitType, 'number | undefined')
-  t.is(tasksMetaSkipType, 'number | undefined')
+  t.is(tasksMetaTotalType, 'number')
+  t.is(tasksMetaLimitType, 'number')
+  t.is(tasksMetaSkipType, 'number')
 
   // Verify that meta type is always inferred from the adapter (FeathersFindMeta in this case)
   t.is(
