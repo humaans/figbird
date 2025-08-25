@@ -274,40 +274,7 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
     query: Record<string, unknown> | null | undefined,
     options?: PrepareQueryOptions,
   ): (item: T) => boolean {
-    // Extract custom operators from the query ($ prefixed keys that aren't standard)
-    const customOperators: string[] = []
-    if (query) {
-      for (const key of Object.keys(query)) {
-        if (
-          key.startsWith('$') &&
-          ![
-            '$limit',
-            '$skip',
-            '$sort',
-            '$select',
-            '$or',
-            '$and',
-            '$in',
-            '$nin',
-            '$lt',
-            '$lte',
-            '$gt',
-            '$gte',
-            '$ne',
-          ].includes(key)
-        ) {
-          customOperators.push(key)
-        }
-      }
-    }
-
-    // Merge custom operators with any provided in options
-    const enhancedOptions: PrepareQueryOptions = {
-      ...options,
-      operators: [...(options?.operators || []), ...customOperators],
-    }
-
-    return matcher<T>(query as Parameters<typeof matcher>[0], enhancedOptions)
+    return matcher<T>(query as Parameters<typeof matcher>[0], options)
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {
