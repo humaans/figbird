@@ -12,5 +12,6 @@
     "targets": {
       "browsers": ["extends browserslist-config-baseline"]
     }
-  }
+  },
+  "sourceMaps": true,
 }
