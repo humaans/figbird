@@ -248,7 +248,25 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
   isItemStale(currItem: T, nextItem: T): boolean {
     const currUpdatedAt = this.#getUpdatedAt(currItem)
     const nextUpdatedAt = this.#getUpdatedAt(nextItem)
-    return !!currUpdatedAt && !!nextUpdatedAt && nextUpdatedAt < currUpdatedAt
+
+    // If either timestamp is missing, consider stale to force update
+    if (!currUpdatedAt || !nextUpdatedAt) {
+      return true
+    }
+
+    // If types differ, consider stale to force update
+    if (typeof currUpdatedAt !== typeof nextUpdatedAt) {
+      console.warn('Mixed updatedAt types detected - considering item stale')
+      return true
+    }
+
+    // Date objects need special handling
+    if (currUpdatedAt instanceof Date && nextUpdatedAt instanceof Date) {
+      return nextUpdatedAt.getTime() < currUpdatedAt.getTime()
+    }
+
+    // Strings (ISO) and numbers can be compared directly
+    return nextUpdatedAt < currUpdatedAt
   }
 
   matcher(
