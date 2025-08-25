@@ -37,7 +37,9 @@ function cleanQuery(query: QueryValue, operators: string[], filters: string[]): 
   return query
 }
 
+// Feathers control fields that are stripped from queries before matching
 export const FILTERS = ['$sort', '$limit', '$skip', '$select']
+// Query operators that are preserved for matching
 export const OPERATORS = ['$in', '$nin', '$lt', '$lte', '$gt', '$gte', '$ne', '$or']
 
 // Removes special filters from the `query` parameters
