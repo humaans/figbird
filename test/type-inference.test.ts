@@ -91,13 +91,6 @@ test('type narrowing works correctly with multiple services', t => {
   const taskItemType = getTypeAtPosition(fixturePath, 'TaskServiceItem')
   const tasksType = getTypeAtPosition(fixturePath, 'tasks')
 
-  console.log('PersonServiceByName:', personServiceType)
-  console.log('PersonServiceItem:', personItemType)
-  console.log('People useFind:', peopleType)
-  console.log('TaskServiceByName:', taskServiceType)
-  console.log('TaskServiceItem:', taskItemType)
-  console.log('Tasks useFind:', tasksType)
-
   // Test that the key types are working correctly
   t.is(
     personServiceType,

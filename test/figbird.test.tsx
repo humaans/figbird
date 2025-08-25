@@ -2322,9 +2322,9 @@ test('handles component unmounting during active requests without warnings', asy
 
   // Add delay to create to ensure it completes after unmount
   const originalCreate = feathers.service('notes').create.bind(feathers.service('notes'))
-  feathers.service('notes').create = async data => {
+  feathers.service('notes').create = async (data: any) => {
     await new Promise(resolve => setTimeout(resolve, 20))
-    return originalCreate(data)
+    return originalCreate(data) as any
   }
 
   render(

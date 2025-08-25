@@ -9,7 +9,7 @@ import type {
 import { matcher, type PrepareQueryOptions } from './matcher.js'
 
 type IdExtractor<T> = (item: T) => string | number | undefined
-type UpdatedAtExtractor<T> = (item: T) => string | Date | number | undefined
+type UpdatedAtExtractor<T> = (item: T) => string | Date | number | null | undefined
 
 type IdFieldType<T = FeathersItem> = string | IdExtractor<T>
 type UpdatedAtFieldType<T = FeathersItem> = string | UpdatedAtExtractor<T>
@@ -164,12 +164,13 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     return id
   }
 
-  #getUpdatedAt(item: T): string | Date | number | undefined {
+  #getUpdatedAt(item: T): string | Date | number | null | undefined {
     return typeof this.#updatedAtField === 'string'
       ? ((item as Record<string, unknown>)[this.#updatedAtField] as
           | string
           | Date
           | number
+          | null
           | undefined)
       : this.#updatedAtField(item)
   }

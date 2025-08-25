@@ -21,7 +21,7 @@
   },
   "scripts": {
     "test": "tsc --noEmit && eslint && prettier --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
-    "type-check": "tsc --noEmit",
+    "tsc": "tsc --noEmit",
     "format": "prettier --write '**/*.{ts,tsx,js,jsx,css,yml}'",
     "coverage": "c8 -r html -r text ava",
     "build": "node ./tasks/build.js",

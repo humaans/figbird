@@ -42,10 +42,10 @@ export interface FeathersFindMeta {
 export interface FeathersItem {
   id?: string | number
   _id?: string | number
-  updatedAt?: string | Date | number
-  updated_at?: string | Date | number
-  createdAt?: string | Date | number
-  created_at?: string | Date | number
+  updatedAt?: string | Date | number | null
+  updated_at?: string | Date | number | null
+  createdAt?: string | Date | number | null
+  created_at?: string | Date | number | null
   [key: string]: unknown
 }
 
@@ -58,6 +58,7 @@ export interface FeathersService<T = FeathersItem> {
     params?: FeathersParams,
   ): Promise<{ data: T[]; total?: number; limit?: number; skip?: number } | T[]>
   create(data: Partial<T>, params?: FeathersParams): Promise<T>
+  create(data: T[], params?: FeathersParams): Promise<T[]>
   update(id: string | number, data: Partial<T>, params?: FeathersParams): Promise<T>
   patch(id: string | number, data: Partial<T>, params?: FeathersParams): Promise<T>
   remove(id: string | number, params?: FeathersParams): Promise<T>
