@@ -25,9 +25,11 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
 
     // Interop constraints
-    "esModuleInterop": true,
+    "esModuleInterop": false,
+    "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "skipLibCheck": true,

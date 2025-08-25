@@ -13,6 +13,13 @@ export interface QueryResult<T> {
   refetch: () => void
 }
 
+/**
+ * Hook for fetching a single item by ID.
+ *
+ * @template T - The type of the item to fetch. Defaults to `any` for backward compatibility.
+ * For better type safety, explicitly provide a type parameter: `useGet<MyItemType>('service', id)`
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function useGet<T = any>(
   serviceName: string,
   resourceId: string | number,
@@ -30,6 +37,13 @@ export function useGet<T = any>(
   return useQuery<T>(desc, config)
 }
 
+/**
+ * Hook for fetching multiple items with optional query parameters.
+ *
+ * @template T - The type of the result array. Defaults to `any[]` for backward compatibility.
+ * For better type safety, explicitly provide a type parameter: `useFind<MyItemType[]>('service', params)`
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function useFind<T = any[]>(
   serviceName: string,
   params: Record<string, unknown> = {},
