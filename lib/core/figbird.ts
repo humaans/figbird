@@ -767,21 +767,27 @@ class QueryStore<
           if (hasItem && !matches) {
             // remove
             const query = service.queries.get(queryId)!
-            service.queries.set(queryId, {
-              ...query,
-              state:
-                query.state.status === 'success'
+            const nextState: QueryState<unknown, TMeta> =
+              query.desc.method === 'get' && query.state.status === 'success'
+                ? {
+                    status: 'idle' as const,
+                    data: null,
+                    meta: itemRemoved(query.state.meta),
+                    isFetching: false,
+                    error: null,
+                  }
+                : query.state.status === 'success'
                   ? {
                       ...query.state,
                       meta: itemRemoved(query.state.meta),
-                      data:
-                        query.desc.method === 'get'
-                          ? null
-                          : (query.state.data as unknown[]).filter(
-                              (x: unknown) => getId(x) !== itemId,
-                            ),
+                      data: (query.state.data as unknown[]).filter(
+                        (x: unknown) => getId(x) !== itemId,
+                      ),
                     }
-                  : query.state,
+                  : query.state
+            service.queries.set(queryId, {
+              ...query,
+              state: nextState,
             })
             itemQueryIndex.delete(queryId)
             touch(queryId)
