@@ -1,11 +1,14 @@
 import type { Adapter, EventHandlers, QueryResponse } from './adapter.js'
 import { matcher, type PrepareQueryOptions } from './matcher.js'
 
-type IdExtractor<T> = (item: T) => string | number | undefined
-type UpdatedAtExtractor<T> = (item: T) => string | Date | number | null | undefined
+// Helper types for field extraction
+type IdExtractor = (item: unknown) => string | number | undefined
+type IdFieldType = string | IdExtractor
 
-type IdFieldType<T = FeathersItem> = string | IdExtractor<T>
-type UpdatedAtFieldType<T = FeathersItem> = string | UpdatedAtExtractor<T>
+type UpdatedAtExtractor = (item: unknown) => string | Date | number | null | undefined
+type UpdatedAtFieldType = string | UpdatedAtExtractor
+
+type Timestamp = string | number | Date | null | undefined
 
 // Feathers-specific types for the Feathers adapter
 
@@ -24,9 +27,10 @@ export interface FeathersQuery {
 
 /**
  * Feathers service method parameters
+ * Now generic over TQuery for type-safe query handling
  */
-export interface FeathersParams {
-  query?: FeathersQuery
+export interface FeathersParams<TQuery extends Record<string, unknown> = FeathersQuery> {
+  query?: TQuery
   connection?: unknown
   headers?: Record<string, string>
   [key: string]: unknown
@@ -58,18 +62,18 @@ export interface FeathersItem {
 /**
  * Feathers service interface
  */
-export interface FeathersService<T = FeathersItem> {
-  get(id: string | number, params?: FeathersParams): Promise<T>
+export interface FeathersService {
+  get(id: string | number, params?: FeathersParams): Promise<unknown>
   find(
     params?: FeathersParams,
-  ): Promise<{ data: T[]; total?: number; limit?: number; skip?: number } | T[]>
-  create(data: Partial<T>, params?: FeathersParams): Promise<T>
-  create(data: T[], params?: FeathersParams): Promise<T[]>
-  update(id: string | number, data: Partial<T>, params?: FeathersParams): Promise<T>
-  patch(id: string | number, data: Partial<T>, params?: FeathersParams): Promise<T>
-  remove(id: string | number, params?: FeathersParams): Promise<T>
-  on(event: string, listener: (data: T) => void): void
-  off(event: string, listener: (data: T) => void): void
+  ): Promise<{ data: unknown[]; total?: number; limit?: number; skip?: number } | unknown[]>
+  create(data: unknown, params?: FeathersParams): Promise<unknown>
+  create(data: unknown[], params?: FeathersParams): Promise<unknown[]>
+  update(id: string | number, data: unknown, params?: FeathersParams): Promise<unknown>
+  patch(id: string | number, data: unknown, params?: FeathersParams): Promise<unknown>
+  remove(id: string | number, params?: FeathersParams): Promise<unknown>
+  on(event: string, listener: (data: unknown) => void): void
+  off(event: string, listener: (data: unknown) => void): void
   [method: string]: unknown
 }
 
@@ -81,29 +85,44 @@ export interface FeathersClient {
   [key: string]: unknown
 }
 
-interface FeathersAdapterOptions<T = FeathersItem> {
-  idField?: IdFieldType<T>
-  updatedAtField?: UpdatedAtFieldType<T>
+interface FeathersAdapterOptions {
+  idField?: IdFieldType
+  updatedAtField?: UpdatedAtFieldType
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
 }
 
-export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, FeathersFindMeta> {
+/**
+ * Helper function to normalize timestamps to epoch milliseconds
+ */
+function toEpochMs(ts: Timestamp): number | null {
+  if (ts == null) return null
+  if (typeof ts === 'number') return ts
+  if (typeof ts === 'string') {
+    const t = Date.parse(ts)
+    return Number.isNaN(t) ? null : t
+  }
+  return ts instanceof Date ? ts.getTime() : null
+}
+
+export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQuery>
+  implements Adapter<FeathersParams<TQuery>, FeathersFindMeta, TQuery>
+{
   feathers?: FeathersClient
-  #idField: IdFieldType<T>
-  #updatedAtField: UpdatedAtFieldType<T>
+  #idField: IdFieldType
+  #updatedAtField: UpdatedAtFieldType
   #defaultPageSize?: number
   #defaultPageSizeWhenFetchingAll?: number
 
   constructor(
     feathers: FeathersClient,
     {
-      idField = (item: T) => (item as FeathersItem).id || (item as FeathersItem)._id,
-      updatedAtField = (item: T) =>
+      idField = (item: unknown) => (item as FeathersItem).id || (item as FeathersItem)._id,
+      updatedAtField = (item: unknown) =>
         (item as FeathersItem).updatedAt || (item as FeathersItem).updated_at,
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
-    }: FeathersAdapterOptions<T> = {},
+    }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
     this.#idField = idField
@@ -112,24 +131,24 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
     this.#defaultPageSizeWhenFetchingAll = defaultPageSizeWhenFetchingAll
   }
 
-  #service(serviceName: string): FeathersService<T> {
-    return this.feathers!.service(serviceName) as FeathersService<T>
+  #service(serviceName: string): FeathersService {
+    return this.feathers!.service(serviceName)
   }
 
   async get(
     serviceName: string,
     resourceId: string | number,
-    params?: FeathersParams,
-  ): Promise<QueryResponse<T, FeathersFindMeta>> {
-    const res = await this.#service(serviceName).get(resourceId, params)
+    params?: FeathersParams<TQuery>,
+  ): Promise<QueryResponse<unknown, FeathersFindMeta>> {
+    const res = await this.#service(serviceName).get(resourceId, params as FeathersParams)
     return { data: res, meta: { total: 1, limit: 1, skip: 0 } }
   }
 
   async #_find(
     serviceName: string,
-    params?: FeathersParams,
-  ): Promise<QueryResponse<T[], FeathersFindMeta>> {
-    const res = await this.#service(serviceName).find(params)
+    params?: FeathersParams<TQuery>,
+  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
+    const res = await this.#service(serviceName).find(params as FeathersParams)
     if (Array.isArray(res)) {
       return { data: res, meta: { total: -1, limit: res.length, skip: 0 } }
     } else {
@@ -140,33 +159,33 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
 
   async find(
     serviceName: string,
-    params?: FeathersParams,
-  ): Promise<QueryResponse<T[], FeathersFindMeta>> {
+    params?: FeathersParams<TQuery>,
+  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
-      params.query = { ...params.query, $limit: this.#defaultPageSize }
+      params.query = { ...params.query, $limit: this.#defaultPageSize } as unknown as TQuery
     }
     return this.#_find(serviceName, params)
   }
 
   findAll(
     serviceName: string,
-    params?: FeathersParams,
-  ): Promise<QueryResponse<T[], FeathersFindMeta>> {
+    params?: FeathersParams<TQuery>,
+  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     if (defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
-      params.query = { ...params.query, $limit: defaultPageSize }
+      params.query = { ...params.query, $limit: defaultPageSize } as unknown as TQuery
     }
 
     return new Promise((resolve, reject) => {
       let $skip = 0
-      const result: QueryResponse<T[], FeathersFindMeta> = {
+      const result: QueryResponse<unknown[], FeathersFindMeta> = {
         data: [],
         meta: { total: 0, limit: 0, skip: 0 },
       }
 
-      const resolveOrFetchNext = ({ data, meta }: QueryResponse<T[], FeathersFindMeta>) => {
+      const resolveOrFetchNext = ({ data, meta }: QueryResponse<unknown[], FeathersFindMeta>) => {
         if (
           data.length === 0 ||
           data.length < meta.limit ||
@@ -183,7 +202,7 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
       const fetchNext = () => {
         this.#_find(serviceName, {
           ...params,
-          query: { ...params?.query, $skip },
+          query: { ...params?.query, $skip } as unknown as TQuery,
         })
           .then(({ data, meta }) => {
             result.meta.limit = meta.limit
@@ -198,7 +217,7 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
     })
   }
 
-  mutate(serviceName: string, method: string, args: unknown[]): Promise<T> {
+  mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
     const service = this.#service(serviceName)
     const serviceMethod = service[method]
     if (typeof serviceMethod === 'function') {
@@ -207,23 +226,23 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
     throw new Error(`Method ${method} not found on service ${serviceName}`)
   }
 
-  subscribe(serviceName: string, handlers: EventHandlers<T>): () => void {
+  subscribe(serviceName: string, handlers: EventHandlers): () => void {
     const service = this.#service(serviceName)
 
-    service.on('created', handlers.created as (data: T) => void)
-    service.on('updated', handlers.updated as (data: T) => void)
-    service.on('patched', handlers.patched as (data: T) => void)
-    service.on('removed', handlers.removed as (data: T) => void)
+    service.on('created', handlers.created)
+    service.on('updated', handlers.updated)
+    service.on('patched', handlers.patched)
+    service.on('removed', handlers.removed)
 
     return () => {
-      service.off('created', handlers.created as (data: T) => void)
-      service.off('updated', handlers.updated as (data: T) => void)
-      service.off('patched', handlers.patched as (data: T) => void)
-      service.off('removed', handlers.removed as (data: T) => void)
+      service.off('created', handlers.created)
+      service.off('updated', handlers.updated)
+      service.off('patched', handlers.patched)
+      service.off('removed', handlers.removed)
     }
   }
 
-  getId(item: T): string | number | undefined {
+  getId(item: unknown): string | number | undefined {
     const id =
       typeof this.#idField === 'string'
         ? ((item as Record<string, unknown>)[this.#idField] as string | number | undefined)
@@ -232,7 +251,7 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
     return id
   }
 
-  #getUpdatedAt(item: T): string | Date | number | null | undefined {
+  #getUpdatedAt(item: unknown): string | Date | number | null | undefined {
     return typeof this.#updatedAtField === 'string'
       ? ((item as Record<string, unknown>)[this.#updatedAtField] as
           | string
@@ -243,35 +262,25 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
       : this.#updatedAtField(item)
   }
 
-  isItemStale(currItem: T, nextItem: T): boolean {
-    const currUpdatedAt = this.#getUpdatedAt(currItem)
-    const nextUpdatedAt = this.#getUpdatedAt(nextItem)
+  isItemStale(currItem: unknown, nextItem: unknown): boolean {
+    const currMs = toEpochMs(this.#getUpdatedAt(currItem))
+    const nextMs = toEpochMs(this.#getUpdatedAt(nextItem))
 
     // If either timestamp is missing, consider stale to force update
-    if (!currUpdatedAt || !nextUpdatedAt) {
+    if (currMs == null || nextMs == null) {
       return true
     }
 
-    // If types differ, consider stale to force update
-    if (typeof currUpdatedAt !== typeof nextUpdatedAt) {
-      console.warn('Mixed updatedAt types detected - considering item stale')
-      return true
-    }
-
-    // Date objects need special handling
-    if (currUpdatedAt instanceof Date && nextUpdatedAt instanceof Date) {
-      return nextUpdatedAt.getTime() < currUpdatedAt.getTime()
-    }
-
-    // Strings (ISO) and numbers can be compared directly
-    return nextUpdatedAt < currUpdatedAt
+    // Next is stale if its timestamp is older than current
+    return nextMs < currMs
   }
 
   matcher(
-    query: Record<string, unknown> | null | undefined,
+    query: TQuery | null | undefined,
     options?: PrepareQueryOptions,
-  ): (item: T) => boolean {
-    return matcher<T>(query as Parameters<typeof matcher>[0], options)
+  ): (item: unknown) => boolean {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return matcher(query as any, options)
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {
@@ -288,5 +297,9 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
       return meta
     }
     return { ...meta, total: Math.max(0, meta.total - 1) }
+  }
+
+  emptyMeta(): FeathersFindMeta {
+    return { total: -1, limit: 0, skip: 0 }
   }
 }

@@ -1,4 +1,10 @@
-import type { Adapter, QueryResponse } from '../adapters/adapter.js'
+import type {
+  Adapter,
+  AdapterMeta,
+  AdapterParams,
+  AdapterQuery,
+  QueryResponse,
+} from '../adapters/adapter.js'
 import { hashObject } from './hash.js'
 import type { AnySchema, Schema } from './schema.js'
 
@@ -27,15 +33,30 @@ export interface QueuedEvent {
 export type QueryStatus = 'idle' | 'loading' | 'success' | 'error'
 
 /**
- * Query state representation
+ * Query state representation - discriminated union for better type safety
  */
-export interface QueryState<T, TMeta = Record<string, unknown>> {
-  data: T | null
-  meta: TMeta
-  status: QueryStatus
-  isFetching: boolean
-  error: Error | null
-}
+export type QueryState<T, TMeta = Record<string, unknown>> =
+  | {
+      status: 'idle' | 'loading'
+      data: null
+      meta: TMeta
+      isFetching: boolean
+      error: null
+    }
+  | {
+      status: 'success'
+      data: T
+      meta: TMeta
+      isFetching: boolean
+      error: null
+    }
+  | {
+      status: 'error'
+      data: null
+      meta: TMeta
+      isFetching: boolean
+      error: Error
+    }
 
 /**
  * Internal query representation
@@ -160,11 +181,15 @@ export type ItemMatcher<T> = (item: T) => boolean
 */
 export class Figbird<
   S extends Schema = AnySchema,
-  TParams = unknown,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  A extends Adapter<any, any, any> = Adapter<
+    unknown,
+    Record<string, unknown>,
+    Record<string, unknown>
+  >,
 > {
-  adapter: Adapter<unknown, TParams, TMeta> | null = null
-  queryStore: QueryStore<TParams, TMeta>
+  adapter: A
+  queryStore: QueryStore<AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
   schema?: S
 
   constructor({
@@ -172,24 +197,27 @@ export class Figbird<
     eventBatchProcessingInterval,
     schema,
   }: {
-    adapter: Adapter<unknown, TParams, TMeta>
+    adapter: A
     eventBatchProcessingInterval?: number
     schema?: S
   }) {
     this.adapter = adapter
     this.schema = schema
-    this.queryStore = new QueryStore<TParams, TMeta>({
+    this.queryStore = new QueryStore<AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
       adapter,
       eventBatchProcessingInterval,
     })
   }
 
-  getState(): Map<string, ServiceState<TMeta>> {
+  getState(): Map<string, ServiceState<AdapterMeta<A>>> {
     return this.queryStore.getState()
   }
 
-  query<T>(desc: QueryDescriptor, config?: QueryConfig<T>): QueryRef<T, TParams, TMeta> {
-    return new QueryRef<T, TParams, TMeta>({
+  query<T>(
+    desc: QueryDescriptor,
+    config?: QueryConfig<T>,
+  ): QueryRef<T, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>> {
+    return new QueryRef<T, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
       desc,
       config: config || {},
       queryStore: this.queryStore,
@@ -208,7 +236,9 @@ export class Figbird<
     return this.queryStore.mutate({ serviceName, method, args })
   }
 
-  subscribeToStateChanges(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
+  subscribeToStateChanges(
+    fn: (state: Map<string, ServiceState<AdapterMeta<A>>>) => void,
+  ): () => void {
     return this.queryStore.subscribeToStateChanges(fn)
   }
 }
@@ -281,11 +311,12 @@ class QueryRef<
   T,
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
+  TQuery extends Record<string, unknown> = Record<string, unknown>,
 > {
   #queryId: string
   #desc: QueryDescriptor
   #config: QueryConfig<T>
-  #queryStore: QueryStore<TParams, TMeta>
+  #queryStore: QueryStore<TParams, TMeta, TQuery>
 
   constructor({
     desc,
@@ -294,7 +325,7 @@ class QueryRef<
   }: {
     desc: QueryDescriptor
     config: QueryConfig<T>
-    queryStore: QueryStore<TParams, TMeta>
+    queryStore: QueryStore<TParams, TMeta, TQuery>
   }) {
     this.#queryId = `q/${hashObject({ desc, config })}`
     this.#desc = desc
@@ -333,8 +364,9 @@ class QueryRef<
 class QueryStore<
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
+  TQuery extends Record<string, unknown> = Record<string, unknown>,
 > {
-  #adapter: Adapter<unknown, TParams, TMeta>
+  #adapter: Adapter<TParams, TMeta, TQuery>
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
@@ -351,7 +383,7 @@ class QueryStore<
     adapter,
     eventBatchProcessingInterval = 100,
   }: {
-    adapter: Adapter<unknown, TParams, TMeta>
+    adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchProcessingInterval?: number
   }) {
     this.#adapter = adapter
@@ -373,7 +405,7 @@ class QueryStore<
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
   }
 
-  materialize<T>(queryRef: QueryRef<T, TParams, TMeta>): void {
+  materialize<T>(queryRef: QueryRef<T, TParams, TMeta, TQuery>): void {
     const { queryId, desc, config } = queryRef.details()
 
     if (!this.#getQuery(queryId)) {
@@ -393,16 +425,16 @@ class QueryStore<
             ) => boolean,
             state: config.skip
               ? {
+                  status: 'idle' as const,
                   data: null,
-                  meta: {} as TMeta,
-                  status: 'idle',
+                  meta: this.#adapter.emptyMeta(),
                   isFetching: false,
                   error: null,
                 }
               : {
+                  status: 'loading' as const,
                   data: null,
-                  meta: {} as TMeta,
-                  status: 'loading',
+                  meta: this.#adapter.emptyMeta(),
                   isFetching: true,
                   error: null,
                 },
@@ -430,7 +462,7 @@ class QueryStore<
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return config.matcher(query as any)
     }
-    return this.#adapter.matcher(query) as ItemMatcher<T>
+    return this.#adapter.matcher(query as TQuery | null) as ItemMatcher<T>
   }
 
   #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
@@ -737,14 +769,19 @@ class QueryStore<
             const query = service.queries.get(queryId)!
             service.queries.set(queryId, {
               ...query,
-              state: {
-                ...query.state,
-                meta: itemRemoved(query.state.meta),
-                data:
-                  query.desc.method === 'get'
-                    ? null
-                    : (query.state.data as unknown[]).filter((x: unknown) => getId(x) !== itemId),
-              },
+              state:
+                query.state.status === 'success'
+                  ? {
+                      ...query.state,
+                      meta: itemRemoved(query.state.meta),
+                      data:
+                        query.desc.method === 'get'
+                          ? null
+                          : (query.state.data as unknown[]).filter(
+                              (x: unknown) => getId(x) !== itemId,
+                            ),
+                    }
+                  : query.state,
             })
             itemQueryIndex.delete(queryId)
             touch(queryId)
@@ -752,25 +789,31 @@ class QueryStore<
             // update
             service.queries.set(queryId, {
               ...query,
-              state: {
-                ...query.state,
-                data:
-                  query.desc.method === 'get'
-                    ? item
-                    : (query.state.data as unknown[]).map((x: unknown) =>
-                        getId(x) === itemId ? item : x,
-                      ),
-              },
+              state:
+                query.state.status === 'success'
+                  ? {
+                      ...query.state,
+                      data:
+                        query.desc.method === 'get'
+                          ? item
+                          : (query.state.data as unknown[]).map((x: unknown) =>
+                              getId(x) === itemId ? item : x,
+                            ),
+                    }
+                  : query.state,
             })
             touch(queryId)
           } else if (matches && query.desc.method === 'find' && query.state.data) {
             service.queries.set(queryId, {
               ...query,
-              state: {
-                ...query.state,
-                meta: itemAdded(query.state.meta),
-                data: (query.state.data as unknown[]).concat(item),
-              },
+              state:
+                query.state.status === 'success'
+                  ? {
+                      ...query.state,
+                      meta: itemAdded(query.state.meta),
+                      data: (query.state.data as unknown[]).concat(item),
+                    }
+                  : query.state,
             })
             itemQueryIndex.add(queryId)
             touch(queryId)
@@ -873,8 +916,22 @@ class QueryStore<
         dirty: false,
         state:
           query.state.status === 'error'
-            ? { ...query.state, isFetching: true, status: 'loading', error: null }
-            : { ...query.state, isFetching: true },
+            ? {
+                status: 'loading' as const,
+                data: null,
+                meta: query.state.meta,
+                isFetching: true,
+                error: null,
+              }
+            : query.state.status === 'success'
+              ? { ...query.state, isFetching: true }
+              : {
+                  status: query.state.status,
+                  data: null,
+                  meta: query.state.meta,
+                  isFetching: true,
+                  error: null,
+                },
       })
     })
   }
@@ -905,9 +962,9 @@ class QueryStore<
       service.queries.set(queryId, {
         ...query,
         state: {
+          status: 'success' as const,
           data,
-          meta: meta || {},
-          status: 'success',
+          meta: meta || this.#adapter.emptyMeta(),
           isFetching: false,
           error: null,
         },
@@ -928,11 +985,11 @@ class QueryStore<
       shouldRefetch = query.dirty
 
       service.queries.set(queryId, {
-        ...query,
+        ...query!,
         state: {
+          status: 'error' as const,
           data: null,
-          meta: {} as TMeta,
-          status: 'error',
+          meta: this.#adapter.emptyMeta(),
           isFetching: false,
           error,
         },

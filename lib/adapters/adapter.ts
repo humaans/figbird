@@ -9,34 +9,59 @@ export interface QueryResponse<TData, TMeta = Record<string, unknown>> {
 /**
  * Event handlers for real-time updates
  */
-export interface EventHandlers<T> {
-  created: (item: T) => void
-  updated: (item: T) => void
-  patched: (item: T) => void
-  removed: (item: T) => void
+export interface EventHandlers {
+  created: (item: unknown) => void
+  updated: (item: unknown) => void
+  patched: (item: unknown) => void
+  removed: (item: unknown) => void
 }
 
 /**
- * Unified adapter interface with optional internal methods
+ * Unified adapter interface
+ * The adapter is service-agnostic and works with unknown items
+ * Type safety comes from the Schema, not the adapter
  */
-export interface Adapter<T = unknown, TParams = unknown, TMeta = Record<string, unknown>> {
+export interface Adapter<
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+  TQuery extends Record<string, unknown> = Record<string, unknown>,
+> {
   // Required core methods
   get(
     serviceName: string,
     resourceId: string | number,
     params?: TParams,
-  ): Promise<QueryResponse<T, TMeta>>
-  find(serviceName: string, params?: TParams): Promise<QueryResponse<T[], TMeta>>
-  findAll(serviceName: string, params?: TParams): Promise<QueryResponse<T[], TMeta>>
-  mutate(serviceName: string, method: string, args: unknown[]): Promise<T>
+  ): Promise<QueryResponse<unknown, TMeta>>
+
+  find(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
+
+  findAll(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
+
+  mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 
   // Optional real-time support
-  subscribe?(serviceName: string, handlers: EventHandlers<T>): () => void
+  subscribe?(serviceName: string, handlers: EventHandlers): () => void
 
   // Required internal methods
-  getId(item: T): string | number | undefined
-  isItemStale(currItem: T, nextItem: T): boolean
-  matcher(query: unknown, options?: unknown): (item: T) => boolean
+  getId(item: unknown): string | number | undefined
+
+  isItemStale(currItem: unknown, nextItem: unknown): boolean
+
+  // Matcher is typed with TQuery but works with unknown items
+  matcher(query: TQuery | null | undefined, options?: unknown): (item: unknown) => boolean
+
+  // Meta transformation methods
   itemAdded(meta: TMeta): TMeta
   itemRemoved(meta: TMeta): TMeta
+
+  // Initialize empty meta to avoid unsafe casts
+  emptyMeta(): TMeta
 }
+
+// Helper types to extract adapter properties
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterParams<A> = A extends Adapter<infer P, any, any> ? P : never
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterMeta<A> = A extends Adapter<any, infer M, any> ? M : never
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterQuery<A> = A extends Adapter<any, any, infer Q> ? Q : never

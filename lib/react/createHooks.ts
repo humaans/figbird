@@ -1,13 +1,9 @@
+import type { AdapterMeta, AdapterParams } from '../adapters/adapter.js'
 import { splitConfig, type Figbird, type QueryConfig } from '../core/figbird.js'
 import type { Schema, ServiceItem, ServiceMethods, ServiceNames } from '../core/schema.js'
 import { findServiceByName } from '../core/schema.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import { useQuery, type QueryResult } from './useQuery.js'
-
-/**
- * Combined params type that includes both Figbird's QueryConfig and adapter params
- */
-type CombinedParams<TParams, TItem = unknown> = TParams & Partial<QueryConfig<TItem>>
 
 /**
  * Strongly-typed call signatures per service name.
@@ -21,7 +17,7 @@ type UseGetForSchema<
 > = <N extends ServiceNames<S>>(
   serviceName: N,
   resourceId: string | number,
-  params?: CombinedParams<TParams, ServiceItem<S, N>>,
+  params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
 ) => QueryResult<ServiceItem<S, N>, TMeta>
 
 type UseFindForSchema<
@@ -30,20 +26,20 @@ type UseFindForSchema<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 > = <N extends ServiceNames<S>>(
   serviceName: N,
-  params?: CombinedParams<TParams, ServiceItem<S, N>>,
+  params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
 ) => QueryResult<ServiceItem<S, N>[], TMeta>
 
 type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   serviceName: N,
 ) => UseMutationResult<ServiceItem<S, N>, ServiceMethods<S, N>>
 
-// Type helper to extract schema, params, and meta types from a Figbird instance
+// Type helper to extract schema and adapter types from a Figbird instance
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type InferSchema<F> = F extends Figbird<infer S, any, any> ? S : never
+type InferSchema<F> = F extends Figbird<infer S, any> ? S : never
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type InferParams<F> = F extends Figbird<any, infer P, any> ? P : never
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type InferMeta<F> = F extends Figbird<any, any, infer M> ? M : never
+type InferAdapter<F> = F extends Figbird<any, infer A> ? A : never
+type InferParams<F> = AdapterParams<InferAdapter<F>>
+type InferMeta<F> = AdapterMeta<InferAdapter<F>>
 
 /**
  * Creates typed hooks for a specific schema.
@@ -64,7 +60,7 @@ type InferMeta<F> = F extends Figbird<any, any, infer M> ? M : never
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createHooks<F extends Figbird<any, any, any>>(
+export function createHooks<F extends Figbird<any, any>>(
   figbird: F,
 ): {
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
@@ -82,26 +78,30 @@ export function createHooks<F extends Figbird<any, any, any>>(
   function useTypedGet<N extends ServiceNames<S>>(
     serviceName: N,
     resourceId: string | number,
-    params?: CombinedParams<TParams, ServiceItem<S, N>>,
+    params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    const { desc, config } = splitConfig<ServiceItem<S, N>>(
-      Object.assign({ serviceName: actualServiceName, method: 'get' as const, resourceId }, params),
+    const combinedConfig = Object.assign(
+      { serviceName: actualServiceName, method: 'get' as const, resourceId },
+      params || {},
     )
+    const { desc, config } = splitConfig<ServiceItem<S, N>>(combinedConfig)
     return useQuery<ServiceItem<S, N>, TMeta>(desc, config)
   }
 
   function useTypedFind<N extends ServiceNames<S>>(
     serviceName: N,
-    params?: CombinedParams<TParams, ServiceItem<S, N>>,
+    params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    const { desc, config } = splitConfig<ServiceItem<S, N>[]>(
-      Object.assign({ serviceName: actualServiceName, method: 'find' as const }, params),
+    const combinedConfig = Object.assign(
+      { serviceName: actualServiceName, method: 'find' as const },
+      params || {},
     )
-    return useQuery<ServiceItem<S, N>[], TMeta>(desc, config)
+    const { desc, config } = splitConfig<ServiceItem<S, N>>(combinedConfig)
+    return useQuery<ServiceItem<S, N>[], TMeta>(desc, config as QueryConfig<ServiceItem<S, N>[]>)
   }
 
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {

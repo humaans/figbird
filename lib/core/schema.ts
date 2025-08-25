@@ -3,6 +3,9 @@
  * These types enable type-safe service definitions and query inference
  */
 
+// Unique symbol for phantom types - keeps internal typing machinery hidden
+declare const $phantom: unique symbol
+
 // Service definition with custom methods - simplified for better type inference
 export interface Service<
   TItem = Record<string, unknown>,
@@ -11,7 +14,7 @@ export interface Service<
   TName extends string = string,
 > {
   readonly name: TName
-  readonly _phantom?: {
+  readonly [$phantom]?: {
     item: TItem
     query: TQuery
     methods: TMethods
@@ -74,32 +77,20 @@ export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
     ? TItem
     : Record<string, unknown>
 
-export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
-  S,
-  N
->['_phantom'] extends {
-  query: infer Q
-}
-  ? Q
-  : Record<string, unknown>
+export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
 
-export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> = ServiceByName<
-  S,
-  N
->['_phantom'] extends {
-  methods: infer M
-}
-  ? M
-  : Record<string, never>
+export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M } } ? M : Record<string, never>
 
 // Utility type to extract item type from a service
-export type Item<S> = S extends { _phantom?: { item: infer I } } ? I : Record<string, unknown>
+export type Item<S> = S extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
 
 // Utility type to extract query type from a service
-export type Query<S> = S extends { _phantom?: { query: infer Q } } ? Q : Record<string, unknown>
+export type Query<S> = S extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
 
 // Utility type to extract methods from a service
-export type Methods<S> = S extends { _phantom?: { methods: infer M } } ? M : Record<string, never>
+export type Methods<S> = S extends { [$phantom]?: { methods: infer M } } ? M : Record<string, never>
 
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(

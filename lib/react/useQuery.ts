@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { QueryState, QueryStatus } from '../core/figbird.js'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
-import { findServiceByName, type AnySchema } from '../core/schema.js'
+import { findServiceByName } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 /**
@@ -34,7 +34,7 @@ export function useGet<
   resourceId: string | number,
   params: CombinedParams<TParams, T> = {} as CombinedParams<TParams, T>,
 ): QueryResult<T, TMeta> {
-  const figbird = useFigbird<AnySchema, TParams, TMeta>()
+  const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig<T>({
@@ -61,7 +61,7 @@ export function useFind<
   serviceName: string,
   params: CombinedParams<TParams, T> = {} as CombinedParams<TParams, T>,
 ): QueryResult<T, TMeta> {
-  const figbird = useFigbird<AnySchema, TParams, TMeta>()
+  const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig<T>({
@@ -74,11 +74,13 @@ export function useFind<
 
 let _seq = 0
 
-function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(): QueryState<T, TMeta> {
+function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
+  emptyMeta: TMeta,
+): QueryState<T, TMeta> {
   return {
-    data: null,
-    meta: {} as TMeta,
     status: 'loading' as const,
+    data: null,
+    meta: emptyMeta,
     isFetching: true,
     error: null,
   }
@@ -98,7 +100,7 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
   desc: QueryDescriptor,
   config: QueryConfig<T>,
 ): QueryResult<T, TMeta> {
-  const figbird = useFigbird<AnySchema, unknown, TMeta>()
+  const figbird = useFigbird()
 
   // a slightly hacky workaround for network-only queries where we want to keep
   // the query.hash() stable between re-renders for this component, but unique
@@ -124,11 +126,19 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
   const refetch = useCallback(() => q.refetch(), [q])
   const subscribe = useCallback((onStoreChange: () => void) => q.subscribe(onStoreChange), [q])
 
-  const getSnapshot = useCallback(() => q.getSnapshot() ?? getInitialQueryResult<T, TMeta>(), [q])
+  const getSnapshot = useCallback(
+    (): QueryState<T, TMeta> =>
+      (q.getSnapshot() as QueryState<T, TMeta> | undefined) ??
+      getInitialQueryResult<T, TMeta>(figbird.adapter.emptyMeta() as TMeta),
+    [q, figbird.adapter],
+  )
 
   // we subscribe to the query state changes, this includes both going from
   // loading -> success state, but also for any realtime data updates
   const queryResult = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-  return useMemo(() => ({ ...queryResult, refetch }), [queryResult, refetch])
+  return useMemo(
+    () => ({ ...queryResult, refetch }) as QueryResult<T, TMeta>,
+    [queryResult, refetch],
+  )
 }
