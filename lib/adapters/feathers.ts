@@ -39,9 +39,9 @@ export interface FeathersParams {
  * Feathers-specific metadata for find operations
  */
 export interface FeathersFindMeta {
-  total?: number
-  limit?: number
-  skip?: number
+  total: number
+  limit: number
+  skip: number
   [key: string]: unknown
 }
 
@@ -125,7 +125,7 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
     params?: FeathersParams,
   ): Promise<QueryResponse<T, FeathersFindMeta>> {
     const res = await this.#service(serviceName).get(resourceId, params)
-    return { data: res, meta: {} }
+    return { data: res, meta: { total: 1, limit: 1, skip: 0 } }
   }
 
   async #_find(
@@ -134,10 +134,10 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
   ): Promise<QueryResponse<T[], FeathersFindMeta>> {
     const res = await this.#service(serviceName).find(params)
     if (Array.isArray(res)) {
-      return { data: res, meta: {} }
+      return { data: res, meta: { total: -1, limit: res.length, skip: 0 } }
     } else {
-      const { data, ...meta } = res
-      return { data, meta }
+      const { data, total = -1, limit = data.length, skip = 0, ...rest } = res
+      return { data, meta: { total, limit, skip, ...rest } }
     }
   }
 
@@ -166,19 +166,15 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
       let $skip = 0
       const result: QueryResponse<T[], FeathersFindMeta> = {
         data: [],
-        meta: { skip: 0 },
+        meta: { total: 0, limit: 0, skip: 0 },
       }
 
       const resolveOrFetchNext = ({ data, meta }: QueryResponse<T[], FeathersFindMeta>) => {
         if (
           data.length === 0 ||
-          (meta && typeof meta.limit === 'number' && meta.limit >= 0 && data.length < meta.limit) ||
-          // allow total to be undefined or -1 to indicate
-          // that total will not be available on this endpoint
-          (meta &&
-            typeof meta.total === 'number' &&
-            meta.total >= 0 &&
-            result.data.length >= meta.total)
+          data.length < meta.limit ||
+          // allow total to be -1 to indicate that total will not be available on this endpoint
+          (meta.total >= 0 && result.data.length >= meta.total)
         ) {
           resolve(result)
         } else {
@@ -193,12 +189,8 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
           query: { ...params?.query, $skip },
         })
           .then(({ data, meta }) => {
-            if (meta && meta.limit !== undefined && result.meta) {
-              result.meta.limit = meta.limit
-            }
-            if (meta && meta.total !== undefined && result.meta) {
-              result.meta.total = meta.total
-            }
+            result.meta.limit = meta.limit
+            result.meta.total = meta.total
             result.data = result.data.concat(data)
             resolveOrFetchNext({ data, meta })
           })
@@ -319,18 +311,18 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, 
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {
-    if (meta?.total && typeof meta.total === 'number' && meta?.total >= 0) {
-      return { ...meta, total: meta.total + 1 }
-    } else {
+    // If total is -1 (indicating unavailable), keep it as -1
+    if (meta.total < 0) {
       return meta
     }
+    return { ...meta, total: meta.total + 1 }
   }
 
   itemRemoved(meta: FeathersFindMeta): FeathersFindMeta {
-    if (meta?.total && typeof meta.total === 'number' && meta?.total > 0) {
-      return { ...meta, total: meta.total - 1 }
-    } else {
+    // If total is -1 (indicating unavailable), keep it as -1
+    if (meta.total < 0) {
       return meta
     }
+    return { ...meta, total: Math.max(0, meta.total - 1) }
   }
 }
