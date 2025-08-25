@@ -16,7 +16,10 @@ type MutationAction<T> =
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
 export interface UseMutationResult<T, TMethods = Record<string, never>> {
-  create: (data: Partial<T> | Partial<T>[], params?: unknown) => Promise<T | T[]>
+  // Overloaded create method for better type inference
+  create(data: Partial<T>, params?: unknown): Promise<T>
+  create(data: Partial<T>[], params?: unknown): Promise<T[]>
+  create(data: Partial<T> | Partial<T>[], params?: unknown): Promise<T | T[]>
   update: (id: string | number, data: Partial<T>, params?: unknown) => Promise<T>
   patch: (id: string | number, data: Partial<T>, params?: unknown) => Promise<T>
   remove: (id: string | number, params?: unknown) => Promise<T>

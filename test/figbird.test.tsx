@@ -1,6 +1,6 @@
 import test from 'ava'
 import React, { StrictMode, useEffect, useState } from 'react'
-import type { FeathersClient, QueryResult, QueryStatus } from '../lib'
+import type { FeathersClient, QueryResult, QueryStatus, UseMutationResult } from '../lib'
 import {
   createHooks,
   createSchema,
@@ -461,7 +461,7 @@ test('realtime listeners continue updating the store even if queries are unmount
 
 test('useMutation - multicreate updates cache correctly', async t => {
   const { render, flush, unmount, $all } = dom()
-  let create: (data: Partial<Note> | Note[]) => Promise<Note | Note[]>
+  let create: UseMutationResult<Note>['create']
 
   function Note() {
     const notes = useFind('notes')
@@ -2492,7 +2492,7 @@ test('mutations work correctly when no queries are active', async t => {
     useEffect(() => {
       // Perform mutations without any queries being active
       ;(async () => {
-        createResult = (await create({ id: 100, content: 'new note' })) as Note
+        createResult = await create({ id: 100, content: 'new note' })
         patchResult = await patch(100, { content: 'patched note' })
         removeResult = await remove(100)
         mutationsCompleted = true
@@ -2542,7 +2542,7 @@ test('mutate methods return the mutated item', async t => {
     useEffect(() => {
       ;(async () => {
         // Test create returns the created item
-        createResult = (await create({ id: 101, content: 'test create' })) as Note
+        createResult = await create({ id: 101, content: 'test create' })
 
         // Test patch returns the patched item
         patchResult = await patch(101, { content: 'test patch' })
