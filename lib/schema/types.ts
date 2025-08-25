@@ -31,11 +31,20 @@ export function service<
 
 // Schema definition - using a mapped type for better inference
 export interface Schema {
-  services: Record<string, Service<any, any, any, any>>
+  services: Record<
+    string,
+    Service<
+      unknown,
+      Record<string, unknown>,
+      Record<string, (...args: unknown[]) => unknown>,
+      string
+    >
+  >
 }
 
 // Helper to create a schema from an array of services using Extract-based narrowing
 export function createSchema<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const TServices extends ReadonlyArray<Service<any, any, any, any>>,
 >(config: {
   services: TServices
@@ -44,10 +53,9 @@ export function createSchema<
     readonly [K in TServices[number]['name']]: Extract<TServices[number], { name: K }>
   }
 } {
-  const serviceMap = {} as any
-  for (const service of config.services) {
-    serviceMap[service.name] = service
-  }
+  const serviceMap = Object.fromEntries(
+    config.services.map(service => [service.name, service]),
+  ) as { [K in TServices[number]['name']]: Extract<TServices[number], { name: K }> }
   return { services: serviceMap }
 }
 
@@ -97,7 +105,14 @@ export type Methods<S> = S extends { _phantom?: { methods: infer M } } ? M : Rec
 export function findServiceByName<S extends Schema>(
   schema: S | undefined,
   name: string,
-): Service | undefined {
+):
+  | Service<
+      unknown,
+      Record<string, unknown>,
+      Record<string, (...args: unknown[]) => unknown>,
+      string
+    >
+  | undefined {
   if (!schema) return undefined
   return schema.services[name]
 }
