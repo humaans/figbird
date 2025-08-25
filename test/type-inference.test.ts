@@ -75,7 +75,10 @@ test('useFind returns correct type for Person service', t => {
     'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, Record<string, never>, "api/people">',
   )
   t.is(serviceItemType, 'Person')
-  t.is(peopleType, 'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[]>')
+  t.is(
+    peopleType,
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], Record<string, unknown>>',
+  )
 })
 
 test('type narrowing works correctly with multiple services', t => {
@@ -106,10 +109,85 @@ test('type narrowing works correctly with multiple services', t => {
   t.is(taskItemType, 'Task')
 
   // Test that useFind correctly narrows to specific types (no more unions!)
-  t.is(peopleType, 'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[]>')
-  t.is(tasksType, 'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[]>')
+  t.is(
+    peopleType,
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], Record<string, unknown>>',
+  )
+  t.is(
+    tasksType,
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[], Record<string, unknown>>',
+  )
 
   // Verify type narrowing - ensure services don't cross-contaminate
   t.not(peopleType, tasksType, 'People and tasks should have different types')
   t.not(personItemType, taskItemType, 'Person and Task item types should be distinct')
+})
+
+test('FeathersFindMeta type inference works correctly', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'feathers-meta-inference.ts')
+
+  // Check that find result has FeathersFindMeta type for meta
+  const findMetaType = getTypeAtPosition(fixturePath, 'FindMetaType')
+  const findMetaTotal = getTypeAtPosition(fixturePath, 'FindMetaTotal')
+  const findMetaLimit = getTypeAtPosition(fixturePath, 'FindMetaLimit')
+  const findMetaSkip = getTypeAtPosition(fixturePath, 'FindMetaSkip')
+
+  // Check that get result also has the meta type
+  const getMetaType = getTypeAtPosition(fixturePath, 'GetMetaType')
+
+  // Check the actual property types
+  const metaTotalType = getTypeAtPosition(fixturePath, 'MetaTotalType')
+  const metaLimitType = getTypeAtPosition(fixturePath, 'MetaLimitType')
+  const metaSkipType = getTypeAtPosition(fixturePath, 'MetaSkipType')
+
+  // Verify that meta has the FeathersFindMeta type
+  t.is(findMetaType, 'FeathersFindMeta')
+  t.is(getMetaType, 'FeathersFindMeta')
+
+  // Verify that individual properties have the correct types
+  t.is(findMetaTotal, 'number | undefined')
+  t.is(findMetaLimit, 'number | undefined')
+  t.is(findMetaSkip, 'number | undefined')
+
+  // Verify that accessing properties gives the right types
+  t.is(metaTotalType, 'number | undefined')
+  t.is(metaLimitType, 'number | undefined')
+  t.is(metaSkipType, 'number | undefined')
+})
+
+test('meta type is automatically inferred from Figbird instance', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'inferred-meta-from-figbird.ts')
+
+  // Check that data types are correct
+  const tasksDataType = getTypeAtPosition(fixturePath, 'TasksData')
+  const projectDataType = getTypeAtPosition(fixturePath, 'ProjectData')
+
+  // Check that meta types are automatically inferred as FeathersFindMeta
+  const tasksMetaType = getTypeAtPosition(fixturePath, 'TasksMeta')
+  const projectMetaType = getTypeAtPosition(fixturePath, 'ProjectMeta')
+
+  // Check individual meta properties
+  const tasksMetaTotalType = getTypeAtPosition(fixturePath, 'TasksMetaTotal')
+  const tasksMetaLimitType = getTypeAtPosition(fixturePath, 'TasksMetaLimit')
+  const tasksMetaSkipType = getTypeAtPosition(fixturePath, 'TasksMetaSkip')
+
+  // Check backward compatibility
+  const backwardCompatMetaType = getTypeAtPosition(fixturePath, 'BackwardCompatMeta')
+
+  // Verify data types
+  t.is(tasksDataType, 'Task[] | null')
+  t.is(projectDataType, 'Project | null')
+
+  // Verify that meta is automatically inferred as FeathersFindMeta
+  // without having to pass it explicitly to createHooks
+  t.is(tasksMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
+  t.is(projectMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
+
+  // Verify individual meta properties are typed correctly
+  t.is(tasksMetaTotalType, 'number | undefined')
+  t.is(tasksMetaLimitType, 'number | undefined')
+  t.is(tasksMetaSkipType, 'number | undefined')
+
+  // Verify backward compatibility - old API defaults to Record<string, unknown>
+  t.is(backwardCompatMetaType, 'Record<string, unknown>')
 })

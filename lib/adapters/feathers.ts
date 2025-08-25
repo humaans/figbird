@@ -91,7 +91,7 @@ interface FeathersAdapterOptions<T = FeathersItem> {
   defaultPageSizeWhenFetchingAll?: number
 }
 
-export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> {
+export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams, FeathersFindMeta> {
   feathers?: FeathersClient
   #idField: IdFieldType<T>
   #updatedAtField: UpdatedAtFieldType<T>
@@ -123,12 +123,15 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     serviceName: string,
     resourceId: string | number,
     params?: FeathersParams,
-  ): Promise<QueryResponse<T>> {
+  ): Promise<QueryResponse<T, FeathersFindMeta>> {
     const res = await this.#service(serviceName).get(resourceId, params)
     return { data: res, meta: {} }
   }
 
-  async #_find(serviceName: string, params?: FeathersParams): Promise<QueryResponse<T[]>> {
+  async #_find(
+    serviceName: string,
+    params?: FeathersParams,
+  ): Promise<QueryResponse<T[], FeathersFindMeta>> {
     const res = await this.#service(serviceName).find(params)
     if (Array.isArray(res)) {
       return { data: res, meta: {} }
@@ -138,7 +141,10 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     }
   }
 
-  async find(serviceName: string, params?: FeathersParams): Promise<QueryResponse<T[]>> {
+  async find(
+    serviceName: string,
+    params?: FeathersParams,
+  ): Promise<QueryResponse<T[], FeathersFindMeta>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
       params.query = { ...params.query, $limit: this.#defaultPageSize }
@@ -146,7 +152,10 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
     return this.#_find(serviceName, params)
   }
 
-  findAll(serviceName: string, params?: FeathersParams): Promise<QueryResponse<T[]>> {
+  findAll(
+    serviceName: string,
+    params?: FeathersParams,
+  ): Promise<QueryResponse<T[], FeathersFindMeta>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     if (defaultPageSize && !params?.query?.$limit) {
       params = { ...params }
@@ -155,12 +164,12 @@ export class FeathersAdapter<T = unknown> implements Adapter<T, FeathersParams> 
 
     return new Promise((resolve, reject) => {
       let $skip = 0
-      const result: QueryResponse<T[]> = {
+      const result: QueryResponse<T[], FeathersFindMeta> = {
         data: [],
         meta: { skip: 0 },
       }
 
-      const resolveOrFetchNext = ({ data, meta }: QueryResponse<T[]>) => {
+      const resolveOrFetchNext = ({ data, meta }: QueryResponse<T[], FeathersFindMeta>) => {
         if (
           data.length === 0 ||
           (meta && typeof meta.limit === 'number' && meta.limit >= 0 && data.length < meta.limit) ||

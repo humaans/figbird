@@ -19,11 +19,15 @@ export interface EventHandlers<T> {
 /**
  * Unified adapter interface with optional internal methods
  */
-export interface Adapter<T = unknown, TParams = unknown> {
+export interface Adapter<T = unknown, TParams = unknown, TMeta = Record<string, unknown>> {
   // Required core methods
-  get(serviceName: string, resourceId: string | number, params?: TParams): Promise<QueryResponse<T>>
-  find(serviceName: string, params?: TParams): Promise<QueryResponse<T[]>>
-  findAll(serviceName: string, params?: TParams): Promise<QueryResponse<T[]>>
+  get(
+    serviceName: string,
+    resourceId: string | number,
+    params?: TParams,
+  ): Promise<QueryResponse<T, TMeta>>
+  find(serviceName: string, params?: TParams): Promise<QueryResponse<T[], TMeta>>
+  findAll(serviceName: string, params?: TParams): Promise<QueryResponse<T[], TMeta>>
   mutate(serviceName: string, method: string, args: unknown[]): Promise<T>
 
   // Optional real-time support
@@ -33,6 +37,6 @@ export interface Adapter<T = unknown, TParams = unknown> {
   getId(item: T): string | number | undefined
   isItemStale(currItem: T, nextItem: T): boolean
   matcher(query: unknown, options?: unknown): (item: T) => boolean
-  itemAdded(meta: Record<string, unknown>): Record<string, unknown>
-  itemRemoved(meta: Record<string, unknown>): Record<string, unknown>
+  itemAdded(meta: TMeta): TMeta
+  itemRemoved(meta: TMeta): TMeta
 }

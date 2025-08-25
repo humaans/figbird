@@ -107,7 +107,7 @@ test('schema-based type inference', t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Create typed hooks for this schema
-  const { useFind, useGet, useMutation } = createHooks<AppSchema>()
+  const { useFind, useGet, useMutation } = createHooks(figbird)
 
   function PersonList() {
     // Type is inferred as QueryResult<Person[]>
@@ -299,8 +299,6 @@ test('schema with array of services', t => {
     ],
   })
 
-  type AppSchema = typeof schema
-
   const feathers = mockFeathers({
     'api/people': {
       data: {
@@ -324,7 +322,7 @@ test('schema with array of services', t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Create typed hooks
-  const { useFind } = createHooks<AppSchema>()
+  const { useFind } = createHooks(figbird)
 
   function App() {
     // Use the actual service names
