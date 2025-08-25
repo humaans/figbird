@@ -3,8 +3,8 @@
  * This shows how pagination metadata flows through the system with full type safety
  */
 
-import type { FeathersFindMeta } from '../../lib'
-import { createHooks, createSchema, service } from '../../lib'
+import type { FeathersClient } from '../../lib'
+import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
 
 // Define domain models
 interface Article {
@@ -25,14 +25,18 @@ interface Comment {
 }
 
 // Create schema with services
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const schema = createSchema({
   services: [service<Article, 'articles'>('articles'), service<Comment, 'comments'>('comments')],
 })
 
-// Create typed hooks with FeathersFindMeta
-// In a real app, you'd create Figbird instance and pass it to FigbirdProvider
-const { useFind } = createHooks<typeof schema, FeathersFindMeta>()
+// Create Figbird instance with FeathersAdapter
+const feathers = {} as FeathersClient
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ schema, adapter })
+
+// Create typed hooks with figbird instance
+// The meta type (FeathersFindMeta) is automatically inferred from the adapter
+const { useFind } = createHooks(figbird)
 
 // Example 1: Paginated article list with type-safe metadata
 export function ArticleList() {
