@@ -12,6 +12,7 @@ import {
   useGet as useUntypedGet,
   useMutation as useUntypedMutation,
 } from '../lib'
+import { matcher as defaultMatcher } from '../lib/adapters/matcher'
 import { dom, mockFeathers } from './helpers'
 
 // Define typed entities
@@ -229,6 +230,7 @@ test('schema-based type inference', t => {
         $search: 'urgent',
         $asOf: new Date('2024-01-01'),
       },
+      matcher: (_query: Parameters<typeof defaultMatcher>[0]) => (_item: Task) => true,
     })
 
     return <div>{tasks.data ? `Found ${tasks.data.length} tasks` : 'Loading...'}</div>
