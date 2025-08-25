@@ -60,33 +60,79 @@ export interface ServiceState<TMeta = Record<string, unknown>> {
 }
 
 /**
- * Query descriptor
+ * Query descriptor for get operations
  */
-export interface QueryDescriptor {
+export interface GetDescriptor {
   serviceName: string
-  method: 'get' | 'find'
-  resourceId?: string | number
+  method: 'get'
+  resourceId: string | number
   params?: unknown
 }
 
 /**
- * Query configuration
+ * Query descriptor for find operations
  */
-export interface QueryConfig<TItem = unknown> {
+export interface FindDescriptor {
+  serviceName: string
+  method: 'find'
+  params?: unknown
+}
+
+/**
+ * Discriminated union of query descriptors
+ */
+export type QueryDescriptor = GetDescriptor | FindDescriptor
+
+/**
+ * Base query configuration shared by all query types
+ */
+interface BaseQueryConfig<TItem = unknown> {
   skip?: boolean
   realtime?: 'merge' | 'refetch' | 'disabled'
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
-  allPages?: boolean
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   matcher?: (query: any) => (item: TItem) => boolean
 }
 
 /**
+ * Configuration for get queries
+ */
+export type GetQueryConfig<TItem = unknown> = BaseQueryConfig<TItem>
+
+/**
+ * Configuration for find queries
+ */
+export interface FindQueryConfig<TItem = unknown> extends BaseQueryConfig<TItem> {
+  allPages?: boolean
+}
+
+/**
+ * Discriminated union of query configurations
+ */
+export type QueryConfig<TItem = unknown> = GetQueryConfig<TItem> | FindQueryConfig<TItem>
+
+/**
+ * Combined config for get operations
+ * Combines the descriptor and config properties with index signature for extra params
+ */
+export type CombinedGetConfig<TItem = unknown> = GetDescriptor &
+  GetQueryConfig<TItem> & {
+    [key: string]: unknown
+  }
+
+/**
+ * Combined config for find operations
+ * Combines the descriptor and config properties with index signature for extra params
+ */
+export type CombinedFindConfig<TItem = unknown> = FindDescriptor &
+  FindQueryConfig<TItem> & {
+    [key: string]: unknown
+  }
+
+/**
  * Combined config for internal use
  */
-export interface CombinedConfig<TItem = unknown> extends QueryDescriptor, QueryConfig<TItem> {
-  [key: string]: unknown
-}
+export type CombinedConfig<TItem = unknown> = CombinedGetConfig<TItem> | CombinedFindConfig<TItem>
 
 /**
  * Item matcher function type
@@ -177,38 +223,54 @@ export function splitConfig<TItem = unknown>(
   desc: QueryDescriptor
   config: QueryConfig<TItem>
 } {
+  // Extract common properties with defaults
   const {
     serviceName,
     method,
-    resourceId,
-    allPages,
     skip,
     realtime = 'merge',
     fetchPolicy = 'swr',
     matcher,
-    ...params // pass through params
+    ...rest
   } = combinedConfig
 
-  // query descriptor, describes the shape
-  // of the query and is passed to the adapter
-  const desc: QueryDescriptor = {
-    serviceName,
-    method,
-    resourceId,
-    params,
-  }
-
-  // figbird specific config options that
-  // drive the query lifecycle
-  let config: QueryConfig<TItem> = {
+  // Build base config (common to both get and find)
+  const baseConfig = {
     skip,
     realtime,
     fetchPolicy,
-    allPages,
     matcher,
   }
 
-  return { desc, config }
+  if (method === 'get') {
+    const { resourceId, ...params } = rest as CombinedGetConfig<TItem>
+
+    const desc: GetDescriptor = {
+      serviceName,
+      method,
+      resourceId,
+      params,
+    }
+
+    const config: GetQueryConfig<TItem> = baseConfig
+
+    return { desc, config }
+  } else {
+    const { allPages, ...params } = rest as CombinedFindConfig<TItem>
+
+    const desc: FindDescriptor = {
+      serviceName,
+      method,
+      params,
+    }
+
+    const config: FindQueryConfig<TItem> = {
+      ...baseConfig,
+      allPages,
+    }
+
+    return { desc, config }
+  }
 }
 
 // a lightweight query reference object to make it easy
@@ -479,15 +541,15 @@ class QueryStore<
       return Promise.reject(new Error('Query not found'))
     }
 
-    const { serviceName, method, resourceId, params } = query.desc
-    const { allPages } = query.config
+    const { desc, config } = query
 
-    if (method === 'get') {
-      return this.#adapter.get(serviceName, resourceId!, params as TParams)
-    } else if (allPages) {
-      return this.#adapter.findAll(serviceName, params as TParams)
+    if (desc.method === 'get') {
+      return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
-      return this.#adapter.find(serviceName, params as TParams)
+      const findConfig = config as FindQueryConfig<unknown>
+      return findConfig.allPages
+        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
+        : this.#adapter.find(desc.serviceName, desc.params as TParams)
     }
   }
 

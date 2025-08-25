@@ -7,3 +7,6 @@ When updating the code, use the following after updates:
 * `npm run test` to run the full test suite including all of the above
 
 Since this is a library, we typically avoid using `any` at all. If the code produces the `Unexpected any` eslint error, fix those by using better types. In some rare cases it does make sense to use any if that makes the public API of the library or a test implementation simpler - add eslint ignore rule in those cases.
+
+Update tests if needed to make them work with the updated code.
+Don't add additional tests unless explicitly asked for that task - otherwise we'll accumulate to many noisy tests.
