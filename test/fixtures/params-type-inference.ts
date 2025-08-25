@@ -3,7 +3,7 @@
  *
  * When using hooks like useFind and useGet, the params parameter accepts BOTH:
  * 1. Figbird-specific params (QueryConfig): skip, realtime, fetchPolicy, allPages, matcher
- * 2. Adapter-specific params (FeathersParams): query, provider, headers, paginate, etc.
+ * 2. Adapter-specific params (FeathersParams): query, headers, etc.
  */
 
 import type { FeathersClient } from '../../lib'
@@ -42,7 +42,6 @@ export const productsWithCombinedParams = useFind('products', {
     category: 'electronics',
     inStock: true,
   },
-  provider: 'rest',
   headers: {
     Authorization: 'Bearer token',
   },
@@ -126,21 +125,18 @@ export function RealtimeProducts() {
   // Merge: incorporate realtime updates into cached data
   const mergeProducts = useFind('products', {
     query: { inStock: true },
-    provider: 'socketio', // Feathers param for socket connection
     realtime: 'merge', // Figbird param for merge strategy
   })
 
   // Refetch: refetch entire query on any realtime event
   const refetchProducts = useFind('products', {
     query: { inStock: true },
-    provider: 'socketio',
     realtime: 'refetch',
   })
 
   // Disabled: no realtime updates
   const staticProducts = useFind('products', {
     query: { inStock: true },
-    provider: 'rest', // REST doesn't support realtime anyway
     realtime: 'disabled',
   })
 
@@ -153,7 +149,6 @@ export const singleProduct = useGet('products', 'product-123', {
   query: {
     $select: ['id', 'name', 'price'], // Only fetch specific fields
   },
-  provider: 'rest',
 
   // Figbird params
   fetchPolicy: 'swr',
@@ -174,11 +169,6 @@ export const complexQuery = useFind('products', {
     ],
     inStock: true,
   },
-  paginate: {
-    default: true,
-    max: 100,
-  },
-  provider: 'socketio',
   headers: {
     'X-Request-ID': '12345',
   },
@@ -215,9 +205,7 @@ export const testCombinedParams: CombinedParamsType = {
     $limit: 10,
     category: 'test',
   },
-  provider: 'rest',
   headers: {},
-  paginate: false,
 
   // Custom properties (allowed by both)
   customProperty: 'allowed',
@@ -227,7 +215,7 @@ export const testCombinedParams: CombinedParamsType = {
 export function demonstrateSplitConfig() {
   // When this is called, splitConfig will separate:
   // - QueryConfig props (skip, realtime, etc.) into config
-  // - Everything else (query, provider, etc.) into params
+  // - Everything else (query, etc.) into params
   const result = useFind('products', {
     // These go to QueryConfig
     skip: false,
@@ -236,7 +224,6 @@ export function demonstrateSplitConfig() {
 
     // These go to adapter params
     query: { category: 'electronics' },
-    provider: 'rest',
     customField: 'value',
   })
 
