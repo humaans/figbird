@@ -77,7 +77,7 @@ export interface QueryConfig {
   realtime?: 'merge' | 'refetch' | 'disabled'
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
   allPages?: boolean
-  matcher?: <T>(query: unknown) => (item: T) => boolean
+  matcher?: (query: any) => (item: any) => boolean
 }
 
 /**
@@ -113,10 +113,11 @@ export type ItemMatcher<T> = (item: T) => boolean
 */
 export class Figbird<
   S extends Schema = AnySchema,
+  TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 > {
-  adapter: Adapter<unknown, unknown, TMeta> | null = null
-  queryStore: QueryStore<TMeta>
+  adapter: Adapter<unknown, TParams, TMeta> | null = null
+  queryStore: QueryStore<TParams, TMeta>
   schema?: S
 
   constructor({
@@ -124,13 +125,13 @@ export class Figbird<
     eventBatchProcessingInterval,
     schema,
   }: {
-    adapter: Adapter<unknown, unknown, TMeta>
+    adapter: Adapter<unknown, TParams, TMeta>
     eventBatchProcessingInterval?: number
     schema?: S
   }) {
     this.adapter = adapter
     this.schema = schema
-    this.queryStore = new QueryStore({
+    this.queryStore = new QueryStore<TParams, TMeta>({
       adapter,
       eventBatchProcessingInterval,
     })
@@ -140,8 +141,8 @@ export class Figbird<
     return this.queryStore.getState()
   }
 
-  query<T>(desc: QueryDescriptor, config?: QueryConfig): QueryRef<T, TMeta> {
-    return new QueryRef<T, TMeta>({
+  query<T>(desc: QueryDescriptor, config?: QueryConfig): QueryRef<T, TParams, TMeta> {
+    return new QueryRef<T, TParams, TMeta>({
       desc,
       config: config || {},
       queryStore: this.queryStore,
@@ -211,11 +212,15 @@ export function splitConfig(combinedConfig: CombinedConfig): {
 // subscribe to state changes and read query data
 // this is only a ref and does not contain state itself, it instead
 // references all the state from the shared figbird query state
-class QueryRef<T, TMeta extends Record<string, unknown> = Record<string, unknown>> {
+class QueryRef<
+  T,
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+> {
   #queryId: string
   #desc: QueryDescriptor
   #config: QueryConfig
-  #queryStore: QueryStore<TMeta>
+  #queryStore: QueryStore<TParams, TMeta>
 
   constructor({
     desc,
@@ -224,7 +229,7 @@ class QueryRef<T, TMeta extends Record<string, unknown> = Record<string, unknown
   }: {
     desc: QueryDescriptor
     config: QueryConfig
-    queryStore: QueryStore<TMeta>
+    queryStore: QueryStore<TParams, TMeta>
   }) {
     this.#queryId = `q/${hashObject({ desc, config })}`
     this.#desc = desc
@@ -260,8 +265,11 @@ class QueryRef<T, TMeta extends Record<string, unknown> = Record<string, unknown
   }
 }
 
-class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>> {
-  #adapter: Adapter<unknown, unknown, TMeta>
+class QueryStore<
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+> {
+  #adapter: Adapter<unknown, TParams, TMeta>
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
@@ -278,7 +286,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
     adapter,
     eventBatchProcessingInterval = 100,
   }: {
-    adapter: Adapter<unknown, unknown, TMeta>
+    adapter: Adapter<unknown, TParams, TMeta>
     eventBatchProcessingInterval?: number
   }) {
     this.#adapter = adapter
@@ -300,7 +308,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
   }
 
-  materialize<T>(queryRef: QueryRef<T, TMeta>): void {
+  materialize<T>(queryRef: QueryRef<T, TParams, TMeta>): void {
     const { queryId, desc, config } = queryRef.details()
 
     if (!this.#getQuery(queryId)) {
@@ -469,11 +477,11 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
     const { allPages } = query.config
 
     if (method === 'get') {
-      return this.#adapter.get(serviceName, resourceId!, params)
+      return this.#adapter.get(serviceName, resourceId!, params as TParams)
     } else if (allPages) {
-      return this.#adapter.findAll(serviceName, params)
+      return this.#adapter.findAll(serviceName, params as TParams)
     } else {
-      return this.#adapter.find(serviceName, params)
+      return this.#adapter.find(serviceName, params as TParams)
     }
   }
 
