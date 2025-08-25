@@ -35,7 +35,6 @@ const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ schema, adapter })
 
 // Create typed hooks with figbird instance
-// The meta type (FeathersFindMeta) is automatically inferred from the adapter
 const { useFind } = createHooks(figbird)
 
 // Example 1: Paginated article list with type-safe metadata
