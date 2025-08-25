@@ -4,6 +4,11 @@ import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/fig
 import { findServiceByName, type AnySchema } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
+/**
+ * Combined params type that includes both Figbird's QueryConfig and adapter params
+ */
+type CombinedParams<TParams> = TParams & Partial<QueryConfig>
+
 export interface QueryResult<T, TMeta extends Record<string, unknown> = Record<string, unknown>> {
   data: T | null
   meta: TMeta
@@ -19,13 +24,17 @@ export interface QueryResult<T, TMeta extends Record<string, unknown> = Record<s
  * @template T - The type of the item to fetch. Defaults to `any` for backward compatibility.
  * For better type safety, explicitly provide a type parameter: `useGet<MyItemType>('service', id)`
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useGet<T = any, TMeta extends Record<string, unknown> = Record<string, unknown>>(
+export function useGet<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  T = any,
+  TParams = Record<string, unknown>,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+>(
   serviceName: string,
   resourceId: string | number,
-  params: Record<string, unknown> = {},
+  params: CombinedParams<TParams> = {} as CombinedParams<TParams>,
 ): QueryResult<T, TMeta> {
-  const figbird = useFigbird<AnySchema, TMeta>()
+  const figbird = useFigbird<AnySchema, TParams, TMeta>()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig({
@@ -43,12 +52,16 @@ export function useGet<T = any, TMeta extends Record<string, unknown> = Record<s
  * @template T - The type of the result array. Defaults to `any[]` for backward compatibility.
  * For better type safety, explicitly provide a type parameter: `useFind<MyItemType[]>('service', params)`
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useFind<T = any[], TMeta extends Record<string, unknown> = Record<string, unknown>>(
+export function useFind<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  T = any[],
+  TParams = Record<string, unknown>,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+>(
   serviceName: string,
-  params: Record<string, unknown> = {},
+  params: CombinedParams<TParams> = {} as CombinedParams<TParams>,
 ): QueryResult<T, TMeta> {
-  const figbird = useFigbird<AnySchema, TMeta>()
+  const figbird = useFigbird<AnySchema, TParams, TMeta>()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig({
@@ -85,7 +98,7 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
   desc: QueryDescriptor,
   config: QueryConfig,
 ): QueryResult<T, TMeta> {
-  const figbird = useFigbird<AnySchema, TMeta>()
+  const figbird = useFigbird<AnySchema, unknown, TMeta>()
 
   // a slightly hacky workaround for network-only queries where we want to keep
   // the query.hash() stable between re-renders for this component, but unique

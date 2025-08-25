@@ -3,6 +3,7 @@ import React, { StrictMode, useEffect, useState } from 'react'
 import type {
   FeathersClient,
   FeathersFindMeta,
+  FeathersParams,
   QueryResult,
   QueryStatus,
   UseMutationResult,
@@ -57,7 +58,7 @@ const createFeathers = ({ skipTotal }: CreateFeathersOptions = {}) =>
 
 interface AppOptions {
   feathers?: ReturnType<typeof mockFeathers>
-  figbird?: Figbird<AppSchema, FeathersFindMeta>
+  figbird?: Figbird<AppSchema, FeathersParams, FeathersFindMeta>
   config?: Record<string, unknown>
 }
 
@@ -65,7 +66,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
   feathers = feathers || createFeathers()
   const adapter = new FeathersAdapter(feathers, config)
   // Create a properly typed figbird instance
-  const figbirdInstance: Figbird<AppSchema, FeathersFindMeta> =
+  const figbirdInstance: Figbird<AppSchema, FeathersParams, FeathersFindMeta> =
     figbird || new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
 
   // Now createHooks can properly infer types from figbirdInstance
@@ -1674,7 +1675,7 @@ test('useFind - with custom matcher', async t => {
   const { matcher: defaultMatcher } = await import('../lib/adapters/matcher')
   const customMatcher = (query: Parameters<typeof defaultMatcher>[0]) => (item: Note) => {
     const match = defaultMatcher(query)
-    return match(item) && item.foo
+    return match(item) && !!item.foo
   }
 
   function Note() {

@@ -194,3 +194,35 @@ test('meta type is automatically inferred from Figbird instance', t => {
     'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta',
   )
 })
+
+test('combined params includes both QueryConfig and FeathersParams', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'params-type-inference.ts')
+
+  // Check that combined params type includes both Figbird and adapter params
+  const combinedParamsType = getTypeAtPosition(fixturePath, 'testCombinedParams')
+
+  // Should include FeathersParams properties
+  t.true(
+    combinedParamsType.includes('query') || combinedParamsType.includes('FeathersParams'),
+    `Expected combined params to include FeathersParams properties, got: ${combinedParamsType}`,
+  )
+
+  // Check that specific QueryConfig properties are present in the type
+  const hasQueryConfig =
+    combinedParamsType.includes('skip') ||
+    combinedParamsType.includes('realtime') ||
+    combinedParamsType.includes('fetchPolicy') ||
+    combinedParamsType.includes('QueryConfig')
+
+  t.true(
+    hasQueryConfig,
+    `Expected combined params to include QueryConfig properties, got: ${combinedParamsType}`,
+  )
+
+  // Verify complex query accepts all combined param types
+  const complexQueryType = getTypeAtPosition(fixturePath, 'complexQuery')
+  t.true(
+    complexQueryType.includes('QueryResult'),
+    `Expected complexQuery to return QueryResult, got: ${complexQueryType}`,
+  )
+})
