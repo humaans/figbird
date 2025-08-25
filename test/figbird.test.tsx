@@ -53,7 +53,7 @@ const createFeathers = ({ skipTotal }: CreateFeathersOptions = {}) =>
 interface AppProps {
   feathers: ReturnType<typeof mockFeathers>
   figbird?: Figbird
-  config?: any
+  config?: Record<string, unknown>
   children: React.ReactNode
 }
 
@@ -435,13 +435,13 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   t.is($('.note2')!.innerHTML, 'hello')
   const state1 = figbird.getState().get('notes')
-  t.is((state1?.entities.get(1) as any)?.content, 'hello')
+  t.is((state1?.entities.get(1) as Note)?.content, 'hello')
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
   const state2 = figbird.getState().get('notes')
-  t.is((state2?.entities.get(1) as any)?.content, 'real')
+  t.is((state2?.entities.get(1) as Note)?.content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -456,12 +456,12 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   // should have updated
   const state3 = figbird.getState().get('notes')
-  t.is((state3?.entities.get(1) as any)?.content, 'still updating')
+  t.is((state3?.entities.get(1) as Note)?.content, 'still updating')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
   const { render, flush, unmount, $all } = dom()
-  let create: any
+  let create: (data: Partial<Note> | Note[]) => Promise<Note | Note[]>
 
   function Note() {
     const notes = useFind('notes')
@@ -495,7 +495,7 @@ test('useMutation - multicreate updates cache correctly', async t => {
 
 test('useMutation patch updates the get binding', async t => {
   const { render, flush, unmount, $ } = dom()
-  let _patch: any
+  let _patch: (id: number, data: Partial<Note>) => Promise<Note>
 
   function Note() {
     const note = useGet('notes', 1)
@@ -671,7 +671,7 @@ test('support custom idField function', async t => {
   }
 
   render(
-    <App feathers={feathers} config={{ idField: (entity: any) => entity._foo }}>
+    <App feathers={feathers} config={{ idField: (entity: Note) => entity._foo }}>
       <Note />
     </App>,
   )
@@ -711,7 +711,7 @@ test('useFind error', async t => {
 test('useFind with skip', async t => {
   const { render, flush, unmount, $ } = dom()
 
-  let setSkip: any
+  let setSkip: React.Dispatch<React.SetStateAction<boolean>>
 
   function Note() {
     const [skip, _setSkip] = useState(true)
@@ -742,24 +742,32 @@ test('useFind with skip', async t => {
 
 test('useFind with refetch', async t => {
   const { render, flush, unmount, $ } = dom()
-  let refetch: any
+  let refetch: () => void
 
   function Note() {
     const notes = useFind('notes')
 
     refetch = notes.refetch
 
-    return <div className='data'>{notes.data && (notes.data as any)[0]?.id}</div>
+    return <div className='data'>{notes.data && notes.data[0]?.id}</div>
   }
 
-  const results = [{ data: [{ id: 1 }] }, { data: [{ id: 2 }] }]
+  const results = [
+    { data: [{ id: 1 }], meta: {} },
+    { data: [{ id: 2 }], meta: {} },
+  ]
   const feathers = createFeathers()
 
   let calls = 0
   feathers.service('notes').find = () => {
     calls++
     const res = results.shift()
-    return Promise.resolve(res!) as Promise<any>
+    return Promise.resolve({
+      ...res!,
+      limit: 100,
+      skip: 0,
+      total: res!.data.length,
+    })
   }
 
   render(
@@ -785,12 +793,12 @@ test('useFind with refetch', async t => {
 
 test('useFind with refetch while already fetching', async t => {
   const { render, flush, unmount, $ } = dom()
-  let refetch: any
+  let refetch: (() => void) | undefined
 
   function Note() {
     const notes = useFind('notes')
     refetch = notes.refetch
-    return <div className='data'>{notes.data && (notes.data as Note[])[0]?.id}</div>
+    return <div className='data'>{notes.data && notes.data[0]?.id}</div>
   }
 
   const results = [{ data: [{ id: 1 }] }, { data: [{ id: 2 }] }, { data: [{ id: 3 }] }]
@@ -802,10 +810,26 @@ test('useFind with refetch while already fetching', async t => {
     const res = results.shift()
     if (calls === 1) {
       // First call is slow
-      return new Promise(resolve => setTimeout(() => resolve(res!), 20)) as Promise<any>
+      return new Promise(resolve =>
+        setTimeout(
+          () =>
+            resolve({
+              ...res!,
+              limit: 100,
+              skip: 0,
+              total: res!.data.length,
+            }),
+          20,
+        ),
+      )
     }
     // Subsequent calls are fast
-    return Promise.resolve(res!) as Promise<any>
+    return Promise.resolve({
+      ...res!,
+      limit: 100,
+      skip: 0,
+      total: res!.data.length,
+    })
   }
 
   render(
@@ -820,7 +844,7 @@ test('useFind with refetch while already fetching', async t => {
   t.is(calls, 1, 'First fetch should have started')
 
   // Call refetch while the first fetch is still in progress
-  refetch()
+  refetch!()
 
   // Wait for both fetches to complete
   await flush(async () => {
@@ -832,7 +856,7 @@ test('useFind with refetch while already fetching', async t => {
 
   // Call refetch again after everything is done
   await flush(() => {
-    refetch()
+    refetch!()
   })
 
   t.is(calls, 3, 'Should have fetched a third time')
@@ -842,26 +866,26 @@ test('useFind with refetch while already fetching', async t => {
 })
 
 test('refetch only works with active listeners', async t => {
-  let refetch: any
+  let refetch: (() => void) | undefined
   let calls = 0
 
   function Note() {
     const notes = useFind('notes')
     refetch = notes.refetch
-    return <div className='data'>{notes.data && (notes.data as Note[])[0]?.id}</div>
+    return <div className='data'>{notes.data && notes.data[0]?.id}</div>
   }
 
   const results = [
-    { data: [{ id: 1 }] },
-    { data: [{ id: 2 }] },
-    { data: [{ id: 3 }] },
-    { data: [{ id: 4 }] },
+    { data: [{ id: 1 }], limit: 100, skip: 0, total: 1 },
+    { data: [{ id: 2 }], limit: 100, skip: 0, total: 1 },
+    { data: [{ id: 3 }], limit: 100, skip: 0, total: 1 },
+    { data: [{ id: 4 }], limit: 100, skip: 0, total: 1 },
   ]
 
   const feathers = createFeathers()
   feathers.service('notes').find = async () => {
     calls++
-    return results[calls - 1] as any
+    return results[calls - 1]!
   }
 
   // First mount
@@ -882,7 +906,7 @@ test('refetch only works with active listeners', async t => {
 
   // Try to refetch by hand
   await dom1.flush(() => {
-    refetch()
+    refetch!()
   })
 
   t.is(calls, 2, 'Should have refetched')
@@ -902,7 +926,7 @@ test('refetch only works with active listeners', async t => {
 
   // Refetch should work now that component is mounted
   await dom2.flush(() => {
-    refetch()
+    refetch!()
   })
 
   t.is(calls, 4, 'Should have refetched with active listeners')
@@ -1179,7 +1203,7 @@ test('useFind - realtime refetch only with active listeners', async t => {
 
   const feathers = createFeathers()
   const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
-  feathers.service('notes').find = async (params?: any) => {
+  feathers.service('notes').find = async (params?: Record<string, unknown>) => {
     findCallCount++
     return originalFind.call(feathers.service('notes'), params)
   }
@@ -1572,9 +1596,9 @@ test('useFind - fetchPolicy network-only', async t => {
   unmount()
 })
 
-function serialize(input: any): any {
+function serialize(input: unknown): unknown {
   if (input instanceof Map) {
-    const obj: any = {}
+    const obj: Record<string, unknown> = {}
     for (const [key, value] of input) {
       obj[key] = serialize(value)
     }
@@ -1584,7 +1608,7 @@ function serialize(input: any): any {
   } else if (Array.isArray(input)) {
     return input.map(serialize)
   } else if (input && typeof input === 'object') {
-    const obj: any = {}
+    const obj: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(input)) {
       obj[key] = serialize(value)
     }
@@ -1627,7 +1651,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
 test('useFind - with custom matcher', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { matcher: defaultMatcher } = await import('../lib/adapters/matcher')
-  const customMatcher = (query: any) => (item: any) => {
+  const customMatcher = (query: Parameters<typeof defaultMatcher>[0]) => (item: Note) => {
     const match = defaultMatcher(query)
     return match(item) && item.foo
   }
@@ -1922,25 +1946,38 @@ test('subscribeToStateChanges', async t => {
 
   await flush()
 
-  let state: any
-  const unsub = figbird.subscribeToStateChanges((s: any) => {
+  let state: Record<string, unknown> = {}
+  const unsub = figbird.subscribeToStateChanges((s: Map<string, unknown>) => {
     state = JSON.parse(JSON.stringify(serialize(s)))
     // Remove updatedAt fields from all entities
-    if (state?.notes?.entities) {
-      Object.values(state.notes.entities as any).forEach((entity: any) => {
-        delete entity.updatedAt
-      })
+    if (state?.notes && typeof state.notes === 'object' && state.notes !== null) {
+      const notesState = state.notes as Record<string, unknown>
+      if (notesState?.entities && typeof notesState.entities === 'object') {
+        Object.values(notesState.entities as Record<string, Record<string, unknown>>).forEach(
+          entity => {
+            delete entity.updatedAt
+          },
+        )
+      }
     }
     // Remove updatedAt fields from all query data
-    if (state?.notes?.queries) {
-      Object.values(state.notes.queries as any).forEach((query: any) => {
-        const data = query?.state?.data
-        if (Array.isArray(data)) {
-          data.forEach((item: any) => delete item.updatedAt)
-        } else if (data && typeof data === 'object') {
-          delete data.updatedAt
-        }
-      })
+    if (state?.notes && typeof state.notes === 'object' && state.notes !== null) {
+      const notesState = state.notes as Record<string, unknown>
+      if (notesState?.queries && typeof notesState.queries === 'object') {
+        Object.values(notesState.queries as Record<string, Record<string, unknown>>).forEach(
+          query => {
+            const data =
+              query?.state && typeof query.state === 'object'
+                ? (query.state as Record<string, unknown>).data
+                : null
+            if (Array.isArray(data)) {
+              data.forEach((item: Record<string, unknown>) => delete item.updatedAt)
+            } else if (data && typeof data === 'object') {
+              delete (data as Record<string, unknown>).updatedAt
+            }
+          },
+        )
+      }
     }
   })
 
@@ -2070,6 +2107,7 @@ test('useFind - stale realtime event is ignored', async t => {
 test('recursive serializer for maps and sets', async t => {
   t.deepEqual(
     serialize(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       new Map<string, any>([
         ['a', 1],
         ['b', new Set([1, 2, 3])],
@@ -2086,7 +2124,7 @@ test('recursive serializer for maps and sets', async t => {
 
 test('useFind handles rapid query parameter changes without showing stale data', async t => {
   const { render, flush, unmount, $ } = dom()
-  let setTag: any
+  let setTag: React.Dispatch<React.SetStateAction<string>>
 
   function SearchableNotes() {
     const [tag, _setTag] = useState('')
@@ -2117,16 +2155,17 @@ test('useFind handles rapid query parameter changes without showing stale data',
   // Mock delays based on tag
   const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
   let findCallCount = 0
-  feathers.service('notes').find = async (params: any) => {
+  feathers.service('notes').find = async (params: Record<string, unknown>) => {
     findCallCount++
-    const tag = params.query?.tag
+    const query = params.query as Record<string, unknown>
+    const tag = query?.tag as string
     if (tag === 'slow') {
       await new Promise(resolve => setTimeout(resolve, 50))
     }
     const result = await originalFind(params)
     // Filter by tag if provided
     if (tag) {
-      result.data = result.data.filter((item: any) => item.tag === tag)
+      result.data = result.data.filter(item => (item as unknown as Note).tag === tag)
       result.total = result.data.length
     }
     return result
@@ -2167,7 +2206,7 @@ test('useFind handles rapid query parameter changes without showing stale data',
 
 test('useFind recovers gracefully from errors on refetch', async t => {
   const { render, flush, unmount, $ } = dom()
-  let refetch: any
+  let refetch: () => void
   let failCount = 0
 
   function Notes() {
@@ -2188,7 +2227,7 @@ test('useFind recovers gracefully from errors on refetch', async t => {
 
   // Make the service fail first 2 times, then succeed
   const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
-  feathers.service('notes').find = async (params: any) => {
+  feathers.service('notes').find = async (params: Record<string, unknown>) => {
     failCount++
     if (failCount <= 2) {
       throw new Error('Network error')
@@ -2236,7 +2275,7 @@ test('concurrent mutations maintain data consistency', async t => {
 
   // Add delays to simulate network latency
   const originalPatch = feathers.service('notes').patch.bind(feathers.service('notes'))
-  feathers.service('notes').patch = async (id: any, data: any) => {
+  feathers.service('notes').patch = async (id: number, data: Partial<Note>) => {
     if (data.content === 'update1') {
       await new Promise(resolve => setTimeout(resolve, 30))
     } else if (data.content === 'update2') {
@@ -2315,9 +2354,10 @@ test('handles component unmounting during active requests without warnings', asy
 
   // Add delay to create to ensure it completes after unmount
   const originalCreate = feathers.service('notes').create.bind(feathers.service('notes'))
-  feathers.service('notes').create = async (data: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(feathers.service('notes').create as any) = async (data: any) => {
     await new Promise(resolve => setTimeout(resolve, 20))
-    return originalCreate(data) as any
+    return originalCreate(data)
   }
 
   render(
@@ -2380,7 +2420,7 @@ test('allPages handles errors gracefully during pagination', async t => {
   // Make the third page fail
   let callCount = 0
   const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
-  feathers.service('notes').find = async (params: any) => {
+  feathers.service('notes').find = async (params: Record<string, unknown>) => {
     callCount++
     if (callCount === 3) {
       // Third page
@@ -2443,7 +2483,7 @@ test('useFind with custom query operators does not crash when realtime is not me
 
 test('mutations work correctly when no queries are active', async t => {
   const { render, flush, unmount } = dom()
-  let createResult: any, patchResult: any, removeResult: any
+  let createResult: Note | undefined, patchResult: Note | undefined, removeResult: Note | undefined
   let mutationsCompleted = false
 
   function MutateOnly() {
@@ -2452,7 +2492,7 @@ test('mutations work correctly when no queries are active', async t => {
     useEffect(() => {
       // Perform mutations without any queries being active
       ;(async () => {
-        createResult = await create({ id: 100, content: 'new note' })
+        createResult = (await create({ id: 100, content: 'new note' })) as Note
         patchResult = await patch(100, { content: 'patched note' })
         removeResult = await remove(100)
         mutationsCompleted = true
@@ -2477,21 +2517,24 @@ test('mutations work correctly when no queries are active', async t => {
   t.true(mutationsCompleted)
 
   // Verify the mutations returned values
-  t.is(createResult.id, 100)
-  t.is(patchResult.content, 'patched note')
-  t.is(removeResult.id, 100)
+  t.is(createResult!.id, 100)
+  t.is(patchResult!.content, 'patched note')
+  t.is(removeResult!.id, 100)
 
   // Verify final state - item was created then removed
   const allNotes = await feathers.service('notes').find()
   t.is(allNotes.total, 1) // Still original 1 note (created then removed)
-  t.falsy(allNotes.data.find((note: any) => note.id === 100)) // Item was removed
+  t.falsy(allNotes.data.find(note => note.id === 100)) // Item was removed
 
   unmount()
 })
 
 test('mutate methods return the mutated item', async t => {
   const { render, flush, unmount } = dom()
-  let createResult: any, patchResult: any, updateResult: any, removeResult: any
+  let createResult: Note | undefined,
+    patchResult: Note | undefined,
+    updateResult: Note | undefined,
+    removeResult: Note | undefined
 
   function Notes() {
     const { create, patch, update, remove } = useMutation('notes')
@@ -2499,7 +2542,7 @@ test('mutate methods return the mutated item', async t => {
     useEffect(() => {
       ;(async () => {
         // Test create returns the created item
-        createResult = await create({ id: 101, content: 'test create' })
+        createResult = (await create({ id: 101, content: 'test create' })) as Note
 
         // Test patch returns the patched item
         patchResult = await patch(101, { content: 'test patch' })
@@ -2525,28 +2568,28 @@ test('mutate methods return the mutated item', async t => {
   await flush()
 
   // Verify all mutation methods returned the expected items
-  t.is(createResult.id, 101)
-  t.is(createResult.content, 'test create')
-  t.truthy(createResult.updatedAt)
+  t.is(createResult!.id, 101)
+  t.is(createResult!.content, 'test create')
+  t.truthy(createResult!.updatedAt)
 
-  t.is(patchResult.id, 101)
-  t.is(patchResult.content, 'test patch')
-  t.truthy(patchResult.updatedAt)
+  t.is(patchResult!.id, 101)
+  t.is(patchResult!.content, 'test patch')
+  t.truthy(patchResult!.updatedAt)
 
-  t.is(updateResult.id, 101)
-  t.is(updateResult.content, 'test update')
-  t.truthy(updateResult.updatedAt)
+  t.is(updateResult!.id, 101)
+  t.is(updateResult!.content, 'test update')
+  t.truthy(updateResult!.updatedAt)
 
-  t.is(removeResult.id, 101)
-  t.is(removeResult.content, 'test update') // Remove returns the item before deletion
-  t.truthy(removeResult.updatedAt)
+  t.is(removeResult!.id, 101)
+  t.is(removeResult!.content, 'test update') // Remove returns the item before deletion
+  t.truthy(removeResult!.updatedAt)
 
   unmount()
 })
 
 test('realtime events are batched to reduce re-renders', async t => {
   const { render, flush, unmount, $all } = dom()
-  let renderLog: any[] = []
+  let renderLog: string[][] = []
 
   function Notes() {
     const notes = useFind('notes')
@@ -2554,7 +2597,7 @@ test('realtime events are batched to reduce re-renders', async t => {
     // Track renders with data snapshots
     useEffect(() => {
       if (notes.data) {
-        renderLog.push(notes.data.map((n: any) => n.content))
+        renderLog.push(notes.data.map(n => n.content))
       }
     })
 
