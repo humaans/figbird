@@ -37,7 +37,7 @@ interface CreateFeathersOptions {
 
 const createFeathers = ({ skipTotal }: CreateFeathersOptions = {}) =>
   mockFeathers({
-    skipTotal,
+    skipTotal: skipTotal ?? false,
     notes: {
       data: {
         1: {
@@ -94,11 +94,11 @@ class ErrorHandler extends React.Component<{ children: React.ReactNode }, ErrorH
     return { hasError: true, error: error.message }
   }
 
-  componentDidCatch(error: Error) {
+  override componentDidCatch(error: Error) {
     console.log('ErrorHandler', error)
   }
 
-  render() {
+  override render() {
     if (this.state.hasError) {
       return <div data-error>{this.state.error}</div>
     }
