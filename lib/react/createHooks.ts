@@ -6,8 +6,8 @@ import type {
   ServiceMethods,
   ServiceNames,
   ServiceQuery,
-} from '../schema/types.js'
-import { findServiceByName } from '../schema/types.js'
+} from '../core/schema.js'
+import { findServiceByName } from '../core/schema.js'
 import { useFigbird } from './react.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import { useQuery, type QueryResult } from './useQuery.js'

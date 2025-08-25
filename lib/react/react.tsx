@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import React, { createContext, useContext } from 'react'
 import type { Figbird } from '../core/figbird.js'
-import type { AnySchema, Schema } from '../schema/types.js'
+import type { AnySchema, Schema } from '../core/schema.js'
 
 // Create a generic context factory to maintain type safety
 function createFigbirdContext<S extends Schema = AnySchema>() {

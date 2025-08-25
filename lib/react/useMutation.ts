@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import { findServiceByName } from '../schema/types.js'
+import { findServiceByName } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 interface MutationState<T> {
