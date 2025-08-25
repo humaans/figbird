@@ -1,17 +1,14 @@
 import test from 'ava'
 import React, { StrictMode, useEffect, useState } from 'react'
-import type { QueryResult, QueryStatus } from '../lib'
-import type { FeathersClient } from '../lib'
+import type { FeathersClient, QueryResult, QueryStatus } from '../lib'
 import {
+  createHooks,
+  createSchema,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
-  useFeathers,
-  useFind,
-  useMutation,
-  createHooks,
-  createSchema,
   service,
+  useFeathers,
 } from '../lib'
 import { dom, mockFeathers, queueTask } from './helpers'
 
@@ -33,11 +30,7 @@ const schema = createSchema({
   services: [service<Note, 'notes'>('notes')],
 })
 
-const {
-  useGet: useTypedGet,
-  useFind: useTypedFind,
-  useMutation: useTypedMutation,
-} = createHooks<typeof schema>()
+const { useGet, useFind, useMutation } = createHooks<typeof schema>()
 
 interface CreateFeathersOptions {
   skipTotal?: boolean
@@ -145,7 +138,7 @@ test('useGet', async t => {
 
   function Note() {
     // Use schema-based typed hook - this provides full type inference
-    const note = useTypedGet('notes', 1)
+    const note = useGet('notes', 1)
     noteData = note.data
     return <NoteList notes={note} />
   }
@@ -171,7 +164,7 @@ test('useGet updates after realtime patch', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
-    const note = useTypedGet('notes', 1)
+    const note = useGet('notes', 1)
     return <NoteList notes={note} />
   }
 
@@ -202,7 +195,7 @@ test('useFind', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
-    const notes = useTypedFind('notes')
+    const notes = useFind('notes')
     return <NoteList notes={notes} />
   }
 
@@ -472,7 +465,7 @@ test('useMutation - multicreate updates cache correctly', async t => {
 
   function Note() {
     const notes = useFind('notes')
-    const { create: _create } = useMutation<Note>('notes')
+    const { create: _create } = useMutation('notes')
     create = _create
 
     return <NoteList notes={notes} />
@@ -505,8 +498,8 @@ test('useMutation patch updates the get binding', async t => {
   let _patch: any
 
   function Note() {
-    const note = useTypedGet('notes', 1)
-    const { patch } = useTypedMutation('notes')
+    const note = useGet('notes', 1)
+    const { patch } = useMutation('notes')
     _patch = patch
     return <NoteList notes={note} />
   }
@@ -537,8 +530,8 @@ test('useMutation handles errors', async t => {
   let handled: string = ''
 
   function Note() {
-    const note = useTypedGet('notes', 1)
-    const { patch, error } = useTypedMutation('notes')
+    const note = useGet('notes', 1)
+    const { patch, error } = useMutation('notes')
 
     useEffect(() => {
       patch(1, {
@@ -2254,8 +2247,8 @@ test('concurrent mutations maintain data consistency', async t => {
 
   function Notes() {
     const notes = useFind('notes')
-    const { patch: patch1 } = useMutation<Note>('notes')
-    const { patch: patch2 } = useMutation<Note>('notes')
+    const { patch: patch1 } = useMutation('notes')
+    const { patch: patch2 } = useMutation('notes')
 
     React.useEffect(() => {
       if (notes.data && notes.data.length > 0 && !hasFiredMutations) {
@@ -2308,7 +2301,7 @@ test('handles component unmounting during active requests without warnings', asy
 
   function Notes() {
     const notes = useFind('notes')
-    const { create } = useMutation<Note>('notes')
+    const { create } = useMutation('notes')
 
     React.useEffect(() => {
       // Start a mutation that will complete after component unmounts
@@ -2454,7 +2447,7 @@ test('mutations work correctly when no queries are active', async t => {
   let mutationsCompleted = false
 
   function MutateOnly() {
-    const { create, patch, remove } = useMutation<Note>('notes')
+    const { create, patch, remove } = useMutation('notes')
 
     useEffect(() => {
       // Perform mutations without any queries being active
@@ -2501,7 +2494,7 @@ test('mutate methods return the mutated item', async t => {
   let createResult: any, patchResult: any, updateResult: any, removeResult: any
 
   function Notes() {
-    const { create, patch, update, remove } = useMutation<Note>('notes')
+    const { create, patch, update, remove } = useMutation('notes')
 
     useEffect(() => {
       ;(async () => {
