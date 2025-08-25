@@ -39,7 +39,7 @@ export function useGet<
   const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig<T>({
     serviceName: actualServiceName,
-    method: 'get',
+    method: 'get' as const,
     resourceId,
     ...params,
   })
@@ -66,7 +66,7 @@ export function useFind<
   const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig<T>({
     serviceName: actualServiceName,
-    method: 'find',
+    method: 'find' as const,
     ...params,
   })
   return useQuery<T, TMeta>(desc, config)
