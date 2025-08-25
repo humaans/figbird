@@ -40,22 +40,22 @@ export interface QueryState<T, TMeta = Record<string, unknown>> {
 /**
  * Internal query representation
  */
-export interface Query {
+export interface Query<T = unknown, TMeta = Record<string, unknown>> {
   queryId: string
   desc: QueryDescriptor
   config: QueryConfig
   pending: boolean
   dirty: boolean
-  filterItem: (item: unknown) => boolean
-  state: QueryState<unknown, any>
+  filterItem: (item: T) => boolean
+  state: QueryState<T, TMeta>
 }
 
 /**
  * Service state in the store
  */
-export interface ServiceState {
+export interface ServiceState<TMeta = Record<string, unknown>> {
   entities: Map<string | number, unknown>
-  queries: Map<string, Query>
+  queries: Map<string, Query<unknown, TMeta>>
   itemQueryIndex: Map<string | number, Set<string>>
 }
 
@@ -136,7 +136,7 @@ export class Figbird<
     })
   }
 
-  getState(): Map<string, ServiceState> {
+  getState(): Map<string, ServiceState<TMeta>> {
     return this.queryStore.getState()
   }
 
@@ -160,7 +160,7 @@ export class Figbird<
     return this.queryStore.mutate({ serviceName, method, args })
   }
 
-  subscribeToStateChanges(fn: (state: Map<string, ServiceState>) => void): () => void {
+  subscribeToStateChanges(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
     return this.queryStore.subscribeToStateChanges(fn)
   }
 }
@@ -265,9 +265,9 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
-  #globalListeners: Set<(state: Map<string, ServiceState>) => void> = new Set()
+  #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
 
-  #state: Map<string, ServiceState> = new Map()
+  #state: Map<string, ServiceState<TMeta>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
 
   #eventQueue: QueuedEvent[] = []
@@ -285,7 +285,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
   }
 
-  #getQuery(queryId: string): Query | undefined {
+  #getQuery(queryId: string): Query<unknown, TMeta> | undefined {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName) {
       const service = this.getState().get(serviceName)
@@ -319,14 +319,14 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
             state: config.skip
               ? {
                   data: null,
-                  meta: {},
+                  meta: {} as TMeta,
                   status: 'idle',
                   isFetching: false,
                   error: null,
                 }
               : {
                   data: null,
-                  meta: {},
+                  meta: {} as TMeta,
                   status: 'loading',
                   isFetching: true,
                   error: null,
@@ -383,7 +383,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
     }
   }
 
-  #addGlobalListener(fn: (state: Map<string, ServiceState>) => void): () => void {
+  #addGlobalListener(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
     this.#globalListeners.add(fn)
     return () => {
       this.#globalListeners.delete(fn)
@@ -424,7 +424,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
     }
   }
 
-  subscribeToStateChanges(fn: (state: Map<string, ServiceState>) => void): () => void {
+  subscribeToStateChanges(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
     return this.#addGlobalListener(fn)
   }
 
@@ -621,7 +621,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
   }
 
   #updateQueriesFromEvents(
-    service: ServiceState,
+    service: ServiceState<TMeta>,
     appliedEvents: QueuedEvent[],
     touch: (queryId: string) => void,
   ): void {
@@ -715,12 +715,12 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
     }
   }
 
-  getState(): Map<string, ServiceState> {
+  getState(): Map<string, ServiceState<TMeta>> {
     return this.#state
   }
 
   #updateState(
-    mutate: (state: Map<string, ServiceState>, touch: (queryId: string) => void) => void,
+    mutate: (state: Map<string, ServiceState<TMeta>>, touch: (queryId: string) => void) => void,
     { silent = false } = {},
   ): void {
     const modifiedQueries = new Set<string>()
@@ -740,7 +740,11 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
 
   #transactOverService(
     queryId: string,
-    fn: (service: ServiceState, query?: Query, touch?: (queryId: string) => void) => void,
+    fn: (
+      service: ServiceState<TMeta>,
+      query?: Query<unknown, TMeta>,
+      touch?: (queryId: string) => void,
+    ) => void,
     options?: { silent?: boolean },
   ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
@@ -758,7 +762,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
 
   #transactOverServiceByName(
     serviceName: string,
-    fn: (service: ServiceState, touch: (queryId: string) => void) => void,
+    fn: (service: ServiceState<TMeta>, touch: (queryId: string) => void) => void,
     { silent = false } = {},
   ): void {
     if (serviceName) {
@@ -851,7 +855,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
         ...query,
         state: {
           data: null,
-          meta: {},
+          meta: {} as TMeta,
           status: 'error',
           isFetching: false,
           error,
@@ -887,7 +891,7 @@ class QueryStore<TMeta extends Record<string, unknown> = Record<string, unknown>
   }
 }
 
-function getItems(query: Query): unknown[] {
+function getItems<TMeta = Record<string, unknown>>(query: Query<unknown, TMeta>): unknown[] {
   return Array.isArray(query.state.data)
     ? query.state.data
     : query.state.data
