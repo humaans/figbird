@@ -2,7 +2,7 @@
 export { Figbird } from './core/figbird.js'
 
 // schema
-export { createSchema, findServiceByName, hasSchema, service } from './schema/types.js'
+export { createSchema, findServiceByName, hasSchema, service } from './core/schema.js'
 export type {
   AnySchema,
   Item,
@@ -15,7 +15,7 @@ export type {
   ServiceNames,
   ServiceQuery,
   UntypedService,
-} from './schema/types.js'
+} from './core/schema.js'
 
 // adapters
 export { FeathersAdapter } from './adapters/feathers.js'

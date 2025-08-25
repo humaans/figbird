@@ -1,6 +1,6 @@
-import type { AnySchema, Schema } from '../schema/types.js'
 import type { Adapter, EventType, Response } from '../types.js'
 import { hashObject } from './hash.js'
+import type { AnySchema, Schema } from './schema.js'
 
 /**
  * Internal event representation
