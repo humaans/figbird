@@ -1,6 +1,8 @@
 // core
 export { Figbird } from './core/figbird.js'
 
+export type { EventType } from './core/figbird.js'
+
 // schema
 export { createSchema, findServiceByName, hasSchema, service } from './core/schema.js'
 export type {
@@ -21,15 +23,15 @@ export type {
 export { FeathersAdapter } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
+// Adapter interface and types
+export type { Adapter, EventHandlers, QueryResponse } from './adapters/adapter.js'
+
 // react hooks
 export { createHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird } from './react/react.js'
 export { useFeathers } from './react/useFeathers.js'
 export { useMutation } from './react/useMutation.js'
 export { useFind, useGet } from './react/useQuery.js'
-
-// Core types that users will interact with
-export type { Adapter, EventHandlers, EventType, Response } from './types.js'
 
 // Query-related types for advanced usage
 export type { QueryConfig, QueryDescriptor, QueryStatus } from './core/figbird.js'
