@@ -23,7 +23,8 @@ export { matcher } from './adapters/matcher.js'
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
-export { FigbirdProvider, useFeathers, useFigbird } from './react/react.js'
+export { FigbirdProvider, useFigbird } from './react/react.js'
+export { useFeathers } from './react/useFeathers.js'
 export { useMutation } from './react/useMutation.js'
 export { useFind, useGet } from './react/useQuery.js'
 
@@ -31,8 +32,7 @@ export { useFind, useGet } from './react/useQuery.js'
 export type { Adapter, EventHandlers, EventType, Response } from './types.js'
 
 // Query-related types for advanced usage
-export type { QueryConfig, QueryDescriptor } from './core/figbird.js'
-export type { QueryStatus } from './core/internal-types.js'
+export type { QueryConfig, QueryDescriptor, QueryStatus } from './core/figbird.js'
 
 // React hook result types (already exported but let's be complete)
 export type { UseMutationResult } from './react/useMutation.js'
