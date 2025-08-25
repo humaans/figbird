@@ -7,7 +7,7 @@ import { useFigbird } from './react.js'
 /**
  * Combined params type that includes both Figbird's QueryConfig and adapter params
  */
-type CombinedParams<TParams> = TParams & Partial<QueryConfig>
+type CombinedParams<TParams, TItem = unknown> = TParams & Partial<QueryConfig<TItem>>
 
 export interface QueryResult<T, TMeta extends Record<string, unknown> = Record<string, unknown>> {
   data: T | null
@@ -32,12 +32,12 @@ export function useGet<
 >(
   serviceName: string,
   resourceId: string | number,
-  params: CombinedParams<TParams> = {} as CombinedParams<TParams>,
+  params: CombinedParams<TParams, T> = {} as CombinedParams<TParams, T>,
 ): QueryResult<T, TMeta> {
   const figbird = useFigbird<AnySchema, TParams, TMeta>()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
-  const { desc, config } = splitConfig({
+  const { desc, config } = splitConfig<T>({
     serviceName: actualServiceName,
     method: 'get',
     resourceId,
@@ -59,12 +59,12 @@ export function useFind<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 >(
   serviceName: string,
-  params: CombinedParams<TParams> = {} as CombinedParams<TParams>,
+  params: CombinedParams<TParams, T> = {} as CombinedParams<TParams, T>,
 ): QueryResult<T, TMeta> {
   const figbird = useFigbird<AnySchema, TParams, TMeta>()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
-  const { desc, config } = splitConfig({
+  const { desc, config } = splitConfig<T>({
     serviceName: actualServiceName,
     method: 'find',
     ...params,
@@ -96,7 +96,7 @@ function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(): Quer
 */
 export function useQuery<T, TMeta extends Record<string, unknown> = Record<string, unknown>>(
   desc: QueryDescriptor,
-  config: QueryConfig,
+  config: QueryConfig<T>,
 ): QueryResult<T, TMeta> {
   const figbird = useFigbird<AnySchema, unknown, TMeta>()
 

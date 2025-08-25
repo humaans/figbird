@@ -89,7 +89,7 @@ export const filteredProducts = useFind('products', {
   },
 
   // Figbird custom matcher for realtime filtering
-  matcher: (_query: any) => (item: any) => {
+  matcher: _query => item => {
     // Custom logic beyond standard Feathers query
     return item.price > 100 && item.tags?.includes('premium')
   },
@@ -188,7 +188,7 @@ export const complexQuery = useFind('products', {
   realtime: 'merge',
   allPages: false,
   skip: false,
-  matcher: (_query: any) => (item: any) => {
+  matcher: _query => item => {
     // Additional client-side filtering
     return item.tags?.length > 0
   },
