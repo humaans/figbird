@@ -167,7 +167,7 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
     return this.#_find(serviceName, params)
   }
 
-  findAll(
+  async findAll(
     serviceName: string,
     params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
@@ -177,43 +177,31 @@ export class FeathersAdapter<TQuery extends Record<string, unknown> = FeathersQu
       params.query = { ...params.query, $limit: defaultPageSize } as unknown as TQuery
     }
 
-    return new Promise((resolve, reject) => {
-      let $skip = 0
-      const result: QueryResponse<unknown[], FeathersFindMeta> = {
-        data: [],
-        meta: { total: 0, limit: 0, skip: 0 },
-      }
+    const result: QueryResponse<unknown[], FeathersFindMeta> = {
+      data: [],
+      meta: { total: -1, limit: 0, skip: 0 },
+    }
+    let $skip = 0
 
-      const resolveOrFetchNext = ({ data, meta }: QueryResponse<unknown[], FeathersFindMeta>) => {
-        if (
-          data.length === 0 ||
-          data.length < meta.limit ||
-          // allow total to be -1 to indicate that total will not be available on this endpoint
-          (meta.total >= 0 && result.data.length >= meta.total)
-        ) {
-          resolve(result)
-        } else {
-          $skip = result.data.length
-          fetchNext()
-        }
-      }
+    while (true) {
+      const { data, meta } = await this.#_find(serviceName, {
+        ...params,
+        query: { ...params?.query, $skip } as unknown as TQuery,
+      })
 
-      const fetchNext = () => {
-        this.#_find(serviceName, {
-          ...params,
-          query: { ...params?.query, $skip } as unknown as TQuery,
-        })
-          .then(({ data, meta }) => {
-            result.meta.limit = meta.limit
-            result.meta.total = meta.total
-            result.data = result.data.concat(data)
-            resolveOrFetchNext({ data, meta })
-          })
-          .catch(reject)
-      }
+      result.meta = { ...result.meta, ...meta }
+      result.data.push(...data)
 
-      fetchNext()
-    })
+      const done =
+        data.length === 0 ||
+        data.length < meta.limit ||
+        // allow total to be -1 to indicate that total will not be available on this endpoint
+        (meta.total >= 0 && result.data.length >= meta.total)
+
+      if (done) return result
+
+      $skip = result.data.length
+    }
   }
 
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
