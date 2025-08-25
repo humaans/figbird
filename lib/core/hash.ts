@@ -48,5 +48,25 @@ function numberToBase64(num: number): string {
   bytes[1] = num >> 16
   bytes[2] = num >> 8
   bytes[3] = num
-  return btoa(String.fromCharCode(...Array.from(bytes)))
+  return bytesToBase64(bytes)
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  // Use Buffer in Node.js for better performance
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64')
+  }
+
+  // Browser fallback - handle large arrays safely
+  if (bytes.length > 1024) {
+    // For large arrays, process in chunks to avoid stack overflow
+    let result = ''
+    for (let i = 0; i < bytes.length; i += 1024) {
+      const chunk = bytes.slice(i, i + 1024)
+      result += String.fromCharCode(...chunk)
+    }
+    return btoa(result)
+  }
+
+  return btoa(String.fromCharCode(...bytes))
 }
