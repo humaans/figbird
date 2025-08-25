@@ -1,9 +1,9 @@
 import test from 'ava'
 import React, { StrictMode, useEffect, useState } from 'react'
 import type { QueryResult, QueryStatus } from '../lib'
+import type { FeathersClient } from '../lib'
 import {
   FeathersAdapter,
-  FeathersClient,
   Figbird,
   FigbirdProvider,
   useFeathers,
