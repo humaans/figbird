@@ -1,20 +1,15 @@
 /**
  * Stable hashing utilities for query keys
- * Ensures consistent hashing even with object property reordering and function values
+ * Ensures consistent hashing even with object property reordering
  */
 
 /**
- * Stable serialization that handles functions and ensures consistent key ordering
+ * Stable serialization that ensures consistent key ordering
  */
 function stableSerialize(value: unknown): string {
   const seen = new WeakSet<object>()
 
   function replacer(_key: string, val: unknown): unknown {
-    // Handle functions with a stable token
-    if (typeof val === 'function') {
-      return `__fn:${val.name || 'anonymous'}`
-    }
-
     // Handle objects
     if (typeof val === 'object' && val !== null) {
       // Check for cycles
@@ -57,7 +52,6 @@ function stableSerialize(value: unknown): string {
  * Features:
  * - Deterministic: Same input always produces same hash
  * - Stable: Object key order doesn't affect hash
- * - Function-aware: Functions are replaced with stable tokens
  * - Fast: FNV-1a is efficient for frequent operations
  * - Collision-resistant: Sufficient for typical query caching needs
  */
