@@ -77,7 +77,7 @@ test('useFind returns correct type for Person service', t => {
   t.is(serviceItemType, 'Person')
   t.is(
     peopleType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], Record<string, unknown>>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
 })
 
@@ -111,11 +111,11 @@ test('type narrowing works correctly with multiple services', t => {
   // Test that useFind correctly narrows to specific types (no more unions!)
   t.is(
     peopleType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], Record<string, unknown>>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
   t.is(
     tasksType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[], Record<string, unknown>>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
 
   // Verify type narrowing - ensure services don't cross-contaminate
@@ -141,8 +141,8 @@ test('FeathersFindMeta type inference works correctly', t => {
   const metaSkipType = getTypeAtPosition(fixturePath, 'MetaSkipType')
 
   // Verify that meta has the FeathersFindMeta type
-  t.is(findMetaType, 'FeathersFindMeta')
-  t.is(getMetaType, 'FeathersFindMeta')
+  t.is(findMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
+  t.is(getMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
 
   // Verify that individual properties have the correct types
   t.is(findMetaTotal, 'number | undefined')
@@ -188,6 +188,9 @@ test('meta type is automatically inferred from Figbird instance', t => {
   t.is(tasksMetaLimitType, 'number | undefined')
   t.is(tasksMetaSkipType, 'number | undefined')
 
-  // Verify backward compatibility - old API defaults to Record<string, unknown>
-  t.is(backwardCompatMetaType, 'Record<string, unknown>')
+  // Verify that meta type is always inferred from the adapter (FeathersFindMeta in this case)
+  t.is(
+    backwardCompatMetaType,
+    'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta',
+  )
 })

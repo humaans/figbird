@@ -1,8 +1,25 @@
-import type { FeathersFindMeta } from '../../lib'
-import { createHooks } from '../../lib'
+import type { FeathersClient } from '../../lib'
+import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
 
-// Create hooks with FeathersFindMeta type
-const { useFind, useGet } = createHooks<any, FeathersFindMeta>()
+// Define a simple interface for testing
+interface Person {
+  id: string
+  name: string
+  email: string
+}
+
+// Create schema
+const schema = createSchema({
+  services: [service<Person, 'api/people'>('api/people')],
+})
+
+// Create Figbird instance with FeathersAdapter
+const feathers = {} as FeathersClient
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ schema, adapter })
+
+// Create hooks with figbird instance - meta type should be inferred as FeathersFindMeta
+const { useFind, useGet } = createHooks(figbird)
 
 // Test that useFind returns QueryResult with FeathersFindMeta
 export const findResult = useFind('api/people')

@@ -1,4 +1,12 @@
-import { createHooks, createSchema, service, type ServiceItem } from '../../lib'
+import type { FeathersClient } from '../../lib'
+import {
+  createHooks,
+  createSchema,
+  FeathersAdapter,
+  Figbird,
+  service,
+  type ServiceItem,
+} from '../../lib'
 
 // Test multi-service schema type inference with distinct types
 interface Person {
@@ -25,7 +33,14 @@ export const schema = createSchema({
 })
 
 type AppSchema = typeof schema
-const { useFind } = createHooks<AppSchema>()
+
+// Create Figbird instance
+const feathers = {} as FeathersClient
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ schema, adapter })
+
+// Create hooks with figbird instance
+const { useFind } = createHooks(figbird)
 
 // Debug individual services
 export type DebugPersonService = typeof personService

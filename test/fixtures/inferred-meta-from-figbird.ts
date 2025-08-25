@@ -44,23 +44,27 @@ const figbird = new Figbird({
 // Create hooks by passing the figbird instance
 // This automatically infers BOTH the schema AND the meta type!
 // No need to manually pass FeathersFindMeta anymore! 🎉
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const hooks = createHooks(figbird)
+const { useFind, useGet } = createHooks(figbird)
 
-// Type-level tests - extract return types for specific services
-export type TasksQuery = ReturnType<typeof hooks.useFind<'tasks'>>
-export type TasksData = TasksQuery['data'] // Should be Task[] | null
-export type TasksMeta = TasksQuery['meta'] // Should be FeathersFindMeta
-export type TasksMetaTotal = TasksMeta['total'] // Should be number | undefined
-export type TasksMetaLimit = TasksMeta['limit'] // Should be number | undefined
-export type TasksMetaSkip = TasksMeta['skip'] // Should be number | undefined
+// Use the hooks to test type inference
+export const tasksResult = useFind('tasks')
+export const projectResult = useGet('projects', '123')
 
-export type ProjectQuery = ReturnType<typeof hooks.useGet<'projects'>>
-export type ProjectData = ProjectQuery['data'] // Should be Project | null
-export type ProjectMeta = ProjectQuery['meta'] // Should be FeathersFindMeta
+// Type-level tests - these will be checked by the test
+export type TasksData = typeof tasksResult.data
+export type TasksMeta = typeof tasksResult.meta
+export type TasksMetaTotal = typeof tasksResult.meta.total
+export type TasksMetaLimit = typeof tasksResult.meta.limit
+export type TasksMetaSkip = typeof tasksResult.meta.skip
 
-// Also test backward compatibility - the old API should still work
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const backwardCompatHooks = createHooks<typeof schema>()
-export type BackwardCompatQuery = ReturnType<typeof backwardCompatHooks.useFind<'tasks'>>
-export type BackwardCompatMeta = BackwardCompatQuery['meta'] // Should be Record<string, unknown>
+export type ProjectData = typeof projectResult.data
+export type ProjectMeta = typeof projectResult.meta
+
+// Test that meta type is always inferred from the adapter
+// Since we're using FeathersAdapter, it will always be FeathersFindMeta
+const feathersNoMeta = {} as FeathersClient
+const adapterNoExplicitMeta = new FeathersAdapter(feathersNoMeta)
+const figbirdNoExplicitMeta = new Figbird({ adapter: adapterNoExplicitMeta, schema })
+const backwardCompatHooks = createHooks(figbirdNoExplicitMeta)
+export const backwardCompatResult = backwardCompatHooks.useFind('tasks')
+export type BackwardCompatMeta = typeof backwardCompatResult.meta

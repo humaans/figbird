@@ -25,6 +25,7 @@ export function useGet<T = any, TMeta extends Record<string, unknown> = Record<s
   resourceId: string | number,
   params: Record<string, unknown> = {},
 ): QueryResult<T, TMeta> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const figbird = useFigbird<any, TMeta>()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
@@ -48,6 +49,7 @@ export function useFind<T = any[], TMeta extends Record<string, unknown> = Recor
   serviceName: string,
   params: Record<string, unknown> = {},
 ): QueryResult<T, TMeta> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const figbird = useFigbird<any, TMeta>()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName

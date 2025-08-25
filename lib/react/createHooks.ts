@@ -1,6 +1,5 @@
 import { splitConfig, type Figbird } from '../core/figbird.js'
 import type {
-  AnySchema,
   Schema,
   ServiceItem,
   ServiceMethods,
@@ -8,7 +7,6 @@ import type {
   ServiceQuery,
 } from '../core/schema.js'
 import { findServiceByName } from '../core/schema.js'
-import { useFigbird } from './react.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import { useQuery, type QueryResult } from './useQuery.js'
 
@@ -49,13 +47,9 @@ type InferMeta<F> = F extends Figbird<any, infer M> ? M : never
  *
  * Usage:
  * ```typescript
- * // Option 1: Pass figbird instance (recommended - infers both schema and meta)
  * const adapter = new FeathersAdapter(feathers)
  * const figbird = new Figbird({ adapter, schema })
  * const { useFind, useGet, useMutation } = createHooks(figbird)
- *
- * // Option 2: Pass types explicitly (backward compatible)
- * const { useFind, useGet, useMutation } = createHooks<AppSchema, FeathersFindMeta>()
  *
  * // component.tsx
  * import { useFind } from './hooks'
@@ -66,7 +60,6 @@ type InferMeta<F> = F extends Figbird<any, infer M> ? M : never
  * ```
  */
 
-// Overload 1: Accept a Figbird instance and infer types from it
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createHooks<F extends Figbird<any, any>>(
   figbird: F,
@@ -74,33 +67,12 @@ export function createHooks<F extends Figbird<any, any>>(
   useGet: UseGetForSchema<InferSchema<F>, InferMeta<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
-}
-
-// Overload 2: Accept explicit type parameters (backward compatible)
-// eslint-disable-next-line no-redeclare
-export function createHooks<
-  S extends Schema = AnySchema,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
->(): {
-  useGet: UseGetForSchema<S, TMeta>
-  useFind: UseFindForSchema<S, TMeta>
-  useMutation: UseMutationForSchema<S>
-}
-
-// Implementation
-// eslint-disable-next-line no-redeclare
-export function createHooks<
-  S extends Schema = AnySchema,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
->(
-  figbird?: Figbird<S, TMeta>,
-): {
-  useGet: UseGetForSchema<S, TMeta>
-  useFind: UseFindForSchema<S, TMeta>
-  useMutation: UseMutationForSchema<S>
 } {
+  type S = InferSchema<F>
+  type TMeta = InferMeta<F>
+
   // The internal implementations are weakly typed with `string` for serviceName.
-  // The strong typing is enforced by the `TypedHooks<S>` return type signature,
+  // The strong typing is enforced by the return type signature,
   // which correctly narrows the types based on the literal service name provided.
 
   function useTypedGet<N extends ServiceNames<S>>(
@@ -108,8 +80,7 @@ export function createHooks<
     resourceId: string | number,
     params?: ServiceQuery<S, N>,
   ) {
-    const figbirdInstance = figbird ?? useFigbird<S, TMeta>()
-    const service = findServiceByName(figbirdInstance.schema, serviceName)
+    const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
     const { desc, config } = splitConfig(
       Object.assign({ serviceName: actualServiceName, method: 'get' as const, resourceId }, params),
@@ -118,8 +89,7 @@ export function createHooks<
   }
 
   function useTypedFind<N extends ServiceNames<S>>(serviceName: N, params?: ServiceQuery<S, N>) {
-    const figbirdInstance = figbird ?? useFigbird<S, TMeta>()
-    const service = findServiceByName(figbirdInstance.schema, serviceName)
+    const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
     const { desc, config } = splitConfig(
       Object.assign({ serviceName: actualServiceName, method: 'find' as const }, params),
@@ -128,8 +98,7 @@ export function createHooks<
   }
 
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
-    const figbirdInstance = figbird ?? useFigbird<S, TMeta>()
-    const service = findServiceByName(figbirdInstance.schema, serviceName)
+    const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
     return useBaseMutation<ServiceItem<S, N>, ServiceMethods<S, N>>(actualServiceName)
   }

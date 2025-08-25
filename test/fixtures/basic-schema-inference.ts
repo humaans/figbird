@@ -1,4 +1,12 @@
-import { createHooks, createSchema, service, type ServiceItem } from '../../lib'
+import type { FeathersClient } from '../../lib'
+import {
+  createHooks,
+  createSchema,
+  FeathersAdapter,
+  Figbird,
+  service,
+  type ServiceItem,
+} from '../../lib'
 
 // Test basic schema type inference with a simple Person interface
 interface Person {
@@ -12,7 +20,11 @@ export const schema = createSchema({
 })
 
 type AppSchema = typeof schema
-const { useFind } = createHooks<AppSchema>()
+
+const feathers = {} as FeathersClient
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ schema, adapter })
+const { useFind } = createHooks(figbird)
 
 // Debug types - these will be inspected by the test
 export type DebugServiceByName = AppSchema['services']['api/people']
