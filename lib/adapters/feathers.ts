@@ -27,9 +27,6 @@ export interface FeathersQuery {
  */
 export interface FeathersParams {
   query?: FeathersQuery
-  paginate?: boolean | { default?: boolean; max?: number }
-  provider?: string
-  route?: Record<string, string>
   connection?: unknown
   headers?: Record<string, string>
   [key: string]: unknown
