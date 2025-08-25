@@ -1,5 +1,4 @@
 {
-  "sourceMaps": true,
   "jsc": {
     "parser": {
       "syntax": "typescript",
@@ -9,5 +8,6 @@
   },
   "module": {
     "type": "es6"
-  }
+  },
+  "sourceMaps": true,
 }
