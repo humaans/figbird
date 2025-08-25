@@ -85,8 +85,10 @@ export const swallowErrors = (yourTestFn: () => void): void => {
   console.error = error
 }
 
+import type { FeathersItem } from '../lib/adapters/feathers-types.js'
+
 interface ServiceData {
-  [key: string]: any
+  [key: string]: FeathersItem
 }
 
 interface ServiceOptions {
@@ -106,16 +108,16 @@ interface FindParams {
   query?: {
     $limit?: number
     $skip?: number
-    [key: string]: any
+    [key: string]: string | number | boolean | Date | undefined
   }
-  [key: string]: any // Add to match FeathersParams
+  [key: string]: unknown // Add to match FeathersParams
 }
 
 interface FindResult {
   total?: number
   limit: number
   skip: number
-  data: any[]
+  data: FeathersItem[]
 }
 
 class Service extends EventEmitter {
@@ -124,7 +126,7 @@ class Service extends EventEmitter {
   counts: ServiceCounts
   delay: number
   options: ServiceOptions;
-  [key: string]: any // Add index signature for FeathersService compatibility
+  [key: string]: unknown // Add index signature for FeathersService compatibility
 
   constructor(name: string, data: ServiceData, options: ServiceOptions = {}) {
     super()
@@ -146,9 +148,13 @@ class Service extends EventEmitter {
     this.delay = delay
   }
 
-  get(id: string | number, _params?: FindParams): Promise<any> {
+  get(id: string | number, _params?: FindParams): Promise<FeathersItem> {
     this.counts.get++
-    return Promise.resolve(this.data[id])
+    const item = this.data[id]
+    if (!item) {
+      return Promise.reject(new Error(`Item with id ${id} not found`))
+    }
+    return Promise.resolve(item)
   }
 
   async find(params: FindParams = {}): Promise<FindResult> {
@@ -160,6 +166,7 @@ class Service extends EventEmitter {
       .slice(skip)
       .slice(0, limit)
       .map(id => this.data[id])
+      .filter((item): item is FeathersItem => item !== undefined)
 
     if (this.delay) {
       await new Promise(resolve => setTimeout(resolve, this.delay))
@@ -181,58 +188,86 @@ class Service extends EventEmitter {
     )
   }
 
-  create(data: any | any[], _params?: FindParams): Promise<any | any[]> {
+  // Method overloads to match FeathersService but also support array creation for tests
+  create(data: Partial<FeathersItem>, _params?: FindParams): Promise<FeathersItem>
+  create(data: FeathersItem[], _params?: FindParams): Promise<FeathersItem[]>
+  create(
+    data: Partial<FeathersItem> | FeathersItem[],
+    _params?: FindParams,
+  ): Promise<FeathersItem | FeathersItem[]> {
     if (Array.isArray(data)) {
       this.counts.create += data.length
-      const ids = data.map(datum => datum.id)
+      const ids = data.map(datum => datum.id || datum._id)
       this.data = { ...this.data }
       for (const datum of data) {
-        this.data[datum.id] = { ...datum, updatedAt: datum.updatedAt || Date.now() }
-        queueTask(() => this.emit('created', this.data[datum.id]))
+        const itemId = datum.id || datum._id
+        if (itemId !== undefined) {
+          this.data[itemId] = { ...datum, updatedAt: datum.updatedAt || Date.now() }
+          queueTask(() => this.emit('created', this.data[itemId]))
+        }
       }
-      return Promise.all(ids.map(id => this.get(id)))
+      return Promise.all(
+        ids.filter((id): id is string | number => id !== undefined).map(id => this.get(id)),
+      )
     }
     this.counts.create++
-    const { id } = data
+    const id = data.id || data._id
+    if (id === undefined) {
+      return Promise.reject(new Error('Item must have an id or _id'))
+    }
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
-    const mutatedItem = this.data[id]
+    const mutatedItem = this.data[id]!
     queueTask(() => this.emit('created', mutatedItem))
-    return this.get(id)
+    return Promise.resolve(mutatedItem)
   }
 
-  patch(id: string | number, data: any, _params?: FindParams): Promise<any> {
+  patch(
+    id: string | number,
+    data: Partial<FeathersItem>,
+    _params?: FindParams,
+  ): Promise<FeathersItem> {
     this.counts.patch++
+    const existingItem = this.data[id]
+    if (!existingItem) {
+      return Promise.reject(new Error(`Item with id ${id} not found`))
+    }
     this.data = {
       ...this.data,
-      [id]: { ...this.data[id], ...data, updatedAt: data.updatedAt || Date.now() },
+      [id]: { ...existingItem, ...data, updatedAt: data.updatedAt || Date.now() },
     }
-    const mutatedItem = this.data[id]
+    const mutatedItem = this.data[id]!
     queueTask(() => this.emit('patched', mutatedItem))
-    return this.get(id)
+    return Promise.resolve(mutatedItem)
   }
 
-  update(id: string | number, data: any, _params?: FindParams): Promise<any> {
+  update(
+    id: string | number,
+    data: Partial<FeathersItem>,
+    _params?: FindParams,
+  ): Promise<FeathersItem> {
     this.counts.update++
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
-    const mutatedItem = this.data[id]
+    const mutatedItem = this.data[id]!
     queueTask(() => this.emit('updated', mutatedItem))
-    return this.get(id)
+    return Promise.resolve(mutatedItem)
   }
 
-  remove(id: string | number, _params?: FindParams): Promise<any> {
+  remove(id: string | number, _params?: FindParams): Promise<FeathersItem> {
     this.counts.remove++
     this.data = { ...this.data }
     const mutatedItem = this.data[id]
+    if (!mutatedItem) {
+      return Promise.reject(new Error(`Item with id ${id} not found`))
+    }
     delete this.data[id]
     queueTask(() => this.emit('removed', mutatedItem))
-    // TODO - check if feathers throws 404 in this case
     return Promise.resolve(mutatedItem)
   }
 }
 
 // Extend the global namespace to include our custom properties
 declare global {
-  var __pendingEmissions: Set<any> | undefined
+  var __pendingEmissions: Set<object> | undefined
   var __emissionsResolves: Set<(value?: unknown) => void> | undefined
 }
 
