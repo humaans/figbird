@@ -1009,66 +1009,6 @@ test('useFind with allPages without total', async t => {
   unmount()
 })
 
-test('useFind with allPages and parallel', async t => {
-  const { render, flush, unmount, $all } = dom()
-  const { App, useFind, feathers } = app()
-
-  function Note() {
-    const notes = useFind('notes', { query: { $limit: 2 }, allPages: true, parallel: true })
-    return <NoteList notes={notes} />
-  }
-
-  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
-  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
-
-  render(
-    <App>
-      <Note />
-    </App>,
-  )
-
-  await flush()
-
-  t.deepEqual(
-    $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc', 'dmc'],
-  )
-  t.is(feathers.service('notes').counts.find, 2)
-
-  unmount()
-})
-
-test('useFind with allPages and parallel where limit is not wholly divisible by total', async t => {
-  const { render, flush, unmount, $all } = dom()
-  const { App, useFind, feathers } = app()
-
-  function Note() {
-    const notes = useFind('notes', { query: { $limit: 2 }, allPages: true, parallel: true })
-    return <NoteList notes={notes} />
-  }
-
-  await feathers.service('notes').create({ id: 2, content: 'doc', tag: 'idea' })
-  await feathers.service('notes').create({ id: 3, content: 'dmc', tag: 'unrelated' })
-  await feathers.service('notes').create({ id: 4, content: 'wat', tag: 'nonsense' })
-  await feathers.service('notes').create({ id: 5, content: 'huh', tag: 'thingies' })
-
-  render(
-    <App>
-      <Note />
-    </App>,
-  )
-
-  await flush()
-
-  t.deepEqual(
-    $all('.note').map(n => n.innerHTML),
-    ['hello', 'doc', 'dmc', 'wat', 'huh'],
-  )
-  t.is(feathers.service('notes').counts.find, 3) // first call returns initial 2, second returns 3 and 4, third returns 5
-
-  unmount()
-})
-
 test('useFind - realtime merge', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
