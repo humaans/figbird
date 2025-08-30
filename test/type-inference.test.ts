@@ -5,13 +5,17 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Helper to get type at a specific position in a TypeScript file
-function getTypeAtPosition(
-  filePath: string,
-  exportName: string,
-  tsConfigOptions: ts.CompilerOptions = {},
-): string {
-  // Create a TypeScript program with the fixture file
+const programCache: Map<
+  string,
+  { program: ts.Program; checker: ts.TypeChecker; sourceFile: ts.SourceFile }
+> = new Map()
+
+function getProgramAndChecker(filePath: string, tsConfigOptions: ts.CompilerOptions = {}) {
+  const cacheKey = JSON.stringify({ filePath, tsConfigOptions })
+  if (programCache.has(cacheKey)) {
+    return programCache.get(cacheKey)!
+  }
+
   const program = ts.createProgram([filePath], {
     strict: true,
     noEmit: true,
@@ -27,6 +31,18 @@ function getTypeAtPosition(
   if (!sourceFile) throw new Error(`Source file not found: ${filePath}`)
 
   const checker = program.getTypeChecker()
+  const cacheEntry = { program, checker, sourceFile }
+  programCache.set(cacheKey, cacheEntry)
+  return cacheEntry
+}
+
+// Helper to get type at a specific position in a TypeScript file
+function getTypeAtPosition(
+  filePath: string,
+  exportName: string,
+  tsConfigOptions: ts.CompilerOptions = {},
+): string {
+  const { checker, sourceFile } = getProgramAndChecker(filePath, tsConfigOptions)
 
   // Find the exported symbol by walking through the source file
   function findExport(node: ts.Node): ts.Node | undefined {
@@ -72,7 +88,7 @@ test('useFind returns correct type for Person service', t => {
 
   t.is(
     serviceByNameType,
-    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, Record<string, never>, "api/people">',
+    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, "api/people">',
   )
   t.is(serviceItemType, 'Person')
   t.is(
@@ -97,11 +113,11 @@ test('type narrowing works correctly with multiple services', t => {
   // Test that the key types are working correctly
   t.is(
     personServiceType,
-    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, Record<string, never>, "api/people">',
+    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, "api/people">',
   )
   t.is(
     taskServiceType,
-    'import("/Users/karolis/projects/figbird/lib/index").Service<Task, Record<string, unknown>, Record<string, never>, "api/tasks">',
+    'import("/Users/karolis/projects/figbird/lib/index").Service<Task, Record<string, unknown>, "api/tasks">',
   )
 
   // Test that ServiceItem extraction is working

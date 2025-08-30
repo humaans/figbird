@@ -15,7 +15,7 @@ type MutationAction<T> =
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
-export interface UseMutationResult<T, TMethods = Record<string, never>> {
+export interface UseMutationResult<T> {
   // Overloaded create method for better type inference
   create(data: Partial<T>, params?: unknown): Promise<T>
   create(data: Partial<T>[], params?: unknown): Promise<T[]>
@@ -26,10 +26,6 @@ export interface UseMutationResult<T, TMethods = Record<string, never>> {
   data: T | T[] | null
   status: 'idle' | 'loading' | 'success' | 'error'
   error: Error | null
-  // Custom methods
-  mutate: (method: string, ...args: unknown[]) => Promise<unknown>
-  // Typed custom methods (when schema is available)
-  methods: TMethods
 }
 
 /**
@@ -42,9 +38,7 @@ export interface UseMutationResult<T, TMethods = Record<string, never>> {
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useMutation<T = any, TMethods = Record<string, never>>(
-  serviceName: string,
-): UseMutationResult<T, TMethods> {
+export function useMutation<T = any>(serviceName: string): UseMutationResult<T> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
@@ -66,7 +60,7 @@ export function useMutation<T = any, TMethods = Record<string, never>>(
 
   const mutate = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (method: MutationMethod | string, ...args: unknown[]): Promise<any> => {
+    async (method: MutationMethod, ...args: unknown[]): Promise<any> => {
       dispatch({ type: 'mutating' })
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -110,20 +104,6 @@ export function useMutation<T = any, TMethods = Record<string, never>>(
     [mutate],
   )
 
-  // Create typed methods proxy for custom service methods
-  // Note: The phantom property is only for type inference and doesn't exist at runtime
-  // We create a proxy that will work for any method name passed to it
-  const methods = useMemo(() => {
-    // The actual method names come from the TMethods type parameter
-    // At runtime, we create a proxy that forwards all calls through mutate
-    const handler = {
-      get(_target: unknown, methodName: string) {
-        return (...args: unknown[]) => mutate(methodName, ...args)
-      },
-    }
-    return new Proxy({}, handler) as TMethods
-  }, [mutate])
-
   return useMemo(
     () => ({
       create,
@@ -133,10 +113,8 @@ export function useMutation<T = any, TMethods = Record<string, never>>(
       data: state.data,
       status: state.status,
       error: state.error,
-      mutate,
-      methods,
     }),
-    [create, update, patch, remove, state, mutate, methods],
+    [create, update, patch, remove, state],
   )
 }
 

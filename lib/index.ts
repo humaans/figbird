@@ -8,12 +8,10 @@ export { createSchema, findServiceByName, hasSchema, service } from './core/sche
 export type {
   AnySchema,
   Item,
-  Methods,
   Query,
   Schema,
   Service,
   ServiceItem,
-  ServiceMethods,
   ServiceNames,
   ServiceQuery,
   UntypedService,
