@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { QueryState, QueryStatus } from '../core/figbird.js'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import { findServiceByName } from '../core/schema.js'
@@ -72,8 +72,6 @@ export function useFind<
   return useQuery<T, TMeta>(desc, config)
 }
 
-let _seq = 0
-
 function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
   emptyMeta: TMeta,
 ): QueryState<T, TMeta> {
@@ -102,14 +100,10 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
 ): QueryResult<T, TMeta> {
   const figbird = useFigbird()
 
-  // a slightly hacky workaround for network-only queries where we want to keep
-  // the query.hash() stable between re-renders for this component, but unique
-  // to each component - network-only queries are not shared between components
-  // - they could be, and we might change that in the future
-  const seqRef = useRef<number | undefined>(undefined)
-  if (seqRef.current === undefined && config.fetchPolicy === 'network-only') {
-    seqRef.current = _seq++
-  }
+  // For network-only queries, we need a unique ID for each hook instance
+  // to ensure that queries are not shared between components.
+  // useId provides a stable, unique ID for the lifetime of the component.
+  const uniqueId = useId()
 
   // we create a new query on each render! but we'll throw it away via useMemo
   // if the q.hash() is the same as the previous query, this allows us to keep
@@ -118,7 +112,7 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
   // stable reference to a query and use it for as long as you want
   const _q = figbird.query<T>(desc, {
     ...config,
-    ...(config.fetchPolicy === 'network-only' ? { seq: seqRef.current } : {}),
+    ...(config.fetchPolicy === 'network-only' ? { uid: uniqueId } : {}),
   })
 
   // a bit of React foo to create stable fn references
