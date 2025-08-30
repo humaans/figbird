@@ -4,7 +4,7 @@ export { Figbird } from './core/figbird.js'
 export type { EventType } from './core/figbird.js'
 
 // schema
-export { createSchema, findServiceByName, hasSchema, service } from './core/schema.js'
+export { createSchema, service } from './core/schema.js'
 export type {
   AnySchema,
   Item,
@@ -28,7 +28,6 @@ export type {
   AdapterParams,
   AdapterQuery,
   EventHandlers,
-  QueryResponse,
 } from './adapters/adapter.js'
 
 // react hooks
@@ -40,12 +39,9 @@ export { useFind, useGet } from './react/useQuery.js'
 
 // Query-related types for advanced usage
 export type {
-  FindDescriptor,
   FindQueryConfig,
-  GetDescriptor,
   GetQueryConfig,
   QueryConfig,
-  QueryDescriptor,
   QueryState,
   QueryStatus,
 } from './core/figbird.js'
