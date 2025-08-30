@@ -146,7 +146,7 @@ function toEpochMs(ts: Timestamp): number | null {
 export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = FeathersQuery>
   implements Adapter<FeathersParams<TDomainQuery>, FeathersFindMeta, TDomainQuery>
 {
-  feathers?: FeathersClient
+  feathers: FeathersClient
   #idField: IdFieldType
   #updatedAtField: UpdatedAtFieldType
   #defaultPageSize: number | undefined
@@ -183,7 +183,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   }
 
   #service(serviceName: string): FeathersService {
-    return this.feathers!.service(serviceName)
+    return this.feathers.service(serviceName)
   }
 
   async get(
