@@ -1,5 +1,5 @@
 import type { Adapter, EventHandlers, QueryResponse } from './adapter.js'
-import { matcher, type PrepareQueryOptions } from './matcher.js'
+import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 
 // Helper types for field extraction
 type IdExtractor = (item: unknown) => string | number | undefined
@@ -320,8 +320,8 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
     query: TDomainQuery | null | undefined,
     options?: PrepareQueryOptions,
   ): (item: unknown) => boolean {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return matcher(query as any, options)
+    // Cast to Query type - the matcher function will validate and clean the query internally
+    return matcher(query as Query | null | undefined, options)
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {
