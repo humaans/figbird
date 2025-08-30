@@ -24,9 +24,20 @@ interface Comment {
   createdAt: Date
 }
 
+interface ArticleService {
+  item: Article
+}
+
+interface CommentService {
+  item: Comment
+}
+
 // Create schema with services
 const schema = createSchema({
-  services: [service<Article, 'articles'>('articles'), service<Comment, 'comments'>('comments')],
+  services: {
+    articles: service<ArticleService>(),
+    comments: service<CommentService>(),
+  },
 })
 
 // Create Figbird instance with FeathersAdapter

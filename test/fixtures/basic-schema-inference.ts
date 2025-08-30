@@ -15,8 +15,14 @@ interface Person {
   email: string
 }
 
+interface PersonService {
+  item: Person
+}
+
 export const schema = createSchema({
-  services: [service<Person, 'api/people'>('api/people')],
+  services: {
+    'api/people': service<PersonService>(),
+  },
 })
 
 type AppSchema = typeof schema

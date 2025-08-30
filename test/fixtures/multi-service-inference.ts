@@ -24,12 +24,19 @@ interface Task {
   tags: string[]
 }
 
-// Create services using the service function
-const personService = service<Person, 'api/people'>('api/people')
-const taskService = service<Task, 'api/tasks'>('api/tasks')
+interface PersonService {
+  item: Person
+}
+
+interface TaskService {
+  item: Task
+}
 
 export const schema = createSchema({
-  services: [personService, taskService] as const,
+  services: {
+    'api/people': service<PersonService>(),
+    'api/tasks': service<TaskService>(),
+  },
 })
 
 type AppSchema = typeof schema
@@ -42,9 +49,9 @@ const figbird = new Figbird({ schema, adapter })
 // Create hooks with figbird instance
 const { useFind } = createHooks(figbird)
 
-// Debug individual services
-export type DebugPersonService = typeof personService
-export type DebugTaskService = typeof taskService
+// Debug individual services (using schema now)
+export type DebugPersonService = AppSchema['services']['api/people']
+export type DebugTaskService = AppSchema['services']['api/tasks']
 
 // Debug types - these will be inspected by the test
 export type PersonServiceByName = AppSchema['services']['api/people']

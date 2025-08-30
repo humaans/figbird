@@ -8,9 +8,15 @@ interface Person {
   email: string
 }
 
+interface PersonService {
+  item: Person
+}
+
 // Create schema
 const schema = createSchema({
-  services: [service<Person, 'api/people'>('api/people')],
+  services: {
+    'api/people': service<PersonService>(),
+  },
 })
 
 // Create Figbird instance with FeathersAdapter

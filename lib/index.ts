@@ -7,14 +7,22 @@ export type { EventType } from './core/figbird.js'
 export { createSchema, service } from './core/schema.js'
 export type {
   AnySchema,
+  Create,
   Item,
+  Patch,
   Query,
   Schema,
   Service,
+  ServiceByName,
+  ServiceCreate,
   ServiceItem,
   ServiceNames,
+  ServicePatch,
   ServiceQuery,
+  ServiceTypeDefinition,
+  ServiceUpdate,
   UntypedService,
+  Update,
 } from './core/schema.js'
 
 // adapters

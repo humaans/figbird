@@ -21,9 +21,20 @@ interface Project {
   taskIds: string[]
 }
 
+interface TaskService {
+  item: Task
+}
+
+interface ProjectService {
+  item: Project
+}
+
 // Create schema
 const schema = createSchema({
-  services: [service<Task, 'tasks'>('tasks'), service<Project, 'projects'>('projects')],
+  services: {
+    tasks: service<TaskService>(),
+    projects: service<ProjectService>(),
+  },
 })
 
 // Mock Feathers client

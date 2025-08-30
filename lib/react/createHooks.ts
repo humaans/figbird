@@ -1,6 +1,13 @@
 import type { AdapterMeta, AdapterParams } from '../adapters/adapter.js'
 import { splitConfig, type Figbird, type QueryConfig } from '../core/figbird.js'
-import type { Schema, ServiceItem, ServiceNames } from '../core/schema.js'
+import type {
+  Schema,
+  ServiceCreate,
+  ServiceItem,
+  ServiceNames,
+  ServicePatch,
+  ServiceUpdate,
+} from '../core/schema.js'
 import { findServiceByName } from '../core/schema.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import { useQuery, type QueryResult } from './useQuery.js'
@@ -31,7 +38,12 @@ type UseFindForSchema<
 
 type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   serviceName: N,
-) => UseMutationResult<ServiceItem<S, N>>
+) => UseMutationResult<
+  ServiceItem<S, N>,
+  ServiceCreate<S, N>,
+  ServiceUpdate<S, N>,
+  ServicePatch<S, N>
+>
 
 // Type helper to extract schema and adapter types from a Figbird instance
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,7 +119,12 @@ export function createHooks<F extends Figbird<any, any>>(
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    return useBaseMutation<ServiceItem<S, N>>(actualServiceName)
+    return useBaseMutation<
+      ServiceItem<S, N>,
+      ServiceCreate<S, N>,
+      ServiceUpdate<S, N>,
+      ServicePatch<S, N>
+    >(actualServiceName)
   }
 
   return {

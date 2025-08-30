@@ -50,13 +50,26 @@ interface TaskQuery {
   [key: string]: unknown
 }
 
+interface PersonService {
+  item: Person
+}
+
+interface TaskService {
+  item: Task
+  query: TaskQuery
+}
+
+interface ProjectService {
+  item: Project
+}
+
 // Define schema with typed services
 const schema = createSchema({
-  services: [
-    service<Person, 'api/people'>('api/people'),
-    service<Task, 'api/tasks', TaskQuery>('api/tasks'),
-    service<Project, 'api/projects'>('api/projects'),
-  ],
+  services: {
+    'api/people': service<PersonService>(),
+    'api/tasks': service<TaskService>(),
+    'api/projects': service<ProjectService>(),
+  },
 })
 
 type AppSchema = typeof schema
@@ -292,12 +305,12 @@ test('schema-based type inference', t => {
 test('schema with array of services', t => {
   const { render, unmount, flush, $ } = dom()
 
-  // Services are defined in an array
+  // Services are defined in an object map
   const schema = createSchema({
-    services: [
-      service<Person, 'api/people'>('api/people'),
-      service<Task, 'api/tasks'>('api/tasks'),
-    ],
+    services: {
+      'api/people': service<PersonService>(),
+      'api/tasks': service<TaskService>(),
+    },
   })
 
   const feathers = mockFeathers({

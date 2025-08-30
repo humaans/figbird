@@ -19,9 +19,15 @@ interface Product {
   tags: string[]
 }
 
+interface ProductService {
+  item: Product
+}
+
 // Create schema
 const schema = createSchema({
-  services: [service<Product, 'products'>('products')],
+  services: {
+    products: service<ProductService>(),
+  },
 })
 
 // Setup Figbird with FeathersAdapter
