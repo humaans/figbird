@@ -111,8 +111,7 @@ interface BaseQueryConfig<TItem = unknown> {
   skip?: boolean
   realtime?: 'merge' | 'refetch' | 'disabled'
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  matcher?: (query: any) => (item: TItem) => boolean
+  matcher?: (query: unknown) => (item: TItem) => boolean
 }
 
 /**
@@ -459,8 +458,7 @@ class QueryStore<
 
     const query = (desc.params as Record<string, unknown>)?.query || null
     if (config.matcher) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return config.matcher(query as any)
+      return config.matcher(query)
     }
     return this.#adapter.matcher(query as TQuery | null) as ItemMatcher<T>
   }

@@ -1617,7 +1617,7 @@ test('useFind - with custom matcher', async t => {
     const notes = useFind('notes', {
       query: { tag: 'post' },
       matcher: query => item => {
-        const match = defaultMatcher(query)
+        const match = defaultMatcher(query as Parameters<typeof defaultMatcher>[0])
         return match(item) && !!item.foo
       },
     })
