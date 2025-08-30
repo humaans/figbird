@@ -15,15 +15,20 @@ type MutationAction<T> =
 
 type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
-export interface UseMutationResult<T> {
+export interface UseMutationResult<
+  TItem,
+  TCreate = Partial<TItem>,
+  TUpdate = TItem,
+  TPatch = Partial<TItem>,
+> {
   // Overloaded create method for better type inference
-  create(data: Partial<T>, params?: unknown): Promise<T>
-  create(data: Partial<T>[], params?: unknown): Promise<T[]>
-  create(data: Partial<T> | Partial<T>[], params?: unknown): Promise<T | T[]>
-  update: (id: string | number, data: Partial<T>, params?: unknown) => Promise<T>
-  patch: (id: string | number, data: Partial<T>, params?: unknown) => Promise<T>
-  remove: (id: string | number, params?: unknown) => Promise<T>
-  data: T | T[] | null
+  create(data: TCreate, params?: unknown): Promise<TItem>
+  create(data: TCreate[], params?: unknown): Promise<TItem[]>
+  create(data: TCreate | TCreate[], params?: unknown): Promise<TItem | TItem[]>
+  update: (id: string | number, data: TUpdate, params?: unknown) => Promise<TItem>
+  patch: (id: string | number, data: TPatch, params?: unknown) => Promise<TItem>
+  remove: (id: string | number, params?: unknown) => Promise<TItem>
+  data: TItem | TItem[] | null
   status: 'idle' | 'loading' | 'success' | 'error'
   error: Error | null
 }
@@ -37,14 +42,17 @@ export interface UseMutationResult<T> {
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useMutation<T = any>(serviceName: string): UseMutationResult<T> {
+export function useMutation<
+  TItem = Record<string, unknown>,
+  TCreate = Partial<TItem>,
+  TUpdate = TItem,
+  TPatch = Partial<TItem>,
+>(serviceName: string): UseMutationResult<TItem, TCreate, TUpdate, TPatch> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [state, dispatch] = useReducer(mutationReducer<any>, {
+  const [state, dispatch] = useReducer(mutationReducer<TItem | TItem[]>, {
     status: 'idle',
     data: null,
     error: null,

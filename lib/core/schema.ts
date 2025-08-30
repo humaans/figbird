@@ -6,7 +6,16 @@
 // Unique symbol for phantom types - keeps internal typing machinery hidden
 declare const $phantom: unique symbol
 
-// Service definition with custom methods - simplified for better type inference
+// Base service type definition interface that users provide
+export interface ServiceTypeDefinition {
+  item: unknown
+  create?: unknown
+  update?: unknown
+  patch?: unknown
+  query?: Record<string, unknown>
+}
+
+// Internal service representation - matches expected type structure
 export interface Service<
   TItem = Record<string, unknown>,
   TQuery extends Record<string, unknown> = Record<string, unknown>,
@@ -16,39 +25,85 @@ export interface Service<
   readonly [$phantom]?: {
     item: TItem
     query: TQuery
+    // Store additional payload types from service definition
+    create: unknown
+    update: unknown
+    patch: unknown
   }
 }
 
-// Helper to create a service with proper literal type preservation
-export function service<
-  TItem,
-  TName extends string,
-  TQuery extends Record<string, unknown> = Record<string, unknown>,
->(name: TName): Service<TItem, TQuery, TName> {
+// Phase 1: Create a service definition (no name yet)
+export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
+  TServiceDef['item'],
+  TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>,
+  string
+> & {
+  readonly [$phantom]?: {
+    item: TServiceDef['item']
+    query: TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>
+    create: TServiceDef['create'] extends undefined
+      ? Partial<TServiceDef['item']>
+      : TServiceDef['create']
+    update: TServiceDef['update'] extends undefined ? TServiceDef['item'] : TServiceDef['update']
+    patch: TServiceDef['patch'] extends undefined
+      ? Partial<TServiceDef['item']>
+      : TServiceDef['patch']
+  }
+} {
   return {
-    name,
-  } as Service<TItem, TQuery, TName>
+    name: '', // Name will be set in createSchema
+  } as Service<
+    TServiceDef['item'],
+    TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>,
+    string
+  > & {
+    readonly [$phantom]?: {
+      item: TServiceDef['item']
+      query: TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>
+      create: TServiceDef['create'] extends undefined
+        ? Partial<TServiceDef['item']>
+        : TServiceDef['create']
+      update: TServiceDef['update'] extends undefined ? TServiceDef['item'] : TServiceDef['update']
+      patch: TServiceDef['patch'] extends undefined
+        ? Partial<TServiceDef['item']>
+        : TServiceDef['patch']
+    }
+  }
 }
 
-// Schema definition - using a mapped type for better inference
+// Base schema interface - flexible to preserve specific service types
 export interface Schema {
   services: Record<string, Service<unknown, Record<string, unknown>, string>>
 }
 
-// Helper to create a schema from an array of services using Extract-based narrowing
+// Phase 2: Create a schema with services object map (preserves literal keys)
 export function createSchema<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const TServices extends ReadonlyArray<Service<any, any, any>>,
+  const TServiceMap extends Record<string, Service<unknown, Record<string, unknown>, string>>,
 >(config: {
-  services: TServices
+  services: TServiceMap
 }): {
   services: {
-    readonly [K in TServices[number]['name']]: Extract<TServices[number], { name: K }>
+    readonly [K in keyof TServiceMap]: TServiceMap[K] extends Service<
+      infer TItem,
+      infer TQuery,
+      string
+    >
+      ? Service<TItem, TQuery, K & string>
+      : never
   }
 } {
+  // Assign names to services based on their keys in the map
   const serviceMap = Object.fromEntries(
-    config.services.map(service => [service.name, service]),
-  ) as { [K in TServices[number]['name']]: Extract<TServices[number], { name: K }> }
+    Object.entries(config.services).map(([name, service]) => [name, { ...service, name }]),
+  ) as {
+    readonly [K in keyof TServiceMap]: TServiceMap[K] extends Service<
+      infer TItem,
+      infer TQuery,
+      string
+    >
+      ? Service<TItem, TQuery, K & string>
+      : never
+  }
   return { services: serviceMap }
 }
 
@@ -58,15 +113,31 @@ export type ServiceNames<S extends Schema> = keyof S['services'] & string
 export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = S['services'][N]
 
 export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends Service<infer TItem, Record<string, unknown>, string>
-    ? TItem
-    : Record<string, unknown>
+  ServiceByName<S, N> extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
+
+export type ServiceCreate<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends { [$phantom]?: { create: infer C } } ? C : Record<string, unknown>
+
+export type ServiceUpdate<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends { [$phantom]?: { update: infer U } } ? U : Record<string, unknown>
+
+export type ServicePatch<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends { [$phantom]?: { patch: infer P } } ? P : Record<string, unknown>
 
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
   ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
 
 // Utility type to extract item type from a service
 export type Item<S> = S extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
+
+// Utility type to extract create type from a service
+export type Create<S> = S extends { [$phantom]?: { create: infer C } } ? C : Record<string, unknown>
+
+// Utility type to extract update type from a service
+export type Update<S> = S extends { [$phantom]?: { update: infer U } } ? U : Record<string, unknown>
+
+// Utility type to extract patch type from a service
+export type Patch<S> = S extends { [$phantom]?: { patch: infer P } } ? P : Record<string, unknown>
 
 // Utility type to extract query type from a service
 export type Query<S> = S extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
@@ -88,5 +159,5 @@ export function hasSchema<S extends Schema>(schema: S | undefined): schema is S 
 // Default schema type when no schema is provided
 export type AnySchema = Schema
 
-// Type for untyped services (backward compatibility)
+// Type for untyped services (fallback for services not in schema)
 export type UntypedService = Service<Record<string, unknown>, Record<string, unknown>, string>

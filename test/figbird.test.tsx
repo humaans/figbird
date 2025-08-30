@@ -24,9 +24,15 @@ interface Note {
   version?: number
 }
 
+interface NoteService {
+  item: Note
+}
+
 // Create schema for typed hooks
 const schema = createSchema({
-  services: [service<Note, 'notes'>('notes')],
+  services: {
+    notes: service<NoteService>(),
+  },
 })
 
 type AppSchema = typeof schema
