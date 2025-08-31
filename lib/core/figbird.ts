@@ -273,6 +273,10 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
     // Multiple queries can safely reference the same cached state.
     unsub()
 */
+/**
+ * Figbird core instance holding the adapter and shared query state.
+ * Prefer `createHooks(figbird)` in React apps to get strongly-typed hooks.
+ */
 export class Figbird<
   S extends Schema = AnySchema,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -286,6 +290,12 @@ export class Figbird<
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
 
+  /**
+   * Create a Figbird instance.
+   * @param adapter Data adapter (e.g. FeathersAdapter)
+   * @param eventBatchProcessingInterval Optional interval (ms) for batching realtime events
+   * @param schema Optional schema to enable full TypeScript inference
+   */
   constructor({
     adapter,
     eventBatchProcessingInterval,
@@ -303,15 +313,18 @@ export class Figbird<
     })
   }
 
+  /** Returns the entire internal state map keyed by service name. */
   getState(): Map<string, ServiceState<AdapterFindMeta<A>>> {
     return this.queryStore.getState()
   }
 
   // Strongly-typed overloads for inference from serviceName and method
+  /** Create a typed `find` query reference. */
   query<N extends ServiceNames<S>>(
     desc: { serviceName: N; method: 'find'; params?: ParamsWithServiceQuery<S, N, A> },
     config?: QueryConfig<ServiceItem<S, N>[]>,
   ): QueryRef<ServiceItem<S, N>[], S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+  /** Create a typed `get` query reference. */
   query<N extends ServiceNames<S>>(
     desc: {
       serviceName: N
@@ -345,6 +358,7 @@ export class Figbird<
   }
 
   // Strongly-typed overload for mutation return types based on service
+  /** Perform a service mutation and return the mutated item typed from the schema. */
   mutate<N extends ServiceNames<S>>(desc: {
     serviceName: N
     method: 'create' | 'update' | 'patch' | 'remove'
@@ -358,6 +372,7 @@ export class Figbird<
     return this.queryStore.mutate(desc)
   }
 
+  /** Subscribe to any state changes within Figbird (across all queries/services). */
   subscribeToStateChanges(
     fn: (state: Map<string, ServiceState<AdapterFindMeta<A>>>) => void,
   ): () => void {
@@ -429,6 +444,10 @@ export function splitConfig<TItem = unknown>(
 // subscribe to state changes and read query data
 // this is only a ref and does not contain state itself, it instead
 // references all the state from the shared figbird query state
+/**
+ * Lightweight reference to a query in the shared Figbird store.
+ * Provides helpers to subscribe to updates, get snapshots, and refetch.
+ */
 class QueryRef<
   T,
   S extends Schema = AnySchema, // Add S here
@@ -456,6 +475,7 @@ class QueryRef<
     this.#queryStore = queryStore
   }
 
+  /** Returns internal details of this query reference (for debugging/testing). */
   details(): { queryId: string; desc: QueryDescriptor; config: QueryConfig<T> } {
     return {
       queryId: this.#queryId,
@@ -464,26 +484,36 @@ class QueryRef<
     }
   }
 
+  /** Returns a stable hash representing descriptor + config. */
   hash(): string {
     return this.#queryId
   }
 
+  /**
+   * Subscribes to this query's state. Triggers fetching if needed.
+   * Returns an unsubscribe function.
+   */
   subscribe(fn: (state: QueryState<T, TMeta>) => void): () => void {
     this.#queryStore.materialize(this)
     return this.#queryStore.subscribe<T>(this.#queryId, fn)
   }
 
+  /** Returns the latest known state for this query, if available. */
   getSnapshot(): QueryState<T, TMeta> | undefined {
     this.#queryStore.materialize(this)
     return this.#queryStore.getQueryState<T>(this.#queryId)
   }
 
+  /** Triggers a refetch for this query. */
   refetch(): void {
     this.#queryStore.materialize(this)
     return this.#queryStore.refetch(this.#queryId)
   }
 }
 
+/**
+ * Internal query store managing entities, queries, and subscriptions.
+ */
 class QueryStore<
   S extends Schema = AnySchema,
   TParams = unknown,
@@ -525,10 +555,15 @@ class QueryStore<
     return undefined
   }
 
+  /** Returns the current state for a query by id, if present. */
   getQueryState<T>(queryId: string): QueryState<T, TMeta> | undefined {
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
   }
 
+  /**
+   * Ensures that backing state exists for the given QueryRef by creating
+   * service/query structures on first use.
+   */
   materialize<T>(queryRef: QueryRef<T, S, TParams, TMeta, TQuery>): void {
     const { queryId, desc, config } = queryRef.details()
 
@@ -630,6 +665,10 @@ class QueryStore<
     return this.#listeners.get(queryId)?.size || 0
   }
 
+  /**
+   * Subscribe to a query state by id. Triggers fetches if needed.
+   * Returns an unsubscribe function.
+   */
   subscribe<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
@@ -655,10 +694,12 @@ class QueryStore<
     }
   }
 
+  /** Subscribe to any store state changes across all services. */
   subscribeToStateChanges(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
     return this.#addGlobalListener(fn)
   }
 
+  /** Refetch a specific query by id. */
   refetch(queryId: string): void {
     const q = this.#getQuery(queryId)
     if (!q) return
@@ -708,6 +749,7 @@ class QueryStore<
     }
   }
 
+  /** Perform a service mutation and update the store from the result. */
   mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
     const { serviceName, method, args } = desc
     const updaters: Record<string, (item: unknown) => void> = {
@@ -956,6 +998,7 @@ class QueryStore<
     }
   }
 
+  /** Returns the entire store state map keyed by service name. */
   getState(): Map<string, ServiceState<TMeta>> {
     return this.#state
   }

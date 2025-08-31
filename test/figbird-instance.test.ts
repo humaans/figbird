@@ -1,6 +1,6 @@
 import test from 'ava'
-import { Figbird } from '../lib/core/figbird'
 import { FeathersAdapter } from '../lib/adapters/feathers'
+import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
 import { mockFeathers } from './helpers'
 
