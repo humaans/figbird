@@ -6,8 +6,8 @@ import type {
   ServiceItem,
   ServiceNames,
   ServicePatch,
-  ServiceUpdate,
   ServiceQuery,
+  ServiceUpdate,
 } from '../core/schema.js'
 import { findServiceByName } from '../core/schema.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
@@ -76,7 +76,7 @@ type InferMeta<F> = AdapterMeta<InferAdapter<F>>
  * import { useFind } from './hooks'
  *
  * function MyComponent() {
- *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
+ *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FindMeta>
  * }
  * ```
  */

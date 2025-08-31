@@ -78,7 +78,7 @@ export interface FeathersParams<TDomainQuery extends Record<string, unknown> = F
 /**
  * Feathers-specific metadata for find operations
  */
-export interface FeathersFindMeta {
+export interface FindMeta {
   total: number
   limit: number
   skip: number
@@ -144,7 +144,7 @@ function toEpochMs(ts: Timestamp): number | null {
 }
 
 export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = FeathersQuery>
-  implements Adapter<FeathersParams<TDomainQuery>, FeathersFindMeta, TDomainQuery>
+  implements Adapter<FeathersParams<TDomainQuery>, FindMeta, TDomainQuery>
 {
   feathers: FeathersClient
   #idField: IdFieldType
@@ -190,7 +190,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
     serviceName: string,
     resourceId: string | number,
     params?: FeathersParams<TDomainQuery>,
-  ): Promise<QueryResponse<unknown, FeathersFindMeta>> {
+  ): Promise<QueryResponse<unknown, FindMeta>> {
     const res = await this.#service(serviceName).get(resourceId, params as FeathersParams)
     return { data: res, meta: { total: 1, limit: 1, skip: 0 } }
   }
@@ -198,7 +198,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   async #_find(
     serviceName: string,
     params?: FeathersParams<TDomainQuery>,
-  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
+  ): Promise<QueryResponse<unknown[], FindMeta>> {
     const res = await this.#service(serviceName).find(params as FeathersParams)
     if (Array.isArray(res)) {
       return { data: res, meta: { total: -1, limit: res.length, skip: 0 } }
@@ -211,7 +211,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   async find(
     serviceName: string,
     params?: FeathersParams<TDomainQuery>,
-  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
+  ): Promise<QueryResponse<unknown[], FindMeta>> {
     if (this.#defaultPageSize && !params?.query?.$limit) {
       return this.#_find(
         serviceName,
@@ -224,14 +224,14 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   async findAll(
     serviceName: string,
     params?: FeathersParams<TDomainQuery>,
-  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
+  ): Promise<QueryResponse<unknown[], FindMeta>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     const baseParams =
       defaultPageSize && !params?.query?.$limit
         ? this.#mergeQueryControls(params, { $limit: defaultPageSize })
         : params || {}
 
-    const result: QueryResponse<unknown[], FeathersFindMeta> = {
+    const result: QueryResponse<unknown[], FindMeta> = {
       data: [],
       meta: { total: -1, limit: 0, skip: 0 },
     }
@@ -324,7 +324,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
     return matcher(query as Query | null | undefined, options)
   }
 
-  itemAdded(meta: FeathersFindMeta): FeathersFindMeta {
+  itemAdded(meta: FindMeta): FindMeta {
     // If total is -1 (indicating unavailable), keep it as -1
     if (meta.total < 0) {
       return meta
@@ -332,7 +332,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
     return { ...meta, total: meta.total + 1 }
   }
 
-  itemRemoved(meta: FeathersFindMeta): FeathersFindMeta {
+  itemRemoved(meta: FindMeta): FindMeta {
     // If total is -1 (indicating unavailable), keep it as -1
     if (meta.total < 0) {
       return meta
@@ -340,7 +340,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
     return { ...meta, total: Math.max(0, meta.total - 1) }
   }
 
-  emptyMeta(): FeathersFindMeta {
+  emptyMeta(): FindMeta {
     return { total: -1, limit: 0, skip: 0 }
   }
 }
