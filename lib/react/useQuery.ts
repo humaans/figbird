@@ -145,8 +145,7 @@ export function useQuery<
   const _q = figbird.query(desc, {
     ...config,
     ...(config.fetchPolicy === 'network-only' ? { uid: uniqueId } : {}),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as QueryConfig<unknown, unknown>) as any
+  } as QueryConfig<unknown, unknown>)
 
   // a bit of React foo to create stable fn references
   const q = useMemo(() => _q, [_q.hash()])
