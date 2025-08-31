@@ -224,8 +224,8 @@ test('allPages works correctly with proper pagination fields', async t => {
   const unsubscribe = query.subscribe(state => {
     if (state.status === 'success') {
       t.is(state.data.length, 10, 'Should fetch all 10 items across multiple pages')
-      t.is(state.data[0].title, 'Task 1')
-      t.is(state.data[9].title, 'Task 10')
+      t.is(state.data[0]?.title, 'Task 1')
+      t.is(state.data[9]?.title, 'Task 10')
     }
   })
 
@@ -234,7 +234,7 @@ test('allPages works correctly with proper pagination fields', async t => {
 })
 
 test('React hooks work with locked-down query types', async t => {
-  const { $all, render, unmount } = dom()
+  const { $all, render, unmount, flush } = dom()
 
   const schema = createSchema({
     services: {
@@ -294,7 +294,7 @@ test('React hooks work with locked-down query types', async t => {
     </FigbirdProvider>,
   )
 
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await flush()
 
   const personElements = $all('.person')
   t.is(personElements.length, 2) // Mock returns all items

@@ -22,10 +22,7 @@ import { useQuery, type QueryResult } from './useQuery.js'
 type WithServiceQuery<S extends Schema, N extends ServiceNames<S>, TParams> = Omit<
   TParams,
   'query'
-> &
-  (TParams extends { query?: infer P }
-    ? { query?: ServiceQuery<S, N> & (P extends Record<string, unknown> ? P : unknown) }
-    : unknown)
+> & { query?: ServiceQuery<S, N> }
 
 type UseGetForSchema<S extends Schema, TParams = unknown> = <N extends ServiceNames<S>>(
   serviceName: N,

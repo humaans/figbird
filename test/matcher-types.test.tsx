@@ -157,7 +157,7 @@ test('matcher receives properly typed query from schema', async t => {
 })
 
 test('React hooks provide typed query in matcher', async t => {
-  const { render, unmount } = dom()
+  const { render, unmount, flush } = dom()
 
   const schema = createSchema({
     services: {
@@ -240,7 +240,7 @@ test('React hooks provide typed query in matcher', async t => {
     </FigbirdProvider>,
   )
 
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await flush()
 
   // If this test compiles and runs without TypeScript errors,
   // it means the query type was correctly inferred
