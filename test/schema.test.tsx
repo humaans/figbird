@@ -21,7 +21,6 @@ interface Person {
   email: string
   age?: number
   role: 'admin' | 'user'
-  [key: string]: unknown
 }
 
 interface Task {
@@ -31,7 +30,6 @@ interface Task {
   assigneeId?: string
   priority: number
   tags: string[]
-  [key: string]: unknown
 }
 
 interface Project {
@@ -40,14 +38,12 @@ interface Project {
   description: string
   ownerId: string
   status: 'active' | 'archived' | 'draft'
-  [key: string]: unknown
 }
 
 // Custom query extensions for specific services
 interface TaskQuery {
   $search?: string
   $asOf?: Date
-  [key: string]: unknown
 }
 
 interface PersonService {
