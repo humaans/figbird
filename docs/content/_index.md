@@ -297,6 +297,111 @@ const { create, update, patch, remove } = useMutation('tasks')
 const newTask = await create({ title: 'Hello', completed: false })
 ```
 
+### Schemas in Detail
+
+Schemas power all TypeScript inference in Figbird. You declare a map of services with their types, and Figbird derives the rest.
+
+1) Define a service type with the shape of your items and optional payload/query types:
+
+```ts
+import { createSchema, service } from 'figbird'
+
+// Domain types
+interface Person { id: string; name: string; email: string }
+interface Task { id: string; title: string; completed: boolean; priority?: number }
+
+// Optional: Domain-specific query types (clean business filters)
+interface PersonQuery { name?: string; email?: string }
+interface TaskQuery { completed?: boolean; priority?: number }
+
+// Optional: Custom payload types
+interface TaskCreate { title: string; completed?: boolean }
+interface TaskPatch { title?: string; completed?: boolean; priority?: number }
+
+interface PersonService {
+  item: Person
+  query?: PersonQuery
+  // create/update/patch omitted – see defaults below
+}
+
+interface TaskService {
+  item: Task
+  query?: TaskQuery
+  create?: TaskCreate       // optional — defaults to Partial<item>
+  update?: Task             // optional — defaults to item (full replacement)
+  patch?: TaskPatch         // optional — defaults to Partial<item>
+}
+
+export const schema = createSchema({
+  services: {
+    'api/people': service<PersonService>(),
+    tasks: service<TaskService>(),
+  },
+})
+```
+
+2) Defaults for payload types (when omitted):
+
+- create: `Partial<item>`
+- update: `item` (full document replacement)
+- patch: `Partial<item>`
+
+3) Service names and types:
+
+- Keys in `services` are preserved as literal names (e.g. `'api/people'` vs `tasks`).
+- Names flow into all APIs: `useFind('api/people')` narrows to `Person`; `useFind('tasks')` narrows to `Task`.
+
+4) Domain query vs adapter controls:
+
+- You only model domain filters via `query?: ...` in your service type.
+- Figbird adapters (e.g. Feathers) automatically add transport controls like `$limit`, `$sort`, `$skip`.
+- As a result, `params.query` is the intersection of your domain query and adapter controls:
+
+```ts
+// PersonQuery & Feathers controls
+useFind('api/people', {
+  query: {
+    name: 'Ada',        // domain
+    $limit: 20,         // adapter control
+    $sort: { name: 1 }, // adapter control
+  },
+})
+```
+
+5) Mutations are fully typed from the schema:
+
+```ts
+const { create, update, patch, remove } = useMutation('tasks')
+
+// Parameter types for each method come from TaskService:
+await create({ title: 'Ship', completed: false })     // TaskCreate
+await update('id-1', { id: 'id-1', title: 'New' })    // Task (full)
+await patch('id-1', { priority: 1 })                  // TaskPatch
+await remove('id-1')                                  // id only
+
+// All mutation methods resolve to the mutated item (Task)
+```
+
+6) Advanced: Using Figbird outside React with typed queries
+
+```ts
+import { Figbird } from 'figbird'
+
+const figbird = new Figbird({ adapter, schema })
+
+// find: data is Task[]
+const q1 = figbird.query({ serviceName: 'tasks', method: 'find', params: { query: { completed: true } } })
+q1.subscribe(state => {
+  // state.data: Task[] | null
+})
+
+// get: data is Task (no meta by default)
+const q2 = figbird.query({ serviceName: 'tasks', method: 'get', resourceId: '123' })
+q2.subscribe(state => {
+  // state.data: Task | null
+})
+```
+
 ## Realtime
 
 Figbird is compatible with the Feathers realtime model out of the box. The moment you mount a component with a `useFind` or `useGet` hook, Figbird will start listening to realtime events for the services in use. It will only at most subscribe once per service. All realtime events will get processed in the following manner:
