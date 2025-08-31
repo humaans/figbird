@@ -61,13 +61,13 @@ export type QueryState<T, TMeta = Record<string, unknown>> =
 /**
  * Internal query representation
  */
-export interface Query<T = unknown, TMeta = Record<string, unknown>> {
+export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = unknown> {
   queryId: string
   desc: QueryDescriptor
-  config: QueryConfig<T>
+  config: QueryConfig<T, TQuery>
   pending: boolean
   dirty: boolean
-  filterItem: (item: T) => boolean
+  filterItem: (item: ElementType<T>) => boolean
   state: QueryState<T, TMeta>
 }
 
@@ -76,7 +76,7 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>> {
  */
 export interface ServiceState<TMeta = Record<string, unknown>> {
   entities: Map<string | number, unknown>
-  queries: Map<string, Query<unknown, TMeta>>
+  queries: Map<string, Query<unknown, TMeta, unknown>>
   itemQueryIndex: Map<string | number, Set<string>>
 }
 
@@ -105,10 +105,15 @@ export interface FindDescriptor {
 export type QueryDescriptor = GetDescriptor | FindDescriptor
 
 /**
+ * Helper type to extract element type from arrays
+ */
+type ElementType<T> = T extends (infer E)[] ? E : T
+
+/**
  * Base query configuration shared by all query types.
  * Add these alongside adapter params when calling useFind/useGet.
  */
-interface BaseQueryConfig<TItem = unknown> {
+interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
   /**
    * Skip fetching entirely. Useful for conditional queries.
    * When true, status is 'idle' and no network request is made.
@@ -135,19 +140,21 @@ interface BaseQueryConfig<TItem = unknown> {
    * Optional custom matcher factory. Only used in realtime 'merge' mode.
    * Receives the prepared query object; returns a predicate for items.
    * Provide this if your adapter needs custom client-side matching logic.
+   * Note: For find queries, the matcher works with individual items, not arrays.
    */
-  matcher?: (query: unknown) => (item: TItem) => boolean
+  matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
 }
 
 /**
  * Configuration for get queries
  */
-export type GetQueryConfig<TItem = unknown> = BaseQueryConfig<TItem>
+export type GetQueryConfig<TItem = unknown, TQuery = unknown> = BaseQueryConfig<TItem, TQuery>
 
 /**
  * Configuration for find queries
  */
-export interface FindQueryConfig<TItem = unknown> extends BaseQueryConfig<TItem> {
+export interface FindQueryConfig<TItem = unknown, TQuery = unknown>
+  extends BaseQueryConfig<TItem, TQuery> {
   /**
    * Fetches all pages by iterating until completion, aggregating results.
    * Honors adapter pagination controls (e.g. $limit/$skip for Feathers).
@@ -158,14 +165,16 @@ export interface FindQueryConfig<TItem = unknown> extends BaseQueryConfig<TItem>
 /**
  * Discriminated union of query configurations
  */
-export type QueryConfig<TItem = unknown> = GetQueryConfig<TItem> | FindQueryConfig<TItem>
+export type QueryConfig<TItem = unknown, TQuery = unknown> =
+  | GetQueryConfig<TItem, TQuery>
+  | FindQueryConfig<TItem, TQuery>
 
 /**
  * Combined config for get operations
  * Combines the descriptor and config properties with index signature for extra params
  */
-export type CombinedGetConfig<TItem = unknown> = GetDescriptor &
-  GetQueryConfig<TItem> & {
+export type CombinedGetConfig<TItem = unknown, TQuery = unknown> = GetDescriptor &
+  GetQueryConfig<TItem, TQuery> & {
     [key: string]: unknown
   }
 
@@ -173,15 +182,17 @@ export type CombinedGetConfig<TItem = unknown> = GetDescriptor &
  * Combined config for find operations
  * Combines the descriptor and config properties with index signature for extra params
  */
-export type CombinedFindConfig<TItem = unknown> = FindDescriptor &
-  FindQueryConfig<TItem> & {
+export type CombinedFindConfig<TItem = unknown, TQuery = unknown> = FindDescriptor &
+  FindQueryConfig<TItem, TQuery> & {
     [key: string]: unknown
   }
 
 /**
  * Combined config for internal use
  */
-export type CombinedConfig<TItem = unknown> = CombinedGetConfig<TItem> | CombinedFindConfig<TItem>
+export type CombinedConfig<TItem = unknown, TQuery = unknown> =
+  | CombinedGetConfig<TItem, TQuery>
+  | CombinedFindConfig<TItem, TQuery>
 
 /**
  * Item matcher function type
@@ -316,8 +327,15 @@ export class Figbird<
   /** Create a typed `find` query reference. */
   query<N extends ServiceNames<S>>(
     desc: { serviceName: N; method: 'find'; params?: ParamsWithServiceQuery<S, N, A> },
-    config?: QueryConfig<ServiceItem<S, N>[]>,
-  ): QueryRef<ServiceItem<S, N>[], S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+    config?: QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>,
+  ): QueryRef<
+    ServiceItem<S, N>[],
+    ServiceQuery<S, N>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
   /** Create a typed `get` query reference. */
   query<N extends ServiceNames<S>>(
     desc: {
@@ -326,13 +344,27 @@ export class Figbird<
       resourceId: string | number
       params?: ParamsWithServiceQuery<S, N, A>
     },
-    config?: QueryConfig<ServiceItem<S, N>>,
-  ): QueryRef<ServiceItem<S, N>, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+    config?: QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>,
+  ): QueryRef<
+    ServiceItem<S, N>,
+    ServiceQuery<S, N>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
   // Generic fallback overload (for dynamic descriptors)
   query<D extends QueryDescriptor>(
     desc: D,
-    config?: QueryConfig<InferQueryData<S, D>>,
-  ): QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+    config?: QueryConfig<InferQueryData<S, D>, AdapterQuery<A>>,
+  ): QueryRef<
+    InferQueryData<S, D>,
+    AdapterQuery<A>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
   // Implementation
   query(
     desc: {
@@ -341,14 +373,16 @@ export class Figbird<
       resourceId?: string | number
       params?: unknown
     },
-    config?: QueryConfig<unknown>,
+    config?: QueryConfig<unknown, unknown>,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ): any {
-    return new QueryRef<unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
-      desc: desc as QueryDescriptor,
-      config: (config || {}) as QueryConfig<unknown>,
-      queryStore: this.queryStore,
-    })
+    return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
+      {
+        desc: desc as QueryDescriptor,
+        config: (config || {}) as QueryConfig<unknown, unknown>,
+        queryStore: this.queryStore,
+      },
+    )
   }
 
   // Strongly-typed overload for mutation return types based on service
@@ -378,11 +412,11 @@ export class Figbird<
  * A helper to split the properties into a query descriptor `desc` (including 'params')
  * and figbird-specific query configuration `config`
  */
-export function splitConfig<TItem = unknown>(
-  combinedConfig: CombinedConfig<TItem>,
+export function splitConfig<TItem = unknown, TQuery = unknown>(
+  combinedConfig: CombinedConfig<TItem, TQuery>,
 ): {
   desc: QueryDescriptor
-  config: QueryConfig<TItem>
+  config: QueryConfig<TItem, TQuery>
 } {
   // Extract common properties with defaults
   const {
@@ -396,7 +430,7 @@ export function splitConfig<TItem = unknown>(
   } = combinedConfig
 
   if (method === 'get') {
-    const { resourceId, ...params } = rest as CombinedGetConfig<TItem>
+    const { resourceId, ...params } = rest as CombinedGetConfig<TItem, TQuery>
 
     const desc: GetDescriptor = {
       serviceName,
@@ -405,7 +439,7 @@ export function splitConfig<TItem = unknown>(
       params,
     }
 
-    const config: GetQueryConfig<TItem> = {
+    const config: GetQueryConfig<TItem, TQuery> = {
       ...(skip !== undefined && { skip }),
       realtime,
       fetchPolicy,
@@ -414,7 +448,7 @@ export function splitConfig<TItem = unknown>(
 
     return { desc, config }
   } else {
-    const { allPages, ...params } = rest as CombinedFindConfig<TItem>
+    const { allPages, ...params } = rest as CombinedFindConfig<TItem, TQuery>
 
     const desc: FindDescriptor = {
       serviceName,
@@ -422,7 +456,7 @@ export function splitConfig<TItem = unknown>(
       params,
     }
 
-    const config: FindQueryConfig<TItem> = {
+    const config: FindQueryConfig<TItem, TQuery> = {
       ...(skip !== undefined && { skip }),
       realtime,
       fetchPolicy,
@@ -444,6 +478,7 @@ export function splitConfig<TItem = unknown>(
  */
 class QueryRef<
   T,
+  TQueryType = unknown,
   S extends Schema = AnySchema, // Add S here
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
@@ -451,7 +486,7 @@ class QueryRef<
 > {
   #queryId: string
   #desc: QueryDescriptor
-  #config: QueryConfig<T>
+  #config: QueryConfig<T, TQueryType>
   #queryStore: QueryStore<S, TParams, TMeta, TQuery>
 
   constructor({
@@ -460,7 +495,7 @@ class QueryRef<
     queryStore,
   }: {
     desc: QueryDescriptor
-    config: QueryConfig<T>
+    config: QueryConfig<T, TQueryType>
     queryStore: QueryStore<S, TParams, TMeta, TQuery>
   }) {
     this.#queryId = `q/${hashObject({ desc, config })}`
@@ -470,7 +505,7 @@ class QueryRef<
   }
 
   /** Returns internal details of this query reference (for debugging/testing). */
-  details(): { queryId: string; desc: QueryDescriptor; config: QueryConfig<T> } {
+  details(): { queryId: string; desc: QueryDescriptor; config: QueryConfig<T, TQueryType> } {
     return {
       queryId: this.#queryId,
       desc: this.#desc,
@@ -538,7 +573,7 @@ class QueryStore<
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
   }
 
-  #getQuery(queryId: string): Query<unknown, TMeta> | undefined {
+  #getQuery(queryId: string): Query<unknown, TMeta, unknown> | undefined {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName) {
       const service = this.getState().get(serviceName)
@@ -558,7 +593,7 @@ class QueryStore<
    * Ensures that backing state exists for the given QueryRef by creating
    * service/query structures on first use.
    */
-  materialize<T>(queryRef: QueryRef<T, S, TParams, TMeta, TQuery>): void {
+  materialize<T, TQueryType>(queryRef: QueryRef<T, TQueryType, S, TParams, TMeta, TQuery>): void {
     const { queryId, desc, config } = queryRef.details()
 
     if (!this.#getQuery(queryId)) {
@@ -570,12 +605,13 @@ class QueryStore<
           service.queries.set(queryId, {
             queryId,
             desc,
-            config: config as QueryConfig<unknown>,
+            config: config as QueryConfig<unknown, unknown>,
             pending: !config.skip,
             dirty: false,
-            filterItem: this.#createItemFilter<unknown>(desc, config as QueryConfig<unknown>) as (
-              item: unknown,
-            ) => boolean,
+            filterItem: this.#createItemFilter<unknown, unknown>(
+              desc,
+              config as QueryConfig<unknown, unknown>,
+            ) as (item: unknown) => boolean,
             state: config.skip
               ? {
                   status: 'idle' as const,
@@ -598,7 +634,10 @@ class QueryStore<
     }
   }
 
-  #createItemFilter<T>(desc: QueryDescriptor, config: QueryConfig<T>): ItemMatcher<T> {
+  #createItemFilter<T, TQueryType>(
+    desc: QueryDescriptor,
+    config: QueryConfig<T, TQueryType>,
+  ): ItemMatcher<ElementType<T>> {
     // if this query is not using the realtime mode
     // we will never be merging events into the cache
     // and will never call the matcher, so to avoid
@@ -612,9 +651,9 @@ class QueryStore<
 
     const query = (desc.params as Record<string, unknown>)?.query || undefined
     if (config.matcher) {
-      return config.matcher(query)
+      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
     }
-    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<T>
+    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
   }
 
   #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
@@ -736,7 +775,7 @@ class QueryStore<
     if (desc.method === 'get') {
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
-      const findConfig = config as FindQueryConfig<unknown>
+      const findConfig = config as FindQueryConfig<unknown, unknown>
       return findConfig.allPages
         ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
         : this.#adapter.find(desc.serviceName, desc.params as TParams)
@@ -1020,7 +1059,7 @@ class QueryStore<
     queryId: string,
     fn: (
       service: ServiceState<TMeta>,
-      query?: Query<unknown, TMeta>,
+      query?: Query<unknown, TMeta, unknown>,
       touch?: (queryId: string) => void,
     ) => void,
     options?: { silent?: boolean },
@@ -1190,7 +1229,9 @@ class QueryStore<
   }
 }
 
-function getItems<TMeta = Record<string, unknown>>(query: Query<unknown, TMeta>): unknown[] {
+function getItems<TMeta = Record<string, unknown>>(
+  query: Query<unknown, TMeta, unknown>,
+): unknown[] {
   return Array.isArray(query.state.data)
     ? query.state.data
     : query.state.data

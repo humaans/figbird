@@ -30,7 +30,8 @@ type WithServiceQuery<S extends Schema, N extends ServiceNames<S>, TParams> = Om
 type UseGetForSchema<S extends Schema, TParams = unknown> = <N extends ServiceNames<S>>(
   serviceName: N,
   resourceId: string | number,
-  params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
+  params?: WithServiceQuery<S, N, TParams> &
+    Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
 ) => QueryResult<ServiceItem<S, N>>
 
 type UseFindForSchema<
@@ -39,7 +40,8 @@ type UseFindForSchema<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 > = <N extends ServiceNames<S>>(
   serviceName: N,
-  params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
+  params?: WithServiceQuery<S, N, TParams> &
+    Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
 ) => QueryResult<ServiceItem<S, N>[], TMeta>
 
 type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
@@ -104,11 +106,12 @@ export function createHooks<F extends Figbird<any, any>>(
       { serviceName: actualServiceName, method: 'get' as const, resourceId },
       params || {},
     )
-    const { desc, config } = splitConfig<ServiceItem<S, N>>(combinedConfig)
+    const { desc, config } = splitConfig<ServiceItem<S, N>, ServiceQuery<S, N>>(combinedConfig)
     // Publicly expose get without meta by default
-    return useQuery<ServiceItem<S, N>, TMeta>(desc, config) as unknown as QueryResult<
-      ServiceItem<S, N>
-    >
+    return useQuery<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
+      desc,
+      config,
+    ) as unknown as QueryResult<ServiceItem<S, N>>
   }
 
   function useTypedFind<N extends ServiceNames<S>>(
@@ -121,8 +124,8 @@ export function createHooks<F extends Figbird<any, any>>(
       { serviceName: actualServiceName, method: 'find' as const },
       params || {},
     )
-    const { desc, config } = splitConfig<ServiceItem<S, N>>(combinedConfig)
-    return useQuery<ServiceItem<S, N>[], TMeta>(desc, config as QueryConfig<ServiceItem<S, N>[]>)
+    const { desc, config } = splitConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>(combinedConfig)
+    return useQuery<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(desc, config)
   }
 
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {

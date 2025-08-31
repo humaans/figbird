@@ -30,14 +30,17 @@ export function useGet(
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { desc, config } = splitConfig<any>({
+  const { desc, config } = splitConfig<any, Record<string, unknown>>({
     serviceName: actualServiceName,
     method: 'get' as const,
     resourceId,
     ...params,
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return useQuery<any, Record<string, unknown>>(desc, config) as QueryResult<any>
+  return useQuery<any, Record<string, unknown>, Record<string, unknown>>(
+    desc,
+    config,
+  ) as QueryResult<any> // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 /**
@@ -54,13 +57,13 @@ export function useFind(
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { desc, config } = splitConfig<any[]>({
+  const { desc, config } = splitConfig<any[], Record<string, unknown>>({
     serviceName: actualServiceName,
     method: 'find' as const,
     ...params,
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return useQuery<any[], Record<string, unknown>>(desc, config)
+  return useQuery<any[], Record<string, unknown>, Record<string, unknown>>(desc, config)
 }
 
 function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
@@ -85,10 +88,11 @@ function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
   })
 
 */
-export function useQuery<T, TMeta extends Record<string, unknown> = Record<string, unknown>>(
-  desc: QueryDescriptor,
-  config: QueryConfig<T>,
-): QueryResult<T, TMeta> {
+export function useQuery<
+  T,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = unknown,
+>(desc: QueryDescriptor, config: QueryConfig<T, TQuery>): QueryResult<T, TMeta> {
   const figbird = useFigbird()
 
   // For network-only queries, we need a unique ID for each hook instance
@@ -105,7 +109,7 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
     ...config,
     ...(config.fetchPolicy === 'network-only' ? { uid: uniqueId } : {}),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  }) as any
+  } as QueryConfig<unknown, unknown>) as any
 
   // a bit of React foo to create stable fn references
   const q = useMemo(() => _q, [_q.hash()])
