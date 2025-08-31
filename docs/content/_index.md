@@ -111,6 +111,32 @@ You can also use the untyped hooks directly from `figbird` (without `createHooks
 
 ## API Reference
 
+## `createHooks`
+
+`createHooks(figbird)` binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns `{ useFind, useGet, useMutation }` with full service- and adapter-aware TypeScript types.
+
+```ts
+import { Figbird, FeathersAdapter, createHooks } from 'figbird'
+
+const adapter = new FeathersAdapter(feathers)
+const figbird = new Figbird({ adapter, schema })
+export const { useFind, useGet, useMutation } = createHooks(figbird)
+
+// Later in components
+function People() {
+  // serviceName literal narrows types
+  const res = useFind('api/people', { query: { name: 'Ada', $limit: 10 } })
+  //          ^ QueryResult<Person[], FindMeta>
+  return <div>{res.data?.length ?? 0}</div>
+}
+
+function TaskView({ id }: { id: string }) {
+  const res = useGet('tasks', id)
+  //          ^ QueryResult<Task> (no meta by default)
+  return <div>{res.data?.title}</div>
+}
+```
+
 ### `useGet`
 
 ```ts
@@ -379,7 +405,7 @@ await update('id-1', { id: 'id-1', title: 'New' })    // Task (full)
 await patch('id-1', { priority: 1 })                  // TaskPatch
 await remove('id-1')                                  // id only
 
-// All mutation methods resolve to the mutated item (Task)
+ // All mutation methods resolve to the mutated item (Task)
 ```
 
 6) Advanced: Using Figbird outside React with typed queries
