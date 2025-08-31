@@ -113,20 +113,15 @@ class ErrorHandler extends React.Component<{ children: React.ReactNode }, ErrorH
   }
 }
 
-interface NoteListProps {
-  notes: {
-    error: Error | null
-    status: QueryStatus
-    data: Note | Note[] | null
-    isFetching: boolean
-    meta?: Record<string, unknown>
-    refetch: () => void
-  }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+interface NoteListProps<TMeta = any> {
+  notes: QueryResult<Note | Note[], TMeta>
   keyField?: string
 }
 
-function NoteList({ notes, keyField = 'id' }: NoteListProps) {
-  if (notes.error) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function NoteList<TMeta = any>({ notes, keyField = 'id' }: NoteListProps<TMeta>) {
+  if (notes.status === 'error') {
     return <div className='error'>{notes.error.message}</div>
   }
 
@@ -134,18 +129,23 @@ function NoteList({ notes, keyField = 'id' }: NoteListProps) {
     return <div className='spinner'>loading...</div>
   }
 
-  // Handle cases where data is null (e.g., when skip:true and status is 'idle')
-  if (!notes.data) {
+  if (notes.status === 'idle') {
+    // When skip:true, status is 'idle' and data is null
     return null
   }
 
+  // At this point, TypeScript knows status === 'success' and data is not null
+  const data = notes.data
+  const items = Array.isArray(data) ? data : [data]
   return (
     <>
-      {(Array.isArray(notes.data) ? notes.data : [notes.data]).map(note => (
-        <div key={note[keyField as keyof Note] as number} className='note'>
-          {note.content}
-        </div>
-      ))}
+      {items
+        .filter((note): note is Note => note !== null && note !== undefined)
+        .map(note => (
+          <div key={note[keyField as keyof Note] as number} className='note'>
+            {note.content}
+          </div>
+        ))}
     </>
   )
 }
@@ -399,12 +399,12 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   function Note1() {
     const notes = useFind('notes')
-    return <div className='note1'>{notes.data && notes.data[0]?.content}</div>
+    return <div className='note1'>{notes.status === 'success' ? notes.data[0]?.content : null}</div>
   }
 
   function Note2() {
     const notes = useFind('notes')
-    return <div className='note2'>{notes.data && notes.data[0]?.content}</div>
+    return <div className='note2'>{notes.status === 'success' ? notes.data[0]?.content : null}</div>
   }
 
   function Notes() {
@@ -562,7 +562,12 @@ test('useMutation handles errors', async t => {
       })
     }, [patch])
 
-    return <NoteList notes={{ ...note, error }} />
+    // If there's a mutation error, show it; otherwise show the query result
+    if (error) {
+      return <div className='error'>{error.message}</div>
+    }
+
+    return <NoteList notes={note} />
   }
 
   feathers.service('notes').patch = () => {
@@ -773,7 +778,7 @@ test('useFind with refetch', async t => {
 
     refetch = notes.refetch
 
-    return <div className='data'>{notes.data && notes.data[0]?.id}</div>
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
 
   const results = [
@@ -822,7 +827,7 @@ test('useFind with refetch while already fetching', async t => {
   function Note() {
     const notes = useFind('notes')
     refetch = notes.refetch
-    return <div className='data'>{notes.data && notes.data[0]?.id}</div>
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
 
   const results = [{ data: [{ id: 1 }] }, { data: [{ id: 2 }] }, { data: [{ id: 3 }] }]
@@ -896,7 +901,7 @@ test('refetch only works with active listeners', async t => {
   function Note() {
     const notes = useFind('notes')
     refetch = notes.refetch
-    return <div className='data'>{notes.data && notes.data[0]?.id}</div>
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
 
   const results = [
@@ -2245,7 +2250,7 @@ test('concurrent mutations maintain data consistency', async t => {
     const { patch: patch2 } = useMutation('notes')
 
     React.useEffect(() => {
-      if (notes.data && notes.data.length > 0 && !hasFiredMutations) {
+      if (notes.status === 'success' && notes.data.length > 0 && !hasFiredMutations) {
         hasFiredMutations = true
         // Fire two mutations concurrently on the same item
         const id = notes.data[0]!.id

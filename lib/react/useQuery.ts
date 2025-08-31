@@ -1,19 +1,56 @@
 import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
-import type { QueryState, QueryStatus } from '../core/figbird.js'
+import type { QueryState } from '../core/figbird.js'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import { findServiceByName } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
-type BaseQueryResult<T> = {
-  data: T | null
-  status: QueryStatus
-  isFetching: boolean
-  error: Error | null
+type BaseQueryResult = {
   refetch: () => void
 }
 
-export type QueryResult<T, TMeta = undefined> = BaseQueryResult<T> &
-  (TMeta extends undefined ? Record<never, never> : { meta: TMeta })
+export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
+  (TMeta extends undefined
+    ?
+        | {
+            status: 'idle' | 'loading'
+            data: null
+            isFetching: boolean
+            error: null
+          }
+        | {
+            status: 'success'
+            data: T
+            isFetching: boolean
+            error: null
+          }
+        | {
+            status: 'error'
+            data: null
+            isFetching: boolean
+            error: Error
+          }
+    :
+        | {
+            status: 'idle' | 'loading'
+            data: null
+            meta: TMeta
+            isFetching: boolean
+            error: null
+          }
+        | {
+            status: 'success'
+            data: T
+            meta: TMeta
+            isFetching: boolean
+            error: null
+          }
+        | {
+            status: 'error'
+            data: null
+            meta: TMeta
+            isFetching: boolean
+            error: Error
+          })
 
 /**
  * Hook for fetching a single item by ID.
@@ -133,8 +170,48 @@ export function useQuery<
   // loading -> success state, but also for any realtime data updates
   const queryResult = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-  return useMemo(
-    () => ({ ...queryResult, refetch }) as QueryResult<T, TMeta>,
-    [queryResult, refetch],
-  )
+  return useMemo(() => {
+    // Handle each case of the discriminated union explicitly
+    if (queryResult.status === 'success') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = {
+        status: 'success' as const,
+        data: queryResult.data,
+        isFetching: queryResult.isFetching,
+        error: null,
+        refetch,
+      }
+      if ('meta' in queryResult) {
+        result.meta = queryResult.meta
+      }
+      return result as QueryResult<T, TMeta>
+    } else if (queryResult.status === 'error') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = {
+        status: 'error' as const,
+        data: null,
+        isFetching: queryResult.isFetching,
+        error: queryResult.error,
+        refetch,
+      }
+      if ('meta' in queryResult) {
+        result.meta = queryResult.meta
+      }
+      return result as QueryResult<T, TMeta>
+    } else {
+      // status === 'idle' || status === 'loading'
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = {
+        status: queryResult.status,
+        data: null,
+        isFetching: queryResult.isFetching,
+        error: null,
+        refetch,
+      }
+      if ('meta' in queryResult) {
+        result.meta = queryResult.meta
+      }
+      return result as QueryResult<T, TMeta>
+    }
+  }, [queryResult, refetch])
 }

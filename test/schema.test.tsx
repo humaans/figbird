@@ -144,7 +144,7 @@ test('schema-based type inference', t => {
       }
     }, [people.data])
 
-    if (!people.data) return <div>Loading...</div>
+    if (people.status !== 'success') return <div>Loading...</div>
 
     return (
       <div>
@@ -161,7 +161,7 @@ test('schema-based type inference', t => {
     // Type is inferred as QueryResult<Task>
     const task = useGet('api/tasks', 't1')
 
-    if (!task.data) return <div>Loading...</div>
+    if (task.status !== 'success') return <div>Loading...</div>
 
     return (
       <div className='task'>
