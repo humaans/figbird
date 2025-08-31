@@ -242,3 +242,24 @@ test('combined params includes both QueryConfig and FeathersParams', t => {
     `Expected complexQuery to return QueryResult, got: ${complexQueryType}`,
   )
 })
+
+test('Figbird methods infer types from schema (query, subscribe, mutate)', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'figbird-methods-inference.ts')
+
+  const findSubscribeStateType = getTypeAtPosition(fixturePath, 'FindSubscribeState')
+  const getSubscribeStateType = getTypeAtPosition(fixturePath, 'GetSubscribeState')
+  const createResultType = getTypeAtPosition(fixturePath, 'CreateResult')
+
+  // Query subscribe param should carry QueryState with inferred data + Feathers meta
+  t.is(
+    findSubscribeStateType,
+    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
+  )
+  t.is(
+    getSubscribeStateType,
+    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person, import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
+  )
+
+  // Mutate create should resolve to Person
+  t.is(createResultType, 'Person')
+})
