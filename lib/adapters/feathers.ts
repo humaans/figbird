@@ -290,9 +290,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>>
     const currMs = toEpochMs(this.#getUpdatedAt(currItem))
     const nextMs = toEpochMs(this.#getUpdatedAt(nextItem))
 
-    // If either timestamp is missing, consider stale to force update
+    // If either timestamp is missing, consider not stale to allow update
     if (currMs == null || nextMs == null) {
-      return true
+      return false
     }
 
     // Next is stale if its timestamp is older than current
