@@ -1,6 +1,6 @@
 /**
  * Test fixture demonstrating automatic meta type inference from Figbird instance
- * This shows the improved DX where we don't need to manually pass FindMeta
+ * This shows the improved DX where we don't need to manually pass FeathersFindMeta
  */
 
 import type { FeathersClient } from '../../lib'
@@ -40,7 +40,7 @@ const schema = createSchema({
 // Mock Feathers client
 const feathersClient = {} as FeathersClient
 
-// Create adapter with FeathersAdapter (which has FindMeta as its meta type)
+// Create adapter with FeathersAdapter (which has FeathersFindMeta as its meta type)
 const adapter = new FeathersAdapter(feathersClient, {
   defaultPageSize: 25,
 })
@@ -54,7 +54,7 @@ const figbird = new Figbird({
 
 // Create hooks by passing the figbird instance
 // This automatically infers BOTH the schema AND the meta type!
-// No need to manually pass FindMeta anymore! 🎉
+// No need to manually pass FeathersFindMeta anymore! 🎉
 const { useFind, useGet } = createHooks(figbird)
 
 // Use the hooks to test type inference
@@ -71,7 +71,7 @@ export type TasksMetaSkip = typeof tasksResult.meta.skip
 export type ProjectData = typeof projectResult.data
 
 // Test that meta type for find is always inferred from the adapter
-// Since we're using FeathersAdapter, it will always be FindMeta
+// Since we're using FeathersAdapter, it will always be FeathersFindMeta
 const feathersNoMeta = {} as FeathersClient
 const adapterNoExplicitMeta = new FeathersAdapter(feathersNoMeta)
 const figbirdNoExplicitMeta = new Figbird({ adapter: adapterNoExplicitMeta, schema })

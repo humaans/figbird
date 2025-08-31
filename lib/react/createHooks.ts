@@ -72,7 +72,7 @@ type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
  * import { useFind } from './hooks'
  *
  * function MyComponent() {
- *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FindMeta>
+ *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
  * }
  * ```
  */
