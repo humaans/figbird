@@ -104,19 +104,6 @@ export interface FeathersFindMeta {
 }
 
 /**
- * Feathers item with standard id and timestamp fields
- */
-export interface FeathersItem {
-  id?: string | number
-  _id?: string | number
-  updatedAt?: string | Date | number | null
-  updated_at?: string | Date | number | null
-  createdAt?: string | Date | number | null
-  created_at?: string | Date | number | null
-  [key: string]: unknown
-}
-
-/**
  * Feathers service interface
  */
 export interface FeathersService {
@@ -186,9 +173,14 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   constructor(
     feathers: FeathersClient,
     {
-      idField = (item: unknown) => (item as FeathersItem).id || (item as FeathersItem)._id,
-      updatedAtField = (item: unknown) =>
-        (item as FeathersItem).updatedAt || (item as FeathersItem).updated_at,
+      idField = (item: unknown) => {
+        const obj = item as Record<string, unknown>
+        return (obj.id ?? obj._id) as string | number | undefined
+      },
+      updatedAtField = (item: unknown) => {
+        const obj = item as Record<string, unknown>
+        return (obj.updatedAt ?? obj.updated_at) as string | Date | number | null | undefined
+      },
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
     }: FeathersAdapterOptions = {},

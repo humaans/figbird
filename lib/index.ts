@@ -64,7 +64,6 @@ export type {
   FeathersControls,
   FeathersFindMeta,
   FeathersFullQuery,
-  FeathersItem,
   FeathersParams,
   FeathersQuery,
   FeathersService,

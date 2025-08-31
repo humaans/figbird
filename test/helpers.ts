@@ -4,8 +4,15 @@ import type { ReactElement } from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { createRoot } from 'react-dom/client'
-import type { FeathersItem } from '../lib/adapters/feathers.js'
 import type { FeathersClient } from '../lib/index.js'
+
+// Local test type for Feathers items
+interface TestItem {
+  id?: string | number
+  _id?: string | number
+  updatedAt?: string | Date | number | null
+  [key: string]: unknown
+}
 
 interface DomHelpers {
   root: Root
@@ -89,7 +96,7 @@ export const swallowErrors = (yourTestFn: () => void): void => {
 }
 
 interface ServiceData {
-  [key: string]: FeathersItem
+  [key: string]: TestItem
 }
 
 interface ServiceOptions {
@@ -118,7 +125,7 @@ interface FindResult {
   total?: number
   limit: number
   skip: number
-  data: FeathersItem[]
+  data: TestItem[]
 }
 
 class Service extends EventEmitter {
@@ -149,7 +156,7 @@ class Service extends EventEmitter {
     this.delay = delay
   }
 
-  get(id: string | number, _params?: FindParams): Promise<FeathersItem> {
+  get(id: string | number, _params?: FindParams): Promise<TestItem> {
     this.counts.get++
     const item = this.data[id]
     if (!item) {
@@ -167,7 +174,7 @@ class Service extends EventEmitter {
       .slice(skip)
       .slice(0, limit)
       .map(id => this.data[id])
-      .filter((item): item is FeathersItem => item !== undefined)
+      .filter((item): item is TestItem => item !== undefined)
 
     if (this.delay) {
       await new Promise(resolve => setTimeout(resolve, this.delay))
@@ -190,12 +197,12 @@ class Service extends EventEmitter {
   }
 
   // Method overloads to match FeathersService but also support array creation for tests
-  create(data: Partial<FeathersItem>, _params?: FindParams): Promise<FeathersItem>
-  create(data: FeathersItem[], _params?: FindParams): Promise<FeathersItem[]>
+  create(data: Partial<TestItem>, _params?: FindParams): Promise<TestItem>
+  create(data: TestItem[], _params?: FindParams): Promise<TestItem[]>
   create(
-    data: Partial<FeathersItem> | FeathersItem[],
+    data: Partial<TestItem> | TestItem[],
     _params?: FindParams,
-  ): Promise<FeathersItem | FeathersItem[]> {
+  ): Promise<TestItem | TestItem[]> {
     if (Array.isArray(data)) {
       this.counts.create += data.length
       const ids = data.map(datum => datum.id || datum._id)
@@ -222,11 +229,7 @@ class Service extends EventEmitter {
     return Promise.resolve(mutatedItem)
   }
 
-  patch(
-    id: string | number,
-    data: Partial<FeathersItem>,
-    _params?: FindParams,
-  ): Promise<FeathersItem> {
+  patch(id: string | number, data: Partial<TestItem>, _params?: FindParams): Promise<TestItem> {
     this.counts.patch++
     const existingItem = this.data[id]
     if (!existingItem) {
@@ -241,11 +244,7 @@ class Service extends EventEmitter {
     return Promise.resolve(mutatedItem)
   }
 
-  update(
-    id: string | number,
-    data: Partial<FeathersItem>,
-    _params?: FindParams,
-  ): Promise<FeathersItem> {
+  update(id: string | number, data: Partial<TestItem>, _params?: FindParams): Promise<TestItem> {
     this.counts.update++
     this.data = { ...this.data, [id]: { ...data, updatedAt: data.updatedAt || Date.now() } }
     const mutatedItem = this.data[id]!
@@ -253,7 +252,7 @@ class Service extends EventEmitter {
     return Promise.resolve(mutatedItem)
   }
 
-  remove(id: string | number, _params?: FindParams): Promise<FeathersItem> {
+  remove(id: string | number, _params?: FindParams): Promise<TestItem> {
     this.counts.remove++
     this.data = { ...this.data }
     const mutatedItem = this.data[id]
