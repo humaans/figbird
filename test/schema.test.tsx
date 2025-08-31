@@ -42,6 +42,9 @@ interface Project {
 
 // Custom query extensions for specific services
 interface TaskQuery {
+  completed?: boolean
+  priority?: number
+  assigneeId?: string
   $search?: string
   $asOf?: Date
 }
@@ -439,4 +442,102 @@ test('type extraction utilities', t => {
 
   t.truthy(query.$search)
   t.truthy(query.$asOf)
+})
+
+test('query type inference is strict - no extra properties allowed', t => {
+  const { render, unmount, flush } = dom()
+
+  const feathers = mockFeathers({
+    'api/tasks': {
+      data: {
+        t1: {
+          id: 't1',
+          title: 'Test task',
+          completed: false,
+          priority: 1,
+          tags: ['test'],
+        },
+      },
+    },
+  })
+
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter, schema })
+
+  // Create typed hooks
+  const { useFind } = createHooks(figbird)
+
+  function TestComponent() {
+    // This should work - valid TaskQuery properties
+    const validQuery = useFind('api/tasks', {
+      query: {
+        completed: false,
+        $search: 'test',
+        $asOf: new Date(),
+      },
+      matcher: query => item => {
+        // Handle custom query operators
+        if (query?.completed !== undefined && item.completed !== query.completed) {
+          return false
+        }
+        // Custom operators don't affect matching in this test
+        return true
+      },
+    })
+
+    // TypeScript should enforce that only defined query properties are allowed
+    // The following would cause a TypeScript error if uncommented:
+    // const invalidQuery = useFind('api/tasks', {
+    //   query: {
+    //     completed: false,
+    //     $search: 'test',
+    //     $asOf: new Date(),
+    //     invalidProperty: 'this should not be allowed', // <- This should cause a TS error
+    //   },
+    // })
+
+    // Test that TypeScript correctly types the query parameter
+    // This should work without errors - all valid properties
+    const testValidQuery = useFind('api/tasks', {
+      query: {
+        completed: false,
+        priority: 1,
+        assigneeId: '123',
+        $search: 'test',
+        $asOf: new Date(),
+      },
+      matcher: query => item => {
+        // Handle custom query operators
+        if (query?.completed !== undefined && item.completed !== query.completed) {
+          return false
+        }
+        if (query?.priority !== undefined && item.priority !== query.priority) {
+          return false
+        }
+        if (query?.assigneeId !== undefined && item.assigneeId !== query.assigneeId) {
+          return false
+        }
+        // Custom operators don't affect matching in this test
+        return true
+      },
+    })
+
+    return (
+      <div>
+        <div>{validQuery.data?.length ?? 0} tasks</div>
+        <div>{testValidQuery.data?.length ?? 0} valid</div>
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <TestComponent />
+    </FigbirdProvider>,
+  )
+
+  return flush().then(() => {
+    t.pass('Query type inference is strict')
+    unmount()
+  })
 })

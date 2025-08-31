@@ -260,8 +260,7 @@ export interface MutationDescriptor {
 type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A extends Adapter> = Omit<
   AdapterParams<A>,
   'query'
-> &
-  (AdapterParams<A> extends { query?: infer P } ? { query?: ServiceQuery<S, N> & P } : unknown)
+> & { query?: ServiceQuery<S, N> }
 
 /**
     Usage:
