@@ -148,17 +148,15 @@ test('FindMeta type inference works correctly', t => {
   const findMetaLimit = getTypeAtPosition(fixturePath, 'FindMetaLimit')
   const findMetaSkip = getTypeAtPosition(fixturePath, 'FindMetaSkip')
 
-  // Check that get result also has the meta type
-  const getMetaType = getTypeAtPosition(fixturePath, 'GetMetaType')
+  // useGet no longer exposes meta by default
 
   // Check the actual property types
   const metaTotalType = getTypeAtPosition(fixturePath, 'MetaTotalType')
   const metaLimitType = getTypeAtPosition(fixturePath, 'MetaLimitType')
   const metaSkipType = getTypeAtPosition(fixturePath, 'MetaSkipType')
 
-  // Verify that meta has the FindMeta type
+  // Verify that find meta has the FindMeta type
   t.is(findMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FindMeta')
-  t.is(getMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FindMeta')
 
   // Verify that individual properties have the correct types
   t.is(findMetaTotal, 'number')
@@ -180,7 +178,7 @@ test('meta type is automatically inferred from Figbird instance', t => {
 
   // Check that meta types are automatically inferred as FindMeta
   const tasksMetaType = getTypeAtPosition(fixturePath, 'TasksMeta')
-  const projectMetaType = getTypeAtPosition(fixturePath, 'ProjectMeta')
+  // get no longer exposes meta by default
 
   // Check individual meta properties
   const tasksMetaTotalType = getTypeAtPosition(fixturePath, 'TasksMetaTotal')
@@ -194,10 +192,9 @@ test('meta type is automatically inferred from Figbird instance', t => {
   t.is(tasksDataType, 'Task[] | null')
   t.is(projectDataType, 'Project | null')
 
-  // Verify that meta is automatically inferred as FindMeta
+  // Verify that meta is automatically inferred as FindMeta for find
   // without having to pass it explicitly to createHooks
   t.is(tasksMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FindMeta')
-  t.is(projectMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FindMeta')
 
   // Verify individual meta properties are typed correctly
   t.is(tasksMetaTotalType, 'number')

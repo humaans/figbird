@@ -1,4 +1,4 @@
-import type { AdapterMeta, AdapterParams } from '../adapters/adapter.js'
+import type { AdapterFindMeta, AdapterParams } from '../adapters/adapter.js'
 import { splitConfig, type Figbird, type QueryConfig } from '../core/figbird.js'
 import type {
   Schema,
@@ -27,15 +27,11 @@ type WithServiceQuery<S extends Schema, N extends ServiceNames<S>, TParams> = Om
     ? { query?: ServiceQuery<S, N> & (P extends Record<string, unknown> ? P : unknown) }
     : unknown)
 
-type UseGetForSchema<
-  S extends Schema,
-  TParams = unknown,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
-> = <N extends ServiceNames<S>>(
+type UseGetForSchema<S extends Schema, TParams = unknown> = <N extends ServiceNames<S>>(
   serviceName: N,
   resourceId: string | number,
   params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
-) => QueryResult<ServiceItem<S, N>, TMeta>
+) => QueryResult<ServiceItem<S, N>>
 
 type UseFindForSchema<
   S extends Schema,
@@ -61,7 +57,7 @@ type InferSchema<F> = F extends Figbird<infer S, any> ? S : never
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type InferAdapter<F> = F extends Figbird<any, infer A> ? A : never
 type InferParams<F> = AdapterParams<InferAdapter<F>>
-type InferMeta<F> = AdapterMeta<InferAdapter<F>>
+type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
 
 /**
  * Creates typed hooks for a specific schema.
@@ -85,7 +81,7 @@ type InferMeta<F> = AdapterMeta<InferAdapter<F>>
 export function createHooks<F extends Figbird<any, any>>(
   figbird: F,
 ): {
-  useGet: UseGetForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
+  useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
 } {
@@ -109,7 +105,10 @@ export function createHooks<F extends Figbird<any, any>>(
       params || {},
     )
     const { desc, config } = splitConfig<ServiceItem<S, N>>(combinedConfig)
-    return useQuery<ServiceItem<S, N>, TMeta>(desc, config)
+    // Publicly expose get without meta by default
+    return useQuery<ServiceItem<S, N>, TMeta>(desc, config) as unknown as QueryResult<
+      ServiceItem<S, N>
+    >
   }
 
   function useTypedFind<N extends ServiceNames<S>>(
@@ -138,7 +137,7 @@ export function createHooks<F extends Figbird<any, any>>(
   }
 
   return {
-    useGet: useTypedGet as UseGetForSchema<S, TParams, TMeta>,
+    useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
   }

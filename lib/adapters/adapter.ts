@@ -1,10 +1,11 @@
 /**
  * Generic response wrapper for all operations
+ * - For find-like operations, include meta (e.g. pagination info)
+ * - For get-like operations, adapters may omit meta entirely
  */
-export interface QueryResponse<TData, TMeta = Record<string, unknown>> {
-  data: TData
-  meta: TMeta
-}
+export type QueryResponse<TData, TMeta = undefined> = { data: TData } & (TMeta extends undefined
+  ? Record<never, never>
+  : { meta: TMeta })
 
 /**
  * Event handlers for real-time updates
@@ -31,7 +32,7 @@ export interface Adapter<
     serviceName: string,
     resourceId: string | number,
     params?: TParams,
-  ): Promise<QueryResponse<unknown, TMeta>>
+  ): Promise<QueryResponse<unknown, TMeta | undefined>>
 
   find(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
 
@@ -62,6 +63,6 @@ export interface Adapter<
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AdapterParams<A> = A extends Adapter<infer P, any, any> ? P : never
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AdapterMeta<A> = A extends Adapter<any, infer M, any> ? M : never
+export type AdapterFindMeta<A> = A extends Adapter<any, infer M, any> ? M : never
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AdapterQuery<A> = A extends Adapter<any, any, infer Q> ? Q : never

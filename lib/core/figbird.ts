@@ -1,6 +1,6 @@
 import type {
   Adapter,
-  AdapterMeta,
+  AdapterFindMeta,
   AdapterParams,
   AdapterQuery,
   QueryResponse,
@@ -254,7 +254,7 @@ export class Figbird<
   >,
 > {
   adapter: A
-  queryStore: QueryStore<S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
 
   constructor({
@@ -268,13 +268,13 @@ export class Figbird<
   }) {
     this.adapter = adapter
     this.schema = schema
-    this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
+    this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
       eventBatchProcessingInterval: eventBatchProcessingInterval,
     })
   }
 
-  getState(): Map<string, ServiceState<AdapterMeta<A>>> {
+  getState(): Map<string, ServiceState<AdapterFindMeta<A>>> {
     return this.queryStore.getState()
   }
 
@@ -282,7 +282,7 @@ export class Figbird<
   query<N extends ServiceNames<S>>(
     desc: { serviceName: N; method: 'find'; params?: ParamsWithServiceQuery<S, N, A> },
     config?: QueryConfig<ServiceItem<S, N>[]>,
-  ): QueryRef<ServiceItem<S, N>[], S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  ): QueryRef<ServiceItem<S, N>[], S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   query<N extends ServiceNames<S>>(
     desc: {
       serviceName: N
@@ -291,12 +291,12 @@ export class Figbird<
       params?: ParamsWithServiceQuery<S, N, A>
     },
     config?: QueryConfig<ServiceItem<S, N>>,
-  ): QueryRef<ServiceItem<S, N>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  ): QueryRef<ServiceItem<S, N>, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   // Generic fallback overload (for dynamic descriptors)
   query<D extends QueryDescriptor>(
     desc: D,
     config?: QueryConfig<InferQueryData<S, D>>,
-  ): QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  ): QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   // Implementation
   query(
     desc: {
@@ -308,7 +308,7 @@ export class Figbird<
     config?: QueryConfig<unknown>,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ): any {
-    return new QueryRef<unknown, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
+    return new QueryRef<unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       desc: desc as QueryDescriptor,
       config: (config || {}) as QueryConfig<unknown>,
       queryStore: this.queryStore,
@@ -330,7 +330,7 @@ export class Figbird<
   }
 
   subscribeToStateChanges(
-    fn: (state: Map<string, ServiceState<AdapterMeta<A>>>) => void,
+    fn: (state: Map<string, ServiceState<AdapterFindMeta<A>>>) => void,
   ): () => void {
     return this.queryStore.subscribeToStateChanges(fn)
   }
@@ -661,7 +661,7 @@ class QueryStore<
     }
   }
 
-  #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta>> {
+  #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta | undefined>> {
     const query = this.#getQuery(queryId)
     if (!query) {
       return Promise.reject(new Error('Query not found'))
@@ -1029,13 +1029,20 @@ class QueryStore<
     })
   }
 
-  #fetched({ queryId, result }: { queryId: string; result: QueryResponse<unknown, TMeta> }): void {
+  #fetched({
+    queryId,
+    result,
+  }: {
+    queryId: string
+    result: QueryResponse<unknown, TMeta | undefined>
+  }): void {
     let shouldRefetch = false
 
     this.#transactOverService(queryId, (service, query) => {
       if (!query) return
 
-      const { data, meta } = result
+      const data = result.data
+      const meta = (result as { meta?: TMeta }).meta
       const items = Array.isArray(data) ? data : [data]
       const getId = (item: unknown) => this.#adapter.getId(item)
 

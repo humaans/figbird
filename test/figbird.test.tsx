@@ -119,7 +119,7 @@ interface NoteListProps {
     status: QueryStatus
     data: Note | Note[] | null
     isFetching: boolean
-    meta: Record<string, unknown>
+    meta?: Record<string, unknown>
     refetch: () => void
   }
   keyField?: string
