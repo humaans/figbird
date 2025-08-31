@@ -40,19 +40,18 @@ export interface UseMutationResult<
  * by the caller. As you create/update/patch/remove
  * entities using this helper, the entities cache gets updated.
  *
+ * Returns untyped data. For type-safe mutations, use createHooks(figbird).
+ *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation<
-  TItem = Record<string, unknown>,
-  TCreate = Partial<TItem>,
-  TUpdate = TItem,
-  TPatch = Partial<TItem>,
->(serviceName: string): UseMutationResult<TItem, TCreate, TUpdate, TPatch> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function useMutation(serviceName: string): UseMutationResult<any, any, any, any> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
 
-  const [state, dispatch] = useReducer(mutationReducer<TItem | TItem[]>, {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [state, dispatch] = useReducer(mutationReducer<any>, {
     status: 'idle',
     data: null,
     error: null,

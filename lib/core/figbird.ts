@@ -6,7 +6,7 @@ import type {
   QueryResponse,
 } from '../adapters/adapter.js'
 import { hashObject } from './hash.js'
-import type { AnySchema, Schema } from './schema.js'
+import type { AnySchema, Schema, ServiceItem, ServiceNames } from './schema.js'
 
 /**
  * Event types supported by Figbird
@@ -160,6 +160,25 @@ export type CombinedConfig<TItem = unknown> = CombinedGetConfig<TItem> | Combine
 export type ItemMatcher<T> = (item: T) => boolean
 
 /**
+ * Helper type to infer data type from schema and query descriptor
+ */
+type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  : D extends { serviceName: infer N; method: 'find' }
+    ? N extends ServiceNames<S>
+      ? ServiceItem<S, N>[]
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+    : D extends { serviceName: infer N; method: 'get' }
+      ? N extends ServiceNames<S>
+        ? ServiceItem<S, N>
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          any
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+
+/**
     Usage:
 
     const adapter = new FeathersAdapter({ feathers })
@@ -212,11 +231,11 @@ export class Figbird<
     return this.queryStore.getState()
   }
 
-  query<T>(
-    desc: QueryDescriptor,
-    config?: QueryConfig<T>,
-  ): QueryRef<T, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>> {
-    return new QueryRef<T, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
+  query<D extends QueryDescriptor>(
+    desc: D,
+    config?: QueryConfig<InferQueryData<S, D>>,
+  ): QueryRef<InferQueryData<S, D>, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>> {
+    return new QueryRef<InferQueryData<S, D>, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
       desc,
       config: config || {},
       queryStore: this.queryStore,
