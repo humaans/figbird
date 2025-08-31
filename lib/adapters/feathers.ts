@@ -45,7 +45,7 @@ type Timestamp = string | number | Date | null | undefined
  * Feathers service method parameters
  * Generic over TQuery for type-safe query handling
  */
-export interface FeathersParams<TQuery extends Record<string, unknown> = Record<string, unknown>> {
+export interface FeathersParams<TQuery = Record<string, unknown>> {
   /**
    * Query fields for filtering, sorting, pagination, etc.
    * When used with Figbird schemas, the query type is inferred per service.
@@ -118,7 +118,7 @@ function toEpochMs(ts: Timestamp): number | null {
   return ts instanceof Date ? ts.getTime() : null
 }
 
-export class FeathersAdapter<TQuery extends Record<string, unknown> = Record<string, unknown>>
+export class FeathersAdapter<TQuery = Record<string, unknown>>
   implements Adapter<FeathersParams<TQuery>, FeathersFindMeta, TQuery>
 {
   feathers: FeathersClient

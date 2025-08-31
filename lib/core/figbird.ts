@@ -250,9 +250,7 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
   AdapterParams<A>,
   'query'
 > &
-  (AdapterParams<A> extends { query?: infer P }
-    ? { query?: ServiceQuery<S, N> & (P extends Record<string, unknown> ? P : unknown) }
-    : unknown)
+  (AdapterParams<A> extends { query?: infer P } ? { query?: ServiceQuery<S, N> & P } : unknown)
 
 /**
     Usage:
@@ -280,11 +278,7 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
 export class Figbird<
   S extends Schema = AnySchema,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  A extends Adapter<any, any, any> = Adapter<
-    unknown,
-    Record<string, unknown>,
-    Record<string, unknown>
-  >,
+  A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 > {
   adapter: A
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
@@ -453,7 +447,7 @@ class QueryRef<
   S extends Schema = AnySchema, // Add S here
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = Record<string, unknown>,
 > {
   #queryId: string
   #desc: QueryDescriptor
@@ -518,7 +512,7 @@ class QueryStore<
   S extends Schema = AnySchema,
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = Record<string, unknown>,
 > {
   #adapter: Adapter<TParams, TMeta, TQuery>
 

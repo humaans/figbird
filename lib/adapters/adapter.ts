@@ -25,7 +25,7 @@ export interface EventHandlers {
 export interface Adapter<
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = Record<string, unknown>,
 > {
   // Required core methods
   get(

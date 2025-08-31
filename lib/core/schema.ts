@@ -12,13 +12,13 @@ export interface ServiceTypeDefinition {
   create?: unknown
   update?: unknown
   patch?: unknown
-  query?: Record<string, unknown>
+  query?: unknown
 }
 
 // Internal service representation - matches expected type structure
 export interface Service<
   TItem = Record<string, unknown>,
-  TQuery extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = Record<string, unknown>,
   TName extends string = string,
 > {
   readonly name: TName
@@ -73,12 +73,12 @@ export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
 
 // Base schema interface - flexible to preserve specific service types
 export interface Schema {
-  services: Record<string, Service<unknown, Record<string, unknown>, string>>
+  services: Record<string, Service<unknown, unknown, string>>
 }
 
 // Phase 2: Create a schema with services object map (preserves literal keys)
 export function createSchema<
-  const TServiceMap extends Record<string, Service<unknown, Record<string, unknown>, string>>,
+  const TServiceMap extends Record<string, Service<unknown, unknown, string>>,
 >(config: {
   services: TServiceMap
 }): {
@@ -146,7 +146,7 @@ export type Query<S> = S extends { [$phantom]?: { query: infer Q } } ? Q : Recor
 export function findServiceByName<S extends Schema>(
   schema: S | undefined,
   name: string,
-): Service<unknown, Record<string, unknown>, string> | undefined {
+): Service<unknown, unknown, string> | undefined {
   if (!schema) return undefined
   return schema.services[name]
 }
@@ -164,4 +164,4 @@ export interface AnySchema extends Schema {
 }
 
 // Type for untyped services (fallback for services not in schema)
-export type UntypedService = Service<Record<string, unknown>, Record<string, unknown>, string>
+export type UntypedService = Service<Record<string, unknown>, unknown, string>

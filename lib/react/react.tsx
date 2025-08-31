@@ -8,11 +8,7 @@ import type { AnySchema, Schema } from '../core/schema.js'
 function createFigbirdContext<
   S extends Schema = AnySchema,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  A extends Adapter<any, any, any> = Adapter<
-    unknown,
-    Record<string, unknown>,
-    Record<string, unknown>
-  >,
+  A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 >() {
   return createContext<Figbird<S, A> | undefined>(undefined)
 }
@@ -23,11 +19,7 @@ const FigbirdContext = createFigbirdContext()
 export function useFigbird<
   S extends Schema = AnySchema,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  A extends Adapter<any, any, any> = Adapter<
-    unknown,
-    Record<string, unknown>,
-    Record<string, unknown>
-  >,
+  A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 >(): Figbird<S, A> {
   const context = useContext(FigbirdContext as React.Context<Figbird<S, A> | undefined>)
   if (!context) {
@@ -39,11 +31,7 @@ export function useFigbird<
 interface FigbirdProviderProps<
   S extends Schema = AnySchema,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  A extends Adapter<any, any, any> = Adapter<
-    unknown,
-    Record<string, unknown>,
-    Record<string, unknown>
-  >,
+  A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 > {
   figbird: Figbird<S, A>
   children: ReactNode
@@ -52,11 +40,7 @@ interface FigbirdProviderProps<
 export function FigbirdProvider<
   S extends Schema = AnySchema,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  A extends Adapter<any, any, any> = Adapter<
-    unknown,
-    Record<string, unknown>,
-    Record<string, unknown>
-  >,
+  A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 >({ figbird, children }: FigbirdProviderProps<S, A>) {
   // Cast the context to maintain type safety
   const TypedContext = FigbirdContext as React.Context<Figbird<S, A> | undefined>
