@@ -32,7 +32,7 @@ export { matcher } from './adapters/matcher.js'
 // Adapter interface and types
 export type {
   Adapter,
-  AdapterMeta,
+  AdapterFindMeta,
   AdapterParams,
   AdapterQuery,
   EventHandlers,

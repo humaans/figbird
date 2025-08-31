@@ -69,9 +69,8 @@ export type TasksMetaLimit = typeof tasksResult.meta.limit
 export type TasksMetaSkip = typeof tasksResult.meta.skip
 
 export type ProjectData = typeof projectResult.data
-export type ProjectMeta = typeof projectResult.meta
 
-// Test that meta type is always inferred from the adapter
+// Test that meta type for find is always inferred from the adapter
 // Since we're using FeathersAdapter, it will always be FindMeta
 const feathersNoMeta = {} as FeathersClient
 const adapterNoExplicitMeta = new FeathersAdapter(feathersNoMeta)

@@ -4,14 +4,16 @@ import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/fig
 import { findServiceByName } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
-export interface QueryResult<T, TMeta extends Record<string, unknown> = Record<string, unknown>> {
+type BaseQueryResult<T> = {
   data: T | null
-  meta: TMeta
   status: QueryStatus
   isFetching: boolean
   error: Error | null
   refetch: () => void
 }
+
+export type QueryResult<T, TMeta = undefined> = BaseQueryResult<T> &
+  (TMeta extends undefined ? Record<never, never> : { meta: TMeta })
 
 /**
  * Hook for fetching a single item by ID.
@@ -23,7 +25,7 @@ export function useGet(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params: Record<string, any> = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): QueryResult<any, Record<string, unknown>> {
+): QueryResult<any> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
@@ -35,7 +37,7 @@ export function useGet(
     ...params,
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return useQuery<any, Record<string, unknown>>(desc, config)
+  return useQuery<any, Record<string, unknown>>(desc, config) as QueryResult<any>
 }
 
 /**

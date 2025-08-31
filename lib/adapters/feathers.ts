@@ -190,9 +190,10 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
     serviceName: string,
     resourceId: string | number,
     params?: FeathersParams<TDomainQuery>,
-  ): Promise<QueryResponse<unknown, FindMeta>> {
+  ): Promise<QueryResponse<unknown, undefined>> {
     const res = await this.#service(serviceName).get(resourceId, params as FeathersParams)
-    return { data: res, meta: { total: 1, limit: 1, skip: 0 } }
+    // Feathers does not provide useful meta for get; return only the item
+    return { data: res }
   }
 
   async #_find(
