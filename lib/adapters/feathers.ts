@@ -16,9 +16,13 @@ type Timestamp = string | number | Date | null | undefined
  * Feathers control fields for queries
  */
 export type FeathersControls = {
+  /** Maximum number of items to return per page. */
   $limit?: number
+  /** Number of items to skip (offset) for pagination. */
   $skip?: number
+  /** Sort specification, e.g. { createdAt: -1 } for descending. */
   $sort?: Record<string, 1 | -1>
+  /** Optional list of fields to include in the response. */
   $select?: string[]
 }
 
@@ -26,8 +30,11 @@ export type FeathersControls = {
  * Feathers query parameters (domain query fields)
  */
 export interface FeathersQuery {
+  /** Combine subqueries using a logical OR. */
   $or?: Array<Record<string, unknown>>
+  /** Combine subqueries using a logical AND. */
   $and?: Array<Record<string, unknown>>
+  /** Additional domain-specific fields are allowed. */
   [key: string]: unknown
 }
 
@@ -69,9 +76,16 @@ export type FeathersFullQuery<TDomainQuery extends Record<string, unknown> = Fea
  * Now generic over TDomainQuery for type-safe query handling
  */
 export interface FeathersParams<TDomainQuery extends Record<string, unknown> = FeathersQuery> {
+  /**
+   * Domain query fields combined with Feathers controls (e.g. $limit, $sort).
+   * When used with Figbird schemas, domain fields are inferred per service.
+   */
   query?: TDomainQuery & FeathersControls
+  /** Optional connection information passed through to the Feathers client. */
   connection?: unknown
+  /** Optional headers to include with the request. */
   headers?: Record<string, string>
+  /** Any additional adapter-specific params are allowed. */
   [key: string]: unknown
 }
 
@@ -79,9 +93,13 @@ export interface FeathersParams<TDomainQuery extends Record<string, unknown> = F
  * Feathers-specific metadata for find operations
  */
 export interface FeathersFindMeta {
+  /** Total number of items matching the query (may be -1 if unknown). */
   total: number
+  /** Page size used for the current result set. */
   limit: number
+  /** Number of items skipped (offset) for this page. */
   skip: number
+  /** Additional adapter-specific metadata. */
   [key: string]: unknown
 }
 

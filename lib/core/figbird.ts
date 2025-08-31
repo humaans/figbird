@@ -105,12 +105,37 @@ export interface FindDescriptor {
 export type QueryDescriptor = GetDescriptor | FindDescriptor
 
 /**
- * Base query configuration shared by all query types
+ * Base query configuration shared by all query types.
+ * Add these alongside adapter params when calling useFind/useGet.
  */
 interface BaseQueryConfig<TItem = unknown> {
+  /**
+   * Skip fetching entirely. Useful for conditional queries.
+   * When true, status is 'idle' and no network request is made.
+   */
   skip?: boolean
+
+  /**
+   * Realtime strategy for handling events:
+   * - 'merge' (default): merge incoming events into cached results
+   * - 'refetch': refetch the entire query when an event is received
+   * - 'disabled': ignore realtime events for this query
+   */
   realtime?: 'merge' | 'refetch' | 'disabled'
+
+  /**
+   * Fetch policy determines how cache vs network is used:
+   * - 'swr' (default): stale-while-revalidate (show cache, refetch in background)
+   * - 'cache-first': prefer cache and avoid network if data is present
+   * - 'network-only': always fetch on mount
+   */
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
+
+  /**
+   * Optional custom matcher factory. Only used in realtime 'merge' mode.
+   * Receives the prepared query object; returns a predicate for items.
+   * Provide this if your adapter needs custom client-side matching logic.
+   */
   matcher?: (query: unknown) => (item: TItem) => boolean
 }
 
@@ -123,6 +148,10 @@ export type GetQueryConfig<TItem = unknown> = BaseQueryConfig<TItem>
  * Configuration for find queries
  */
 export interface FindQueryConfig<TItem = unknown> extends BaseQueryConfig<TItem> {
+  /**
+   * Fetches all pages by iterating until completion, aggregating results.
+   * Honors adapter pagination controls (e.g. $limit/$skip for Feathers).
+   */
   allPages?: boolean
 }
 
