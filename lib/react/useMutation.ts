@@ -70,8 +70,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
     async (method: MutationMethod, ...args: unknown[]): Promise<any> => {
       dispatch({ type: 'mutating' })
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const item = await figbird.mutate<any>({
+        const item = await figbird.mutate({
           serviceName: actualServiceName,
           method,
           args,

@@ -179,6 +179,44 @@ type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends Any
         any
 
 /**
+ * Helper type to infer data type from schema and mutation descriptor
+ */
+type InferMutationData<S extends Schema, D extends MutationDescriptor> = S extends AnySchema
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  : D extends { serviceName: infer N; method: 'create' }
+    ? N extends ServiceNames<S>
+      ? ServiceItem<S, N>
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+    : D extends { serviceName: infer N; method: 'update' }
+      ? N extends ServiceNames<S>
+        ? ServiceItem<S, N>
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          any
+      : D extends { serviceName: infer N; method: 'patch' }
+        ? N extends ServiceNames<S>
+          ? ServiceItem<S, N>
+          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            any
+        : D extends { serviceName: infer N; method: 'remove' }
+          ? N extends ServiceNames<S>
+            ? ServiceItem<S, N>
+            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              any
+          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            any
+
+/**
+ * Descriptor for mutation operations
+ */
+export interface MutationDescriptor {
+  serviceName: string
+  method: 'create' | 'update' | 'patch' | 'remove'
+  args: unknown[]
+}
+
+/**
     Usage:
 
     const adapter = new FeathersAdapter({ feathers })
@@ -207,7 +245,7 @@ export class Figbird<
   >,
 > {
   adapter: A
-  queryStore: QueryStore<AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  queryStore: QueryStore<S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
   schema: S | undefined
 
   constructor({
@@ -221,7 +259,7 @@ export class Figbird<
   }) {
     this.adapter = adapter
     this.schema = schema
-    this.queryStore = new QueryStore<AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
+    this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
       adapter,
       eventBatchProcessingInterval: eventBatchProcessingInterval,
     })
@@ -234,24 +272,18 @@ export class Figbird<
   query<D extends QueryDescriptor>(
     desc: D,
     config?: QueryConfig<InferQueryData<S, D>>,
-  ): QueryRef<InferQueryData<S, D>, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>> {
-    return new QueryRef<InferQueryData<S, D>, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
+  ): QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>> {
+    return new QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
       desc,
       config: config || {},
       queryStore: this.queryStore,
     })
   }
 
-  mutate<T = unknown>({
-    serviceName,
-    method,
-    args,
-  }: {
-    serviceName: string
-    method: string
-    args: unknown[]
-  }): Promise<T> {
-    return this.queryStore.mutate({ serviceName, method, args })
+  mutate<D extends MutationDescriptor>(
+    desc: D,
+  ): Promise<InferMutationData<S, D>> {
+    return this.queryStore.mutate(desc)
   }
 
   subscribeToStateChanges(
@@ -327,6 +359,7 @@ export function splitConfig<TItem = unknown>(
 // references all the state from the shared figbird query state
 class QueryRef<
   T,
+  S extends Schema = AnySchema, // Add S here
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery extends Record<string, unknown> = Record<string, unknown>,
@@ -334,7 +367,7 @@ class QueryRef<
   #queryId: string
   #desc: QueryDescriptor
   #config: QueryConfig<T>
-  #queryStore: QueryStore<TParams, TMeta, TQuery>
+  #queryStore: QueryStore<S, TParams, TMeta, TQuery>
 
   constructor({
     desc,
@@ -343,7 +376,7 @@ class QueryRef<
   }: {
     desc: QueryDescriptor
     config: QueryConfig<T>
-    queryStore: QueryStore<TParams, TMeta, TQuery>
+    queryStore: QueryStore<S, TParams, TMeta, TQuery>
   }) {
     this.#queryId = `q/${hashObject({ desc, config })}`
     this.#desc = desc
@@ -380,6 +413,7 @@ class QueryRef<
 }
 
 class QueryStore<
+  S extends Schema = AnySchema,
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery extends Record<string, unknown> = Record<string, unknown>,
@@ -423,7 +457,7 @@ class QueryStore<
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
   }
 
-  materialize<T>(queryRef: QueryRef<T, TParams, TMeta, TQuery>): void {
+  materialize<T>(queryRef: QueryRef<T, S, TParams, TMeta, TQuery>): void {
     const { queryId, desc, config } = queryRef.details()
 
     if (!this.#getQuery(queryId)) {
@@ -602,15 +636,8 @@ class QueryStore<
     }
   }
 
-  mutate<T = unknown>({
-    serviceName,
-    method,
-    args,
-  }: {
-    serviceName: string
-    method: string
-    args: unknown[]
-  }): Promise<T> {
+  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+    const { serviceName, method, args } = desc
     const updaters: Record<string, (item: unknown) => void> = {
       create: item => this.#processEvent(serviceName, { type: 'created', item }),
       update: item => this.#processEvent(serviceName, { type: 'updated', item }),
@@ -620,7 +647,7 @@ class QueryStore<
 
     return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
       updaters[method]?.(item)
-      return item as T
+      return item as InferMutationData<S, D>
     })
   }
 
