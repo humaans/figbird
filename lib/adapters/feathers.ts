@@ -13,59 +13,29 @@ type Timestamp = string | number | Date | null | undefined
 // Feathers-specific types for the Feathers adapter
 
 /**
- * Feathers control fields for queries
- */
-export type FeathersControls = {
-  /** Maximum number of items to return per page. */
-  $limit?: number
-  /** Number of items to skip (offset) for pagination. */
-  $skip?: number
-  /** Sort specification, e.g. { createdAt: -1 } for descending. */
-  $sort?: Record<string, 1 | -1>
-  /** Optional list of fields to include in the response. */
-  $select?: string[]
-}
-
-/**
- * Feathers query parameters (domain query fields)
- */
-export interface FeathersQuery {
-  /** Combine subqueries using a logical OR. */
-  $or?: Array<Record<string, unknown>>
-  /** Combine subqueries using a logical AND. */
-  $and?: Array<Record<string, unknown>>
-  /** Additional domain-specific fields are allowed. */
-  [key: string]: unknown
-}
-
-/**
- * Convenience type that combines domain query with Feathers controls
- * Useful when you need the full query type including controls
- */
-export type FeathersFullQuery<TDomainQuery extends Record<string, unknown> = FeathersQuery> =
-  TDomainQuery & FeathersControls
-
-/**
- * Example usage with clean domain query types:
+ * Example usage with domain query types:
  * ```typescript
- * // In your schema, define only domain-specific query fields
+ * // In your schema, define your query fields including any Feathers controls you need
  * interface TodoQuery {
  *   completed?: boolean
  *   category?: string
  *   priority?: 'low' | 'medium' | 'high'
+ *   $limit?: number
+ *   $skip?: number
+ *   $sort?: Record<string, 1 | -1>
  * }
  *
- * // The adapter automatically adds Feathers controls
+ * // The adapter is generic over your query type
  * const adapter = new FeathersAdapter<TodoQuery>(feathers)
  *
- * // Users get full type safety without repeating control fields
+ * // Users get full type safety
  * const params: FeathersParams<TodoQuery> = {
  *   query: {
  *     completed: true,      // Domain field
  *     priority: 'high',     // Domain field
- *     $limit: 10,          // Control field (automatically available)
- *     $skip: 20,           // Control field (automatically available)
- *     $sort: { createdAt: -1 } // Control field (automatically available)
+ *     $limit: 10,          // Control field (if included in your type)
+ *     $skip: 20,           // Control field (if included in your type)
+ *     $sort: { createdAt: -1 } // Control field (if included in your type)
  *   }
  * }
  * ```
@@ -73,14 +43,14 @@ export type FeathersFullQuery<TDomainQuery extends Record<string, unknown> = Fea
 
 /**
  * Feathers service method parameters
- * Now generic over TDomainQuery for type-safe query handling
+ * Generic over TQuery for type-safe query handling
  */
-export interface FeathersParams<TDomainQuery extends Record<string, unknown> = FeathersQuery> {
+export interface FeathersParams<TQuery extends Record<string, unknown> = Record<string, unknown>> {
   /**
-   * Domain query fields combined with Feathers controls (e.g. $limit, $sort).
-   * When used with Figbird schemas, domain fields are inferred per service.
+   * Query fields for filtering, sorting, pagination, etc.
+   * When used with Figbird schemas, the query type is inferred per service.
    */
-  query?: TDomainQuery & FeathersControls
+  query?: TQuery
   /** Optional connection information passed through to the Feathers client. */
   connection?: unknown
   /** Optional headers to include with the request. */
@@ -148,8 +118,8 @@ function toEpochMs(ts: Timestamp): number | null {
   return ts instanceof Date ? ts.getTime() : null
 }
 
-export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = FeathersQuery>
-  implements Adapter<FeathersParams<TDomainQuery>, FeathersFindMeta, TDomainQuery>
+export class FeathersAdapter<TQuery extends Record<string, unknown> = Record<string, unknown>>
+  implements Adapter<FeathersParams<TQuery>, FeathersFindMeta, TQuery>
 {
   feathers: FeathersClient
   #idField: IdFieldType
@@ -158,15 +128,15 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   #defaultPageSizeWhenFetchingAll: number | undefined
 
   /**
-   * Helper to merge query controls while maintaining type safety
+   * Helper to merge query parameters while maintaining type safety
    */
-  #mergeQueryControls(
-    params: FeathersParams<TDomainQuery> | undefined,
-    controls: FeathersControls,
-  ): FeathersParams<TDomainQuery> {
+  #mergeQueryParams(
+    params: FeathersParams<TQuery> | undefined,
+    additionalQuery: Record<string, unknown>,
+  ): FeathersParams<TQuery> {
     return {
       ...params,
-      query: { ...params?.query, ...controls } as TDomainQuery & FeathersControls,
+      query: { ...params?.query, ...additionalQuery } as TQuery,
     }
   }
 
@@ -199,7 +169,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   async get(
     serviceName: string,
     resourceId: string | number,
-    params?: FeathersParams<TDomainQuery>,
+    params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown, undefined>> {
     const res = await this.#service(serviceName).get(resourceId, params as FeathersParams)
     // Feathers does not provide useful meta for get; return only the item
@@ -208,7 +178,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
 
   async #_find(
     serviceName: string,
-    params?: FeathersParams<TDomainQuery>,
+    params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const res = await this.#service(serviceName).find(params as FeathersParams)
     if (Array.isArray(res)) {
@@ -221,12 +191,13 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
 
   async find(
     serviceName: string,
-    params?: FeathersParams<TDomainQuery>,
+    params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
-    if (this.#defaultPageSize && !params?.query?.$limit) {
+    const queryLimit = (params?.query as Record<string, unknown>)?.$limit
+    if (this.#defaultPageSize && !queryLimit) {
       return this.#_find(
         serviceName,
-        this.#mergeQueryControls(params, { $limit: this.#defaultPageSize }),
+        this.#mergeQueryParams(params, { $limit: this.#defaultPageSize }),
       )
     }
     return this.#_find(serviceName, params)
@@ -234,12 +205,13 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
 
   async findAll(
     serviceName: string,
-    params?: FeathersParams<TDomainQuery>,
+    params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
+    const queryLimit = (params?.query as Record<string, unknown>)?.$limit
     const baseParams =
-      defaultPageSize && !params?.query?.$limit
-        ? this.#mergeQueryControls(params, { $limit: defaultPageSize })
+      defaultPageSize && !queryLimit
+        ? this.#mergeQueryParams(params, { $limit: defaultPageSize })
         : params || {}
 
     const result: QueryResponse<unknown[], FeathersFindMeta> = {
@@ -251,7 +223,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
     while (true) {
       const { data, meta } = await this.#_find(
         serviceName,
-        this.#mergeQueryControls(baseParams, { $skip }),
+        this.#mergeQueryParams(baseParams, { $skip }),
       )
 
       result.meta = { ...result.meta, ...meta }
@@ -328,7 +300,7 @@ export class FeathersAdapter<TDomainQuery extends Record<string, unknown> = Feat
   }
 
   matcher(
-    query: TDomainQuery | null | undefined,
+    query: TQuery | null | undefined,
     options?: PrepareQueryOptions,
   ): (item: unknown) => boolean {
     // Cast to Query type - the matcher function will validate and clean the query internally
