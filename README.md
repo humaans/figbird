@@ -19,7 +19,7 @@ Figbird now provides full TypeScript support for adapter-specific metadata. When
 ```typescript
 const { data, meta } = useFind('todos')
 // meta.total is typed as number | undefined
-// meta.limit is typed as number | undefined  
+// meta.limit is typed as number | undefined
 // meta.skip is typed as number | undefined
 ```
 
@@ -27,10 +27,10 @@ Create hooks with your adapter's meta type for full IntelliSense support:
 
 ```typescript
 import { createHooks, FeathersAdapter } from 'figbird'
-import type { FeathersFindMeta } from 'figbird'
+import type { FindMeta } from 'figbird'
 
-// Create typed hooks with FeathersFindMeta
-const { useFind, useGet } = createHooks<MySchema, FeathersFindMeta>()
+// Create typed hooks with FindMeta
+const { useFind, useGet } = createHooks<MySchema, FindMeta>()
 ```
 
 This feature is adapter-agnostic - custom adapters can provide their own metadata types for cursor-based pagination or other patterns.

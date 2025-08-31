@@ -61,7 +61,7 @@ export function ArticleList() {
   // All these properties are properly typed!
   const { meta } = articlesQuery
 
-  // TypeScript knows meta has FeathersFindMeta properties
+  // TypeScript knows meta has FindMeta properties
   const currentPage = meta.skip && meta.limit ? Math.floor(meta.skip / meta.limit) + 1 : 1
   const totalPages = meta.total && meta.limit ? Math.ceil(meta.total / meta.limit) : 1
   const hasNextPage = meta.total ? (meta.skip || 0) + (meta.limit || 0) < meta.total : false

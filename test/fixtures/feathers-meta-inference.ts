@@ -24,10 +24,10 @@ const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ schema, adapter })
 
-// Create hooks with figbird instance - meta type should be inferred as FeathersFindMeta
+// Create hooks with figbird instance - meta type should be inferred as FindMeta
 const { useFind, useGet } = createHooks(figbird)
 
-// Test that useFind returns QueryResult with FeathersFindMeta
+// Test that useFind returns QueryResult with FindMeta
 export const findResult = useFind('api/people')
 
 // Extract meta type for testing
