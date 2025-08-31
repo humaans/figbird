@@ -95,7 +95,8 @@ export function createHooks<F extends Figbird<any, any>>(
   function useTypedGet<N extends ServiceNames<S>>(
     serviceName: N,
     resourceId: string | number,
-    params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
+    params?: WithServiceQuery<S, N, TParams> &
+      Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
@@ -113,7 +114,8 @@ export function createHooks<F extends Figbird<any, any>>(
 
   function useTypedFind<N extends ServiceNames<S>>(
     serviceName: N,
-    params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
+    params?: WithServiceQuery<S, N, TParams> &
+      Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
