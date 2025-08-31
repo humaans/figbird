@@ -62,12 +62,12 @@ export type { QueryResult } from './react/useQuery.js'
 export type {
   FeathersClient,
   FeathersControls,
+  FeathersFindMeta,
   FeathersFullQuery,
   FeathersItem,
   FeathersParams,
   FeathersQuery,
   FeathersService,
-  FindMeta,
 } from './adapters/feathers.js'
 
 // Adapter options for creating custom adapters

@@ -27,10 +27,10 @@ Create hooks with your adapter's meta type for full IntelliSense support:
 
 ```typescript
 import { createHooks, FeathersAdapter } from 'figbird'
-import type { FindMeta } from 'figbird'
+import type { FeathersFindMeta } from 'figbird'
 
-// Create typed hooks with FindMeta
-const { useFind, useGet } = createHooks<MySchema, FindMeta>()
+// Create typed hooks with FeathersFindMeta
+const { useFind, useGet } = createHooks<MySchema, FeathersFindMeta>()
 ```
 
 This feature is adapter-agnostic - custom adapters can provide their own metadata types for cursor-based pagination or other patterns.

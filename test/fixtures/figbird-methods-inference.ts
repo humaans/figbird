@@ -20,7 +20,7 @@ const schema = createSchema({
   },
 })
 
-// Figbird instance with Feathers adapter (meta inferred as FindMeta)
+// Figbird instance with Feathers adapter (meta inferred as FeathersFindMeta)
 const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ schema, adapter })

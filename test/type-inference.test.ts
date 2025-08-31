@@ -93,7 +93,7 @@ test('useFind returns correct type for Person service', t => {
   t.is(serviceItemType, 'Person')
   t.is(
     peopleType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FindMeta>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
 })
 
@@ -127,11 +127,11 @@ test('type narrowing works correctly with multiple services', t => {
   // Test that useFind correctly narrows to specific types (no more unions!)
   t.is(
     peopleType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FindMeta>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
   t.is(
     tasksType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[], import("/Users/karolis/projects/figbird/lib/index").FindMeta>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
 
   // Verify type narrowing - ensure services don't cross-contaminate
@@ -139,10 +139,10 @@ test('type narrowing works correctly with multiple services', t => {
   t.not(personItemType, taskItemType, 'Person and Task item types should be distinct')
 })
 
-test('FindMeta type inference works correctly', t => {
+test('FeathersFindMeta type inference works correctly', t => {
   const fixturePath = join(__dirname, 'fixtures', 'feathers-meta-inference.ts')
 
-  // Check that find result has FindMeta type for meta
+  // Check that find result has FeathersFindMeta type for meta
   const findMetaType = getTypeAtPosition(fixturePath, 'FindMetaType')
   const findMetaTotal = getTypeAtPosition(fixturePath, 'FindMetaTotal')
   const findMetaLimit = getTypeAtPosition(fixturePath, 'FindMetaLimit')
@@ -156,7 +156,7 @@ test('FindMeta type inference works correctly', t => {
   const metaSkipType = getTypeAtPosition(fixturePath, 'MetaSkipType')
 
   // Verify that find meta has the FindMeta type
-  t.is(findMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FindMeta')
+  t.is(findMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
 
   // Verify that individual properties have the correct types
   t.is(findMetaTotal, 'number')
@@ -176,7 +176,7 @@ test('meta type is automatically inferred from Figbird instance', t => {
   const tasksDataType = getTypeAtPosition(fixturePath, 'TasksData')
   const projectDataType = getTypeAtPosition(fixturePath, 'ProjectData')
 
-  // Check that meta types are automatically inferred as FindMeta
+  // Check that meta types are automatically inferred as FeathersFindMeta
   const tasksMetaType = getTypeAtPosition(fixturePath, 'TasksMeta')
   // get no longer exposes meta by default
 
@@ -192,17 +192,20 @@ test('meta type is automatically inferred from Figbird instance', t => {
   t.is(tasksDataType, 'Task[] | null')
   t.is(projectDataType, 'Project | null')
 
-  // Verify that meta is automatically inferred as FindMeta for find
+  // Verify that meta is automatically inferred as FeathersFindMeta for find
   // without having to pass it explicitly to createHooks
-  t.is(tasksMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FindMeta')
+  t.is(tasksMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
 
   // Verify individual meta properties are typed correctly
   t.is(tasksMetaTotalType, 'number')
   t.is(tasksMetaLimitType, 'number')
   t.is(tasksMetaSkipType, 'number')
 
-  // Verify that meta type is always inferred from the adapter (FindMeta in this case)
-  t.is(backwardCompatMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FindMeta')
+  // Verify that meta type is always inferred from the adapter (FeathersFindMeta in this case)
+  t.is(
+    backwardCompatMetaType,
+    'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta',
+  )
 })
 
 test('combined params includes both QueryConfig and FeathersParams', t => {
@@ -247,11 +250,11 @@ test('Figbird methods infer types from schema (query, subscribe, mutate)', t => 
   // Query subscribe param should carry QueryState with inferred data + Feathers meta
   t.is(
     findSubscribeStateType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person[], import("/Users/karolis/projects/figbird/lib/index").FindMeta>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
   t.is(
     getSubscribeStateType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person, import("/Users/karolis/projects/figbird/lib/index").FindMeta>',
+    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person, import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
   )
 
   // Mutate create should resolve to Person
