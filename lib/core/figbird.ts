@@ -269,20 +269,54 @@ export class Figbird<
     return this.queryStore.getState()
   }
 
+  // Strongly-typed overloads for inference from serviceName and method
+  query<N extends ServiceNames<S>>(
+    desc: { serviceName: N; method: 'find'; params?: unknown },
+    config?: QueryConfig<ServiceItem<S, N>[]>,
+  ): QueryRef<ServiceItem<S, N>[], S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  query<N extends ServiceNames<S>>(
+    desc: {
+      serviceName: N
+      method: 'get'
+      resourceId: string | number
+      params?: unknown
+    },
+    config?: QueryConfig<ServiceItem<S, N>>,
+  ): QueryRef<ServiceItem<S, N>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  // Generic fallback overload (for dynamic descriptors)
   query<D extends QueryDescriptor>(
     desc: D,
     config?: QueryConfig<InferQueryData<S, D>>,
-  ): QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>> {
-    return new QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>(
-      {
-        desc,
-        config: config || {},
-        queryStore: this.queryStore,
-      },
-    )
+  ): QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
+  // Implementation
+  query(
+    desc: {
+      serviceName: string
+      method: 'find' | 'get'
+      resourceId?: string | number
+      params?: unknown
+    },
+    config?: QueryConfig<unknown>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): any {
+    return new QueryRef<unknown, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
+      desc: desc as QueryDescriptor,
+      config: (config || {}) as QueryConfig<unknown>,
+      queryStore: this.queryStore,
+    })
   }
 
-  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+  // Strongly-typed overload for mutation return types based on service
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'create' | 'update' | 'patch' | 'remove'
+    args: unknown[]
+  }): Promise<ServiceItem<S, N>>
+  // Generic fallback overload (for dynamic descriptors)
+  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>>
+  // Implementation
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mutate(desc: MutationDescriptor): Promise<any> {
     return this.queryStore.mutate(desc)
   }
 

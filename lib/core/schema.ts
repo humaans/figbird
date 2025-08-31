@@ -157,7 +157,11 @@ export function hasSchema<S extends Schema>(schema: S | undefined): schema is S 
 }
 
 // Default schema type when no schema is provided
-export type AnySchema = Schema
+// Use a branded subtype of Schema so we can detect "untyped schema" in conditional types
+declare const $anySchemaBrand: unique symbol
+export interface AnySchema extends Schema {
+  readonly [$anySchemaBrand]: 'AnySchema'
+}
 
 // Type for untyped services (fallback for services not in schema)
 export type UntypedService = Service<Record<string, unknown>, Record<string, unknown>, string>
