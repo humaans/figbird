@@ -4,11 +4,6 @@ import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/fig
 import { findServiceByName } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
-/**
- * Combined params type that includes both Figbird's QueryConfig and adapter params
- */
-type CombinedParams<TParams, TItem = unknown> = TParams & Partial<QueryConfig<TItem>>
-
 export interface QueryResult<T, TMeta extends Record<string, unknown> = Record<string, unknown>> {
   data: T | null
   meta: TMeta
@@ -20,56 +15,50 @@ export interface QueryResult<T, TMeta extends Record<string, unknown> = Record<s
 
 /**
  * Hook for fetching a single item by ID.
- *
- * @template T - The type of the item to fetch. Defaults to `any` for backward compatibility.
- * For better type safety, explicitly provide a type parameter: `useGet<MyItemType>('service', id)`
+ * Returns untyped data. For type-safe queries, use createHooks(figbird).
  */
-export function useGet<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  T = any,
-  TParams = Record<string, unknown>,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
->(
+export function useGet(
   serviceName: string,
   resourceId: string | number,
-  params: CombinedParams<TParams, T> = {} as CombinedParams<TParams, T>,
-): QueryResult<T, TMeta> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params: Record<string, any> = {},
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): QueryResult<any, Record<string, unknown>> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
-  const { desc, config } = splitConfig<T>({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { desc, config } = splitConfig<any>({
     serviceName: actualServiceName,
     method: 'get' as const,
     resourceId,
     ...params,
   })
-  return useQuery<T, TMeta>(desc, config)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return useQuery<any, Record<string, unknown>>(desc, config)
 }
 
 /**
  * Hook for fetching multiple items with optional query parameters.
- *
- * @template T - The type of the result array. Defaults to `any[]` for backward compatibility.
- * For better type safety, explicitly provide a type parameter: `useFind<MyItemType[]>('service', params)`
+ * Returns untyped data. For type-safe queries, use createHooks(figbird).
  */
-export function useFind<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  T = any[],
-  TParams = Record<string, unknown>,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
->(
+export function useFind(
   serviceName: string,
-  params: CombinedParams<TParams, T> = {} as CombinedParams<TParams, T>,
-): QueryResult<T, TMeta> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params: Record<string, any> = {},
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): QueryResult<any[], Record<string, unknown>> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
-  const { desc, config } = splitConfig<T>({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { desc, config } = splitConfig<any[]>({
     serviceName: actualServiceName,
     method: 'find' as const,
     ...params,
   })
-  return useQuery<T, TMeta>(desc, config)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return useQuery<any[], Record<string, unknown>>(desc, config)
 }
 
 function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
@@ -110,10 +99,11 @@ export function useQuery<T, TMeta extends Record<string, unknown> = Record<strin
   // the q.subscribe and q.getSnapshot stable and avoid unsubbing and resubbing
   // you don't need to do this outside React where you can more easily create a
   // stable reference to a query and use it for as long as you want
-  const _q = figbird.query<T>(desc, {
+  const _q = figbird.query(desc, {
     ...config,
     ...(config.fetchPolicy === 'network-only' ? { uid: uniqueId } : {}),
-  })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any
 
   // a bit of React foo to create stable fn references
   const q = useMemo(() => _q, [_q.hash()])

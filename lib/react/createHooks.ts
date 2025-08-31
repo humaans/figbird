@@ -119,12 +119,12 @@ export function createHooks<F extends Figbird<any, any>>(
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    return useBaseMutation<
+    return useBaseMutation(actualServiceName) as UseMutationResult<
       ServiceItem<S, N>,
       ServiceCreate<S, N>,
       ServiceUpdate<S, N>,
       ServicePatch<S, N>
-    >(actualServiceName)
+    >
   }
 
   return {
