@@ -7,6 +7,7 @@ import type {
   ServiceNames,
   ServicePatch,
   ServiceUpdate,
+  ServiceQuery,
 } from '../core/schema.js'
 import { findServiceByName } from '../core/schema.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
@@ -17,6 +18,15 @@ import { useQuery, type QueryResult } from './useQuery.js'
  * Using a union of call signatures (one per service) gives the best inference:
  * passing a literal service name narrows the return type to that service.
  */
+// Narrow adapter params `query` by the service domain query type while preserving adapter controls
+type WithServiceQuery<S extends Schema, N extends ServiceNames<S>, TParams> = Omit<
+  TParams,
+  'query'
+> &
+  (TParams extends { query?: infer P }
+    ? { query?: ServiceQuery<S, N> & (P extends Record<string, unknown> ? P : unknown) }
+    : unknown)
+
 type UseGetForSchema<
   S extends Schema,
   TParams = unknown,
@@ -24,7 +34,7 @@ type UseGetForSchema<
 > = <N extends ServiceNames<S>>(
   serviceName: N,
   resourceId: string | number,
-  params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
+  params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
 ) => QueryResult<ServiceItem<S, N>, TMeta>
 
 type UseFindForSchema<
@@ -33,7 +43,7 @@ type UseFindForSchema<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 > = <N extends ServiceNames<S>>(
   serviceName: N,
-  params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
+  params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
 ) => QueryResult<ServiceItem<S, N>[], TMeta>
 
 type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
@@ -90,7 +100,7 @@ export function createHooks<F extends Figbird<any, any>>(
   function useTypedGet<N extends ServiceNames<S>>(
     serviceName: N,
     resourceId: string | number,
-    params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
+    params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
@@ -104,7 +114,7 @@ export function createHooks<F extends Figbird<any, any>>(
 
   function useTypedFind<N extends ServiceNames<S>>(
     serviceName: N,
-    params?: TParams & Partial<QueryConfig<ServiceItem<S, N>>>,
+    params?: WithServiceQuery<S, N, TParams> & Partial<QueryConfig<ServiceItem<S, N>>>,
   ) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
