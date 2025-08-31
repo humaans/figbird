@@ -233,7 +233,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>>
         data.length === 0 ||
         data.length < meta.limit ||
         // allow total to be -1 to indicate that total will not be available on this endpoint
-        (meta.total >= 0 && result.data.length >= meta.total)
+        (meta.total > 0 && result.data.length >= meta.total)
 
       if (done) return result
 
