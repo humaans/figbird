@@ -219,7 +219,7 @@ test('React hooks provide typed query in matcher', async t => {
       return <div>Loading...</div>
     }
 
-    if (todos.status === 'success' && todos.data) {
+    if (todos.status === 'success') {
       return (
         <div>
           {todos.data.map(todo => (

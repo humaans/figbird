@@ -273,7 +273,7 @@ test('React hooks work with locked-down query types', async t => {
       return <div>Loading...</div>
     }
 
-    if (people.status === 'success' && people.data) {
+    if (people.status === 'success') {
       return (
         <div>
           {people.data.map(person => (
