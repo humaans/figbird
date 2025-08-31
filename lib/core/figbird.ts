@@ -6,7 +6,7 @@ import type {
   QueryResponse,
 } from '../adapters/adapter.js'
 import { hashObject } from './hash.js'
-import type { AnySchema, Schema, ServiceItem, ServiceNames } from './schema.js'
+import type { AnySchema, Schema, ServiceItem, ServiceNames, ServiceQuery } from './schema.js'
 
 /**
  * Event types supported by Figbird
@@ -216,6 +216,15 @@ export interface MutationDescriptor {
   args: unknown[]
 }
 
+// Helper to specialize adapter params' `query` by service-level domain query
+type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A extends Adapter> = Omit<
+  AdapterParams<A>,
+  'query'
+> &
+  (AdapterParams<A> extends { query?: infer P }
+    ? { query?: ServiceQuery<S, N> & (P extends Record<string, unknown> ? P : unknown) }
+    : unknown)
+
 /**
     Usage:
 
@@ -271,7 +280,7 @@ export class Figbird<
 
   // Strongly-typed overloads for inference from serviceName and method
   query<N extends ServiceNames<S>>(
-    desc: { serviceName: N; method: 'find'; params?: unknown },
+    desc: { serviceName: N; method: 'find'; params?: ParamsWithServiceQuery<S, N, A> },
     config?: QueryConfig<ServiceItem<S, N>[]>,
   ): QueryRef<ServiceItem<S, N>[], S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
   query<N extends ServiceNames<S>>(
@@ -279,7 +288,7 @@ export class Figbird<
       serviceName: N
       method: 'get'
       resourceId: string | number
-      params?: unknown
+      params?: ParamsWithServiceQuery<S, N, A>
     },
     config?: QueryConfig<ServiceItem<S, N>>,
   ): QueryRef<ServiceItem<S, N>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>
