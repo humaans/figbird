@@ -299,12 +299,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>>
     return nextMs < currMs
   }
 
-  matcher(
-    query: TQuery | null | undefined,
-    options?: PrepareQueryOptions,
-  ): (item: unknown) => boolean {
+  matcher(query: TQuery | undefined, options?: PrepareQueryOptions): (item: unknown) => boolean {
     // Cast to Query type - the matcher function will validate and clean the query internally
-    return matcher(query as Query | null | undefined, options)
+    return matcher(query as Query | undefined, options)
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {

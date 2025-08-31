@@ -49,7 +49,7 @@ export interface Adapter<
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 
   // Matcher is typed with TQuery but works with unknown items
-  matcher(query: TQuery | null | undefined, options?: unknown): (item: unknown) => boolean
+  matcher(query: TQuery | undefined, options?: unknown): (item: unknown) => boolean
 
   // Meta transformation methods
   itemAdded(meta: TMeta): TMeta

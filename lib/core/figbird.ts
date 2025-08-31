@@ -610,11 +610,11 @@ class QueryStore<
       return () => false
     }
 
-    const query = (desc.params as Record<string, unknown>)?.query || null
+    const query = (desc.params as Record<string, unknown>)?.query || undefined
     if (config.matcher) {
       return config.matcher(query)
     }
-    return this.#adapter.matcher(query as TQuery | null) as ItemMatcher<T>
+    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<T>
   }
 
   #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {

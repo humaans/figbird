@@ -44,9 +44,9 @@ export const OPERATORS = ['$in', '$nin', '$lt', '$lte', '$gt', '$gte', '$ne', '$
 
 // Removes special filters from the `query` parameters
 export function prepareQuery(
-  query: Query | null | undefined,
+  query: Query | undefined,
   options: PrepareQueryOptions = {},
-): Query | null | undefined {
+): Query | undefined {
   if (!query) return query
   const { filters: additionalFilters = [], operators: additionalOperators = [] } = options
   return cleanQuery(
@@ -61,7 +61,7 @@ function isObject(obj: unknown): obj is Query {
 }
 
 export function matcher<T>(
-  query: Query | null | undefined,
+  query: Query | undefined,
   options?: PrepareQueryOptions,
 ): (item: T) => boolean {
   if (!query || Object.keys(query).length === 0) return () => true
