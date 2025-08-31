@@ -273,16 +273,16 @@ export class Figbird<
     desc: D,
     config?: QueryConfig<InferQueryData<S, D>>,
   ): QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>> {
-    return new QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>({
-      desc,
-      config: config || {},
-      queryStore: this.queryStore,
-    })
+    return new QueryRef<InferQueryData<S, D>, S, AdapterParams<A>, AdapterMeta<A>, AdapterQuery<A>>(
+      {
+        desc,
+        config: config || {},
+        queryStore: this.queryStore,
+      },
+    )
   }
 
-  mutate<D extends MutationDescriptor>(
-    desc: D,
-  ): Promise<InferMutationData<S, D>> {
+  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
     return this.queryStore.mutate(desc)
   }
 
