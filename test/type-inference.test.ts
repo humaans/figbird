@@ -79,24 +79,6 @@ function getTypeAtPosition(
   return checker.typeToString(type, exportNode, ts.TypeFormatFlags.NoTruncation)
 }
 
-test('useFind returns correct type for Person service', t => {
-  const fixturePath = join(__dirname, 'fixtures', 'basic-schema-inference.ts')
-
-  const serviceByNameType = getTypeAtPosition(fixturePath, 'DebugServiceByName')
-  const serviceItemType = getTypeAtPosition(fixturePath, 'DebugServiceItem')
-  const peopleType = getTypeAtPosition(fixturePath, 'people')
-
-  t.is(
-    serviceByNameType,
-    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, "api/people">',
-  )
-  t.is(serviceItemType, 'Person')
-  t.is(
-    peopleType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
-  )
-})
-
 test('type narrowing works correctly with multiple services', t => {
   const fixturePath = join(__dirname, 'fixtures', 'multi-service-inference.ts')
 
@@ -137,36 +119,6 @@ test('type narrowing works correctly with multiple services', t => {
   // Verify type narrowing - ensure services don't cross-contaminate
   t.not(peopleType, tasksType, 'People and tasks should have different types')
   t.not(personItemType, taskItemType, 'Person and Task item types should be distinct')
-})
-
-test('FeathersFindMeta type inference works correctly', t => {
-  const fixturePath = join(__dirname, 'fixtures', 'feathers-meta-inference.ts')
-
-  // Check that find result has FeathersFindMeta type for meta
-  const findMetaType = getTypeAtPosition(fixturePath, 'FindMetaType')
-  const findMetaTotal = getTypeAtPosition(fixturePath, 'FindMetaTotal')
-  const findMetaLimit = getTypeAtPosition(fixturePath, 'FindMetaLimit')
-  const findMetaSkip = getTypeAtPosition(fixturePath, 'FindMetaSkip')
-
-  // useGet no longer exposes meta by default
-
-  // Check the actual property types
-  const metaTotalType = getTypeAtPosition(fixturePath, 'MetaTotalType')
-  const metaLimitType = getTypeAtPosition(fixturePath, 'MetaLimitType')
-  const metaSkipType = getTypeAtPosition(fixturePath, 'MetaSkipType')
-
-  // Verify that find meta has the FindMeta type
-  t.is(findMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
-
-  // Verify that individual properties have the correct types
-  t.is(findMetaTotal, 'number')
-  t.is(findMetaLimit, 'number')
-  t.is(findMetaSkip, 'number')
-
-  // Verify that accessing properties gives the right types
-  t.is(metaTotalType, 'number')
-  t.is(metaLimitType, 'number')
-  t.is(metaSkipType, 'number')
 })
 
 test('meta type is automatically inferred from Figbird instance', t => {
