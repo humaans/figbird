@@ -49,10 +49,6 @@ const figbird = new Figbird({ schema, adapter })
 // Create hooks with figbird instance
 const { useFind } = createHooks(figbird)
 
-// Debug individual services (using schema now)
-export type DebugPersonService = AppSchema['services']['api/people']
-export type DebugTaskService = AppSchema['services']['api/tasks']
-
 // Debug types - these will be inspected by the test
 export type PersonServiceByName = AppSchema['services']['api/people']
 export type TaskServiceByName = AppSchema['services']['api/tasks']
