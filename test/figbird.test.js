@@ -860,6 +860,62 @@ test('refetch only works with active listeners', async t => {
   dom2.unmount()
 })
 
+test('useFind with realtime refetch and debounce', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  function Note() {
+    const notes = useFind('notes', {
+      query: { tag: 'idea' },
+      realtime: 'refetch',
+      refetchDebounce: 1000,
+    })
+
+    return <NoteList notes={notes} />
+  }
+
+  const feathers = createFeathers()
+
+  render(
+    <App feathers={feathers}>
+      <Note />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(feathers.service('notes').counts.find, 1, 'initial fetch occurs once')
+
+  await flush(async () => {
+    await feathers.service('notes').patch(1, { content: 'first debounce', tag: 'idea' })
+  })
+
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await feathers.service('notes').patch(1, { content: 'second debounce', tag: 'idea' })
+  })
+
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 900))
+  })
+
+  t.is(
+    feathers.service('notes').counts.find,
+    1,
+    'should not refetch while debounce window is active',
+  )
+
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 200))
+  })
+
+  await flush()
+
+  t.is(feathers.service('notes').counts.find, 2, 'debounced events trigger a single refetch')
+  t.is($('.note').innerHTML, 'second debounce')
+
+  unmount()
+})
+
 test('useFind with allPages', async t => {
   const { render, flush, unmount, $all } = dom()
   function Note() {
