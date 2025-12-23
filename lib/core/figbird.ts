@@ -6,7 +6,16 @@ import type {
   QueryResponse,
 } from '../adapters/adapter.js'
 import { hashObject } from './hash.js'
-import type { AnySchema, Schema, ServiceItem, ServiceNames, ServiceQuery } from './schema.js'
+import type {
+  AnySchema,
+  Schema,
+  ServiceCreate,
+  ServiceItem,
+  ServiceNames,
+  ServicePatch,
+  ServiceQuery,
+  ServiceUpdate,
+} from './schema.js'
 
 /**
  * Event types supported by Figbird
@@ -250,13 +259,55 @@ type InferMutationData<S extends Schema, D extends MutationDescriptor> = S exten
             any
 
 /**
- * Descriptor for mutation operations
+ * Base mutation descriptor with common fields
  */
-export interface MutationDescriptor {
+interface BaseMutationDescriptor {
   serviceName: string
-  method: 'create' | 'update' | 'patch' | 'remove'
-  args: unknown[]
+  params?: unknown
 }
+
+/**
+ * Descriptor for create mutations
+ */
+export interface CreateMutationDescriptor extends BaseMutationDescriptor {
+  method: 'create'
+  data: unknown
+}
+
+/**
+ * Descriptor for update mutations
+ */
+export interface UpdateMutationDescriptor extends BaseMutationDescriptor {
+  method: 'update'
+  id: string | number
+  data: unknown
+}
+
+/**
+ * Descriptor for patch mutations
+ */
+export interface PatchMutationDescriptor extends BaseMutationDescriptor {
+  method: 'patch'
+  id: string | number
+  data: unknown
+}
+
+/**
+ * Descriptor for remove mutations
+ */
+export interface RemoveMutationDescriptor extends BaseMutationDescriptor {
+  method: 'remove'
+  id: string | number
+}
+
+/**
+ * Discriminated union of all mutation descriptors
+ */
+export type MutationDescriptor =
+  | CreateMutationDescriptor
+  | UpdateMutationDescriptor
+  | PatchMutationDescriptor
+  | RemoveMutationDescriptor
 
 // Helper to specialize adapter params' `query` by service-level domain query
 type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A extends Adapter> = Omit<
@@ -386,15 +437,50 @@ export class Figbird<
     )
   }
 
-  // Strongly-typed overload for mutation return types based on service
-  /** Perform a service mutation and return the mutated item typed from the schema. */
+  // Strongly-typed mutation overloads
+
+  /** Create a single new item. */
   mutate<N extends ServiceNames<S>>(desc: {
     serviceName: N
-    method: 'create' | 'update' | 'patch' | 'remove'
-    args: unknown[]
+    method: 'create'
+    data: ServiceCreate<S, N>
+    params?: AdapterParams<A>
   }): Promise<ServiceItem<S, N>>
-  // Generic fallback overload (for dynamic descriptors)
-  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>>
+
+  /** Create multiple new items (batch). */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'create'
+    data: ServiceCreate<S, N>[]
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>[]>
+
+  /** Update an existing item by ID (full replacement). */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'update'
+    id: string | number
+    data: ServiceUpdate<S, N>
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>>
+
+  /** Patch an existing item by ID (partial update). */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'patch'
+    id: string | number
+    data: ServicePatch<S, N>
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>>
+
+  /** Remove an item by ID. */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'remove'
+    id: string | number
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>>
+
   // Implementation
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mutate(desc: MutationDescriptor): Promise<any> {
@@ -785,7 +871,7 @@ class QueryStore<
 
   /** Perform a service mutation and update the store from the result. */
   mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
-    const { serviceName, method, args } = desc
+    const { serviceName, method } = desc
     const updaters: Record<string, (item: unknown) => void> = {
       create: item => this.#processEvent(serviceName, { type: 'created', item }),
       update: item => this.#processEvent(serviceName, { type: 'updated', item }),
@@ -793,10 +879,26 @@ class QueryStore<
       remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
     }
 
+    // Convert named params to args array for the adapter
+    const args = this.#buildMutationArgs(desc)
+
     return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
       updaters[method]?.(item)
       return item as InferMutationData<S, D>
     })
+  }
+
+  /** Convert mutation descriptor to args array for adapter */
+  #buildMutationArgs(desc: MutationDescriptor): unknown[] {
+    switch (desc.method) {
+      case 'create':
+        return desc.params !== undefined ? [desc.data, desc.params] : [desc.data]
+      case 'update':
+      case 'patch':
+        return desc.params !== undefined ? [desc.id, desc.data, desc.params] : [desc.id, desc.data]
+      case 'remove':
+        return desc.params !== undefined ? [desc.id, desc.params] : [desc.id]
+    }
   }
 
   #subscribeToRealtime(queryId: string): void {

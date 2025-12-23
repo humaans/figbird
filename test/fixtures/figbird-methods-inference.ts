@@ -34,6 +34,10 @@ export type FindSubscribeState = Parameters<Parameters<typeof findQuery.subscrib
 export type GetSubscribeState = Parameters<Parameters<typeof getQuery.subscribe>[0]>[0]
 
 // Mutate: create — return type should be Person based on schema
-const createDesc = { serviceName: 'api/people', method: 'create', args: [{}] as unknown[] } as const
+const createDesc = {
+  serviceName: 'api/people',
+  method: 'create',
+  data: {} as Partial<Person>,
+} as const
 const createPromise = figbird.mutate(createDesc)
 export type CreateResult = Awaited<typeof createPromise>

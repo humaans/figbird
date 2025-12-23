@@ -216,7 +216,7 @@ test('figbird.mutate with create', async t => {
   await figbird.mutate({
     serviceName: 'notes',
     method: 'create',
-    args: [{ id: 2, content: 'world' }],
+    data: { id: 2, content: 'world' },
   })
 
   const query = figbird.query({ serviceName: 'notes', method: 'find' })
@@ -248,7 +248,8 @@ test('figbird.mutate with update', async t => {
   await figbird.mutate({
     serviceName: 'notes',
     method: 'update',
-    args: [1, { id: 1, content: 'world' }],
+    id: 1,
+    data: { id: 1, content: 'world' },
   })
 
   const query = figbird.query({ serviceName: 'notes', method: 'get', resourceId: 1 })
@@ -274,7 +275,7 @@ test('figbird.mutate with patch', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  await figbird.mutate({ serviceName: 'notes', method: 'patch', args: [1, { content: 'world' }] })
+  await figbird.mutate({ serviceName: 'notes', method: 'patch', id: 1, data: { content: 'world' } })
 
   const query = figbird.query({ serviceName: 'notes', method: 'get', resourceId: 1 })
   const result = await new Promise(resolve => {
@@ -299,7 +300,7 @@ test('figbird.mutate with remove', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  await figbird.mutate({ serviceName: 'notes', method: 'remove', args: [1] })
+  await figbird.mutate({ serviceName: 'notes', method: 'remove', id: 1 })
 
   const query = figbird.query({ serviceName: 'notes', method: 'find' })
   const result = await new Promise(resolve => {

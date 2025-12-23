@@ -13,8 +13,6 @@ type MutationAction<T> =
   | { type: 'success'; payload: T }
   | { type: 'error'; payload: Error }
 
-type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
-
 export interface UseMutationResult<
   TItem,
   TCreate = Partial<TItem>,
@@ -65,16 +63,12 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
     }
   }, [])
 
-  const mutate = useCallback(
+  const executeMutation = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (method: MutationMethod, ...args: unknown[]): Promise<any> => {
+    async (promise: Promise<any>): Promise<any> => {
       dispatch({ type: 'mutating' })
       try {
-        const item = await figbird.mutate({
-          serviceName: actualServiceName,
-          method,
-          args,
-        })
+        const item = await promise
         if (mountedRef.current) {
           dispatch({ type: 'success', payload: item })
         }
@@ -87,27 +81,61 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
         throw error
       }
     },
-    [figbird, actualServiceName, dispatch, mountedRef],
+    [dispatch, mountedRef],
   )
 
   const create = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (data: any, params?: unknown) => mutate('create', data, params),
-    [mutate],
+    (data: any, params?: unknown) =>
+      executeMutation(
+        figbird.mutate({
+          serviceName: actualServiceName,
+          method: 'create' as const,
+          data,
+          params,
+        }),
+      ),
+    [executeMutation, figbird, actualServiceName],
   )
   const update = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (id: string | number, data: any, params?: unknown) => mutate('update', id, data, params),
-    [mutate],
+    (id: string | number, data: any, params?: unknown) =>
+      executeMutation(
+        figbird.mutate({
+          serviceName: actualServiceName,
+          method: 'update' as const,
+          id,
+          data,
+          params,
+        }),
+      ),
+    [executeMutation, figbird, actualServiceName],
   )
   const patch = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (id: string | number, data: any, params?: unknown) => mutate('patch', id, data, params),
-    [mutate],
+    (id: string | number, data: any, params?: unknown) =>
+      executeMutation(
+        figbird.mutate({
+          serviceName: actualServiceName,
+          method: 'patch' as const,
+          id,
+          data,
+          params,
+        }),
+      ),
+    [executeMutation, figbird, actualServiceName],
   )
   const remove = useCallback(
-    (id: string | number, params?: unknown) => mutate('remove', id, params),
-    [mutate],
+    (id: string | number, params?: unknown) =>
+      executeMutation(
+        figbird.mutate({
+          serviceName: actualServiceName,
+          method: 'remove' as const,
+          id,
+          params,
+        }),
+      ),
+    [executeMutation, figbird, actualServiceName],
   )
 
   return useMemo(
