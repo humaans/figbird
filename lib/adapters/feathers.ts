@@ -118,9 +118,11 @@ function toEpochMs(ts: Timestamp): number | null {
   return ts instanceof Date ? ts.getTime() : null
 }
 
-export class FeathersAdapter<TQuery = Record<string, unknown>>
-  implements Adapter<FeathersParams<TQuery>, FeathersFindMeta, TQuery>
-{
+export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapter<
+  FeathersParams<TQuery>,
+  FeathersFindMeta,
+  TQuery
+> {
   feathers: FeathersClient
   #idField: IdFieldType
   #updatedAtField: UpdatedAtFieldType

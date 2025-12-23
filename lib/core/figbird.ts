@@ -153,8 +153,10 @@ export type GetQueryConfig<TItem = unknown, TQuery = unknown> = BaseQueryConfig<
 /**
  * Configuration for find queries
  */
-export interface FindQueryConfig<TItem = unknown, TQuery = unknown>
-  extends BaseQueryConfig<TItem, TQuery> {
+export interface FindQueryConfig<TItem = unknown, TQuery = unknown> extends BaseQueryConfig<
+  TItem,
+  TQuery
+> {
   /**
    * Fetches all pages by iterating until completion, aggregating results.
    * Honors adapter pagination controls (e.g. $limit/$skip for Feathers).
