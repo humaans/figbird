@@ -57,8 +57,8 @@ type DeriveMethods<TServiceDef extends ServiceTypeDefinition> =
     ? Record<string, never>
     : NonNullable<TServiceDef['methods']> & AnyMethodsType
 
-type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = TServiceDef extends { query: infer Q }
-  ? Q
+type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends keyof TServiceDef
+  ? Exclude<TServiceDef['query'], undefined>
   : Record<string, unknown>
 
 // Phase 1: Create a service definition (no name yet)

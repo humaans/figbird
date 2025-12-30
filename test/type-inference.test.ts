@@ -216,3 +216,11 @@ test('Figbird methods infer types from schema (query, subscribe, mutate)', t => 
   // Mutate create should resolve to Person
   t.is(createResultType, 'Person')
 })
+
+test('optional query definitions are inferred', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'optional-query-inference.ts')
+
+  const taskQueryType = getTypeAtPosition(fixturePath, 'TaskQueryType')
+
+  t.is(taskQueryType, 'TaskQuery')
+})
