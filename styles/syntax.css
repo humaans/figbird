@@ -91,6 +91,9 @@
   color: #0000ff;
   font-weight: bold; }
 
+.chroma .nx {
+  color: #0000ff; }
+
 .chroma .nt {
   color: #008000;
   font-weight: bold; }
@@ -165,6 +168,9 @@
   color: #666666; }
 
 .chroma .o {
+  color: #666666; }
+
+.chroma .p {
   color: #666666; }
 
 .chroma .ow {
