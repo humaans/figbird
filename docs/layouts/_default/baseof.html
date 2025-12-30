@@ -44,12 +44,12 @@
    <link href="https://fonts.googleapis.com/css2?family=Vollkorn:wght@400;600;700;900&display=swap" rel="stylesheet"> 
 
   {{ $base := resources.Get "styles/base.scss" | toCSS }}
-  {{ $syntax := resources.Get "styles/syntax.scss" | toCSS }}
   {{ $main := resources.Get "styles/main.scss" | toCSS }}
+  {{ $syntax := resources.Get "styles/syntax.scss" | toCSS }}
 
   <link href="{{ $base.RelPermalink }}" rel="stylesheet" type="text/css" />
-  <link href="{{ $syntax.RelPermalink }}" rel="stylesheet" type="text/css" />
   <link href="{{ $main.RelPermalink }}" rel="stylesheet" type="text/css" />
+  <link href="{{ $syntax.RelPermalink }}" rel="stylesheet" type="text/css" />
 </head>
 
 
