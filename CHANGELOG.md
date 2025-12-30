@@ -1,5 +1,15 @@
 # Figbird Changelog
 
+## 0.21.0
+
+Full TypeScript support with schema-driven type inference:
+
+- **Schema DSL** - Define services with `createSchema` and `service<T>()` for full type inference across all hooks and methods
+- **Typed hooks** - `createHooks(figbird)` returns `useFind`, `useGet`, `useMutation`, and `useFeathers` with types narrowed by service name
+- **Typed Feathers client** - `useFeathers()` returns a `TypedFeathersClient` with fully typed CRUD methods based on your schema
+- **Custom methods** - Define typed custom service methods in your schema (e.g., `methods: { archive: (ids: string[]) => Promise<{ count: number }> }`)
+- **Typed mutation payloads** - `useMutation` methods (`create`, `update`, `patch`) accept typed payloads derived from schema definitions
+
 ## 0.20.0
 
 - A full rewrite of the internals to simplify the code and especially React bindings. Figbird now has a core implementation in pure JavaScript that is independent from React and allows creating queries and interacting with them directly via the figbird class methods. The React hooks API remains largely unchanged. With this the feathers specific bindings are also extracted into a dedicated feathers adapter module. This allows adapting figbird to other frameworks and libraries.
