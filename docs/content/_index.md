@@ -78,7 +78,7 @@ client.configure(feathers.authentication({ storage: window.localStorage }))
 
 const adapter = new FeathersAdapter(client)
 const figbird = new Figbird({ adapter, schema })
-const { useFind, useGet, useMutation } = createHooks(figbird)
+const { useFind, useGet, useMutation, useFeathers } = createHooks(figbird)
 
 function App() {
   return (
@@ -113,14 +113,14 @@ You can also use the untyped hooks directly from `figbird` (without `createHooks
 
 ## `createHooks`
 
-`createHooks(figbird)` binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns `{ useFind, useGet, useMutation }` with full service- and adapter-aware TypeScript types.
+`createHooks(figbird)` binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns `{ useFind, useGet, useMutation, useFeathers }` with full service- and adapter-aware TypeScript types.
 
 ```ts
 import { Figbird, FeathersAdapter, createHooks } from 'figbird'
 
 const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ adapter, schema })
-export const { useFind, useGet, useMutation } = createHooks(figbird)
+export const { useFind, useGet, useMutation, useFeathers } = createHooks(figbird)
 
 // Later in components
 function People() {
@@ -228,10 +228,17 @@ const { data, status, error, create, update, patch, remove } = useMutation(servi
 ### `useFeathers`
 
 ```ts
-const { feathers } = useFeathers()
+// From createHooks - returns typed client
+const { useFeathers } = createHooks(figbird)
+const feathers = useFeathers()
+
+// Fully typed service access
+const note = await feathers.service('notes').get('1')     // note: Note
+await feathers.service('notes').create({ title: 'Hi' })   // typed payload
+await feathers.service('notes').patch('1', { content: 'Updated' })
 ```
 
-Get the feathers instance passed to `Provider`.
+Returns the Feathers client. When using `createHooks`, returns a `TypedFeathersClient` with full type safety for all service methods based on your schema.
 
 ### `Provider`
 
@@ -426,6 +433,33 @@ const q2 = figbird.query({ serviceName: 'tasks', method: 'get', resourceId: '123
 q2.subscribe(state => {
   // state.data: Task | null
 })
+```
+
+7) Custom methods on services:
+
+Feathers services often have custom methods beyond CRUD. Define them in your schema for full type safety:
+
+```ts
+interface NotesService {
+  item: Note
+  methods: {
+    archive: (ids: string[]) => Promise<{ count: number }>
+    search: (term: string, limit?: number) => Promise<Note[]>
+  }
+}
+
+const schema = createSchema({
+  services: {
+    notes: service<NotesService>(),
+  },
+})
+
+// Access via typed Feathers client:
+const { useFeathers } = createHooks(figbird)
+const feathers = useFeathers()
+
+await feathers.service('notes').archive(['1', '2'])  // returns { count: number }
+await feathers.service('notes').search('hello')      // returns Note[]
 ```
 
 ## Realtime

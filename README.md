@@ -41,7 +41,7 @@ client.configure(feathers.socketio(io('http://localhost:3030')))
 
 const adapter = new FeathersAdapter(client)
 const figbird = new Figbird({ adapter, schema })
-const { useFind, useGet, useMutation } = createHooks(figbird)
+const { useFind, useGet, useMutation, useFeathers } = createHooks(figbird)
 
 // 3) Use typed hooks
 function Notes() {
