@@ -55,7 +55,7 @@ type DerivePatch<TServiceDef extends ServiceTypeDefinition> = TServiceDef['patch
 type DeriveMethods<TServiceDef extends ServiceTypeDefinition> =
   TServiceDef['methods'] extends undefined
     ? Record<string, never>
-    : NonNullable<TServiceDef['methods']>
+    : NonNullable<TServiceDef['methods']> & AnyMethodsType
 
 type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = TServiceDef extends { query: infer Q }
   ? Q
@@ -69,7 +69,7 @@ export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
   DeriveCreate<TServiceDef>,
   DeriveUpdate<TServiceDef>,
   DerivePatch<TServiceDef>,
-  DeriveMethods<TServiceDef> extends AnyMethodsType ? DeriveMethods<TServiceDef> : AnyMethodsType
+  DeriveMethods<TServiceDef>
 > {
   return { name: '' } as Service<
     TServiceDef['item'],
@@ -78,7 +78,7 @@ export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
     DeriveCreate<TServiceDef>,
     DeriveUpdate<TServiceDef>,
     DerivePatch<TServiceDef>,
-    DeriveMethods<TServiceDef> extends AnyMethodsType ? DeriveMethods<TServiceDef> : AnyMethodsType
+    DeriveMethods<TServiceDef>
   >
 }
 
