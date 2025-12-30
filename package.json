@@ -3,22 +3,28 @@
   "version": "0.20.0-8",
   "description": "Effortless realtime data management for React + Feathers applications.",
   "type": "module",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
     "./package-lock.json": "./package-lock.json",
     "./tsconfig.json": "./tsconfig.json",
     ".": {
+      "types": "./dist/esm/index.d.ts",
       "require": "./dist/cjs/index.js",
       "import": "./dist/esm/index.js"
     },
     "./*": {
+      "types": "./dist/esm/*.d.ts",
       "require": "./dist/cjs/*.js",
       "import": "./dist/esm/*.js"
     }
   },
   "scripts": {
-    "test": "eslint && prettier --check '**/*.{js,css,yml}' && c8 ava",
-    "format": "prettier --write '**/*.{js,css,yml}'",
+    "test": "tsc --noEmit && eslint && prettier --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
+    "lint": "eslint",
+    "tsc": "tsc --noEmit",
+    "ava": "ava",
+    "format": "prettier --write '**/*.{ts,tsx,js,jsx,css,yml}'",
     "coverage": "c8 -r html -r text ava",
     "build": "node ./tasks/build.js",
     "watch": "node ./tasks/build.js -w",
@@ -41,6 +47,12 @@
     "@swc-node/register": "^1.11.1",
     "@swc/cli": "^0.7.8",
     "@swc/core": "^1.13.5",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.11",
+    "@types/react-dom": "^19.1.7",
+    "@typescript-eslint/eslint-plugin": "^8.40.0",
+    "@typescript-eslint/parser": "^8.40.0",
     "ava": "^6.4.1",
     "browserslist-config-baseline": "^0.5.0",
     "c8": "^10.1.3",
@@ -52,19 +64,25 @@
     "jsdom": "^26.1.0",
     "prettier": "^3.6.2",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "typescript": "^5.9.2"
   },
   "sideEffects": false,
   "ava": {
     "serial": true,
     "files": [
-      "test/*.test.js"
+      "test/*.test.{js,ts,tsx}"
     ],
+    "extensions": {
+      "js": true,
+      "ts": "module",
+      "tsx": "module"
+    },
     "nodeArguments": [
       "--import=@swc-node/register/esm-register"
     ],
     "require": [
-      "./test/setup.js"
+      "./test/setup.ts"
     ]
   },
   "np": {

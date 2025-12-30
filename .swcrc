@@ -1,13 +1,13 @@
 {
-  "sourceMaps": true,
   "jsc": {
     "parser": {
-      "syntax": "ecmascript",
-      "jsx": true
+      "syntax": "typescript",
+      "tsx": true
     },
     "target": "es2024"
   },
   "module": {
     "type": "es6"
-  }
+  },
+  "sourceMaps": true,
 }

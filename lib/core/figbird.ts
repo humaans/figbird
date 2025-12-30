@@ -1,0 +1,1343 @@
+import type {
+  Adapter,
+  AdapterFindMeta,
+  AdapterParams,
+  AdapterQuery,
+  QueryResponse,
+} from '../adapters/adapter.js'
+import { hashObject } from './hash.js'
+import type {
+  AnySchema,
+  Schema,
+  ServiceCreate,
+  ServiceItem,
+  ServiceNames,
+  ServicePatch,
+  ServiceQuery,
+  ServiceUpdate,
+} from './schema.js'
+
+/**
+ * Event types supported by Figbird
+ */
+export type EventType = 'created' | 'updated' | 'patched' | 'removed'
+
+/**
+ * Internal event representation
+ */
+export interface Event {
+  type: EventType
+  item: unknown
+}
+
+/**
+ * Queued event for batch processing
+ */
+export interface QueuedEvent {
+  serviceName: string
+  type: EventType
+  items: unknown[]
+}
+
+export type QueryStatus = 'idle' | 'loading' | 'success' | 'error'
+
+/**
+ * Query state representation - discriminated union for better type safety
+ */
+export type QueryState<T, TMeta = Record<string, unknown>> =
+  | {
+      status: 'idle' | 'loading'
+      data: null
+      meta: TMeta
+      isFetching: boolean
+      error: null
+    }
+  | {
+      status: 'success'
+      data: T
+      meta: TMeta
+      isFetching: boolean
+      error: null
+    }
+  | {
+      status: 'error'
+      data: null
+      meta: TMeta
+      isFetching: boolean
+      error: Error
+    }
+
+/**
+ * Internal query representation
+ */
+export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = unknown> {
+  queryId: string
+  desc: QueryDescriptor
+  config: QueryConfig<T, TQuery>
+  pending: boolean
+  dirty: boolean
+  filterItem: (item: ElementType<T>) => boolean
+  state: QueryState<T, TMeta>
+}
+
+/**
+ * Service state in the store
+ */
+export interface ServiceState<TMeta = Record<string, unknown>> {
+  entities: Map<string | number, unknown>
+  queries: Map<string, Query<unknown, TMeta, unknown>>
+  itemQueryIndex: Map<string | number, Set<string>>
+}
+
+/**
+ * Query descriptor for get operations
+ */
+export interface GetDescriptor {
+  serviceName: string
+  method: 'get'
+  resourceId: string | number
+  params?: unknown
+}
+
+/**
+ * Query descriptor for find operations
+ */
+export interface FindDescriptor {
+  serviceName: string
+  method: 'find'
+  params?: unknown
+}
+
+/**
+ * Discriminated union of query descriptors
+ */
+export type QueryDescriptor = GetDescriptor | FindDescriptor
+
+/**
+ * Helper type to extract element type from arrays
+ */
+type ElementType<T> = T extends (infer E)[] ? E : T
+
+/**
+ * Base query configuration shared by all query types.
+ * Add these alongside adapter params when calling useFind/useGet.
+ */
+interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
+  /**
+   * Skip fetching entirely. Useful for conditional queries.
+   * When true, status is 'idle' and no network request is made.
+   */
+  skip?: boolean
+
+  /**
+   * Realtime strategy for handling events:
+   * - 'merge' (default): merge incoming events into cached results
+   * - 'refetch': refetch the entire query when an event is received
+   * - 'disabled': ignore realtime events for this query
+   */
+  realtime?: 'merge' | 'refetch' | 'disabled'
+
+  /**
+   * Fetch policy determines how cache vs network is used:
+   * - 'swr' (default): stale-while-revalidate (show cache, refetch in background)
+   * - 'cache-first': prefer cache and avoid network if data is present
+   * - 'network-only': always fetch on mount
+   */
+  fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
+
+  /**
+   * Optional custom matcher factory. Only used in realtime 'merge' mode.
+   * Receives the prepared query object; returns a predicate for items.
+   * Provide this if your adapter needs custom client-side matching logic.
+   * Note: For find queries, the matcher works with individual items, not arrays.
+   */
+  matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
+}
+
+/**
+ * Configuration for get queries
+ */
+export type GetQueryConfig<TItem = unknown, TQuery = unknown> = BaseQueryConfig<TItem, TQuery>
+
+/**
+ * Configuration for find queries
+ */
+export interface FindQueryConfig<TItem = unknown, TQuery = unknown> extends BaseQueryConfig<
+  TItem,
+  TQuery
+> {
+  /**
+   * Fetches all pages by iterating until completion, aggregating results.
+   * Honors adapter pagination controls (e.g. $limit/$skip for Feathers).
+   */
+  allPages?: boolean
+}
+
+/**
+ * Discriminated union of query configurations
+ */
+export type QueryConfig<TItem = unknown, TQuery = unknown> =
+  | GetQueryConfig<TItem, TQuery>
+  | FindQueryConfig<TItem, TQuery>
+
+/**
+ * Combined config for get operations
+ * Combines the descriptor and config properties with index signature for extra params
+ */
+export type CombinedGetConfig<TItem = unknown, TQuery = unknown> = GetDescriptor &
+  GetQueryConfig<TItem, TQuery> & {
+    [key: string]: unknown
+  }
+
+/**
+ * Combined config for find operations
+ * Combines the descriptor and config properties with index signature for extra params
+ */
+export type CombinedFindConfig<TItem = unknown, TQuery = unknown> = FindDescriptor &
+  FindQueryConfig<TItem, TQuery> & {
+    [key: string]: unknown
+  }
+
+/**
+ * Combined config for internal use
+ */
+export type CombinedConfig<TItem = unknown, TQuery = unknown> =
+  | CombinedGetConfig<TItem, TQuery>
+  | CombinedFindConfig<TItem, TQuery>
+
+/**
+ * Item matcher function type
+ */
+export type ItemMatcher<T> = (item: T) => boolean
+
+/**
+ * Helper type to infer data type from schema and query descriptor
+ */
+type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  : D extends { serviceName: infer N; method: 'find' }
+    ? N extends ServiceNames<S>
+      ? ServiceItem<S, N>[]
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+    : D extends { serviceName: infer N; method: 'get' }
+      ? N extends ServiceNames<S>
+        ? ServiceItem<S, N>
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          any
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+
+/**
+ * Helper type to infer data type from schema and mutation descriptor
+ */
+type InferMutationData<S extends Schema, D extends MutationDescriptor> = S extends AnySchema
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  : D extends { serviceName: infer N; method: 'create' }
+    ? N extends ServiceNames<S>
+      ? ServiceItem<S, N>
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+    : D extends { serviceName: infer N; method: 'update' }
+      ? N extends ServiceNames<S>
+        ? ServiceItem<S, N>
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          any
+      : D extends { serviceName: infer N; method: 'patch' }
+        ? N extends ServiceNames<S>
+          ? ServiceItem<S, N>
+          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            any
+        : D extends { serviceName: infer N; method: 'remove' }
+          ? N extends ServiceNames<S>
+            ? ServiceItem<S, N>
+            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              any
+          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            any
+
+/**
+ * Base mutation descriptor with common fields
+ */
+interface BaseMutationDescriptor {
+  serviceName: string
+  params?: unknown
+}
+
+/**
+ * Descriptor for create mutations
+ */
+export interface CreateMutationDescriptor extends BaseMutationDescriptor {
+  method: 'create'
+  data: unknown
+}
+
+/**
+ * Descriptor for update mutations
+ */
+export interface UpdateMutationDescriptor extends BaseMutationDescriptor {
+  method: 'update'
+  id: string | number
+  data: unknown
+}
+
+/**
+ * Descriptor for patch mutations
+ */
+export interface PatchMutationDescriptor extends BaseMutationDescriptor {
+  method: 'patch'
+  id: string | number
+  data: unknown
+}
+
+/**
+ * Descriptor for remove mutations
+ */
+export interface RemoveMutationDescriptor extends BaseMutationDescriptor {
+  method: 'remove'
+  id: string | number
+}
+
+/**
+ * Discriminated union of all mutation descriptors
+ */
+export type MutationDescriptor =
+  | CreateMutationDescriptor
+  | UpdateMutationDescriptor
+  | PatchMutationDescriptor
+  | RemoveMutationDescriptor
+
+// Helper to specialize adapter params' `query` by service-level domain query
+type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A extends Adapter> = Omit<
+  AdapterParams<A>,
+  'query'
+> & { query?: ServiceQuery<S, N> }
+
+/**
+    Usage:
+
+    const adapter = new FeathersAdapter({ feathers })
+    const figbird = new Figbird({ adapter })
+
+    const q = figbird.query({ serviceName: 'notes', method: 'find' })
+
+    // Execute query and begin listening for realtime updates
+    const unsub = q.subscribe(state => console.log(state.status, state.data))
+
+    // Get current query state synchronously
+    q.getSnapshot()
+
+    // Stop listening to updates while preserving the query state and data in cache.
+    // The query state can be recovered by creating a new query with the same parameters.
+    // Multiple queries can safely reference the same cached state.
+    unsub()
+*/
+/**
+ * Figbird core instance holding the adapter and shared query state.
+ * Prefer `createHooks(figbird)` in React apps to get strongly-typed hooks.
+ */
+export class Figbird<
+  S extends Schema = AnySchema,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
+> {
+  adapter: A
+  queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+  schema: S | undefined
+
+  /**
+   * Create a Figbird instance.
+   * @param adapter Data adapter (e.g. FeathersAdapter)
+   * @param eventBatchProcessingInterval Optional interval (ms) for batching realtime events
+   * @param schema Optional schema to enable full TypeScript inference
+   */
+  constructor({
+    adapter,
+    eventBatchProcessingInterval,
+    schema,
+  }: {
+    adapter: A
+    eventBatchProcessingInterval?: number
+    schema?: S
+  }) {
+    this.adapter = adapter
+    this.schema = schema
+    this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
+      adapter,
+      eventBatchProcessingInterval: eventBatchProcessingInterval,
+    })
+  }
+
+  /** Returns the entire internal state map keyed by service name. */
+  getState(): Map<string, ServiceState<AdapterFindMeta<A>>> {
+    return this.queryStore.getState()
+  }
+
+  // Strongly-typed overloads for inference from serviceName and method
+  /** Create a typed `find` query reference. */
+  query<N extends ServiceNames<S>>(
+    desc: { serviceName: N; method: 'find'; params?: ParamsWithServiceQuery<S, N, A> },
+    config?: QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>,
+  ): QueryRef<
+    ServiceItem<S, N>[],
+    ServiceQuery<S, N>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
+  /** Create a typed `get` query reference. */
+  query<N extends ServiceNames<S>>(
+    desc: {
+      serviceName: N
+      method: 'get'
+      resourceId: string | number
+      params?: ParamsWithServiceQuery<S, N, A>
+    },
+    config?: QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>,
+  ): QueryRef<
+    ServiceItem<S, N>,
+    ServiceQuery<S, N>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
+  // Generic fallback overload (for dynamic descriptors)
+  query<D extends QueryDescriptor>(
+    desc: D,
+    config?: QueryConfig<InferQueryData<S, D>, AdapterQuery<A>>,
+  ): QueryRef<
+    InferQueryData<S, D>,
+    AdapterQuery<A>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
+  // Implementation
+  query(
+    desc: {
+      serviceName: string
+      method: 'find' | 'get'
+      resourceId?: string | number
+      params?: unknown
+    },
+    config?: QueryConfig<unknown, unknown>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): any {
+    return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
+      {
+        desc: desc as QueryDescriptor,
+        config: (config || {}) as QueryConfig<unknown, unknown>,
+        queryStore: this.queryStore,
+      },
+    )
+  }
+
+  // Strongly-typed mutation overloads
+
+  /** Create a single new item. */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'create'
+    data: ServiceCreate<S, N>
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>>
+
+  /** Create multiple new items (batch). */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'create'
+    data: ServiceCreate<S, N>[]
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>[]>
+
+  /** Update an existing item by ID (full replacement). */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'update'
+    id: string | number
+    data: ServiceUpdate<S, N>
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>>
+
+  /** Patch an existing item by ID (partial update). */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'patch'
+    id: string | number
+    data: ServicePatch<S, N>
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>>
+
+  /** Remove an item by ID. */
+  mutate<N extends ServiceNames<S>>(desc: {
+    serviceName: N
+    method: 'remove'
+    id: string | number
+    params?: AdapterParams<A>
+  }): Promise<ServiceItem<S, N>>
+
+  // Implementation
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mutate(desc: MutationDescriptor): Promise<any> {
+    return this.queryStore.mutate(desc)
+  }
+
+  /** Subscribe to any state changes within Figbird (across all queries/services). */
+  subscribeToStateChanges(
+    fn: (state: Map<string, ServiceState<AdapterFindMeta<A>>>) => void,
+  ): () => void {
+    return this.queryStore.subscribeToStateChanges(fn)
+  }
+}
+
+/**
+ * A helper to split the properties into a query descriptor `desc` (including 'params')
+ * and figbird-specific query configuration `config`
+ */
+export function splitConfig<TItem = unknown, TQuery = unknown>(
+  combinedConfig: CombinedConfig<TItem, TQuery>,
+): {
+  desc: QueryDescriptor
+  config: QueryConfig<TItem, TQuery>
+} {
+  // Extract common properties with defaults
+  const {
+    serviceName,
+    method,
+    skip,
+    realtime = 'merge',
+    fetchPolicy = 'swr',
+    matcher,
+    ...rest
+  } = combinedConfig
+
+  if (method === 'get') {
+    const { resourceId, ...params } = rest as CombinedGetConfig<TItem, TQuery>
+
+    const desc: GetDescriptor = {
+      serviceName,
+      method,
+      resourceId,
+      params,
+    }
+
+    const config: GetQueryConfig<TItem, TQuery> = {
+      ...(skip !== undefined && { skip }),
+      realtime,
+      fetchPolicy,
+      ...(matcher !== undefined && { matcher }),
+    }
+
+    return { desc, config }
+  } else {
+    const { allPages, ...params } = rest as CombinedFindConfig<TItem, TQuery>
+
+    const desc: FindDescriptor = {
+      serviceName,
+      method,
+      params,
+    }
+
+    const config: FindQueryConfig<TItem, TQuery> = {
+      ...(skip !== undefined && { skip }),
+      realtime,
+      fetchPolicy,
+      ...(matcher !== undefined && { matcher }),
+      ...(allPages !== undefined && { allPages }),
+    }
+
+    return { desc, config }
+  }
+}
+
+// a lightweight query reference object to make it easy
+// subscribe to state changes and read query data
+// this is only a ref and does not contain state itself, it instead
+// references all the state from the shared figbird query state
+/**
+ * Lightweight reference to a query in the shared Figbird store.
+ * Provides helpers to subscribe to updates, get snapshots, and refetch.
+ */
+class QueryRef<
+  T,
+  TQueryType = unknown,
+  S extends Schema = AnySchema, // Add S here
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = Record<string, unknown>,
+> {
+  #queryId: string
+  #desc: QueryDescriptor
+  #config: QueryConfig<T, TQueryType>
+  #queryStore: QueryStore<S, TParams, TMeta, TQuery>
+
+  constructor({
+    desc,
+    config,
+    queryStore,
+  }: {
+    desc: QueryDescriptor
+    config: QueryConfig<T, TQueryType>
+    queryStore: QueryStore<S, TParams, TMeta, TQuery>
+  }) {
+    this.#queryId = `q/${hashObject({ desc, config })}`
+    this.#desc = desc
+    this.#config = config
+    this.#queryStore = queryStore
+  }
+
+  /** Returns internal details of this query reference (for debugging/testing). */
+  details(): { queryId: string; desc: QueryDescriptor; config: QueryConfig<T, TQueryType> } {
+    return {
+      queryId: this.#queryId,
+      desc: this.#desc,
+      config: this.#config,
+    }
+  }
+
+  /** Returns a stable hash representing descriptor + config. */
+  hash(): string {
+    return this.#queryId
+  }
+
+  /**
+   * Subscribes to this query's state. Triggers fetching if needed.
+   * Returns an unsubscribe function.
+   */
+  subscribe(fn: (state: QueryState<T, TMeta>) => void): () => void {
+    this.#queryStore.materialize(this)
+    return this.#queryStore.subscribe<T>(this.#queryId, fn)
+  }
+
+  /** Returns the latest known state for this query, if available. */
+  getSnapshot(): QueryState<T, TMeta> | undefined {
+    this.#queryStore.materialize(this)
+    return this.#queryStore.getQueryState<T>(this.#queryId)
+  }
+
+  /** Triggers a refetch for this query. */
+  refetch(): void {
+    this.#queryStore.materialize(this)
+    return this.#queryStore.refetch(this.#queryId)
+  }
+}
+
+/**
+ * Internal query store managing entities, queries, and subscriptions.
+ */
+class QueryStore<
+  S extends Schema = AnySchema,
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = Record<string, unknown>,
+> {
+  #adapter: Adapter<TParams, TMeta, TQuery>
+
+  #realtime: Set<string> = new Set()
+  #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
+  #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
+
+  #state: Map<string, ServiceState<TMeta>> = new Map()
+  #serviceNamesByQueryId: Map<string, string> = new Map()
+
+  #eventQueue: QueuedEvent[] = []
+  #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
+  #eventBatchProcessingInterval: number | undefined = 100
+
+  constructor({
+    adapter,
+    eventBatchProcessingInterval = 100,
+  }: {
+    adapter: Adapter<TParams, TMeta, TQuery>
+    eventBatchProcessingInterval?: number | undefined
+  }) {
+    this.#adapter = adapter
+    this.#eventBatchProcessingInterval = eventBatchProcessingInterval
+  }
+
+  #getQuery(queryId: string): Query<unknown, TMeta, unknown> | undefined {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (serviceName) {
+      const service = this.getState().get(serviceName)
+      if (service) {
+        return service.queries.get(queryId)
+      }
+    }
+    return undefined
+  }
+
+  /** Returns the current state for a query by id, if present. */
+  getQueryState<T>(queryId: string): QueryState<T, TMeta> | undefined {
+    return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
+  }
+
+  /**
+   * Ensures that backing state exists for the given QueryRef by creating
+   * service/query structures on first use.
+   */
+  materialize<T, TQueryType>(queryRef: QueryRef<T, TQueryType, S, TParams, TMeta, TQuery>): void {
+    const { queryId, desc, config } = queryRef.details()
+
+    if (!this.#getQuery(queryId)) {
+      this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
+
+      this.#transactOverService(
+        queryId,
+        service => {
+          service.queries.set(queryId, {
+            queryId,
+            desc,
+            config: config as QueryConfig<unknown, unknown>,
+            pending: !config.skip,
+            dirty: false,
+            filterItem: this.#createItemFilter<unknown, unknown>(
+              desc,
+              config as QueryConfig<unknown, unknown>,
+            ) as (item: unknown) => boolean,
+            state: config.skip
+              ? {
+                  status: 'idle' as const,
+                  data: null,
+                  meta: this.#adapter.emptyMeta(),
+                  isFetching: false,
+                  error: null,
+                }
+              : {
+                  status: 'loading' as const,
+                  data: null,
+                  meta: this.#adapter.emptyMeta(),
+                  isFetching: true,
+                  error: null,
+                },
+          })
+        },
+        { silent: true },
+      )
+    }
+  }
+
+  #createItemFilter<T, TQueryType>(
+    desc: QueryDescriptor,
+    config: QueryConfig<T, TQueryType>,
+  ): ItemMatcher<ElementType<T>> {
+    // if this query is not using the realtime mode
+    // we will never be merging events into the cache
+    // and will never call the matcher, so to avoid
+    // the issue where custom query filters or operators
+    // cause the default matcher to throw an error without
+    // additional configuration, let's avoid creating a matcher
+    // altogether
+    if (config.realtime !== 'merge') {
+      return () => false
+    }
+
+    const query = (desc.params as Record<string, unknown>)?.query || undefined
+    if (config.matcher) {
+      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
+    }
+    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
+  }
+
+  #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
+    if (!this.#listeners.has(queryId)) {
+      this.#listeners.set(queryId, new Set())
+    }
+    this.#listeners.get(queryId)!.add(fn as (state: QueryState<unknown, TMeta>) => void)
+    return () => {
+      const listeners = this.#listeners.get(queryId)
+      if (listeners) {
+        listeners.delete(fn as (state: QueryState<unknown, TMeta>) => void)
+        if (listeners.size === 0) {
+          this.#listeners.delete(queryId)
+        }
+      }
+    }
+  }
+
+  #invokeListeners(queryId: string): void {
+    const listeners = this.#listeners.get(queryId)
+    if (listeners) {
+      const state = this.getQueryState(queryId)
+      if (state) {
+        listeners.forEach(listener => listener(state))
+      }
+    }
+  }
+
+  #addGlobalListener(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
+    this.#globalListeners.add(fn)
+    return () => {
+      this.#globalListeners.delete(fn)
+    }
+  }
+
+  #invokeGlobalListeners(): void {
+    const state = this.getState()
+    this.#globalListeners.forEach(listener => listener(state))
+  }
+
+  #listenerCount(queryId: string): number {
+    return this.#listeners.get(queryId)?.size || 0
+  }
+
+  /**
+   * Subscribe to a query state by id. Triggers fetches if needed.
+   * Returns an unsubscribe function.
+   */
+  subscribe<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
+    const q = this.#getQuery(queryId)
+    if (!q) return () => {}
+
+    if (
+      q.pending ||
+      (q.state.status === 'success' && q.config.fetchPolicy === 'swr' && !q.state.isFetching) ||
+      (q.state.status === 'error' && !q.state.isFetching)
+    ) {
+      this.#queue(queryId)
+    }
+
+    const removeListener = this.#addListener(queryId, fn)
+
+    this.#subscribeToRealtime(queryId)
+
+    const shouldVacuumByDefault = q.config.fetchPolicy === 'network-only'
+    return ({ vacuum = shouldVacuumByDefault }: { vacuum?: boolean } = {}) => {
+      removeListener()
+      if (vacuum && this.#listenerCount(queryId) === 0) {
+        this.#vacuum({ queryId })
+      }
+    }
+  }
+
+  /** Subscribe to any store state changes across all services. */
+  subscribeToStateChanges(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
+    return this.#addGlobalListener(fn)
+  }
+
+  /** Refetch a specific query by id. */
+  refetch(queryId: string): void {
+    const q = this.#getQuery(queryId)
+    if (!q) return
+
+    if (!q.state.isFetching) {
+      this.#queue(queryId)
+    } else {
+      // Mark as dirty to refetch after current fetch completes
+      this.#transactOverService(
+        queryId,
+        (service, query) => {
+          service.queries.set(queryId, {
+            ...query!,
+            dirty: true,
+          })
+        },
+        { silent: true },
+      )
+    }
+  }
+
+  async #queue(queryId: string): Promise<void> {
+    this.#fetching({ queryId })
+    try {
+      const result = await this.#fetch(queryId)
+      this.#fetched({ queryId, result })
+    } catch (err) {
+      this.#fetchFailed({ queryId, error: err instanceof Error ? err : new Error(String(err)) })
+    }
+  }
+
+  #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta | undefined>> {
+    const query = this.#getQuery(queryId)
+    if (!query) {
+      return Promise.reject(new Error('Query not found'))
+    }
+
+    const { desc, config } = query
+
+    if (desc.method === 'get') {
+      return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
+    } else {
+      const findConfig = config as FindQueryConfig<unknown, unknown>
+      return findConfig.allPages
+        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
+        : this.#adapter.find(desc.serviceName, desc.params as TParams)
+    }
+  }
+
+  /** Perform a service mutation and update the store from the result. */
+  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+    const { serviceName, method } = desc
+    const updaters: Record<string, (item: unknown) => void> = {
+      create: item => this.#processEvent(serviceName, { type: 'created', item }),
+      update: item => this.#processEvent(serviceName, { type: 'updated', item }),
+      patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
+      remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
+    }
+
+    // Convert named params to args array for the adapter
+    const args = this.#buildMutationArgs(desc)
+
+    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
+      updaters[method]?.(item)
+      return item as InferMutationData<S, D>
+    })
+  }
+
+  /** Convert mutation descriptor to args array for adapter */
+  #buildMutationArgs(desc: MutationDescriptor): unknown[] {
+    switch (desc.method) {
+      case 'create':
+        return desc.params !== undefined ? [desc.data, desc.params] : [desc.data]
+      case 'update':
+      case 'patch':
+        return desc.params !== undefined ? [desc.id, desc.data, desc.params] : [desc.id, desc.data]
+      case 'remove':
+        return desc.params !== undefined ? [desc.id, desc.params] : [desc.id]
+    }
+  }
+
+  #subscribeToRealtime(queryId: string): void {
+    const query = this.#getQuery(queryId)
+    if (!query) return
+
+    const { serviceName } = query.desc
+
+    // check if already subscribed to the events of this service
+    if (this.#realtime.has(serviceName)) {
+      return
+    }
+
+    if (!this.#adapter.subscribe) {
+      return // Real-time not supported by this adapter
+    }
+
+    const created = (item: unknown) => this.#queueEvent(serviceName, { type: 'created', item })
+    const updated = (item: unknown) => this.#queueEvent(serviceName, { type: 'updated', item })
+    const patched = (item: unknown) => this.#queueEvent(serviceName, { type: 'patched', item })
+    const removed = (item: unknown) => this.#queueEvent(serviceName, { type: 'removed', item })
+
+    this.#adapter.subscribe(serviceName, {
+      created,
+      updated,
+      patched,
+      removed,
+    })
+    this.#realtime.add(serviceName)
+  }
+
+  #processEvent(serviceName: string, event: Event): void {
+    this.#eventQueue.push({
+      serviceName,
+      type: event.type,
+      items: Array.isArray(event.item) ? event.item : [event.item],
+    })
+
+    this.#processQueuedEvents()
+  }
+
+  #queueEvent(serviceName: string, event: Event): void {
+    this.#eventQueue.push({
+      serviceName,
+      type: event.type,
+      items: Array.isArray(event.item) ? event.item : [event.item],
+    })
+
+    if (!this.#eventBatchProcessingTimer) {
+      // process all events in a short interval as a batch later
+      if (this.#eventBatchProcessingInterval) {
+        this.#eventBatchProcessingTimer = setTimeout(() => {
+          this.#processQueuedEvents()
+          this.#eventBatchProcessingTimer = null
+        }, this.#eventBatchProcessingInterval)
+      } else {
+        // batching is disabled, process each event immediately
+        this.#processQueuedEvents()
+      }
+    }
+  }
+
+  #processQueuedEvents(): void {
+    if (this.#eventQueue.length === 0) {
+      return
+    }
+
+    // Group events by service
+    const eventsByService: Record<string, QueuedEvent[]> = {}
+    for (const event of this.#eventQueue) {
+      if (!eventsByService[event.serviceName]) {
+        eventsByService[event.serviceName] = []
+      }
+      eventsByService[event.serviceName]!.push(event)
+    }
+
+    const getId = (item: unknown) => this.#adapter.getId(item)
+    const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
+
+    for (const [serviceName, events] of Object.entries(eventsByService)) {
+      this.#transactOverServiceByName(serviceName, (service, touch) => {
+        const appliedEvents: QueuedEvent[] = []
+        for (const event of events) {
+          const { type, items } = event
+          for (const item of items) {
+            if (type === 'created') {
+              const itemId = getId(item)
+              if (itemId !== undefined) {
+                service.entities.set(itemId, item)
+                appliedEvents.push(event)
+              }
+            } else if (type === 'updated' || type === 'patched') {
+              const itemId = getId(item)
+              if (itemId !== undefined) {
+                const currItem = service.entities.get(itemId)
+                if (!currItem || !isItemStale(currItem, item)) {
+                  service.entities.set(itemId, item)
+                  appliedEvents.push(event)
+                }
+              }
+            } else if (type === 'removed') {
+              const itemId = getId(item)
+              if (itemId !== undefined) {
+                service.entities.delete(itemId)
+                appliedEvents.push(event)
+              }
+            }
+          }
+        }
+
+        // Update queries only for non-stale items
+        if (appliedEvents.length > 0) {
+          this.#updateQueriesFromEvents(service, appliedEvents, touch)
+        }
+      })
+
+      // Refetch refetchable queries if needed
+      this.#refetchRefetchableQueries(serviceName)
+    }
+
+    this.#eventQueue = []
+  }
+
+  #updateQueriesFromEvents(
+    service: ServiceState<TMeta>,
+    appliedEvents: QueuedEvent[],
+    touch: (queryId: string) => void,
+  ): void {
+    const getId = (item: unknown) => this.#adapter.getId(item)
+    const itemAdded = (meta: TMeta) => this.#adapter.itemAdded(meta)
+    const itemRemoved = (meta: TMeta) => this.#adapter.itemRemoved(meta)
+    for (const { type, items } of appliedEvents) {
+      for (const item of items) {
+        const itemId = getId(item)
+        if (itemId === undefined) continue
+
+        if (!service.itemQueryIndex.has(itemId)) {
+          service.itemQueryIndex.set(itemId, new Set())
+        }
+        const itemQueryIndex = service.itemQueryIndex.get(itemId)!
+
+        for (const [queryId, query] of service.queries) {
+          let matches: boolean
+
+          if (query.config.realtime !== 'merge') {
+            continue
+          }
+
+          if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
+            continue
+          }
+
+          if (type === 'removed') {
+            matches = false
+          } else {
+            matches = query.filterItem(item)
+          }
+
+          const hasItem = itemQueryIndex.has(queryId)
+          if (hasItem && !matches) {
+            // remove
+            const query = service.queries.get(queryId)!
+            const nextState: QueryState<unknown, TMeta> =
+              query.desc.method === 'get' && query.state.status === 'success'
+                ? {
+                    status: 'idle' as const,
+                    data: null,
+                    meta: itemRemoved(query.state.meta),
+                    isFetching: false,
+                    error: null,
+                  }
+                : query.state.status === 'success'
+                  ? {
+                      ...query.state,
+                      meta: itemRemoved(query.state.meta),
+                      data: (query.state.data as unknown[]).filter(
+                        (x: unknown) => getId(x) !== itemId,
+                      ),
+                    }
+                  : query.state
+            service.queries.set(queryId, {
+              ...query,
+              state: nextState,
+            })
+            itemQueryIndex.delete(queryId)
+            touch(queryId)
+          } else if (hasItem && matches) {
+            // update
+            service.queries.set(queryId, {
+              ...query,
+              state:
+                query.state.status === 'success'
+                  ? {
+                      ...query.state,
+                      data:
+                        query.desc.method === 'get'
+                          ? item
+                          : (query.state.data as unknown[]).map((x: unknown) =>
+                              getId(x) === itemId ? item : x,
+                            ),
+                    }
+                  : query.state,
+            })
+            touch(queryId)
+          } else if (matches && query.desc.method === 'find' && query.state.data) {
+            service.queries.set(queryId, {
+              ...query,
+              state:
+                query.state.status === 'success'
+                  ? {
+                      ...query.state,
+                      meta: itemAdded(query.state.meta),
+                      data: (query.state.data as unknown[]).concat(item),
+                    }
+                  : query.state,
+            })
+            itemQueryIndex.add(queryId)
+            touch(queryId)
+          }
+        }
+      }
+    }
+  }
+
+  #refetchRefetchableQueries(serviceName: string): void {
+    const service = this.getState().get(serviceName)
+    if (!service) return
+
+    for (const query of service.queries.values()) {
+      if (query.config.realtime === 'refetch' && this.#listenerCount(query.queryId) > 0) {
+        this.refetch(query.queryId)
+      }
+    }
+  }
+
+  /** Returns the entire store state map keyed by service name. */
+  getState(): Map<string, ServiceState<TMeta>> {
+    return this.#state
+  }
+
+  #updateState(
+    mutate: (state: Map<string, ServiceState<TMeta>>, touch: (queryId: string) => void) => void,
+    { silent = false } = {},
+  ): void {
+    const modifiedQueries = new Set<string>()
+
+    // Modify fn to track changes
+    const touch = (queryId: string) => modifiedQueries.add(queryId)
+
+    mutate(this.#state, touch)
+
+    if (!silent && modifiedQueries.size > 0) {
+      for (const queryId of modifiedQueries) {
+        this.#invokeListeners(queryId)
+      }
+      this.#invokeGlobalListeners()
+    }
+  }
+
+  #transactOverService(
+    queryId: string,
+    fn: (
+      service: ServiceState<TMeta>,
+      query?: Query<unknown, TMeta, unknown>,
+      touch?: (queryId: string) => void,
+    ) => void,
+    options?: { silent?: boolean },
+  ): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (!serviceName) return
+
+    this.#transactOverServiceByName(
+      serviceName,
+      (service, touch) => {
+        fn(service, service.queries.get(queryId), touch)
+        touch(queryId)
+      },
+      options,
+    )
+  }
+
+  #transactOverServiceByName(
+    serviceName: string,
+    fn: (service: ServiceState<TMeta>, touch: (queryId: string) => void) => void,
+    { silent = false } = {},
+  ): void {
+    if (serviceName) {
+      // initialise the service structure if needed
+      if (!this.getState().get(serviceName)) {
+        this.getState().set(serviceName, {
+          entities: new Map(),
+          queries: new Map(),
+          itemQueryIndex: new Map(),
+        })
+      }
+
+      this.#updateState(
+        (state, touch) => {
+          const service = state.get(serviceName)
+          if (service) {
+            fn(service, touch)
+          }
+        },
+        { silent },
+      )
+    }
+  }
+
+  #fetching({ queryId }: { queryId: string }): void {
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      service.queries.set(queryId, {
+        ...query,
+        pending: false,
+        dirty: false,
+        state:
+          query.state.status === 'error'
+            ? {
+                status: 'loading' as const,
+                data: null,
+                meta: query.state.meta,
+                isFetching: true,
+                error: null,
+              }
+            : query.state.status === 'success'
+              ? { ...query.state, isFetching: true }
+              : {
+                  status: query.state.status,
+                  data: null,
+                  meta: query.state.meta,
+                  isFetching: true,
+                  error: null,
+                },
+      })
+    })
+  }
+
+  #fetched({
+    queryId,
+    result,
+  }: {
+    queryId: string
+    result: QueryResponse<unknown, TMeta | undefined>
+  }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      const data = result.data
+      const meta = (result as { meta?: TMeta }).meta
+      const items = Array.isArray(data) ? data : [data]
+      const getId = (item: unknown) => this.#adapter.getId(item)
+
+      for (const item of items) {
+        const itemId = getId(item)
+        if (itemId !== undefined) {
+          service.entities.set(itemId, item)
+          if (!service.itemQueryIndex.has(itemId)) {
+            service.itemQueryIndex.set(itemId, new Set())
+          }
+          service.itemQueryIndex.get(itemId)!.add(queryId)
+        }
+      }
+
+      shouldRefetch = query.dirty
+
+      service.queries.set(queryId, {
+        ...query,
+        state: {
+          status: 'success' as const,
+          data,
+          meta: meta || this.#adapter.emptyMeta(),
+          isFetching: false,
+          error: null,
+        },
+      })
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.#queue(queryId)
+    }
+  }
+
+  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      shouldRefetch = query.dirty
+
+      service.queries.set(queryId, {
+        ...query!,
+        state: {
+          status: 'error' as const,
+          data: null,
+          meta: this.#adapter.emptyMeta(),
+          isFetching: false,
+          error,
+        },
+      })
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.#queue(queryId)
+    }
+  }
+
+  #vacuum({ queryId }: { queryId: string }): void {
+    this.#transactOverService(
+      queryId,
+      (service, query) => {
+        if (query) {
+          if (query.state.data) {
+            const getId = (item: unknown) => this.#adapter.getId(item)
+            for (const item of getItems(query)) {
+              const id = getId(item)
+              if (id !== undefined && service.itemQueryIndex.has(id)) {
+                service.itemQueryIndex.get(id)!.delete(queryId)
+              }
+            }
+          }
+          service.queries.delete(queryId)
+          this.#serviceNamesByQueryId.delete(queryId)
+        }
+      },
+      { silent: true },
+    )
+  }
+}
+
+function getItems<TMeta = Record<string, unknown>>(
+  query: Query<unknown, TMeta, unknown>,
+): unknown[] {
+  return Array.isArray(query.state.data)
+    ? query.state.data
+    : query.state.data
+      ? [query.state.data]
+      : []
+}

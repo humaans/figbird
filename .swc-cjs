@@ -1,8 +1,8 @@
 {
   "jsc": {
     "parser": {
-      "syntax": "ecmascript",
-      "jsx": true
+      "syntax": "typescript",
+      "tsx": true
     }
   },
   "module": {
@@ -12,5 +12,6 @@
     "targets": {
       "browsers": ["extends browserslist-config-baseline"]
     }
-  }
+  },
+  "sourceMaps": true,
 }
