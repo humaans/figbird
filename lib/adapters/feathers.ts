@@ -1,5 +1,15 @@
 import type { Adapter, EventHandlers, QueryResponse } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
+import type {
+  Schema,
+  ServiceNames,
+  ServiceItem,
+  ServiceCreate,
+  ServiceUpdate,
+  ServicePatch,
+  ServiceQuery,
+  ServiceMethods,
+} from '../core/schema.js'
 
 // Helper types for field extraction
 type IdExtractor = (item: unknown) => string | number | undefined
@@ -97,6 +107,55 @@ export interface FeathersService {
 export interface FeathersClient {
   service(name: string): FeathersService
   [key: string]: unknown
+}
+
+/**
+ * Typed Feathers service for a specific service in the schema.
+ * Provides full type safety for CRUD methods and custom methods.
+ */
+export type TypedFeathersService<
+  TItem,
+  TCreate,
+  TUpdate,
+  TPatch,
+  TQuery,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  TMethods extends Record<string, (...args: any[]) => any>,
+> = {
+  get(id: string | number, params?: FeathersParams<TQuery>): Promise<TItem>
+  find(
+    params?: FeathersParams<TQuery>,
+  ): Promise<{ data: TItem[]; total?: number; limit?: number; skip?: number } | TItem[]>
+  create(data: TCreate, params?: FeathersParams<TQuery>): Promise<TItem>
+  create(data: TCreate[], params?: FeathersParams<TQuery>): Promise<TItem[]>
+  update(id: string | number, data: TUpdate, params?: FeathersParams<TQuery>): Promise<TItem>
+  patch(id: string | number, data: TPatch, params?: FeathersParams<TQuery>): Promise<TItem>
+  remove(id: string | number, params?: FeathersParams<TQuery>): Promise<TItem>
+  on(event: string, listener: (data: TItem) => void): void
+  off(event: string, listener: (data: TItem) => void): void
+} & TMethods
+
+/**
+ * Typed Feathers client based on schema.
+ * Uses a mapped type that creates a union of call signatures, enabling literal
+ * narrowing: when you call service('notes'), only the 'notes' signature matches.
+ *
+ * @example
+ * const client: TypedFeathersClient<typeof schema> = ...
+ * const note = await client.service('notes').get('1')  // note: Note
+ * await client.service('notes').archive(['1'])         // Custom method typed!
+ */
+export type TypedFeathersClient<S extends Schema> = {
+  service<N extends ServiceNames<S>>(
+    serviceName: N,
+  ): TypedFeathersService<
+    ServiceItem<S, N>,
+    ServiceCreate<S, N>,
+    ServiceUpdate<S, N>,
+    ServicePatch<S, N>,
+    ServiceQuery<S, N>,
+    ServiceMethods<S, N>
+  >
 }
 
 interface FeathersAdapterOptions {

@@ -1,4 +1,5 @@
 import type { AdapterFindMeta, AdapterParams } from '../adapters/adapter.js'
+import type { FeathersClient, TypedFeathersClient } from '../adapters/feathers.js'
 import { splitConfig, type Figbird, type QueryConfig } from '../core/figbird.js'
 import type {
   Schema,
@@ -50,6 +51,8 @@ type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   ServicePatch<S, N>
 >
 
+type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
+
 // Type helper to extract schema and adapter types from a Figbird instance
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type InferSchema<F> = F extends Figbird<infer S, any> ? S : never
@@ -83,6 +86,7 @@ export function createHooks<F extends Figbird<any, any>>(
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
+  useFeathers: UseFeathersForSchema<InferSchema<F>>
 } {
   type S = InferSchema<F>
   type TParams = InferParams<F>
@@ -138,9 +142,20 @@ export function createHooks<F extends Figbird<any, any>>(
     >
   }
 
+  function useTypedFeathers() {
+    const adapter = figbird.adapter as { feathers?: FeathersClient }
+    if (!adapter?.feathers) {
+      throw new Error('useFeathers must be used with a Feathers adapter')
+    }
+    // Cast through unknown: FeathersClient has the same runtime shape as TypedFeathersClient,
+    // we're just adding type information based on the schema
+    return adapter.feathers as unknown as TypedFeathersClient<S>
+  }
+
   return {
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
+    useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
   }
 }

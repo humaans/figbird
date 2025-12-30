@@ -13,68 +13,93 @@ export interface ServiceTypeDefinition {
   update?: unknown
   patch?: unknown
   query?: unknown
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  methods?: Record<string, (...args: any[]) => any>
 }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyMethodsType = Record<string, (...args: any[]) => any>
 
 // Internal service representation - matches expected type structure
 export interface Service<
   TItem = Record<string, unknown>,
   TQuery = Record<string, unknown>,
   TName extends string = string,
+  TCreate = unknown,
+  TUpdate = unknown,
+  TPatch = unknown,
+  TMethods extends AnyMethodsType = AnyMethodsType,
 > {
   readonly name: TName
   readonly [$phantom]?: {
     item: TItem
     query: TQuery
-    // Store additional payload types from service definition
-    create: unknown
-    update: unknown
-    patch: unknown
+    create: TCreate
+    update: TUpdate
+    patch: TPatch
+    methods: TMethods
   }
 }
+
+// Helper types to derive payload types from service definition
+type DeriveCreate<TServiceDef extends ServiceTypeDefinition> =
+  TServiceDef['create'] extends undefined ? Partial<TServiceDef['item']> : TServiceDef['create']
+
+type DeriveUpdate<TServiceDef extends ServiceTypeDefinition> =
+  TServiceDef['update'] extends undefined ? TServiceDef['item'] : TServiceDef['update']
+
+type DerivePatch<TServiceDef extends ServiceTypeDefinition> = TServiceDef['patch'] extends undefined
+  ? Partial<TServiceDef['item']>
+  : TServiceDef['patch']
+
+type DeriveMethods<TServiceDef extends ServiceTypeDefinition> =
+  TServiceDef['methods'] extends undefined
+    ? Record<string, never>
+    : NonNullable<TServiceDef['methods']>
+
+type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = TServiceDef extends { query: infer Q }
+  ? Q
+  : Record<string, unknown>
 
 // Phase 1: Create a service definition (no name yet)
 export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
   TServiceDef['item'],
-  TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>,
-  string
-> & {
-  readonly [$phantom]?: {
-    item: TServiceDef['item']
-    query: TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>
-    create: TServiceDef['create'] extends undefined
-      ? Partial<TServiceDef['item']>
-      : TServiceDef['create']
-    update: TServiceDef['update'] extends undefined ? TServiceDef['item'] : TServiceDef['update']
-    patch: TServiceDef['patch'] extends undefined
-      ? Partial<TServiceDef['item']>
-      : TServiceDef['patch']
-  }
-} {
-  return {
-    name: '', // Name will be set in createSchema
-  } as Service<
+  DeriveQuery<TServiceDef>,
+  string,
+  DeriveCreate<TServiceDef>,
+  DeriveUpdate<TServiceDef>,
+  DerivePatch<TServiceDef>,
+  DeriveMethods<TServiceDef> extends AnyMethodsType ? DeriveMethods<TServiceDef> : AnyMethodsType
+> {
+  return { name: '' } as Service<
     TServiceDef['item'],
-    TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>,
-    string
-  > & {
-    readonly [$phantom]?: {
-      item: TServiceDef['item']
-      query: TServiceDef extends { query: infer Q } ? Q : Record<string, unknown>
-      create: TServiceDef['create'] extends undefined
-        ? Partial<TServiceDef['item']>
-        : TServiceDef['create']
-      update: TServiceDef['update'] extends undefined ? TServiceDef['item'] : TServiceDef['update']
-      patch: TServiceDef['patch'] extends undefined
-        ? Partial<TServiceDef['item']>
-        : TServiceDef['patch']
-    }
-  }
+    DeriveQuery<TServiceDef>,
+    string,
+    DeriveCreate<TServiceDef>,
+    DeriveUpdate<TServiceDef>,
+    DerivePatch<TServiceDef>,
+    DeriveMethods<TServiceDef> extends AnyMethodsType ? DeriveMethods<TServiceDef> : AnyMethodsType
+  >
 }
 
 // Base schema interface - flexible to preserve specific service types
 export interface Schema {
   services: Record<string, Service<unknown, unknown, string>>
 }
+
+// Helper type to extract all service parameters and update name
+type ExtractServiceWithName<S, N extends string> =
+  S extends Service<
+    infer TItem,
+    infer TQuery,
+    string,
+    infer TCreate,
+    infer TUpdate,
+    infer TPatch,
+    infer TMethods extends AnyMethodsType
+  >
+    ? Service<TItem, TQuery, N, TCreate, TUpdate, TPatch, TMethods>
+    : never
 
 // Phase 2: Create a schema with services object map (preserves literal keys)
 export function createSchema<
@@ -83,26 +108,14 @@ export function createSchema<
   services: TServiceMap
 }): {
   services: {
-    readonly [K in keyof TServiceMap]: TServiceMap[K] extends Service<
-      infer TItem,
-      infer TQuery,
-      string
-    >
-      ? Service<TItem, TQuery, K & string>
-      : never
+    readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
   }
 } {
   // Assign names to services based on their keys in the map
   const serviceMap = Object.fromEntries(
     Object.entries(config.services).map(([name, service]) => [name, { ...service, name }]),
   ) as {
-    readonly [K in keyof TServiceMap]: TServiceMap[K] extends Service<
-      infer TItem,
-      infer TQuery,
-      string
-    >
-      ? Service<TItem, TQuery, K & string>
-      : never
+    readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
   }
   return { services: serviceMap }
 }
@@ -127,6 +140,14 @@ export type ServicePatch<S extends Schema, N extends ServiceNames<S>> =
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
   ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyMethods = Record<string, (...args: any[]) => any>
+
+export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
+  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends AnyMethods } }
+    ? M
+    : Record<string, never>
+
 // Utility type to extract item type from a service
 export type Item<S> = S extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
 
@@ -141,6 +162,9 @@ export type Patch<S> = S extends { [$phantom]?: { patch: infer P } } ? P : Recor
 
 // Utility type to extract query type from a service
 export type Query<S> = S extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
+
+// Utility type to extract methods from a service
+export type Methods<S> = S extends { [$phantom]?: { methods: infer M } } ? M : Record<string, never>
 
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(

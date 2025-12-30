@@ -92,14 +92,18 @@ test('type narrowing works correctly with multiple services', t => {
   const taskItemType = getTypeAtPosition(fixturePath, 'TaskServiceItem')
   const tasksType = getTypeAtPosition(fixturePath, 'tasks')
 
-  // Test that the key types are working correctly
-  t.is(
-    personServiceType,
-    'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, "api/people">',
+  // Test that the key types are working correctly (Service has more type parameters now)
+  t.true(
+    personServiceType.startsWith(
+      'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, "api/people"',
+    ),
+    `Expected personServiceType to start with Service<Person, ...>, got: ${personServiceType}`,
   )
-  t.is(
-    taskServiceType,
-    'import("/Users/karolis/projects/figbird/lib/index").Service<Task, Record<string, unknown>, "api/tasks">',
+  t.true(
+    taskServiceType.startsWith(
+      'import("/Users/karolis/projects/figbird/lib/index").Service<Task, Record<string, unknown>, "api/tasks"',
+    ),
+    `Expected taskServiceType to start with Service<Task, ...>, got: ${taskServiceType}`,
   )
 
   // Test that ServiceItem extraction is working

@@ -9,6 +9,7 @@ export type {
   AnySchema,
   Create,
   Item,
+  Methods,
   Patch,
   Query,
   Schema,
@@ -16,6 +17,7 @@ export type {
   ServiceByName,
   ServiceCreate,
   ServiceItem,
+  ServiceMethods,
   ServiceNames,
   ServicePatch,
   ServiceQuery,
@@ -64,6 +66,8 @@ export type {
   FeathersFindMeta,
   FeathersParams,
   FeathersService,
+  TypedFeathersClient,
+  TypedFeathersService,
 } from './adapters/feathers.js'
 
 // Adapter options for creating custom adapters
