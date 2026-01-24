@@ -17,6 +17,11 @@ import {
   type UseInfiniteFindResult,
 } from './useInfiniteFind.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
+import {
+  usePaginatedFind as useBasePaginatedFind,
+  type UsePaginatedFindConfig,
+  type UsePaginatedFindResult,
+} from './usePaginatedFind.js'
 import { useQuery, type QueryResult } from './useQuery.js'
 
 /**
@@ -67,6 +72,17 @@ type UseInfiniteFindForSchema<
   } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
 ) => UseInfiniteFindResult<ServiceItem<S, N>, TMeta>
 
+type UsePaginatedFindForSchema<
+  S extends Schema,
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+> = <N extends ServiceNames<S>>(
+  serviceName: N,
+  config: Omit<UsePaginatedFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>, 'query'> & {
+    query?: ServiceQuery<S, N>
+  } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
+) => UsePaginatedFindResult<ServiceItem<S, N>, TMeta>
+
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
 // Type helper to extract schema and adapter types from a Figbird instance
@@ -102,6 +118,7 @@ export function createHooks<F extends Figbird<any, any>>(
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useInfiniteFind: UseInfiniteFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
+  usePaginatedFind: UsePaginatedFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
 } {
@@ -162,6 +179,20 @@ export function createHooks<F extends Figbird<any, any>>(
     )
   }
 
+  function useTypedPaginatedFind<N extends ServiceNames<S>>(
+    serviceName: N,
+    config: Omit<UsePaginatedFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>, 'query'> & {
+      query?: ServiceQuery<S, N>
+    } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
+  ) {
+    const service = findServiceByName(figbird.schema, serviceName)
+    const actualServiceName = service?.name ?? serviceName
+    return useBasePaginatedFind<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
+      actualServiceName,
+      config as UsePaginatedFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>,
+    )
+  }
+
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
@@ -187,6 +218,7 @@ export function createHooks<F extends Figbird<any, any>>(
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useInfiniteFind: useTypedInfiniteFind as UseInfiniteFindForSchema<S, TParams, TMeta>,
+    usePaginatedFind: useTypedPaginatedFind as UsePaginatedFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
   }

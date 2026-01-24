@@ -39,6 +39,7 @@ Queries are live - if a record is created that matches your query, it appears. I
 - **Live queries** - results update as records are created, modified, or removed
 - **Shared cache** - same data across components, always consistent
 - **Realtime built-in** - Feathers websocket events update your UI automatically
+- **Pagination hooks** - infinite scroll and page-based navigation with realtime support
 - **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
 - **Full TypeScript** - define a schema once, get inference everywhere
 - **Framework-agnostic core** - works outside React for SSR, testing, or background sync
@@ -293,6 +294,112 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 - `error` - error object if request failed
 - `refetch` - function to refetch data
 
+## useInfiniteFind
+
+Fetches resources with infinite scroll / "load more" pagination. Data accumulates across pages as you call `loadMore()`. Supports both cursor-based and offset-based pagination.
+
+```ts
+const {
+  data,
+  meta,
+  status,
+  isFetching,
+  isLoadingMore,
+  hasNextPage,
+  loadMore,
+  refetch,
+  error,
+  loadMoreError,
+} = useInfiniteFind('notes', {
+  query: { $sort: { createdAt: -1 } },
+  limit: 20,
+})
+```
+
+#### Arguments
+
+- `serviceName` - the name of Feathers service
+- `config` - configuration object
+
+#### Config options
+
+- `query` - query parameters for filtering/sorting
+- `limit` - page size (uses adapter default if not specified)
+- `skip` - setting to true will not fetch the data
+- `realtime` - one of `merge` (default), `refetch` or `disabled`
+- `fetchAllPages` - fetch all pages automatically on initial load
+- `matcher` - custom matcher function for realtime events
+- `sorter` - custom sorter for inserting realtime events in correct order
+- `getPageParam` - custom function to extract next page param from response
+- `getHasNextPage` - custom function to determine if more pages exist
+
+#### Returns
+
+- `data` - accumulated data from all loaded pages (array)
+- `meta` - metadata from the last fetched page
+- `status` - one of `loading`, `success` or `error`
+- `isFetching` - `true` if any fetch is in progress
+- `isLoadingMore` - `true` if loading more pages
+- `hasNextPage` - whether more pages are available
+- `loadMore` - function to load the next page
+- `refetch` - function to refetch from the beginning
+- `error` - error from initial fetch
+- `loadMoreError` - error from loadMore operation
+
+## usePaginatedFind
+
+Fetches resources with traditional page-based navigation. Shows one page at a time with navigation controls. Previous page data stays visible during transitions for a smooth UX.
+
+```ts
+const {
+  data,
+  meta,
+  status,
+  page,
+  totalPages,
+  hasNextPage,
+  hasPrevPage,
+  setPage,
+  nextPage,
+  prevPage,
+  refetch,
+} = usePaginatedFind('notes', {
+  query: { $sort: { createdAt: -1 } },
+  limit: 20,
+})
+```
+
+#### Arguments
+
+- `serviceName` - the name of Feathers service
+- `config` - configuration object (limit is required)
+
+#### Config options
+
+- `query` - query parameters for filtering/sorting
+- `limit` - page size (required)
+- `initialPage` - starting page number, 1-indexed (default: 1)
+- `skip` - setting to true will not fetch the data
+- `realtime` - one of `merge` (default), `refetch` or `disabled`
+- `matcher` - custom matcher function for realtime events
+- `getTotal` - custom function to extract total count from meta
+
+#### Returns
+
+- `data` - data for the current page (array)
+- `meta` - metadata for the current page
+- `status` - one of `loading`, `success` or `error`
+- `isFetching` - `true` if fetching data
+- `error` - error object if request failed
+- `page` - current page number (1-indexed)
+- `totalPages` - total number of pages
+- `hasNextPage` - whether there is a next page
+- `hasPrevPage` - whether there is a previous page
+- `setPage` - function to navigate to a specific page
+- `nextPage` - function to go to next page
+- `prevPage` - function to go to previous page
+- `refetch` - function to refetch current page
+
 ## useMutation
 
 Provides methods to create, update, patch, and remove resources. Mutations automatically update the cache, so all components using related queries re-render with fresh data.
@@ -379,14 +486,21 @@ React context provider that makes the Figbird instance available to all hooks in
 
 ## createHooks
 
-`createHooks(figbird)` binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns `{ useFind, useGet, useMutation, useFeathers }` with full service- and adapter-aware TypeScript types.
+`createHooks(figbird)` binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns `{ useFind, useGet, useInfiniteFind, usePaginatedFind, useMutation, useFeathers }` with full service- and adapter-aware TypeScript types.
 
 ```ts
 import { Figbird, FeathersAdapter, createHooks } from 'figbird'
 
 const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ adapter, schema })
-export const { useFind, useGet, useMutation, useFeathers } = createHooks(figbird)
+export const {
+  useFind,
+  useGet,
+  useInfiniteFind,
+  usePaginatedFind,
+  useMutation,
+  useFeathers,
+} = createHooks(figbird)
 
 // Later in components
 function People() {
