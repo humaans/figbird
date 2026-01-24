@@ -43,6 +43,7 @@ export type {
 // react hooks
 export { createHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird } from './react/react.js'
+export { useInfiniteFind } from './react/useInfiniteFind.js'
 export { useFeathers } from './react/useFeathers.js'
 export { useMutation } from './react/useMutation.js'
 export { useFind, useGet } from './react/useQuery.js'
@@ -57,6 +58,7 @@ export type {
 } from './core/figbird.js'
 
 // React hook result types (already exported but let's be complete)
+export type { UseInfiniteFindConfig, UseInfiniteFindResult } from './react/useInfiniteFind.js'
 export type { UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQuery.js'
 

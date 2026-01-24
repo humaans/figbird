@@ -70,7 +70,8 @@ export interface FeathersParams<TQuery = Record<string, unknown>> {
 }
 
 /**
- * Feathers-specific metadata for find operations
+ * Feathers-specific metadata for find operations.
+ * Supports both offset pagination (total/limit/skip) and cursor pagination (hasNextPage/endCursor).
  */
 export interface FeathersFindMeta {
   /** Total number of items matching the query (may be -1 if unknown). */
@@ -79,6 +80,10 @@ export interface FeathersFindMeta {
   limit: number
   /** Number of items skipped (offset) for this page. */
   skip: number
+  /** Whether there are more pages available (cursor pagination). */
+  hasNextPage?: boolean
+  /** Cursor to fetch the next page (cursor pagination). */
+  endCursor?: string | null
   /** Additional adapter-specific metadata. */
   [key: string]: unknown
 }
@@ -245,8 +250,34 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     if (Array.isArray(res)) {
       return { data: res, meta: { total: -1, limit: res.length, skip: 0 } }
     } else {
-      const { data, total = -1, limit = data.length, skip = 0, ...rest } = res
-      return { data, meta: { total, limit, skip, ...rest } }
+      const {
+        data,
+        total = -1,
+        limit = data.length,
+        skip = 0,
+        hasNextPage,
+        endCursor,
+        ...rest
+      } = res as {
+        data: unknown[]
+        total?: number
+        limit?: number
+        skip?: number
+        hasNextPage?: boolean
+        endCursor?: string | null
+        [key: string]: unknown
+      }
+      return {
+        data,
+        meta: {
+          total,
+          limit,
+          skip,
+          ...(hasNextPage !== undefined && { hasNextPage }),
+          ...(endCursor !== undefined && { endCursor }),
+          ...rest,
+        },
+      }
     }
   }
 
