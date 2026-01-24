@@ -126,12 +126,8 @@ function NoteList<TMeta = any>({ notes, keyField = 'id' }: NoteListProps<TMeta>)
   }
 
   if (notes.status === 'loading') {
+    // When skip:true, status is 'loading' with isFetching:false
     return <div className='spinner'>loading...</div>
-  }
-
-  if (notes.status === 'idle') {
-    // When skip:true, status is 'idle' and data is null
-    return null
   }
 
   // At this point, TypeScript knows status === 'success' and data is not null
@@ -755,7 +751,7 @@ test('useFind with skip', async t => {
     </App>,
   )
 
-  t.is($('.data')!.innerHTML, 'idle')
+  t.is($('.data')!.innerHTML, 'loading')
   t.is(feathers.service('notes').counts.find, 0, 'No find() calls when skip=true')
 
   await flush(() => {
@@ -2138,7 +2134,7 @@ test('useFind handles rapid query parameter changes without showing stale data',
     </App>,
   )
 
-  t.is($('.status')!.innerHTML, 'idle')
+  t.is($('.status')!.innerHTML, 'loading')
 
   // Rapid changes: slow query followed by fast query
   await flush(() => {
