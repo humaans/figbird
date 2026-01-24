@@ -20,10 +20,13 @@ export interface UseInfiniteFindConfig<TItem, TQuery, TMeta> {
   matcher?: (query: TQuery | undefined) => (item: TItem) => boolean
   /** Custom sorter for inserting realtime events (default: built from query.$sort) */
   sorter?: (a: TItem, b: TItem) => number
-  /** Custom cursor extraction (default: meta.endCursor) */
-  getCursor?: (meta: TMeta, data: TItem[]) => string | null
-  /** Custom hasNextPage extraction (default: meta.hasNextPage) */
-  getHasNextPage?: (meta: TMeta, data: TItem[]) => boolean
+  /**
+   * Extract next page param from response. Returns cursor string, skip number, or null if no more pages.
+   * Auto-detects mode: uses cursor if meta.endCursor exists, otherwise uses offset (skip).
+   */
+  getPageParam?: (meta: TMeta, data: TItem[], allData: TItem[]) => string | number | null
+  /** Custom hasNextPage extraction (default: meta.hasNextPage or derived from getPageParam) */
+  getHasNextPage?: (meta: TMeta, data: TItem[], allData: TItem[]) => boolean
 }
 
 /**
@@ -53,7 +56,7 @@ export interface UseInfiniteFindResult<TItem, TMeta> {
 }
 
 // State shape for the reducer
-interface CursorState<TItem, TMeta> {
+interface InfiniteState<TItem, TMeta> {
   status: 'loading' | 'success' | 'error'
   data: TItem[]
   meta: TMeta
@@ -62,18 +65,18 @@ interface CursorState<TItem, TMeta> {
   loadMoreError: Error | null
   error: Error | null
   hasNextPage: boolean
-  cursor: string | null
+  pageParam: string | number | null // cursor string OR skip number
 }
 
 // Action types
-type CursorAction<TItem, TMeta> =
+type InfiniteAction<TItem, TMeta> =
   | { type: 'FETCH_START' }
   | {
       type: 'FETCH_SUCCESS'
       data: TItem[]
       meta: TMeta
       hasNextPage: boolean
-      cursor: string | null
+      pageParam: string | number | null
     }
   | { type: 'FETCH_ERROR'; error: Error }
   | { type: 'LOAD_MORE_START' }
@@ -82,7 +85,7 @@ type CursorAction<TItem, TMeta> =
       data: TItem[]
       meta: TMeta
       hasNextPage: boolean
-      cursor: string | null
+      pageParam: string | number | null
     }
   | { type: 'LOAD_MORE_ERROR'; error: Error }
   | { type: 'REFETCH' }
@@ -90,9 +93,9 @@ type CursorAction<TItem, TMeta> =
 
 function createReducer<TItem, TMeta>(emptyMeta: TMeta) {
   return function reducer(
-    state: CursorState<TItem, TMeta>,
-    action: CursorAction<TItem, TMeta>,
-  ): CursorState<TItem, TMeta> {
+    state: InfiniteState<TItem, TMeta>,
+    action: InfiniteAction<TItem, TMeta>,
+  ): InfiniteState<TItem, TMeta> {
     switch (action.type) {
       case 'FETCH_START':
         return {
@@ -110,7 +113,7 @@ function createReducer<TItem, TMeta>(emptyMeta: TMeta) {
           loadMoreError: null,
           error: null,
           hasNextPage: action.hasNextPage,
-          cursor: action.cursor,
+          pageParam: action.pageParam,
         }
       case 'FETCH_ERROR':
         return {
@@ -132,7 +135,7 @@ function createReducer<TItem, TMeta>(emptyMeta: TMeta) {
           meta: action.meta,
           isLoadingMore: false,
           hasNextPage: action.hasNextPage,
-          cursor: action.cursor,
+          pageParam: action.pageParam,
         }
       case 'LOAD_MORE_ERROR':
         return {
@@ -150,7 +153,7 @@ function createReducer<TItem, TMeta>(emptyMeta: TMeta) {
           loadMoreError: null,
           error: null,
           hasNextPage: false,
-          cursor: null,
+          pageParam: null,
         }
       case 'REALTIME_UPDATE':
         return {
@@ -243,6 +246,37 @@ export function useInfiniteFind<
   const figbird = useFigbird()
   const adapter = figbird.adapter as Adapter<unknown, TMeta, TQuery & Record<string, unknown>>
 
+  // Default getPageParam: auto-detect mode from response
+  const defaultGetPageParam = (meta: TMeta, data: TItem[], _allData: TItem[]) => {
+    // Cursor mode: if endCursor exists, use it
+    if ('endCursor' in meta && meta.endCursor != null) {
+      return meta.endCursor as string
+    }
+    // Offset mode: calculate next skip value
+    const skip = (meta as Record<string, unknown>).skip as number | undefined
+    const limit = (meta as Record<string, unknown>).limit as number | undefined
+    const total = (meta as Record<string, unknown>).total as number | undefined
+    const currentSkip = skip ?? 0
+    const nextSkip = currentSkip + data.length
+    // No more pages if we've fetched everything
+    if (total !== undefined && nextSkip >= total) return null
+    // No more pages if we got fewer items than limit (and limit is known)
+    if (limit !== undefined && data.length < limit) return null
+    // If we got no data, no more pages
+    if (data.length === 0) return null
+    return nextSkip
+  }
+
+  // Default getHasNextPage: derive from pageParam or explicit meta.hasNextPage
+  const defaultGetHasNextPage = (meta: TMeta, data: TItem[], allData: TItem[]) => {
+    // If meta.hasNextPage is explicitly set, use it
+    if ('hasNextPage' in meta && typeof meta.hasNextPage === 'boolean') {
+      return meta.hasNextPage
+    }
+    // Otherwise derive from whether getPageParam returns non-null
+    return defaultGetPageParam(meta, data, allData) !== null
+  }
+
   const {
     query,
     skip = false,
@@ -251,8 +285,8 @@ export function useInfiniteFind<
     limit,
     matcher: customMatcher,
     sorter: customSorter,
-    getCursor = (meta: TMeta) => (meta.endCursor as string | null) ?? null,
-    getHasNextPage = (meta: TMeta) => (meta.hasNextPage as boolean) ?? false,
+    getPageParam = defaultGetPageParam,
+    getHasNextPage = defaultGetHasNextPage,
   } = config
 
   const emptyMeta = useMemo(() => adapter.emptyMeta(), [adapter])
@@ -267,7 +301,7 @@ export function useInfiniteFind<
     loadMoreError: null,
     error: null,
     hasNextPage: false,
-    cursor: null,
+    pageParam: null,
   })
 
   // Build matcher for realtime events
@@ -290,16 +324,16 @@ export function useInfiniteFind<
   const stateRef = useRef(state)
   stateRef.current = state
 
-  const configRef = useRef({ query, limit, getCursor, getHasNextPage })
-  configRef.current = { query, limit, getCursor, getHasNextPage }
+  const configRef = useRef({ query, limit, getPageParam, getHasNextPage })
+  configRef.current = { query, limit, getPageParam, getHasNextPage }
 
   // Fetch function
   const fetchPage = useCallback(
-    async (cursor: string | null, isLoadMore: boolean) => {
+    async (pageParam: string | number | null, isLoadMore: boolean, allData: TItem[] = []) => {
       const {
         query: currentQuery,
         limit: currentLimit,
-        getCursor: gc,
+        getPageParam: gpp,
         getHasNextPage: ghnp,
       } = configRef.current
 
@@ -307,7 +341,9 @@ export function useInfiniteFind<
         query: {
           ...currentQuery,
           ...(currentLimit && { $limit: currentLimit }),
-          ...(cursor && { cursor }),
+          // Add pagination param based on type
+          ...(typeof pageParam === 'string' && { cursor: pageParam }),
+          ...(typeof pageParam === 'number' && { $skip: pageParam }),
         },
       }
 
@@ -315,8 +351,9 @@ export function useInfiniteFind<
         const result = await adapter.find(serviceName, params)
         const data = result.data as TItem[]
         const meta = result.meta as TMeta
-        const nextCursor = gc(meta, data)
-        const hasMore = ghnp(meta, data)
+        const newAllData = isLoadMore ? [...allData, ...data] : data
+        const nextPageParam = gpp(meta, data, newAllData)
+        const hasMore = ghnp(meta, data, newAllData)
 
         if (isLoadMore) {
           dispatch({
@@ -324,7 +361,7 @@ export function useInfiniteFind<
             data,
             meta,
             hasNextPage: hasMore,
-            cursor: nextCursor,
+            pageParam: nextPageParam,
           })
         } else {
           dispatch({
@@ -332,11 +369,11 @@ export function useInfiniteFind<
             data,
             meta,
             hasNextPage: hasMore,
-            cursor: nextCursor,
+            pageParam: nextPageParam,
           })
         }
 
-        return { data, meta, hasNextPage: hasMore, cursor: nextCursor }
+        return { data, meta, hasNextPage: hasMore, pageParam: nextPageParam, allData: newAllData }
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err))
         if (isLoadMore) {
@@ -359,21 +396,23 @@ export function useInfiniteFind<
     async function initialFetch() {
       dispatch({ type: 'FETCH_START' })
 
-      const result = await fetchPage(null, false)
+      const result = await fetchPage(null, false, [])
 
       if (cancelled || !result) return
 
       // If fetchAllPages is enabled, continue fetching
-      if (fetchAllPages && result.hasNextPage && result.cursor) {
-        let currentCursor: string | null = result.cursor
+      if (fetchAllPages && result.hasNextPage && result.pageParam !== null) {
+        let currentPageParam: string | number | null = result.pageParam
         let hasMore: boolean = result.hasNextPage
+        let allData: TItem[] = result.allData
 
-        while (hasMore && currentCursor && !cancelled) {
+        while (hasMore && currentPageParam !== null && !cancelled) {
           dispatch({ type: 'LOAD_MORE_START' })
-          const nextResult = await fetchPage(currentCursor, true)
+          const nextResult = await fetchPage(currentPageParam, true, allData)
           if (!nextResult || cancelled) break
-          currentCursor = nextResult.cursor
+          currentPageParam = nextResult.pageParam
           hasMore = nextResult.hasNextPage
+          allData = nextResult.allData
         }
       }
     }
@@ -389,17 +428,21 @@ export function useInfiniteFind<
   // loadMore function
   const loadMore = useCallback(() => {
     const currentState = stateRef.current
-    if (currentState.isLoadingMore || !currentState.hasNextPage || !currentState.cursor) {
+    if (
+      currentState.isLoadingMore ||
+      !currentState.hasNextPage ||
+      currentState.pageParam === null
+    ) {
       return
     }
     dispatch({ type: 'LOAD_MORE_START' })
-    fetchPage(currentState.cursor, true)
+    fetchPage(currentState.pageParam, true, currentState.data)
   }, [fetchPage])
 
   // refetch function
   const refetch = useCallback(() => {
     dispatch({ type: 'REFETCH' })
-    fetchPage(null, false)
+    fetchPage(null, false, [])
   }, [fetchPage])
 
   // Realtime subscription effect

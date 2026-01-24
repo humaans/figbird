@@ -687,3 +687,306 @@ test('useInfiniteFind realtime disabled ignores events', async t => {
 
   unmount()
 })
+
+// Offset-based pagination tests
+
+test('useInfiniteFind offset mode: initial fetch returns first page', async t => {
+  const { $, flush, render, unmount } = dom()
+
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 300 },
+    { id: 2, title: 'Doc 2', createdAt: 200 },
+    { id: 3, title: 'Doc 3', createdAt: 100 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 2,
+      mode: 'offset',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { useInfiniteFind } = createHooks(figbird)
+
+  function App() {
+    const { status, data, hasNextPage } = useInfiniteFind('api/documents', {
+      query: { $sort: { createdAt: -1 } },
+    })
+
+    return (
+      <div>
+        <span className='status'>{status}</span>
+        <span className='count'>{data.length}</span>
+        <span className='hasNextPage'>{String(hasNextPage)}</span>
+        {data.map(d => (
+          <span key={d.id} className='doc'>
+            {d.title}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  t.is($('.status')?.textContent, 'success')
+  t.is($('.count')?.textContent, '2')
+  t.is($('.hasNextPage')?.textContent, 'true')
+
+  unmount()
+})
+
+test('useInfiniteFind offset mode: loadMore fetches with correct $skip', async t => {
+  const { $, $all, flush, render, unmount, click } = dom()
+
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 300 },
+    { id: 2, title: 'Doc 2', createdAt: 200 },
+    { id: 3, title: 'Doc 3', createdAt: 100 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 2,
+      mode: 'offset',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { useInfiniteFind } = createHooks(figbird)
+
+  function App() {
+    const { status, data, hasNextPage, loadMore, isLoadingMore } = useInfiniteFind(
+      'api/documents',
+      {
+        query: { $sort: { createdAt: -1 } },
+      },
+    )
+
+    return (
+      <div>
+        <span className='status'>{status}</span>
+        <span className='count'>{data.length}</span>
+        <span className='hasNextPage'>{String(hasNextPage)}</span>
+        <span className='isLoadingMore'>{String(isLoadingMore)}</span>
+        {data.map(d => (
+          <span key={d.id} className='doc'>
+            {d.title}
+          </span>
+        ))}
+        {hasNextPage && (
+          <button onClick={loadMore} className='load-more'>
+            Load More
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  t.is($('.count')?.textContent, '2')
+  t.is($('.hasNextPage')?.textContent, 'true')
+
+  // Click load more
+  const loadMoreBtn = $('.load-more')
+  t.truthy(loadMoreBtn)
+  click(loadMoreBtn!)
+
+  await flush()
+
+  t.is($('.count')?.textContent, '3')
+  t.is($('.hasNextPage')?.textContent, 'false')
+  t.is($all('.doc').length, 3)
+
+  unmount()
+})
+
+test('useInfiniteFind offset mode: hasNextPage false when no more data', async t => {
+  const { $, flush, render, unmount } = dom()
+
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 300 },
+    { id: 2, title: 'Doc 2', createdAt: 200 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 2,
+      mode: 'offset',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { useInfiniteFind } = createHooks(figbird)
+
+  function App() {
+    const { data, hasNextPage, loadMore } = useInfiniteFind('api/documents', {
+      query: { $sort: { createdAt: -1 } },
+    })
+
+    return (
+      <div>
+        <span className='count'>{data.length}</span>
+        <span className='hasNextPage'>{String(hasNextPage)}</span>
+        {hasNextPage && (
+          <button onClick={loadMore} className='load-more'>
+            Load More
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  // With 2 items and pageSize 2, skip + data.length >= total, so hasNextPage should be false
+  t.is($('.count')?.textContent, '2')
+  t.is($('.hasNextPage')?.textContent, 'false')
+  t.falsy($('.load-more'))
+
+  unmount()
+})
+
+test('useInfiniteFind offset mode: hasNextPage false when data.length < limit', async t => {
+  const { $, flush, render, unmount } = dom()
+
+  // 3 items with pageSize 5 means we get all items in first page
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 300 },
+    { id: 2, title: 'Doc 2', createdAt: 200 },
+    { id: 3, title: 'Doc 3', createdAt: 100 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 5,
+      mode: 'offset',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { useInfiniteFind } = createHooks(figbird)
+
+  function App() {
+    const { data, hasNextPage } = useInfiniteFind('api/documents', {})
+
+    return (
+      <div>
+        <span className='count'>{data.length}</span>
+        <span className='hasNextPage'>{String(hasNextPage)}</span>
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  // Got 3 items but limit was 5, so data.length < limit means no more pages
+  t.is($('.count')?.textContent, '3')
+  t.is($('.hasNextPage')?.textContent, 'false')
+
+  unmount()
+})
+
+test('useInfiniteFind offset mode: multiple loadMore calls accumulate data', async t => {
+  const { $, $all, flush, render, unmount, click } = dom()
+
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 500 },
+    { id: 2, title: 'Doc 2', createdAt: 400 },
+    { id: 3, title: 'Doc 3', createdAt: 300 },
+    { id: 4, title: 'Doc 4', createdAt: 200 },
+    { id: 5, title: 'Doc 5', createdAt: 100 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 2,
+      mode: 'offset',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { useInfiniteFind } = createHooks(figbird)
+
+  function App() {
+    const { data, hasNextPage, loadMore } = useInfiniteFind('api/documents', {
+      query: { $sort: { createdAt: -1 } },
+    })
+
+    return (
+      <div>
+        <span className='count'>{data.length}</span>
+        <span className='hasNextPage'>{String(hasNextPage)}</span>
+        {data.map(d => (
+          <span key={d.id} className='doc'>
+            {d.title}
+          </span>
+        ))}
+        {hasNextPage && (
+          <button onClick={loadMore} className='load-more'>
+            Load More
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  t.is($('.count')?.textContent, '2')
+  t.is($('.hasNextPage')?.textContent, 'true')
+
+  // First loadMore: skip=2, get items 3-4
+  click($('.load-more')!)
+  await flush()
+
+  t.is($('.count')?.textContent, '4')
+  t.is($('.hasNextPage')?.textContent, 'true')
+
+  // Second loadMore: skip=4, get item 5
+  click($('.load-more')!)
+  await flush()
+
+  t.is($('.count')?.textContent, '5')
+  t.is($('.hasNextPage')?.textContent, 'false')
+  t.is($all('.doc').length, 5)
+
+  unmount()
+})

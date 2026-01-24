@@ -21,6 +21,7 @@ interface ServiceCounts {
 interface FindParams {
   query?: {
     $limit?: number
+    $skip?: number
     cursor?: string
     $sort?: Record<string, 1 | -1>
     [key: string]: unknown
@@ -28,11 +29,13 @@ interface FindParams {
   [key: string]: unknown
 }
 
+type PaginationMode = 'cursor' | 'offset'
+
 interface CursorFindResult {
   data: TestItem[]
-  hasNextPage: boolean
-  endCursor: string | null
-  total?: number
+  hasNextPage?: boolean // Only present in cursor mode
+  endCursor?: string | null // Only present in cursor mode
+  total: number
   limit: number
   skip: number
 }
@@ -41,6 +44,8 @@ interface CursorServiceOptions {
   data: TestItem[]
   pageSize: number
   failNextFind?: boolean
+  /** Pagination mode: 'cursor' (default) returns endCursor/hasNextPage, 'offset' returns only skip/limit/total */
+  mode?: PaginationMode
 }
 
 class CursorService extends EventEmitter {
@@ -49,7 +54,8 @@ class CursorService extends EventEmitter {
   #originalOrder: (string | number)[]
   pageSize: number
   counts: ServiceCounts
-  #failNextFind: boolean;
+  #failNextFind: boolean
+  #mode: PaginationMode;
   [key: string]: unknown
 
   constructor(name: string, options: CursorServiceOptions) {
@@ -74,6 +80,7 @@ class CursorService extends EventEmitter {
       remove: 0,
     }
     this.#failNextFind = options.failNextFind ?? false
+    this.#mode = options.mode ?? 'cursor'
   }
 
   get(id: string | number): Promise<TestItem> {
@@ -95,15 +102,25 @@ class CursorService extends EventEmitter {
 
     const limit = params.query?.$limit ?? this.pageSize
     const cursor = params.query?.cursor
+    const skip = params.query?.$skip ?? 0
 
     // Get all items in original order
     const allItems = this.#originalOrder
       .map(id => this.#data.get(id))
       .filter((item): item is TestItem => item !== undefined)
 
-    // Find starting index based on cursor
+    // Find starting index based on cursor (cursor mode) or $skip (offset mode)
     let startIndex = 0
-    if (cursor) {
+    if (this.#mode === 'cursor' && cursor) {
+      const cursorId = parseInt(cursor, 10)
+      startIndex = this.#originalOrder.findIndex(id => id === cursorId)
+      if (startIndex === -1) {
+        startIndex = 0
+      }
+    } else if (this.#mode === 'offset') {
+      startIndex = skip
+    } else if (cursor) {
+      // Cursor mode with cursor param
       const cursorId = parseInt(cursor, 10)
       startIndex = this.#originalOrder.findIndex(id => id === cursorId)
       if (startIndex === -1) {
@@ -116,6 +133,18 @@ class CursorService extends EventEmitter {
     const hasNextPage = startIndex + limit < allItems.length
     const nextCursorId = hasNextPage ? this.#originalOrder[startIndex + limit] : null
 
+    // Return different shape based on mode
+    if (this.#mode === 'offset') {
+      // Offset mode: only return skip/limit/total (no endCursor/hasNextPage)
+      return Promise.resolve({
+        data: pageData,
+        total: allItems.length,
+        limit,
+        skip: startIndex,
+      })
+    }
+
+    // Cursor mode: include endCursor and hasNextPage
     return Promise.resolve({
       data: pageData,
       hasNextPage,
