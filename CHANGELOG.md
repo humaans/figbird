@@ -1,5 +1,14 @@
 # Figbird Changelog
 
+## 0.22.0
+
+New pagination hooks for infinite scroll and page-based navigation:
+
+- **`useInfiniteFind`** - Infinite scroll / "load more" pagination hook. Data accumulates across pages as you call `loadMore()`. Supports both cursor-based and offset-based backends with auto-detection. Includes realtime support with `merge`, `refetch`, or `disabled` modes.
+- **`usePaginatedFind`** - Traditional page-based navigation hook. Shows one page at a time with `nextPage()`, `prevPage()`, and `setPage(n)` controls. Previous page data stays visible during transitions for smooth UX. Supports both offset pagination (random page access) and cursor pagination (sequential navigation only).
+- **Adapter-level pagination config** - `FeathersAdapter` now accepts `getNextPageParam` and `getHasNextPage` options for customizing pagination logic. Default implementation auto-detects: cursor mode (uses `meta.endCursor`) takes priority, offset mode (uses `meta.skip`/`meta.total`) is fallback.
+- **Cursor support in `findAll()`** - The `allPages` option now works with cursor-based backends using the `$cursor` query param.
+
 ## 0.21.1
 
 - Remove the `idle` status from `useFind` and `useGet` result to keep consumer code simpler. For cases where `idle` was previously useful look for combination of status `loading` and `isFetching` false.
