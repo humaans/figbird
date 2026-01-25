@@ -109,9 +109,10 @@ export function useQuery<
   // the q.subscribe and q.getSnapshot stable and avoid unsubbing and resubbing
   // you don't need to do this outside React where you can more easily create a
   // stable reference to a query and use it for as long as you want
+  const fetchPolicy = (config as { fetchPolicy?: string }).fetchPolicy
   const _q = figbird.query(desc, {
     ...config,
-    ...(config.fetchPolicy === 'network-only' ? { uid: uniqueId } : {}),
+    ...(fetchPolicy === 'network-only' ? { uid: uniqueId } : {}),
   } as QueryConfig<unknown, unknown>)
 
   // a bit of React foo to create stable fn references

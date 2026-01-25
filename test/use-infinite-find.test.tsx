@@ -215,7 +215,7 @@ test('useInfiniteFind realtime created events insert at sorted position', async 
     },
   })
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
   const { useInfiniteFind } = createHooks(figbird)
 
   function App() {
@@ -271,7 +271,7 @@ test('useInfiniteFind realtime updated events update in place', async t => {
     },
   })
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
   const { useInfiniteFind } = createHooks(figbird)
 
   function App() {
@@ -328,7 +328,7 @@ test('useInfiniteFind realtime removed events remove from data', async t => {
     },
   })
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
   const { useInfiniteFind } = createHooks(figbird)
 
   function App() {
@@ -466,7 +466,7 @@ test('useInfiniteFind custom matcher works correctly', async t => {
     },
   })
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
   const { useInfiniteFind } = createHooks(figbird)
 
   function App() {
@@ -528,7 +528,7 @@ test('useInfiniteFind custom sorter works correctly', async t => {
     },
   })
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
   const { useInfiniteFind } = createHooks(figbird)
 
   function App() {

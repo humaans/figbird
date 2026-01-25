@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import type { Adapter, EventHandlers } from '../adapters/adapter.js'
+import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
+import type { InfiniteFindQueryConfig, InfiniteQueryState } from '../core/figbird.js'
 import { useFigbird } from './react.js'
 
 /**
@@ -46,185 +46,31 @@ export interface UseInfiniteFindResult<TItem, TMeta> {
   refetch: () => void
 }
 
-// State shape for the reducer
-interface InfiniteState<TItem, TMeta> {
-  status: 'loading' | 'success' | 'error'
-  data: TItem[]
-  meta: TMeta
-  isFetching: boolean
-  isLoadingMore: boolean
-  loadMoreError: Error | null
-  error: Error | null
-  hasNextPage: boolean
-  pageParam: string | number | null // cursor string OR skip number
-}
-
-// Action types
-type InfiniteAction<TItem, TMeta> =
-  | { type: 'FETCH_START' }
-  | {
-      type: 'FETCH_SUCCESS'
-      data: TItem[]
-      meta: TMeta
-      hasNextPage: boolean
-      pageParam: string | number | null
-    }
-  | { type: 'FETCH_ERROR'; error: Error }
-  | { type: 'LOAD_MORE_START' }
-  | {
-      type: 'LOAD_MORE_SUCCESS'
-      data: TItem[]
-      meta: TMeta
-      hasNextPage: boolean
-      pageParam: string | number | null
-    }
-  | { type: 'LOAD_MORE_ERROR'; error: Error }
-  | { type: 'REFETCH' }
-  | { type: 'REALTIME_UPDATE'; data: TItem[] }
-
-function createReducer<TItem, TMeta>(emptyMeta: TMeta) {
-  return function reducer(
-    state: InfiniteState<TItem, TMeta>,
-    action: InfiniteAction<TItem, TMeta>,
-  ): InfiniteState<TItem, TMeta> {
-    switch (action.type) {
-      case 'FETCH_START':
-        return {
-          ...state,
-          isFetching: true,
-          error: null,
-        }
-      case 'FETCH_SUCCESS':
-        return {
-          status: 'success',
-          data: action.data,
-          meta: action.meta,
-          isFetching: false,
-          isLoadingMore: false,
-          loadMoreError: null,
-          error: null,
-          hasNextPage: action.hasNextPage,
-          pageParam: action.pageParam,
-        }
-      case 'FETCH_ERROR':
-        return {
-          ...state,
-          status: 'error',
-          isFetching: false,
-          error: action.error,
-        }
-      case 'LOAD_MORE_START':
-        return {
-          ...state,
-          isLoadingMore: true,
-          loadMoreError: null,
-        }
-      case 'LOAD_MORE_SUCCESS':
-        return {
-          ...state,
-          data: [...state.data, ...action.data],
-          meta: action.meta,
-          isLoadingMore: false,
-          hasNextPage: action.hasNextPage,
-          pageParam: action.pageParam,
-        }
-      case 'LOAD_MORE_ERROR':
-        return {
-          ...state,
-          isLoadingMore: false,
-          loadMoreError: action.error,
-        }
-      case 'REFETCH':
-        return {
-          status: 'loading',
-          data: [],
-          meta: emptyMeta,
-          isFetching: true,
-          isLoadingMore: false,
-          loadMoreError: null,
-          error: null,
-          hasNextPage: false,
-          pageParam: null,
-        }
-      case 'REALTIME_UPDATE':
-        return {
-          ...state,
-          data: action.data,
-        }
-      default:
-        return state
-    }
+function getInitialInfiniteQueryState<TItem, TMeta extends Record<string, unknown>>(
+  emptyMeta: TMeta,
+): InfiniteQueryState<TItem, TMeta> {
+  return {
+    status: 'loading' as const,
+    data: [],
+    meta: emptyMeta,
+    isFetching: true,
+    isLoadingMore: false,
+    loadMoreError: null,
+    error: null,
+    hasNextPage: false,
+    pageParam: null,
   }
-}
-
-/**
- * Build a sorter function from a $sort object
- */
-function buildSorter<TItem>(
-  sort: Record<string, 1 | -1> | undefined,
-): (a: TItem, b: TItem) => number {
-  if (!sort || Object.keys(sort).length === 0) {
-    // Default: append at end (no sorting)
-    return () => 0
-  }
-
-  const sortEntries = Object.entries(sort)
-  return (a: TItem, b: TItem) => {
-    for (const [key, direction] of sortEntries) {
-      const aVal = (a as Record<string, unknown>)[key]
-      const bVal = (b as Record<string, unknown>)[key]
-
-      let cmp = 0
-      if (aVal == null && bVal == null) {
-        cmp = 0
-      } else if (aVal == null) {
-        cmp = 1
-      } else if (bVal == null) {
-        cmp = -1
-      } else if (typeof aVal === 'string' && typeof bVal === 'string') {
-        cmp = aVal.localeCompare(bVal)
-      } else if (aVal < bVal) {
-        cmp = -1
-      } else if (aVal > bVal) {
-        cmp = 1
-      }
-
-      if (cmp !== 0) {
-        return cmp * direction
-      }
-    }
-    return 0
-  }
-}
-
-/**
- * Insert an item into a sorted array at the correct position
- */
-function insertSorted<TItem>(
-  data: TItem[],
-  item: TItem,
-  sorter: (a: TItem, b: TItem) => number,
-): TItem[] {
-  const result = [...data]
-  let low = 0
-  let high = result.length
-
-  while (low < high) {
-    const mid = Math.floor((low + high) / 2)
-    if (sorter(item, result[mid]!) <= 0) {
-      high = mid
-    } else {
-      low = mid + 1
-    }
-  }
-
-  result.splice(low, 0, item)
-  return result
 }
 
 /**
  * Hook for infinite/cursor-based pagination with realtime updates.
  * Manages accumulated data across pages with loadMore functionality.
+ *
+ * This is a thin wrapper around Figbird's query system using useSyncExternalStore.
+ * All state is stored in Figbird's central store, enabling:
+ * - Consistency with mutations (patching an item updates it everywhere)
+ * - Entity deduplication across queries
+ * - Proper realtime event batching and handling
  */
 export function useInfiniteFind<
   TItem,
@@ -235,210 +81,63 @@ export function useInfiniteFind<
   config: UseInfiniteFindConfig<TItem, TQuery> = {},
 ): UseInfiniteFindResult<TItem, TMeta> {
   const figbird = useFigbird()
-  const adapter = figbird.adapter as Adapter<unknown, TMeta, TQuery & Record<string, unknown>>
 
-  const {
-    query,
-    skip = false,
-    realtime = 'merge',
-    limit,
-    matcher: customMatcher,
-    sorter: customSorter,
-  } = config
+  const { query, skip = false, realtime = 'merge', limit, matcher, sorter } = config
 
-  const emptyMeta = useMemo(() => adapter.emptyMeta(), [adapter])
-  const reducer = useMemo(() => createReducer<TItem, TMeta>(emptyMeta), [emptyMeta])
+  // Each hook instance gets its own unique query via instanceId.
+  // This ensures pagination state is not shared between components,
+  // while the underlying entities are still shared in the central cache.
+  const instanceId = useId()
 
-  const [state, dispatch] = useReducer(reducer, {
-    status: 'loading',
-    data: [],
-    meta: emptyMeta,
-    isFetching: !skip,
-    isLoadingMore: false,
-    loadMoreError: null,
-    error: null,
-    hasNextPage: false,
-    pageParam: null,
-  })
-
-  // Build matcher for realtime events
-  const itemMatcher = useMemo(() => {
-    if (realtime !== 'merge') return () => false
-    if (customMatcher) return customMatcher(query)
-    return adapter.matcher(query as (TQuery & Record<string, unknown>) | undefined) as (
-      item: TItem,
-    ) => boolean
-  }, [adapter, query, realtime, customMatcher])
-
-  // Build sorter for realtime insertions
-  const itemSorter = useMemo(() => {
-    if (customSorter) return customSorter
-    const sort = (query as { $sort?: Record<string, 1 | -1> } | undefined)?.$sort
-    return buildSorter<TItem>(sort)
-  }, [query, customSorter])
-
-  // Refs to access latest values in callbacks
-  const stateRef = useRef(state)
-  stateRef.current = state
-
-  const configRef = useRef({ query, limit })
-  configRef.current = { query, limit }
-
-  // Fetch function
-  const fetchPage = useCallback(
-    async (pageParam: string | number | null, isLoadMore: boolean, _allData: TItem[] = []) => {
-      const { query: currentQuery, limit: currentLimit } = configRef.current
-
-      const params: Record<string, unknown> = {
-        query: {
-          ...currentQuery,
-          ...(currentLimit && { $limit: currentLimit }),
-          // Add pagination param based on type
-          ...(typeof pageParam === 'string' && { $cursor: pageParam }),
-          ...(typeof pageParam === 'number' && { $skip: pageParam }),
-        },
-      }
-
-      try {
-        const result = await adapter.find(serviceName, params)
-        const data = result.data as TItem[]
-        const meta = result.meta as TMeta
-        const nextPageParam = adapter.getNextPageParam(meta, data)
-        const hasMore = adapter.getHasNextPage(meta, data)
-
-        if (isLoadMore) {
-          dispatch({
-            type: 'LOAD_MORE_SUCCESS',
-            data,
-            meta,
-            hasNextPage: hasMore,
-            pageParam: nextPageParam,
-          })
-        } else {
-          dispatch({
-            type: 'FETCH_SUCCESS',
-            data,
-            meta,
-            hasNextPage: hasMore,
-            pageParam: nextPageParam,
-          })
-        }
-
-        return { data, meta, hasNextPage: hasMore, pageParam: nextPageParam }
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err))
-        if (isLoadMore) {
-          dispatch({ type: 'LOAD_MORE_ERROR', error })
-        } else {
-          dispatch({ type: 'FETCH_ERROR', error })
-        }
-        return null
-      }
-    },
-    [adapter, serviceName],
+  // Build the query config
+  const queryConfig: InfiniteFindQueryConfig<TItem[], TQuery> = useMemo(
+    () => ({
+      skip,
+      realtime,
+      ...(limit !== undefined && { limit }),
+      ...(matcher !== undefined && { matcher }),
+      ...(sorter !== undefined && { sorter }),
+    }),
+    [skip, realtime, limit, matcher, sorter],
   )
 
-  // Initial fetch effect
-  useEffect(() => {
-    if (skip) return
+  // Create the query reference.
+  // We create a new one on each render but use useMemo with the hash to stabilize it.
+  const _q = figbird.query(
+    {
+      serviceName,
+      method: 'infiniteFind' as const,
+      params: query ? { query } : undefined,
+      instanceId,
+    },
+    queryConfig as InfiniteFindQueryConfig<unknown[], unknown>,
+  )
 
-    dispatch({ type: 'FETCH_START' })
-    fetchPage(null, false, [])
-    // Note: We intentionally use JSON.stringify(query) to re-fetch when query changes
-  }, [skip, fetchPage, JSON.stringify(query)])
+  // Stabilize the query ref by its hash
+  const q = useMemo(() => _q, [_q.hash()])
 
-  // loadMore function
-  const loadMore = useCallback(() => {
-    const currentState = stateRef.current
-    if (
-      currentState.isLoadingMore ||
-      !currentState.hasNextPage ||
-      currentState.pageParam === null
-    ) {
-      return
-    }
-    dispatch({ type: 'LOAD_MORE_START' })
-    fetchPage(currentState.pageParam, true, currentState.data)
-  }, [fetchPage])
+  // Cache empty meta to avoid creating it repeatedly
+  const emptyMetaRef = useRef<TMeta | null>(null)
+  if (emptyMetaRef.current == null) {
+    emptyMetaRef.current = figbird.adapter.emptyMeta() as TMeta
+  }
 
-  // refetch function
-  const refetch = useCallback(() => {
-    dispatch({ type: 'REFETCH' })
-    fetchPage(null, false, [])
-  }, [fetchPage])
+  // Callbacks for useSyncExternalStore
+  const subscribe = useCallback((onStoreChange: () => void) => q.subscribe(onStoreChange), [q])
 
-  // Realtime subscription effect
-  useEffect(() => {
-    if (skip || realtime === 'disabled' || !adapter.subscribe) {
-      return
-    }
+  const getSnapshot = useCallback(
+    (): InfiniteQueryState<TItem, TMeta> =>
+      (q.getSnapshot() as InfiniteQueryState<TItem, TMeta> | undefined) ??
+      getInitialInfiniteQueryState<TItem, TMeta>(emptyMetaRef.current!),
+    [q],
+  )
 
-    const getId = (item: unknown) => adapter.getId(item)
+  // Subscribe to the query state changes
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-    const handlers: EventHandlers = {
-      created: (item: unknown) => {
-        if (realtime === 'refetch') {
-          refetch()
-          return
-        }
-
-        const typedItem = item as TItem
-        if (!itemMatcher(typedItem)) return
-
-        const currentData = stateRef.current.data
-        const newData = insertSorted(currentData, typedItem, itemSorter)
-        dispatch({ type: 'REALTIME_UPDATE', data: newData })
-      },
-      updated: (item: unknown) => {
-        if (realtime === 'refetch') {
-          refetch()
-          return
-        }
-
-        const typedItem = item as TItem
-        const itemId = getId(typedItem)
-        const currentData = stateRef.current.data
-        const existingIndex = currentData.findIndex(d => getId(d) === itemId)
-        const matches = itemMatcher(typedItem)
-
-        if (existingIndex >= 0 && !matches) {
-          // Remove: no longer matches
-          const newData = currentData.filter((_, i) => i !== existingIndex)
-          dispatch({ type: 'REALTIME_UPDATE', data: newData })
-        } else if (existingIndex >= 0 && matches) {
-          // Update in place
-          const newData = [...currentData]
-          newData[existingIndex] = typedItem
-          dispatch({ type: 'REALTIME_UPDATE', data: newData })
-        } else if (existingIndex < 0 && matches) {
-          // New item that matches - insert sorted
-          const newData = insertSorted(currentData, typedItem, itemSorter)
-          dispatch({ type: 'REALTIME_UPDATE', data: newData })
-        }
-      },
-      patched: (item: unknown) => {
-        // Same logic as updated
-        handlers.updated(item)
-      },
-      removed: (item: unknown) => {
-        if (realtime === 'refetch') {
-          refetch()
-          return
-        }
-
-        const typedItem = item as TItem
-        const itemId = getId(typedItem)
-        const currentData = stateRef.current.data
-        const newData = currentData.filter(d => getId(d) !== itemId)
-        if (newData.length !== currentData.length) {
-          dispatch({ type: 'REALTIME_UPDATE', data: newData })
-        }
-      },
-    }
-
-    const unsubscribe = adapter.subscribe(serviceName, handlers)
-    return unsubscribe
-  }, [serviceName, skip, realtime, adapter, itemMatcher, itemSorter, refetch])
+  // Action callbacks
+  const loadMore = useCallback(() => q.loadMore(), [q])
+  const refetch = useCallback(() => q.refetch(), [q])
 
   return useMemo(
     () => ({
