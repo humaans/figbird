@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', function () {
   if (!links.length) return
 
   const sections = []
-  links.forEach((link) => {
+  links.forEach(link => {
     const id = link.getAttribute('href').slice(1)
     const section = document.getElementById(id)
     if (section) {
@@ -25,7 +25,7 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     }
 
-    links.forEach((link) => link.classList.remove('active'))
+    links.forEach(link => link.classList.remove('active'))
     if (current) {
       current.classList.add('active')
     }
