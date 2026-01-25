@@ -17,6 +17,8 @@ import type {
   ServiceUpdate,
 } from './schema.js'
 
+// ==================== EVENT TYPES ====================
+
 /**
  * Event types supported by Figbird
  */
@@ -38,6 +40,8 @@ export interface QueuedEvent {
   type: EventType
   items: unknown[]
 }
+
+// ==================== QUERY STATE TYPES ====================
 
 export type QueryStatus = 'idle' | 'loading' | 'success' | 'error'
 
@@ -68,6 +72,44 @@ export type QueryState<T, TMeta = Record<string, unknown>> =
     }
 
 /**
+ * Query state for infinite find queries - extended with pagination state
+ */
+export type InfiniteQueryState<T, TMeta = Record<string, unknown>> =
+  | {
+      status: 'loading'
+      data: T[]
+      meta: TMeta
+      isFetching: boolean
+      isLoadingMore: boolean
+      loadMoreError: null
+      error: null
+      hasNextPage: boolean
+      pageParam: string | number | null
+    }
+  | {
+      status: 'success'
+      data: T[]
+      meta: TMeta
+      isFetching: boolean
+      isLoadingMore: boolean
+      loadMoreError: Error | null
+      error: null
+      hasNextPage: boolean
+      pageParam: string | number | null
+    }
+  | {
+      status: 'error'
+      data: T[]
+      meta: TMeta
+      isFetching: boolean
+      isLoadingMore: boolean
+      loadMoreError: Error | null
+      error: Error
+      hasNextPage: boolean
+      pageParam: string | number | null
+    }
+
+/**
  * Internal query representation
  */
 export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = unknown> {
@@ -90,6 +132,8 @@ export interface ServiceState<TMeta = Record<string, unknown>> {
   queries: Map<string, Query<unknown, TMeta, unknown>>
   itemQueryIndex: Map<string | number, Set<string>>
 }
+
+// ==================== QUERY DESCRIPTOR TYPES ====================
 
 /**
  * Query descriptor for get operations
@@ -125,6 +169,8 @@ export interface InfiniteFindDescriptor {
  * Discriminated union of query descriptors
  */
 export type QueryDescriptor = GetDescriptor | FindDescriptor | InfiniteFindDescriptor
+
+// ==================== QUERY CONFIG TYPES ====================
 
 /**
  * Helper type to extract element type from arrays
@@ -206,44 +252,6 @@ export interface InfiniteFindQueryConfig<TItem = unknown, TQuery = unknown> exte
 }
 
 /**
- * Query state for infinite find queries - extended with pagination state
- */
-export type InfiniteQueryState<T, TMeta = Record<string, unknown>> =
-  | {
-      status: 'loading'
-      data: T[]
-      meta: TMeta
-      isFetching: boolean
-      isLoadingMore: boolean
-      loadMoreError: null
-      error: null
-      hasNextPage: boolean
-      pageParam: string | number | null
-    }
-  | {
-      status: 'success'
-      data: T[]
-      meta: TMeta
-      isFetching: boolean
-      isLoadingMore: boolean
-      loadMoreError: Error | null
-      error: null
-      hasNextPage: boolean
-      pageParam: string | number | null
-    }
-  | {
-      status: 'error'
-      data: T[]
-      meta: TMeta
-      isFetching: boolean
-      isLoadingMore: boolean
-      loadMoreError: Error | null
-      error: Error
-      hasNextPage: boolean
-      pageParam: string | number | null
-    }
-
-/**
  * Discriminated union of query configurations
  */
 export type QueryConfig<TItem = unknown, TQuery = unknown> =
@@ -290,53 +298,7 @@ export type CombinedConfig<TItem = unknown, TQuery = unknown> =
  */
 export type ItemMatcher<T> = (item: T) => boolean
 
-/**
- * Helper type to infer data type from schema and query descriptor
- */
-type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema
-  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    any
-  : D extends { serviceName: infer N; method: 'find' }
-    ? N extends ServiceNames<S>
-      ? ServiceItem<S, N>[]
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        any
-    : D extends { serviceName: infer N; method: 'get' }
-      ? N extends ServiceNames<S>
-        ? ServiceItem<S, N>
-        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          any
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        any
-
-/**
- * Helper type to infer data type from schema and mutation descriptor
- */
-type InferMutationData<S extends Schema, D extends MutationDescriptor> = S extends AnySchema
-  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    any
-  : D extends { serviceName: infer N; method: 'create' }
-    ? N extends ServiceNames<S>
-      ? ServiceItem<S, N>
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        any
-    : D extends { serviceName: infer N; method: 'update' }
-      ? N extends ServiceNames<S>
-        ? ServiceItem<S, N>
-        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          any
-      : D extends { serviceName: infer N; method: 'patch' }
-        ? N extends ServiceNames<S>
-          ? ServiceItem<S, N>
-          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            any
-        : D extends { serviceName: infer N; method: 'remove' }
-          ? N extends ServiceNames<S>
-            ? ServiceItem<S, N>
-            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              any
-          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            any
+// ==================== MUTATION TYPES ====================
 
 /**
  * Base mutation descriptor with common fields
@@ -389,11 +351,63 @@ export type MutationDescriptor =
   | PatchMutationDescriptor
   | RemoveMutationDescriptor
 
+// ==================== HELPER TYPES ====================
+
+/**
+ * Helper type to infer data type from schema and query descriptor
+ */
+type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  : D extends { serviceName: infer N; method: 'find' }
+    ? N extends ServiceNames<S>
+      ? ServiceItem<S, N>[]
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+    : D extends { serviceName: infer N; method: 'get' }
+      ? N extends ServiceNames<S>
+        ? ServiceItem<S, N>
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          any
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+
+/**
+ * Helper type to infer data type from schema and mutation descriptor
+ */
+type InferMutationData<S extends Schema, D extends MutationDescriptor> = S extends AnySchema
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  : D extends { serviceName: infer N; method: 'create' }
+    ? N extends ServiceNames<S>
+      ? ServiceItem<S, N>
+      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+    : D extends { serviceName: infer N; method: 'update' }
+      ? N extends ServiceNames<S>
+        ? ServiceItem<S, N>
+        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          any
+      : D extends { serviceName: infer N; method: 'patch' }
+        ? N extends ServiceNames<S>
+          ? ServiceItem<S, N>
+          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            any
+        : D extends { serviceName: infer N; method: 'remove' }
+          ? N extends ServiceNames<S>
+            ? ServiceItem<S, N>
+            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              any
+          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            any
+
 // Helper to specialize adapter params' `query` by service-level domain query
 type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A extends Adapter> = Omit<
   AdapterParams<A>,
   'query'
 > & { query?: ServiceQuery<S, N> }
+
+// ==================== FIGBIRD CLASS ====================
 
 /**
     Usage:
@@ -593,6 +607,8 @@ export class Figbird<
   }
 }
 
+// ==================== SPLIT CONFIG HELPER ====================
+
 /**
  * A helper to split the properties into a query descriptor `desc` (including 'params')
  * and figbird-specific query configuration `config`
@@ -652,6 +668,8 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
     return { desc, config }
   }
 }
+
+// ==================== QUERY REF CLASS ====================
 
 // a lightweight query reference object to make it easy
 // subscribe to state changes and read query data
@@ -737,6 +755,8 @@ class QueryRef<
   }
 }
 
+// ==================== QUERY STORE CLASS ====================
+
 /**
  * Internal query store managing entities, queries, and subscriptions.
  */
@@ -746,6 +766,8 @@ class QueryStore<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery = Record<string, unknown>,
 > {
+  // ==================== SHARED STATE ====================
+
   #adapter: Adapter<TParams, TMeta, TQuery>
 
   #realtime: Set<string> = new Set()
@@ -770,15 +792,11 @@ class QueryStore<
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
   }
 
-  #getQuery(queryId: string): Query<unknown, TMeta, unknown> | undefined {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
-    if (serviceName) {
-      const service = this.getState().get(serviceName)
-      if (service) {
-        return service.queries.get(queryId)
-      }
-    }
-    return undefined
+  // ==================== PUBLIC API ====================
+
+  /** Returns the entire store state map keyed by service name. */
+  getState(): Map<string, ServiceState<TMeta>> {
+    return this.#state
   }
 
   /** Returns the current state for a query by id, if present. */
@@ -853,102 +871,6 @@ class QueryStore<
         { silent: true },
       )
     }
-  }
-
-  #createSorter(desc: QueryDescriptor): (a: unknown, b: unknown) => number {
-    const sort = (desc.params as { query?: { $sort?: Record<string, 1 | -1> } })?.query?.$sort
-    if (!sort || Object.keys(sort).length === 0) {
-      return () => 0
-    }
-    const sortEntries = Object.entries(sort)
-    return (a: unknown, b: unknown) => {
-      for (const [key, direction] of sortEntries) {
-        const aVal = (a as Record<string, unknown>)[key]
-        const bVal = (b as Record<string, unknown>)[key]
-        let cmp = 0
-        if (aVal == null && bVal == null) {
-          cmp = 0
-        } else if (aVal == null) {
-          cmp = 1
-        } else if (bVal == null) {
-          cmp = -1
-        } else if (typeof aVal === 'string' && typeof bVal === 'string') {
-          cmp = aVal.localeCompare(bVal)
-        } else if (aVal < bVal) {
-          cmp = -1
-        } else if (aVal > bVal) {
-          cmp = 1
-        }
-        if (cmp !== 0) {
-          return cmp * direction
-        }
-      }
-      return 0
-    }
-  }
-
-  #createItemFilter<T, TQueryType>(
-    desc: QueryDescriptor,
-    config: QueryConfig<T, TQueryType>,
-  ): ItemMatcher<ElementType<T>> {
-    // if this query is not using the realtime mode
-    // we will never be merging events into the cache
-    // and will never call the matcher, so to avoid
-    // the issue where custom query filters or operators
-    // cause the default matcher to throw an error without
-    // additional configuration, let's avoid creating a matcher
-    // altogether
-    if (config.realtime !== 'merge') {
-      return () => false
-    }
-
-    const query = (desc.params as Record<string, unknown>)?.query || undefined
-    if (config.matcher) {
-      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
-    }
-    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
-  }
-
-  #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
-    if (!this.#listeners.has(queryId)) {
-      this.#listeners.set(queryId, new Set())
-    }
-    this.#listeners.get(queryId)!.add(fn as (state: QueryState<unknown, TMeta>) => void)
-    return () => {
-      const listeners = this.#listeners.get(queryId)
-      if (listeners) {
-        listeners.delete(fn as (state: QueryState<unknown, TMeta>) => void)
-        if (listeners.size === 0) {
-          this.#listeners.delete(queryId)
-        }
-      }
-    }
-  }
-
-  #invokeListeners(queryId: string): void {
-    const listeners = this.#listeners.get(queryId)
-    if (listeners) {
-      const state = this.getQueryState(queryId)
-      if (state) {
-        listeners.forEach(listener => listener(state))
-      }
-    }
-  }
-
-  #addGlobalListener(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
-    this.#globalListeners.add(fn)
-    return () => {
-      this.#globalListeners.delete(fn)
-    }
-  }
-
-  #invokeGlobalListeners(): void {
-    const state = this.getState()
-    this.#globalListeners.forEach(listener => listener(state))
-  }
-
-  #listenerCount(queryId: string): number {
-    return this.#listeners.get(queryId)?.size || 0
   }
 
   /**
@@ -1090,6 +1012,161 @@ class QueryStore<
 
     this.#queueInfinite(queryId, true)
   }
+
+  /** Perform a service mutation and update the store from the result. */
+  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+    const { serviceName, method } = desc
+    const updaters: Record<string, (item: unknown) => void> = {
+      create: item => this.#processEvent(serviceName, { type: 'created', item }),
+      update: item => this.#processEvent(serviceName, { type: 'updated', item }),
+      patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
+      remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
+    }
+
+    // Convert named params to args array for the adapter
+    const args = this.#buildMutationArgs(desc)
+
+    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
+      updaters[method]?.(item)
+      return item as InferMutationData<S, D>
+    })
+  }
+
+  // ==================== REGULAR QUERY LIFECYCLE ====================
+
+  async #queue(queryId: string): Promise<void> {
+    this.#fetching({ queryId })
+    try {
+      const result = await this.#fetch(queryId)
+      this.#fetched({ queryId, result })
+    } catch (err) {
+      this.#fetchFailed({ queryId, error: err instanceof Error ? err : new Error(String(err)) })
+    }
+  }
+
+  #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta | undefined>> {
+    const query = this.#getQuery(queryId)
+    if (!query) {
+      return Promise.reject(new Error('Query not found'))
+    }
+
+    const { desc, config } = query
+
+    if (desc.method === 'get') {
+      return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
+    } else if (desc.method === 'find') {
+      const findConfig = config as FindQueryConfig<unknown, unknown>
+      return findConfig.allPages
+        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
+        : this.#adapter.find(desc.serviceName, desc.params as TParams)
+    } else {
+      return Promise.reject(new Error('Unsupported query method'))
+    }
+  }
+
+  #fetching({ queryId }: { queryId: string }): void {
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      service.queries.set(queryId, {
+        ...query,
+        pending: false,
+        dirty: false,
+        state:
+          query.state.status === 'error'
+            ? {
+                status: 'loading' as const,
+                data: null,
+                meta: query.state.meta,
+                isFetching: true,
+                error: null,
+              }
+            : query.state.status === 'success'
+              ? { ...query.state, isFetching: true }
+              : {
+                  status: query.state.status,
+                  data: null,
+                  meta: query.state.meta,
+                  isFetching: true,
+                  error: null,
+                },
+      })
+    })
+  }
+
+  #fetched({
+    queryId,
+    result,
+  }: {
+    queryId: string
+    result: QueryResponse<unknown, TMeta | undefined>
+  }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      const data = result.data
+      const meta = (result as { meta?: TMeta }).meta
+      const items = Array.isArray(data) ? data : [data]
+      const getId = (item: unknown) => this.#adapter.getId(item)
+
+      for (const item of items) {
+        const itemId = getId(item)
+        if (itemId !== undefined) {
+          service.entities.set(itemId, item)
+          if (!service.itemQueryIndex.has(itemId)) {
+            service.itemQueryIndex.set(itemId, new Set())
+          }
+          service.itemQueryIndex.get(itemId)!.add(queryId)
+        }
+      }
+
+      shouldRefetch = query.dirty
+
+      service.queries.set(queryId, {
+        ...query,
+        state: {
+          status: 'success' as const,
+          data,
+          meta: meta || this.#adapter.emptyMeta(),
+          isFetching: false,
+          error: null,
+        },
+      })
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.#queue(queryId)
+    }
+  }
+
+  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      shouldRefetch = query.dirty
+
+      service.queries.set(queryId, {
+        ...query!,
+        state: {
+          status: 'error' as const,
+          data: null,
+          meta: this.#adapter.emptyMeta(),
+          isFetching: false,
+          error,
+        },
+      })
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.#queue(queryId)
+    }
+  }
+
+  // ==================== INFINITE QUERY LIFECYCLE ====================
 
   async #queueInfinite(queryId: string, isLoadMore: boolean): Promise<void> {
     if (!isLoadMore) {
@@ -1300,67 +1377,7 @@ class QueryStore<
     }
   }
 
-  async #queue(queryId: string): Promise<void> {
-    this.#fetching({ queryId })
-    try {
-      const result = await this.#fetch(queryId)
-      this.#fetched({ queryId, result })
-    } catch (err) {
-      this.#fetchFailed({ queryId, error: err instanceof Error ? err : new Error(String(err)) })
-    }
-  }
-
-  #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta | undefined>> {
-    const query = this.#getQuery(queryId)
-    if (!query) {
-      return Promise.reject(new Error('Query not found'))
-    }
-
-    const { desc, config } = query
-
-    if (desc.method === 'get') {
-      return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
-    } else if (desc.method === 'find') {
-      const findConfig = config as FindQueryConfig<unknown, unknown>
-      return findConfig.allPages
-        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
-        : this.#adapter.find(desc.serviceName, desc.params as TParams)
-    } else {
-      return Promise.reject(new Error('Unsupported query method'))
-    }
-  }
-
-  /** Perform a service mutation and update the store from the result. */
-  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
-    const { serviceName, method } = desc
-    const updaters: Record<string, (item: unknown) => void> = {
-      create: item => this.#processEvent(serviceName, { type: 'created', item }),
-      update: item => this.#processEvent(serviceName, { type: 'updated', item }),
-      patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
-      remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
-    }
-
-    // Convert named params to args array for the adapter
-    const args = this.#buildMutationArgs(desc)
-
-    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
-      updaters[method]?.(item)
-      return item as InferMutationData<S, D>
-    })
-  }
-
-  /** Convert mutation descriptor to args array for adapter */
-  #buildMutationArgs(desc: MutationDescriptor): unknown[] {
-    switch (desc.method) {
-      case 'create':
-        return desc.params !== undefined ? [desc.data, desc.params] : [desc.data]
-      case 'update':
-      case 'patch':
-        return desc.params !== undefined ? [desc.id, desc.data, desc.params] : [desc.id, desc.data]
-      case 'remove':
-        return desc.params !== undefined ? [desc.id, desc.params] : [desc.id]
-    }
-  }
+  // ==================== REALTIME EVENTS ====================
 
   #subscribeToRealtime(queryId: string): void {
     const query = this.#getQuery(queryId)
@@ -1645,9 +1662,17 @@ class QueryStore<
     }
   }
 
-  /** Returns the entire store state map keyed by service name. */
-  getState(): Map<string, ServiceState<TMeta>> {
-    return this.#state
+  // ==================== STATE MANAGEMENT ====================
+
+  #getQuery(queryId: string): Query<unknown, TMeta, unknown> | undefined {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (serviceName) {
+      const service = this.getState().get(serviceName)
+      if (service) {
+        return service.queries.get(queryId)
+      }
+    }
+    return undefined
   }
 
   #updateState(
@@ -1718,108 +1743,6 @@ class QueryStore<
     }
   }
 
-  #fetching({ queryId }: { queryId: string }): void {
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
-
-      service.queries.set(queryId, {
-        ...query,
-        pending: false,
-        dirty: false,
-        state:
-          query.state.status === 'error'
-            ? {
-                status: 'loading' as const,
-                data: null,
-                meta: query.state.meta,
-                isFetching: true,
-                error: null,
-              }
-            : query.state.status === 'success'
-              ? { ...query.state, isFetching: true }
-              : {
-                  status: query.state.status,
-                  data: null,
-                  meta: query.state.meta,
-                  isFetching: true,
-                  error: null,
-                },
-      })
-    })
-  }
-
-  #fetched({
-    queryId,
-    result,
-  }: {
-    queryId: string
-    result: QueryResponse<unknown, TMeta | undefined>
-  }): void {
-    let shouldRefetch = false
-
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
-
-      const data = result.data
-      const meta = (result as { meta?: TMeta }).meta
-      const items = Array.isArray(data) ? data : [data]
-      const getId = (item: unknown) => this.#adapter.getId(item)
-
-      for (const item of items) {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          service.entities.set(itemId, item)
-          if (!service.itemQueryIndex.has(itemId)) {
-            service.itemQueryIndex.set(itemId, new Set())
-          }
-          service.itemQueryIndex.get(itemId)!.add(queryId)
-        }
-      }
-
-      shouldRefetch = query.dirty
-
-      service.queries.set(queryId, {
-        ...query,
-        state: {
-          status: 'success' as const,
-          data,
-          meta: meta || this.#adapter.emptyMeta(),
-          isFetching: false,
-          error: null,
-        },
-      })
-    })
-
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
-      this.#queue(queryId)
-    }
-  }
-
-  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
-    let shouldRefetch = false
-
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
-
-      shouldRefetch = query.dirty
-
-      service.queries.set(queryId, {
-        ...query!,
-        state: {
-          status: 'error' as const,
-          data: null,
-          meta: this.#adapter.emptyMeta(),
-          isFetching: false,
-          error,
-        },
-      })
-    })
-
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
-      this.#queue(queryId)
-    }
-  }
-
   #vacuum({ queryId }: { queryId: string }): void {
     this.#transactOverService(
       queryId,
@@ -1841,7 +1764,120 @@ class QueryStore<
       { silent: true },
     )
   }
+
+  // ==================== INTERNAL HELPERS ====================
+
+  #createSorter(desc: QueryDescriptor): (a: unknown, b: unknown) => number {
+    const sort = (desc.params as { query?: { $sort?: Record<string, 1 | -1> } })?.query?.$sort
+    if (!sort || Object.keys(sort).length === 0) {
+      return () => 0
+    }
+    const sortEntries = Object.entries(sort)
+    return (a: unknown, b: unknown) => {
+      for (const [key, direction] of sortEntries) {
+        const aVal = (a as Record<string, unknown>)[key]
+        const bVal = (b as Record<string, unknown>)[key]
+        let cmp = 0
+        if (aVal == null && bVal == null) {
+          cmp = 0
+        } else if (aVal == null) {
+          cmp = 1
+        } else if (bVal == null) {
+          cmp = -1
+        } else if (typeof aVal === 'string' && typeof bVal === 'string') {
+          cmp = aVal.localeCompare(bVal)
+        } else if (aVal < bVal) {
+          cmp = -1
+        } else if (aVal > bVal) {
+          cmp = 1
+        }
+        if (cmp !== 0) {
+          return cmp * direction
+        }
+      }
+      return 0
+    }
+  }
+
+  #createItemFilter<T, TQueryType>(
+    desc: QueryDescriptor,
+    config: QueryConfig<T, TQueryType>,
+  ): ItemMatcher<ElementType<T>> {
+    // if this query is not using the realtime mode
+    // we will never be merging events into the cache
+    // and will never call the matcher, so to avoid
+    // the issue where custom query filters or operators
+    // cause the default matcher to throw an error without
+    // additional configuration, let's avoid creating a matcher
+    // altogether
+    if (config.realtime !== 'merge') {
+      return () => false
+    }
+
+    const query = (desc.params as Record<string, unknown>)?.query || undefined
+    if (config.matcher) {
+      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
+    }
+    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
+  }
+
+  /** Convert mutation descriptor to args array for adapter */
+  #buildMutationArgs(desc: MutationDescriptor): unknown[] {
+    switch (desc.method) {
+      case 'create':
+        return desc.params !== undefined ? [desc.data, desc.params] : [desc.data]
+      case 'update':
+      case 'patch':
+        return desc.params !== undefined ? [desc.id, desc.data, desc.params] : [desc.id, desc.data]
+      case 'remove':
+        return desc.params !== undefined ? [desc.id, desc.params] : [desc.id]
+    }
+  }
+
+  #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
+    if (!this.#listeners.has(queryId)) {
+      this.#listeners.set(queryId, new Set())
+    }
+    this.#listeners.get(queryId)!.add(fn as (state: QueryState<unknown, TMeta>) => void)
+    return () => {
+      const listeners = this.#listeners.get(queryId)
+      if (listeners) {
+        listeners.delete(fn as (state: QueryState<unknown, TMeta>) => void)
+        if (listeners.size === 0) {
+          this.#listeners.delete(queryId)
+        }
+      }
+    }
+  }
+
+  #invokeListeners(queryId: string): void {
+    const listeners = this.#listeners.get(queryId)
+    if (listeners) {
+      const state = this.getQueryState(queryId)
+      if (state) {
+        listeners.forEach(listener => listener(state))
+      }
+    }
+  }
+
+  #addGlobalListener(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
+    this.#globalListeners.add(fn)
+    return () => {
+      this.#globalListeners.delete(fn)
+    }
+  }
+
+  #invokeGlobalListeners(): void {
+    const state = this.getState()
+    this.#globalListeners.forEach(listener => listener(state))
+  }
+
+  #listenerCount(queryId: string): number {
+    return this.#listeners.get(queryId)?.size || 0
+  }
 }
+
+// ==================== MODULE HELPERS ====================
 
 function getItems<TMeta = Record<string, unknown>>(
   query: Query<unknown, TMeta, unknown>,
