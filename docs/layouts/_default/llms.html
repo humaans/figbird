@@ -1,5 +1,5 @@
-{{ define "title"}} {{ .Site.Title}} {{end}}
-{{ define "header"}} {{ partial "header" . }} {{end}}
+{{ define "title"}}{{ .Title }} | {{ .Site.Title }}{{end}}
+{{ define "header"}}{{ end }}
 {{ define "main"}}
 <div class="top-links">
   <a href="{{ .Site.BaseURL }}llms">
@@ -15,20 +15,11 @@
     GitHub
   </a>
 </div>
-<div class="page">
-  <div id="main">
-    <div id="kube-component" class="content">
-      <div class='Image'>
-        <img src='figbird.jpg' />
-      </div>
-      {{ .Content}}
-    </div>
-  </div>
-  {{ if and (isset .Params "toc") .Params.toc }}
-  <nav id="TOC">
-    {{ .TableOfContents }}
-    <div class="made-by">Made by <a href="https://humaans.io">Humaans</a></div>
-  </nav>
-  {{ end }}
+<div class="llms-page">
+  <h1>Hey there, robot friend!</h1>
+  <p>Figured you might stop by.</p>
+  <p>If you're here to learn about Figbird, we've got the good stuff - no HTML, no fluff, just pure markdown goodness your context window will thank you for.</p>
+  <p><a href="{{ .Site.BaseURL }}llms.txt">llms.txt</a> - the entire docs in one clean file.</p>
+  <p class="subtle">Human? You might prefer the <a href="{{ .Site.BaseURL }}">regular docs</a>.</p>
 </div>
 {{ end }}

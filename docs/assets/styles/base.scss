@@ -170,17 +170,18 @@ input[type='search']::-webkit-search-cancel-button {
 html,
 body {
   font-size: 16px;
-  line-height: 1.64;
+  line-height: 1.625;
 }
 
 body {
-  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
-  color: #313439;
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #171717;
   background-color: transparent;
+  -webkit-font-smoothing: antialiased;
 }
 
 a {
-  color: #3794de;
+  color: lab(47.9229% 22.3147 -86.8328);
 }
 
 a:hover {
@@ -194,54 +195,73 @@ h3,
 h4,
 h5,
 h6 {
-  font-family: 'Vollkorn', sans-serif;
-  font-weight: bold;
-  color: #0d0d0e;
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 600;
+  color: #171717;
   text-rendering: optimizeLegibility;
-  margin-bottom: 16px;
 }
 
-h1.title {
-  font-size: 48px;
-  line-height: 64px;
-  margin-bottom: 8px;
-}
-
+h1.title,
 h1,
 .h1 {
-  font-size: 48px;
-  line-height: 52px;
+  font-size: 2rem;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  margin-top: 4rem;
+  margin-bottom: 1.5rem;
 }
 
 h2,
 .h2 {
-  font-size: 36px;
-  line-height: 40px;
-  margin-top: 120px;
+  font-size: 1.5rem;
+  line-height: 1.333;
+  letter-spacing: -0.015em;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
 }
 
 h3,
 .h3 {
-  font-size: 24px;
-  line-height: 32px;
+  font-size: 1.25rem;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
 h4,
 .h4 {
-  font-size: 21px;
-  line-height: 32px;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 1.5rem;
+  margin-bottom: 0.25rem;
 }
 
 h5,
 .h5 {
-  font-size: 18px;
-  line-height: 28px;
+  font-size: 1rem;
+  line-height: 1.5;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
 }
 
 h6,
 .h6 {
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+p {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+h2 + p,
+h3 + p {
+  margin-top: 0;
 }
 
 h1 a,
@@ -259,57 +279,22 @@ h6 a,
   color: inherit;
 }
 
-p + h2,
-p + h3,
-p + h4,
-p + h5,
-p + h6,
-ul + h2,
-ul + h3,
-ul + h4,
-ul + h5,
-ul + h6,
-ol + h2,
-ol + h3,
-ol + h4,
-ol + h5,
-ol + h6,
-dl + h2,
-dl + h3,
-dl + h4,
-dl + h5,
-dl + h6,
-blockquote + h2,
-blockquote + h3,
-blockquote + h4,
-blockquote + h5,
-blockquote + h6,
-hr + h2,
-hr + h3,
-hr + h4,
-hr + h5,
-hr + h6,
-pre + h2,
-pre + h3,
-pre + h4,
-pre + h5,
-pre + h6,
-table + h2,
-table + h3,
-table + h4,
-table + h5,
-table + h6,
-form + h2,
-form + h3,
-form + h4,
-form + h5,
-form + h6,
-figure + h2,
-figure + h3,
-figure + h4,
-figure + h5,
-figure + h6 {
-  margin-top: 48px;
+p + h1, ul + h1, ol + h1, dl + h1, blockquote + h1, hr + h1, pre + h1, table + h1, form + h1, figure + h1 {
+  margin-top: 4rem;
+}
+
+p + h2, ul + h2, ol + h2, dl + h2, blockquote + h2, hr + h2, pre + h2, table + h2, form + h2, figure + h2 {
+  margin-top: 2.5rem;
+}
+
+p + h3, ul + h3, ol + h3, dl + h3, blockquote + h3, hr + h3, pre + h3, table + h3, form + h3, figure + h3 {
+  margin-top: 1.5rem;
+}
+
+p + h4, ul + h4, ol + h4, dl + h4, blockquote + h4, hr + h4, pre + h4, table + h4, form + h4, figure + h4,
+p + h5, ul + h5, ol + h5, dl + h5, blockquote + h5, hr + h5, pre + h5, table + h5, form + h5, figure + h5,
+p + h6, ul + h6, ol + h6, dl + h6, blockquote + h6, hr + h6, pre + h6, table + h6, form + h6, figure + h6 {
+  margin-top: 1.5rem;
 }
 
 ul,
@@ -416,15 +401,17 @@ kbd {
 }*/
 
 p code,
-ul code {
-  display: inline-block;
-  background: #eef5ff;
-  color: #18185b;
+li code {
+  display: inline;
+  background: lab(96.52% -0.0000298023 0.0000119209);
+  border: 1px solid lab(92% 0 0);
+  color: inherit;
   border-radius: 4px;
-  font-size: 15px;
-  line-height: 19px;
-  padding: 0 4px;
-  font-family: 'Source Code Pro', monospace;
+  font-size: 0.875em;
+  line-height: 1.4;
+  padding: 0 3px;
+  font-family: 'Geist Mono', 'SF Mono', Menlo, Monaco, monospace;
+  font-weight: 400;
 }
 
 mark {
@@ -461,7 +448,7 @@ code,
 samp,
 var,
 kbd {
-  font-family: 'Source Code Pro', Consolas, 'Lucida Console', monospace;
+  font-family: 'Geist Mono', 'SF Mono', Menlo, Monaco, monospace;
 }
 
 pre,
@@ -469,9 +456,9 @@ samp,
 var,
 kbd,
 mark {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 500;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  font-weight: 400;
   font-style: normal;
   -moz-osx-font-smoothing: grayscale;
 }

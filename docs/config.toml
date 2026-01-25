@@ -3,7 +3,24 @@ languageCode = "en-us"
 title = "Figbird"
 description = "Effortless realtime data management for React + Feathers applications."
 
+[mediaTypes]
+  [mediaTypes."text/plain"]
+    suffixes = ["txt"]
+
+[outputFormats]
+  [outputFormats.llms]
+    baseName = "llms"
+    isPlainText = true
+    mediaType = "text/plain"
+    notAlternative = true
+
+[outputs]
+  home = ["HTML", "llms"]
+
 [markup]
   [markup.highlight]
     noClasses = false
     tabWidth = 4
+  [markup.tableOfContents]
+    startLevel = 1
+    endLevel = 2
