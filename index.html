@@ -2,7 +2,7 @@
 <html lang="en-us">
 
 <head>
-  <meta name="generator" content="Hugo 0.153.5">
+  <meta name="generator" content="Hugo 0.143.0">
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -23,9 +23,9 @@
   <meta property="og:url" content="https://humaans.github.io/figbird/">
   <meta property="og:site_name" content="Figbird">
   <meta property="og:title" content="Figbird">
-  <meta property="og:description" content="Figbird Effortless realtime data management for React &#43; Feathers applications. A library used in and extracted from Humaans.
-Idiomatic React Hooks Fetch some data with const { data } = useFind(&#39;notes&#39;) and your components will rerender in realtime as the data changes upstream. Modify the data using the const { patch } = useMutation(&#39;notes&#39;) and the updates will be instantly propagated to all components referencing the same objects.
-useGet useFind useMutation Live Queries Works with Feathers realtime events and with local data mutations. Once a record is created/modified/removed all queries referencing this record get updated. For example, if your data is fetched using useFind(&#39;notes&#39;, { query: { tag: &#39;ideas&#39; } }) and you then patch some note with patch({ tag: &#39;ideas&#39; }) - the query will update immediately and rerender all components referencing that query. Adjust behaviour per query:">
+  <meta property="og:description" content="Figbird A data fetching library for React &#43; Feathers applications. Used in production at Humaans.
+Figbird gives you React hooks that fetch data and keep it updated. When a record changes - from this component, another component, or a realtime event from the server - every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.
+Installation pnpm add figbird How It Works function Notes() { const { data } = useFind(&#39;notes&#39;) const { patch } = useMutation(&#39;notes&#39;) // Updates propagate to all components showing this note const markDone = (id) =&gt; patch(id, { done: true }) return data?.map(note =&gt; ( &lt;Note key={note.id} note={note} onDone={markDone} /&gt; )) } Queries are live - if a record is created that matches your query, it appears. If it’s modified to no longer match, it disappears. This works for local mutations and realtime events from the server.">
   <meta property="og:locale" content="en_us">
   <meta property="og:type" content="website">
 
@@ -56,8 +56,7 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 
   <link rel="shortcut icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABA0lEQVRYhe3XMUoDURDG8UnuMQveQvIeljZ2gq0ErALWFnHTiJamCLFLkRuk1jYkKGq08Aru4gkMhORvsYKoBNPsjEoGvvr78R5TjCBSJWiLqDlBF8SEUhN0QdScmqaIVKQoL7l0OaYphOTFEfAsbuXv3+ELiAl/CHC4B/cjmIx/zsFOCYB2i5WnnToDLs6cAZ0TZ0DaMAJMp7C7+T1bG1aA15WL/ilgPv+8/91TY8DXebh2BjxNnAG3Q2PAbAb9zkeO6sYA9y1YA9YAU8D+NlwN4G4EjzcwvITeuSGgpPwCgMU9uCzFYaK53wtoJkRN3QA1PRZEqgVCM7PzPGhG0CYilTeI30bY9plB/gAAAABJRU5ErkJggg==">
 
-   <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400;500;600;700&family=Vollkorn:wght@400;600;700;900&display=swap" rel="stylesheet">
-   <link href="https://fonts.googleapis.com/css2?family=Vollkorn:wght@400;600;700;900&display=swap" rel="stylesheet"> 
+   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet"> 
 
   
   
@@ -72,109 +71,118 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 <body class="page-kube">
   <header>  </header>
   <main>
+<div class="top-links">
+  <a href="https://humaans.github.io/figbird/llms">
+    <svg style="width:18px;height:18px;position:relative;top:-2px" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M12 .04a1.743 1.743 0 0 0-.537 3.401l-.631 2.579H2.456A2.456 2.456 0 0 0 0 8.476v13.029a2.456 2.456 0 0 0 2.456 2.456h19.088c1.356 0 2.456-1.1 2.456-2.456V8.476c0-1.356-1.1-2.456-2.456-2.456h-8.403l-.616-2.575A1.743 1.743 0 0 0 11.999.04zM3.933 7.881h16.136c1.101 0 1.994.893 1.994 1.994v10.117a1.994 1.994 0 0 1-1.994 1.994H3.933a1.994 1.994 0 0 1-1.994-1.994V9.875c0-1.101.893-1.994 1.994-1.994m3.254 2.312a4.575 4.575 0 1 0 0 9.15a4.575 4.575 0 0 0 0-9.15m9.743 0a4.575 4.575 0 1 0 0 9.15a4.575 4.575 0 0 0 0-9.15m-9.743 1.07a3.506 3.506 0 1 1 0 7.011a3.506 3.506 0 0 1 0-7.011m9.743 0a3.506 3.506 0 1 1 0 7.011a3.506 3.506 0 0 1 0-7.011m-9.743 1.663a1.843 1.843 0 1 0 0 3.686a1.843 1.843 0 0 0 0-3.686m9.743 0a1.843 1.843 0 1 0 0 3.686a1.843 1.843 0 0 0 0-3.686m-6.927 6.5v2.159h.706v-2.159zm1.077 0v2.159h.705v-2.159zm1.076 0v2.159h.706v-2.159zm1.077 0v2.159h.706v-2.159zm1.077.03v2.1a1.08 1.08 0 0 0 .829-1.049v-.001c0-.51-.354-.937-.829-1.05m-4.678.028a1.08 1.08 0 0 0-.731 1.021v.001c0 .474.306.876.731 1.021z"/>
+    </svg>
+    LLMs
+  </a>
+  <a href="https://github.com/humaans/figbird">
+    <svg style="width:20px;height:20px" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M12,2A10,10 0 0,0 2,12C2,16.42 4.87,20.17 8.84,21.5C9.34,21.58 9.5,21.27 9.5,21C9.5,20.77 9.5,20.14 9.5,19.31C6.73,19.91 6.14,17.97 6.14,17.97C5.68,16.81 5.03,16.5 5.03,16.5C4.12,15.88 5.1,15.9 5.1,15.9C6.1,15.97 6.63,16.93 6.63,16.93C7.5,18.45 8.97,18 9.54,17.76C9.63,17.11 9.89,16.67 10.17,16.42C7.95,16.17 5.62,15.31 5.62,11.5C5.62,10.39 6,9.5 6.65,8.79C6.55,8.54 6.2,7.5 6.75,6.15C6.75,6.15 7.59,5.88 9.5,7.17C10.29,6.95 11.15,6.84 12,6.84C12.85,6.84 13.71,6.95 14.5,7.17C16.41,5.88 17.25,6.15 17.25,6.15C17.8,7.5 17.45,8.54 17.35,8.79C18,9.5 18.38,10.39 18.38,11.5C18.38,15.32 16.04,16.16 13.81,16.41C14.17,16.72 14.5,17.33 14.5,18.26C14.5,19.6 14.5,20.68 14.5,21C14.5,21.27 14.66,21.59 15.17,21.5C19.14,20.16 22,16.42 22,12A10,10 0 0,0 12,2Z" />
+    </svg>
+    GitHub
+  </a>
+</div>
 <div class="page">
   <div id="main">
     <div id="kube-component" class="content">
-    <div class='Image'>
-      <img src='figbird.jpg' />
-    </div>
+      <div class='Image'>
+        <img src='figbird.jpg' />
+      </div>
       <h1 id="figbird">Figbird</h1>
-<p>Effortless realtime data management for <a href="https://reactjs.org/">React</a> + <a href="https://feathersjs.com/">Feathers</a> applications. A library used in and extracted from <a href="https://humaans.io/">Humaans</a>.</p>
-<h4 id="idiomatic-react-hooks">Idiomatic React Hooks</h4>
-<p>Fetch some data with <code>const { data } = useFind('notes')</code> and your components will rerender in realtime as the data changes upstream. Modify the data using the <code>const { patch } = useMutation('notes')</code> and the updates will be instantly propagated to all components referencing the same objects.</p>
+<p>A data fetching library for <a href="https://reactjs.org/">React</a> + <a href="https://feathersjs.com/">Feathers</a> applications. Used in production at <a href="https://humaans.io/">Humaans</a>.</p>
+<p>Figbird gives you React hooks that fetch data and keep it updated. When a record changes - from this component, another component, or a realtime event from the server - every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.</p>
+<h2 id="installation">Installation</h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl">pnpm add figbird
+</span></span></code></pre></div><h2 id="how-it-works">How It Works</h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">Notes() {</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="p">{</span> <span class="nx">patch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="c1">// Updates propagate to all components showing this note
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>  <span class="kr">const</span> <span class="nx">markDone</span> <span class="o">=</span> <span class="p">(</span><span class="nx">id</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nx">patch</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span> <span class="p">{</span> <span class="nx">done</span>: <span class="kt">true</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="nx">data</span><span class="o">?</span><span class="p">.</span><span class="nx">map</span><span class="p">(</span><span class="nx">note</span> <span class="o">=&gt;</span> <span class="p">(</span>
+</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">Note</span> <span class="na">key</span><span class="o">=</span><span class="p">{</span><span class="nx">note</span><span class="p">.</span><span class="nx">id</span><span class="p">}</span> <span class="na">note</span><span class="o">=</span><span class="p">{</span><span class="nx">note</span><span class="p">}</span> <span class="na">onDone</span><span class="o">=</span><span class="p">{</span><span class="nx">markDone</span><span class="p">}</span> <span class="p">/&gt;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">))</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><p>Queries are live - if a record is created that matches your query, it appears. If it&rsquo;s modified to no longer match, it disappears. This works for local mutations and realtime events from the server.</p>
+<h2 id="why-figbird">Why Figbird</h2>
 <ul>
-<li><code>useGet</code></li>
-<li><code>useFind</code></li>
-<li><code>useMutation</code></li>
+<li><strong>Live queries</strong> - results update as records are created, modified, or removed</li>
+<li><strong>Shared cache</strong> - same data across components, always consistent</li>
+<li><strong>Realtime built-in</strong> - Feathers websocket events update your UI automatically</li>
+<li><strong>Fetch policies</strong> - <code>swr</code>, <code>cache-first</code>, or <code>network-only</code> per query</li>
+<li><strong>Full TypeScript</strong> - define a schema once, get inference everywhere</li>
+<li><strong>Framework-agnostic core</strong> - works outside React for SSR, testing, or background sync</li>
 </ul>
-<h4 id="live-queries">Live Queries</h4>
-<p>Works with Feathers realtime events and with local data mutations. Once a record is created/modified/removed all queries referencing this record get updated. For example, if your data is fetched using <code>useFind('notes', { query: { tag: 'ideas' } })</code> and you then patch some note with <code>patch({ tag: 'ideas' })</code> - the query will update immediately and rerender all components referencing that query. Adjust behaviour per query:</p>
-<ul>
-<li><code>merge</code> - merge realtime events into cached queries as they come (default)</li>
-<li><code>refetch</code> - refetch data for this query from the server when a realtime event is received</li>
-<li><code>disabled</code> - ignore realtime events for this query</li>
-</ul>
-<h4 id="fetch-policies">Fetch policies</h4>
-<p>Fetch policies allow you to fine tune Figbird to your requirements. With the default <code>swr</code> (stale-while-revalidate) Figbird uses cached data when possible for maximum responsiveness, but refetches in the background on mount to make sure data is up to date. The other policies include <code>cache-first</code> which will use cache and not refresh from the server (compatible with realtime).</p>
-<ul>
-<li><code>swr</code> - show cached data if possible and refetch in the background (default)</li>
-<li><code>cache-first</code> - show cached data if possible and avoid fetching if data is there</li>
-<li><code>network-only</code> - always refetch data on mount</li>
-</ul>
-<h4 id="cache-eviction">Cache eviction</h4>
-<p>The usage of <code>useGet</code> and <code>useFind</code> hooks gets reference counted so that Figbird knows exactly if any of the queries are still being referenced by the UI. By default, Figbird will keep all the data and cache without ever evicting, but if your application demands it, you can strategically implement cache eviction hooks (e.g. on page navigation) to clear out all unused cache items or specific items based on service name or data attributes. (Note: yet to be implemented.)</p>
-<ul>
-<li><code>manual</code> - cache all queries in memory forever, evict manually (default)</li>
-<li><code>unmount</code> - remove cached query data on unmount (if no component is referencing that particular cached data anymore)</li>
-<li><code>delayed</code> - remove unused cached data after some time</li>
-</ul>
-<h2 id="install">Install</h2>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl">$ npm install figbird
-</span></span></code></pre></div><h2 id="example">Example</h2>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">React</span> <span class="kr">from</span> <span class="s1">&#39;react&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">io</span> <span class="kr">from</span> <span class="s1">&#39;socket.io-client&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">feathers</span> <span class="kr">from</span> <span class="s1">&#39;@feathersjs/client&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">FigbirdProvider</span><span class="p">,</span>
+<h2 id="quick-start">Quick Start</h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">Figbird</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">FeathersAdapter</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">FigbirdProvider</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">createSchema</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">service</span><span class="p">,</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">createHooks</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">createHooks</span>
 </span></span><span class="line"><span class="cl"><span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">feathersClient</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;./feathers&#39;</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Define your domain types and services for type inference
-</span></span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">Note</span> <span class="p">{</span> <span class="nx">id</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">content</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">tag?</span>: <span class="kt">string</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">NoteService</span> <span class="p">{</span> <span class="nx">item</span>: <span class="kt">Note</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="c1">// Define your schema for type inference
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">interface</span> <span class="nx">Note</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">id</span>: <span class="kt">string</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">content</span>: <span class="kt">string</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">schema</span> <span class="o">=</span> <span class="nx">createSchema</span><span class="p">({</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">services</span><span class="o">:</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">    <span class="nx">notes</span>: <span class="kt">service</span><span class="p">&lt;</span><span class="nt">NoteService</span><span class="p">&gt;(),</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">notes</span>: <span class="kt">service</span><span class="o">&lt;</span><span class="p">{</span> <span class="nx">item</span>: <span class="kt">Note</span> <span class="p">}</span><span class="o">&gt;</span><span class="p">(),</span>
 </span></span><span class="line"><span class="cl">  <span class="p">},</span>
 </span></span><span class="line"><span class="cl"><span class="p">})</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">socket</span> <span class="o">=</span> <span class="nx">io</span><span class="p">(</span><span class="s1">&#39;http://localhost:3030&#39;</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">client</span> <span class="o">=</span> <span class="nx">feathers</span><span class="p">()</span>
-</span></span><span class="line"><span class="cl"><span class="nx">client</span><span class="p">.</span><span class="nx">configure</span><span class="p">(</span><span class="nx">feathers</span><span class="p">.</span><span class="nx">socketio</span><span class="p">(</span><span class="nx">socket</span><span class="p">))</span>
-</span></span><span class="line"><span class="cl"><span class="nx">client</span><span class="p">.</span><span class="nx">configure</span><span class="p">(</span><span class="nx">feathers</span><span class="p">.</span><span class="nx">authentication</span><span class="p">({</span> <span class="nx">storage</span>: <span class="kt">window.localStorage</span> <span class="p">}))</span>
+</span></span><span class="line"><span class="cl"><span class="c1">// Create figbird instance
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">adapter</span>: <span class="kt">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathersClient</span><span class="p">),</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">schema</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">client</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span><span class="p">,</span> <span class="nx">schema</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFind</span><span class="p">,</span> <span class="nx">useGet</span><span class="p">,</span> <span class="nx">useMutation</span><span class="p">,</span> <span class="nx">useFeathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="c1">// Create typed hooks
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">export</span> <span class="kr">const</span> <span class="p">{</span> <span class="nx">useFind</span><span class="p">,</span> <span class="nx">useGet</span><span class="p">,</span> <span class="nx">useMutation</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">App() {</span>
-</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">(</span>
-</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">FigbirdProvider</span> <span class="na">figbird</span><span class="o">=</span><span class="p">{</span><span class="nx">figbird</span><span class="p">}&gt;</span>
-</span></span><span class="line"><span class="cl">      <span class="p">&lt;</span><span class="nt">Notes</span> <span class="p">/&gt;</span>
-</span></span><span class="line"><span class="cl">    <span class="p">&lt;/</span><span class="nt">FigbirdProvider</span><span class="p">&gt;</span>
-</span></span><span class="line"><span class="cl">  <span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="c1">// Wrap your app
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="nx">App</span> <span class="o">=</span> <span class="p">()</span> <span class="o">=&gt;</span> <span class="p">(</span>
+</span></span><span class="line"><span class="cl">  <span class="p">&lt;</span><span class="nt">FigbirdProvider</span> <span class="na">figbird</span><span class="o">=</span><span class="p">{</span><span class="nx">figbird</span><span class="p">}&gt;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">Notes</span> <span class="p">/&gt;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">&lt;/</span><span class="nt">FigbirdProvider</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="cl"><span class="p">)</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">Notes() {</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">// useFind returns meta (FindMeta) with FeathersAdapter
-</span></span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="p">{</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">meta</span><span class="p">,</span> <span class="nx">error</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">tag</span><span class="o">:</span> <span class="s1">&#39;ideas&#39;</span> <span class="p">}</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="c1">// Use the hooks
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kd">function</span> <span class="nx">Notes() {</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">  <span class="k">if</span> <span class="p">(</span><span class="nx">status</span> <span class="o">===</span> <span class="s1">&#39;loading&#39;</span><span class="p">)</span> <span class="k">return</span> <span class="p">&lt;&gt;</span><span class="nx">Loading</span><span class="p">...&lt;/&gt;</span>
-</span></span><span class="line"><span class="cl">  <span class="k">if</span> <span class="p">(</span><span class="nx">status</span> <span class="o">===</span> <span class="s1">&#39;error&#39;</span><span class="p">)</span> <span class="k">return</span> <span class="p">&lt;&gt;{</span><span class="nx">error</span><span class="o">!</span><span class="p">.</span><span class="nx">message</span><span class="p">}&lt;/&gt;</span>
-</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">(</span>
-</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;</span>
-</span></span><span class="line"><span class="cl">      <span class="nx">Showing</span> <span class="p">{</span><span class="nx">data</span><span class="o">!</span><span class="p">.</span><span class="nx">length</span><span class="p">}</span> <span class="nx">notes</span> <span class="k">of</span> <span class="p">{</span><span class="nx">meta</span><span class="p">.</span><span class="nx">total</span><span class="p">}</span>
-</span></span><span class="line"><span class="cl">    <span class="p">&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
-</span></span><span class="line"><span class="cl">  <span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">SingleNote() {</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">// useGet does NOT expose meta by default (returns only the item)
-</span></span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">,</span> <span class="s1">&#39;1&#39;</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">&lt;&gt;{</span><span class="nx">data</span><span class="o">?</span><span class="p">.</span><span class="nx">content</span><span class="p">}&lt;/&gt;</span>
+</span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">&lt;&gt;{</span><span class="nx">data</span><span class="o">?</span><span class="p">.</span><span class="nx">map</span><span class="p">(</span><span class="nx">note</span> <span class="o">=&gt;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">div</span> <span class="na">key</span><span class="o">=</span><span class="p">{</span><span class="nx">note</span><span class="p">.</span><span class="nx">id</span><span class="p">}&gt;{</span><span class="nx">note</span><span class="p">.</span><span class="nx">content</span><span class="p">}&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">)}&lt;/&gt;</span>
 </span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><p>You can also use the untyped hooks directly from <code>figbird</code> (without <code>createHooks</code>), which return generic <code>any</code> data for convenience.</p>
-<h2 id="typescript-types">TypeScript Types</h2>
-<h3 id="overview">Overview</h3>
-<p>Figbird provides strong TypeScript inference with a simple schema DSL. Define services with their <code>item</code> shape (and optionally <code>query</code>, <code>create</code>, <code>update</code>, <code>patch</code> payloads):</p>
+</span></span></code></pre></div><h1 id="typescript">TypeScript</h1>
+<p>Figbird provides full TypeScript inference through a lightweight schema DSL. Define your services once, and get type safety across all hooks, mutations, and queries - no code generation required.</p>
+<h2 id="defining-a-schema">Defining a Schema</h2>
+<p>A schema declares your services and their types. Each service specifies an <code>item</code> shape, and optionally custom types for queries and mutation payloads.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">createSchema</span><span class="p">,</span> <span class="nx">service</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">Task</span> <span class="p">{</span> <span class="nx">id</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">title</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">completed</span>: <span class="kt">boolean</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskQuery</span> <span class="p">{</span> <span class="nx">completed?</span>: <span class="kt">boolean</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">Task</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">id</span>: <span class="kt">string</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">title</span>: <span class="kt">string</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">completed</span>: <span class="kt">boolean</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskQuery</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">completed?</span>: <span class="kt">boolean</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskService</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">item</span>: <span class="kt">Task</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">query?</span>: <span class="kt">TaskQuery</span>
@@ -185,130 +193,47 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 </span></span><span class="line"><span class="cl">    <span class="nx">tasks</span>: <span class="kt">service</span><span class="p">&lt;</span><span class="nt">TaskService</span><span class="p">&gt;(),</span>
 </span></span><span class="line"><span class="cl">  <span class="p">},</span>
 </span></span><span class="line"><span class="cl"><span class="p">})</span>
-</span></span></code></pre></div><p>Create a Figbird instance and typed hooks:</p>
+</span></span></code></pre></div><p>Service keys are preserved as literal types - so <code>'api/people'</code> and <code>'tasks'</code> remain distinct, and all APIs narrow correctly based on the service name you pass.</p>
+<h2 id="type-safe-hooks">Type-Safe Hooks</h2>
+<p>Once you have a schema, pass it to Figbird and create your hooks. Every hook call is fully typed based on the service name.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span><span class="p">,</span> <span class="nx">FeathersAdapter</span><span class="p">,</span> <span class="nx">createHooks</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span><span class="p">,</span> <span class="nx">schema</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">adapter</span>: <span class="kt">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">),</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">schema</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFind</span><span class="p">,</span> <span class="nx">useGet</span><span class="p">,</span> <span class="nx">useMutation</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Fully typed results
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">tasks</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">)</span> <span class="c1">// QueryResult&lt;Task[], FindMeta&gt;
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">task</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="s1">&#39;123&#39;</span><span class="p">)</span> <span class="c1">// QueryResult&lt;Task&gt;
-</span></span></span></code></pre></div><p>Params type inference (domain query fields):</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="c1">// params.query is inferred from the service domain query,
-</span></span></span><span class="line"><span class="cl"><span class="c1">// while Feathers controls like $limit, $sort are preserved
-</span></span></span><span class="line"><span class="cl"><span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">completed</span>: <span class="kt">true</span><span class="p">,</span> <span class="nx">$limit</span>: <span class="kt">10</span> <span class="p">}</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl"><span class="c1">//                ^       ^ domain fields     ^ Feathers controls
-</span></span></span></code></pre></div><p>Mutations:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">create</span><span class="p">,</span> <span class="nx">update</span><span class="p">,</span> <span class="nx">patch</span><span class="p">,</span> <span class="nx">remove</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// create returns the mutated item (Task)
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">newTask</span> <span class="o">=</span> <span class="k">await</span> <span class="nx">create</span><span class="p">({</span> <span class="nx">title</span><span class="o">:</span> <span class="s1">&#39;Hello&#39;</span><span class="p">,</span> <span class="nx">completed</span>: <span class="kt">false</span> <span class="p">})</span>
-</span></span></code></pre></div><h3 id="schemas">Schemas</h3>
-<p>Schemas power all TypeScript inference in Figbird. You declare a map of services with their types, and Figbird derives the rest.</p>
-<ol>
-<li>Define a service type with the shape of your items and optional payload/query types:</li>
-</ol>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">createSchema</span><span class="p">,</span> <span class="nx">service</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Domain types
-</span></span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">Person</span> <span class="p">{</span> <span class="nx">id</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">name</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">email</span>: <span class="kt">string</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">Task</span> <span class="p">{</span> <span class="nx">id</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">title</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">completed</span>: <span class="kt">boolean</span><span class="p">;</span> <span class="nx">priority?</span>: <span class="kt">number</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Optional: Domain-specific query types (clean business filters)
-</span></span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">PersonQuery</span> <span class="p">{</span> <span class="nx">name?</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">email?</span>: <span class="kt">string</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskQuery</span> <span class="p">{</span> <span class="nx">completed?</span>: <span class="kt">boolean</span><span class="p">;</span> <span class="nx">priority?</span>: <span class="kt">number</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Optional: Custom payload types
-</span></span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskCreate</span> <span class="p">{</span> <span class="nx">title</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">completed?</span>: <span class="kt">boolean</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskPatch</span> <span class="p">{</span> <span class="nx">title?</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">completed?</span>: <span class="kt">boolean</span><span class="p">;</span> <span class="nx">priority?</span>: <span class="kt">number</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">PersonService</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">item</span>: <span class="kt">Person</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">query?</span>: <span class="kt">PersonQuery</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">// create/update/patch omitted – see defaults below
-</span></span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskService</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">item</span>: <span class="kt">Task</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">query?</span>: <span class="kt">TaskQuery</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">create?</span>: <span class="kt">TaskCreate</span>       <span class="c1">// optional — defaults to Partial&lt;item&gt;
-</span></span></span><span class="line"><span class="cl">  <span class="nx">update?</span>: <span class="kt">Task</span>             <span class="c1">// optional — defaults to item (full replacement)
-</span></span></span><span class="line"><span class="cl">  <span class="nx">patch?</span>: <span class="kt">TaskPatch</span>         <span class="c1">// optional — defaults to Partial&lt;item&gt;
-</span></span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">export</span> <span class="kr">const</span> <span class="nx">schema</span> <span class="o">=</span> <span class="nx">createSchema</span><span class="p">({</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">services</span><span class="o">:</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">    <span class="s1">&#39;api/people&#39;</span><span class="o">:</span> <span class="nx">service</span><span class="p">&lt;</span><span class="nt">PersonService</span><span class="p">&gt;(),</span>
-</span></span><span class="line"><span class="cl">    <span class="nx">tasks</span>: <span class="kt">service</span><span class="p">&lt;</span><span class="nt">TaskService</span><span class="p">&gt;(),</span>
+</span></span><span class="line"><span class="cl"><span class="c1">// Types flow automatically
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="nx">tasks</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">)</span>       <span class="c1">// QueryResult&lt;Task[], FindMeta&gt;
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="nx">task</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="s1">&#39;123&#39;</span><span class="p">)</span>  <span class="c1">// QueryResult&lt;Task&gt;
+</span></span></span></code></pre></div><h2 id="query-parameters">Query Parameters</h2>
+<p>Query parameters combine your domain filters with adapter controls. You define the business-level filters in your schema, and Figbird&rsquo;s adapter adds transport controls like <code>$limit</code>, <code>$sort</code>, and <code>$skip</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">query</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">completed</span>: <span class="kt">true</span><span class="p">,</span>  <span class="c1">// domain filter (from TaskQuery)
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nx">$limit</span>: <span class="kt">10</span><span class="p">,</span>       <span class="c1">// adapter control (from Feathers)
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nx">$sort</span><span class="o">:</span> <span class="p">{</span> <span class="nx">title</span>: <span class="kt">1</span> <span class="p">},</span>
 </span></span><span class="line"><span class="cl">  <span class="p">},</span>
 </span></span><span class="line"><span class="cl"><span class="p">})</span>
-</span></span></code></pre></div><ol start="2">
-<li>Defaults for payload types (when omitted):</li>
-</ol>
-<ul>
-<li>create: <code>Partial&lt;item&gt;</code></li>
-<li>update: <code>item</code> (full document replacement)</li>
-<li>patch: <code>Partial&lt;item&gt;</code></li>
-</ul>
-<ol start="3">
-<li>Service names and types:</li>
-</ol>
-<ul>
-<li>Keys in <code>services</code> are preserved as literal names (e.g. <code>'api/people'</code> vs <code>tasks</code>).</li>
-<li>Names flow into all APIs: <code>useFind('api/people')</code> narrows to <code>Person</code>; <code>useFind('tasks')</code> narrows to <code>Task</code>.</li>
-</ul>
-<ol start="4">
-<li>Domain query vs adapter controls:</li>
-</ol>
-<ul>
-<li>You only model domain filters via <code>query?: ...</code> in your service type.</li>
-<li>Figbird adapters (e.g. Feathers) automatically add transport controls like <code>$limit</code>, <code>$sort</code>, <code>$skip</code>.</li>
-<li>As a result, <code>params.query</code> is the intersection of your domain query and adapter controls:</li>
-</ul>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="c1">// PersonQuery &amp; Feathers controls
-</span></span></span><span class="line"><span class="cl"><span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;api/people&#39;</span><span class="p">,</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">  <span class="nx">query</span><span class="o">:</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">    <span class="nx">name</span><span class="o">:</span> <span class="s1">&#39;Ada&#39;</span><span class="p">,</span>        <span class="c1">// domain
-</span></span></span><span class="line"><span class="cl">    <span class="nx">$limit</span>: <span class="kt">20</span><span class="p">,</span>         <span class="c1">// adapter control
-</span></span></span><span class="line"><span class="cl">    <span class="nx">$sort</span><span class="o">:</span> <span class="p">{</span> <span class="nx">name</span>: <span class="kt">1</span> <span class="p">},</span> <span class="c1">// adapter control
-</span></span></span><span class="line"><span class="cl">  <span class="p">},</span>
-</span></span><span class="line"><span class="cl"><span class="p">})</span>
-</span></span></code></pre></div><ol start="5">
-<li>Mutations are fully typed from the schema:</li>
-</ol>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">create</span><span class="p">,</span> <span class="nx">update</span><span class="p">,</span> <span class="nx">patch</span><span class="p">,</span> <span class="nx">remove</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">)</span>
+</span></span></code></pre></div><p>This separation keeps your schema focused on domain logic while preserving full access to adapter features.</p>
+<h2 id="typed-mutations">Typed Mutations</h2>
+<p>Mutations infer their parameter and return types from your schema. You can optionally define custom payload types for <code>create</code>, <code>update</code>, and <code>patch</code> operations.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">TaskService</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">item</span>: <span class="kt">Task</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">query?</span>: <span class="kt">TaskQuery</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">create</span><span class="o">?:</span> <span class="p">{</span> <span class="nx">title</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">completed?</span>: <span class="kt">boolean</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">patch</span><span class="o">?:</span> <span class="p">{</span> <span class="nx">title?</span>: <span class="kt">string</span><span class="p">;</span> <span class="nx">completed?</span>: <span class="kt">boolean</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><p>If you omit payload types, Figbird uses sensible defaults: <code>Partial&lt;item&gt;</code> for create and patch, and <code>item</code> for update (full replacement).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">create</span><span class="p">,</span> <span class="nx">patch</span><span class="p">,</span> <span class="nx">remove</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Parameter types for each method come from TaskService:
-</span></span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">create</span><span class="p">({</span> <span class="nx">title</span><span class="o">:</span> <span class="s1">&#39;Ship&#39;</span><span class="p">,</span> <span class="nx">completed</span>: <span class="kt">false</span> <span class="p">})</span>     <span class="c1">// TaskCreate
-</span></span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">update</span><span class="p">(</span><span class="s1">&#39;id-1&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">id</span><span class="o">:</span> <span class="s1">&#39;id-1&#39;</span><span class="p">,</span> <span class="nx">title</span><span class="o">:</span> <span class="s1">&#39;New&#39;</span> <span class="p">})</span>    <span class="c1">// Task (full)
-</span></span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">patch</span><span class="p">(</span><span class="s1">&#39;id-1&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">priority</span>: <span class="kt">1</span> <span class="p">})</span>                  <span class="c1">// TaskPatch
-</span></span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">remove</span><span class="p">(</span><span class="s1">&#39;id-1&#39;</span><span class="p">)</span>                                  <span class="c1">// id only
-</span></span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"> <span class="c1">// All mutation methods resolve to the mutated item (Task)
-</span></span></span></code></pre></div><ol start="6">
-<li>Advanced: Using Figbird outside React with typed queries</li>
-</ol>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span><span class="p">,</span> <span class="nx">schema</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// find: data is Task[]
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">q1</span> <span class="o">=</span> <span class="nx">figbird</span><span class="p">.</span><span class="nx">query</span><span class="p">({</span> <span class="nx">serviceName</span><span class="o">:</span> <span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;find&#39;</span><span class="p">,</span> <span class="nx">params</span><span class="o">:</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">completed</span>: <span class="kt">true</span> <span class="p">}</span> <span class="p">}</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl"><span class="nx">q1</span><span class="p">.</span><span class="nx">subscribe</span><span class="p">(</span><span class="nx">state</span> <span class="o">=&gt;</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">// state.data: Task[] | null
-</span></span></span><span class="line"><span class="cl"><span class="p">})</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// get: data is Task (no meta by default)
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">q2</span> <span class="o">=</span> <span class="nx">figbird</span><span class="p">.</span><span class="nx">query</span><span class="p">({</span> <span class="nx">serviceName</span><span class="o">:</span> <span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;get&#39;</span><span class="p">,</span> <span class="nx">resourceId</span><span class="o">:</span> <span class="s1">&#39;123&#39;</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl"><span class="nx">q2</span><span class="p">.</span><span class="nx">subscribe</span><span class="p">(</span><span class="nx">state</span> <span class="o">=&gt;</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">// state.data: Task | null
-</span></span></span><span class="line"><span class="cl"><span class="p">})</span>
-</span></span></code></pre></div><ol start="7">
-<li>Custom methods on services:</li>
-</ol>
-<p>Feathers services often have custom methods beyond CRUD. Define them in your schema for full type safety:</p>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">newTask</span> <span class="o">=</span> <span class="k">await</span> <span class="nx">create</span><span class="p">({</span> <span class="nx">title</span><span class="o">:</span> <span class="s1">&#39;Ship it&#39;</span> <span class="p">})</span>  <span class="c1">// typed payload, returns Task
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="k">await</span> <span class="nx">patch</span><span class="p">(</span><span class="s1">&#39;id-1&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">completed</span>: <span class="kt">true</span> <span class="p">})</span>            <span class="c1">// typed patch payload
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="k">await</span> <span class="nx">remove</span><span class="p">(</span><span class="s1">&#39;id-1&#39;</span><span class="p">)</span>                                <span class="c1">// returns removed Task
+</span></span></span></code></pre></div><h2 id="custom-service-methods">Custom Service Methods</h2>
+<p>Feathers services often expose custom methods beyond CRUD. Define them in your schema to get full type safety when calling them through the Feathers client.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">interface</span> <span class="nx">NotesService</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">item</span>: <span class="kt">Note</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">methods</span><span class="o">:</span> <span class="p">{</span>
@@ -322,55 +247,34 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 </span></span><span class="line"><span class="cl">    <span class="nx">notes</span>: <span class="kt">service</span><span class="p">&lt;</span><span class="nt">NotesService</span><span class="p">&gt;(),</span>
 </span></span><span class="line"><span class="cl">  <span class="p">},</span>
 </span></span><span class="line"><span class="cl"><span class="p">})</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Access via typed Feathers client:
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFeathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
+</span></span></code></pre></div><p>Access custom methods through the typed Feathers client returned by <code>useFeathers</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFeathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">feathers</span> <span class="o">=</span> <span class="nx">useFeathers</span><span class="p">()</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">archive</span><span class="p">([</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="s1">&#39;2&#39;</span><span class="p">])</span>  <span class="c1">// returns { count: number }
-</span></span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">search</span><span class="p">(</span><span class="s1">&#39;hello&#39;</span><span class="p">)</span>      <span class="c1">// returns Note[]
-</span></span></span></code></pre></div><h2 id="api-reference">API Reference</h2>
-<h2 id="createhooks"><code>createHooks</code></h2>
-<p><code>createHooks(figbird)</code> binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns <code>{ useFind, useGet, useMutation, useFeathers }</code> with full service- and adapter-aware TypeScript types.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span><span class="p">,</span> <span class="nx">FeathersAdapter</span><span class="p">,</span> <span class="nx">createHooks</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span><span class="p">,</span> <span class="nx">schema</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl"><span class="kr">export</span> <span class="kr">const</span> <span class="p">{</span> <span class="nx">useFind</span><span class="p">,</span> <span class="nx">useGet</span><span class="p">,</span> <span class="nx">useMutation</span><span class="p">,</span> <span class="nx">useFeathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Later in components
-</span></span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">People() {</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">// serviceName literal narrows types
-</span></span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="nx">res</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;api/people&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">name</span><span class="o">:</span> <span class="s1">&#39;Ada&#39;</span><span class="p">,</span> <span class="nx">$limit</span>: <span class="kt">10</span> <span class="p">}</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">//          ^ QueryResult&lt;Person[], FindMeta&gt;
-</span></span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;{</span><span class="nx">res</span><span class="p">.</span><span class="nx">data</span><span class="o">?</span><span class="p">.</span><span class="nx">length</span> <span class="o">??</span> <span class="mi">0</span><span class="p">}&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">TaskView</span><span class="p">({</span> <span class="nx">id</span> <span class="p">}</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span>: <span class="kt">string</span> <span class="p">})</span> <span class="p">{</span>
-</span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="nx">res</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="nx">id</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="c1">//          ^ QueryResult&lt;Task&gt; (no meta by default)
-</span></span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;{</span><span class="nx">res</span><span class="p">.</span><span class="nx">data</span><span class="o">?</span><span class="p">.</span><span class="nx">title</span><span class="p">}&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><h3 id="useget"><code>useGet</code></h3>
+</span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">archive</span><span class="p">([</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="s1">&#39;2&#39;</span><span class="p">])</span>  <span class="c1">// { count: number }
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">search</span><span class="p">(</span><span class="s1">&#39;hello&#39;</span><span class="p">)</span>      <span class="c1">// Note[]
+</span></span></span></code></pre></div><h1 id="api-reference">API Reference</h1>
+<h2 id="useget">useGet</h2>
+<p>Fetches a single resource by ID. The result stays in sync with realtime events and is shared across components using the same query.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="c1">// Untyped usage
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">id</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">id</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1">// Typed usage with createHooks(figbird)
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useGet</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="p">{</span> <span class="nx">useGet</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">note</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">,</span> <span class="s1">&#39;1&#39;</span><span class="p">)</span> <span class="c1">// note: QueryResult&lt;Note&gt;
-</span></span></span></code></pre></div><p><strong>Arguments</strong></p>
+</span></span></span></code></pre></div><h4 id="arguments">Arguments</h4>
 <ul>
 <li><code>serviceName</code> - the name of Feathers service</li>
 <li><code>id</code> - the id of the resource</li>
 <li><code>params</code> - any params you&rsquo;d pass to a Feathers service call, plus any Figbird params</li>
 </ul>
-<p><strong>Figbird params</strong></p>
+<h4 id="figbird-params">Figbird params</h4>
 <ul>
 <li><code>skip</code> - setting to true will not fetch the data</li>
 <li><code>realtime</code> - one of <code>merge</code> (default), <code>refetch</code> or <code>disabled</code></li>
 <li><code>fetchPolicy</code> - one of <code>swr</code> (default), <code>cache-first</code> or <code>network-only</code></li>
 </ul>
-<p><strong>Returns</strong></p>
+<h4 id="returns">Returns</h4>
 <ul>
 <li><code>data</code> - starts as <code>null</code> and is set to the fetch result (single item)</li>
 <li><code>status</code> - one of <code>loading</code>, <code>success</code> or <code>error</code></li>
@@ -379,19 +283,20 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 <li><code>refetch</code> - function to refetch data</li>
 </ul>
 <p>Note: By default, <code>useGet</code> does not expose <code>meta</code>. Adapters may return meta for get operations, but the built-in FeathersAdapter returns only the item.</p>
-<h3 id="usefind"><code>useFind</code></h3>
+<h2 id="usefind">useFind</h2>
+<p>Fetches a list of resources matching a query. Results update automatically when records are created, modified, or removed - either locally or via realtime events.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="c1">// Untyped usage
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">meta</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">meta</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">isFetching</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">refetch</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1">// Typed usage with createHooks(figbird)
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFind</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFind</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">notes</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">)</span> <span class="c1">// QueryResult&lt;Note[], FindMeta&gt;
-</span></span></span></code></pre></div><p><strong>Arguments</strong></p>
+</span></span></span></code></pre></div><h4 id="arguments-1">Arguments</h4>
 <ul>
 <li><code>serviceName</code> - the name of Feathers service</li>
 <li><code>params</code> - any params you&rsquo;d pass to Feathers, plus any Figbird params</li>
 </ul>
-<p><strong>Figbird params</strong></p>
+<h4 id="figbird-params-1">Figbird params</h4>
 <ul>
 <li><code>skip</code> - setting true will not fetch the data</li>
 <li><code>realtime</code> - one of <code>merge</code> (default), <code>refetch</code> or <code>disabled</code></li>
@@ -401,7 +306,7 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 <li><code>parallelLimit</code> - when used in combination with <code>parallel</code> limits how many parallel requests to make at once (default: 4)</li>
 <li><code>matcher</code> - custom matcher function of signature <code>(query) =&gt; (item) =&gt; bool</code>, used when merging realtime events into local query cache</li>
 </ul>
-<p><strong>Returns</strong></p>
+<h4 id="returns-1">Returns</h4>
 <ul>
 <li><code>data</code> - starts as <code>null</code> and is set to the fetch result (array)</li>
 <li><code>meta</code> - adapter-specific metadata from the <code>find</code> envelope, e.g. <code>{ total, limit, skip }</code> (type: <code>FindMeta</code> with FeathersAdapter)</li>
@@ -410,47 +315,45 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 <li><code>error</code> - error object if request failed</li>
 <li><code>refetch</code> - function to refetch data</li>
 </ul>
-<h3 id="usemutation"><code>useMutation</code></h3>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">create</span><span class="p">,</span> <span class="nx">update</span><span class="p">,</span> <span class="nx">patch</span><span class="p">,</span> <span class="nx">remove</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
-</span></span></code></pre></div><p><strong>Arguments</strong></p>
+<h2 id="usemutation">useMutation</h2>
+<p>Provides methods to create, update, patch, and remove resources. Mutations automatically update the cache, so all components using related queries re-render with fresh data.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">data</span><span class="p">,</span> <span class="nx">status</span><span class="p">,</span> <span class="nx">error</span><span class="p">,</span> <span class="nx">create</span><span class="p">,</span> <span class="nx">update</span><span class="p">,</span> <span class="nx">patch</span><span class="p">,</span> <span class="nx">remove</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">useMutation</span><span class="p">(</span><span class="nx">serviceName</span><span class="p">,</span> <span class="nx">params</span><span class="p">)</span>
+</span></span></code></pre></div><h4 id="arguments-2">Arguments</h4>
 <ul>
 <li><code>serviceName</code> - the name of Feathers service</li>
 </ul>
-<p><strong>Returns</strong></p>
+<h4 id="returns-2">Returns</h4>
 <ul>
 <li><code>create(data, params)</code> - create</li>
 <li><code>update(id, data, params)</code> - update</li>
 <li><code>patch(id, data, params)</code> - patch</li>
 <li><code>remove(id, params)</code> - remove</li>
 <li><code>status</code> - one of <code>idle</code>, <code>loading</code>, <code>success</code> or <code>error</code></li>
-<li><code>data</code> - starts of as <code>null</code> and is set to the latest mutation result</li>
+<li><code>data</code> - starts off as <code>null</code> and is set to the latest mutation result</li>
 <li><code>error</code> - error object of the last failed mutation</li>
 </ul>
-<h3 id="usefeathers"><code>useFeathers</code></h3>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="c1">// From createHooks - returns typed client
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFeathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
+<h2 id="usefeathers">useFeathers</h2>
+<p>Returns the underlying Feathers client for direct service access. Useful for one-off operations, custom methods, or when you need the client outside of Figbird&rsquo;s caching layer.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="p">{</span> <span class="nx">useFeathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">feathers</span> <span class="o">=</span> <span class="nx">useFeathers</span><span class="p">()</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">// Fully typed service access
-</span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">note</span> <span class="o">=</span> <span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="kr">get</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">)</span>     <span class="c1">// note: Note
-</span></span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">create</span><span class="p">({</span> <span class="nx">title</span><span class="o">:</span> <span class="s1">&#39;Hi&#39;</span> <span class="p">})</span>   <span class="c1">// typed payload
-</span></span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">patch</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;Updated&#39;</span> <span class="p">})</span>
-</span></span></code></pre></div><p>Returns the Feathers client. When using <code>createHooks</code>, returns a <code>TypedFeathersClient</code> with full type safety for all service methods based on your schema.</p>
-<h3 id="provider"><code>Provider</code></h3>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-tsx" data-lang="tsx"><span class="line"><span class="cl"><span class="p">&lt;</span><span class="nt">FigbirdProvider</span> <span class="na">figbird</span><span class="o">=</span><span class="p">{</span><span class="nx">figbird</span><span class="p">}&gt;{</span><span class="nx">children</span><span class="p">}&lt;/</span><span class="nt">FigbirdProvider</span><span class="p">&gt;</span>
-</span></span></code></pre></div><ul>
-<li><code>figbird</code> - figbird instance</li>
-</ul>
-<h3 id="figbird-1"><code>Figbird</code></h3>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">note</span> <span class="o">=</span> <span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="kr">get</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">create</span><span class="p">({</span> <span class="nx">title</span><span class="o">:</span> <span class="s1">&#39;Hi&#39;</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">feathers</span><span class="p">.</span><span class="nx">service</span><span class="p">(</span><span class="s1">&#39;notes&#39;</span><span class="p">).</span><span class="nx">patch</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">content</span><span class="o">:</span> <span class="s1">&#39;Updated&#39;</span> <span class="p">})</span>
+</span></span></code></pre></div><p>When created via <code>createHooks</code>, returns a <code>TypedFeathersClient</code> with full type safety for all service methods based on your schema.</p>
+<h2 id="figbird-1">Figbird</h2>
+<p>The core class that manages query state, caching, and realtime event processing. Create one instance and share it across your app via the Provider.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span><span class="p">,</span> <span class="nx">schema</span> <span class="p">})</span>
-</span></span></code></pre></div><ul>
+</span></span></code></pre></div><h4 id="arguments-3">Arguments</h4>
+<ul>
 <li><code>adapter</code> - an instance of a data fetching adapter</li>
 <li><code>schema</code> - optional schema to enable full TypeScript inference</li>
 </ul>
-<h3 id="feathersadapter"><code>FeathersAdapter</code></h3>
-<p>A Feathers.js API specific adapter.</p>
+<h2 id="feathersadapter">FeathersAdapter</h2>
+<p>Connects Figbird to a Feathers.js backend. Handles data fetching, realtime subscriptions, and translates between Figbird&rsquo;s query format and Feathers conventions.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">,</span> <span class="nx">options</span><span class="p">)</span>
-</span></span></code></pre></div><ul>
+</span></span></code></pre></div><h4 id="arguments-4">Arguments</h4>
+<ul>
 <li><code>feathers</code> - feathers client</li>
 <li><code>options</code>
 <ul>
@@ -463,9 +366,42 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 </ul>
 <p>Meta behavior:</p>
 <ul>
-<li><code>find</code> returns <code>{ data, meta }</code> where <code>meta</code> is <code>FindMeta</code> (e.g. <code>{ total, limit, skip }</code>).</li>
-<li><code>get</code> returns only <code>{ data }</code> by default (no meta).</li>
+<li><code>find</code> returns <code>{ data, meta }</code> where <code>meta</code> is of type <code>FindMeta</code></li>
+<li><code>get</code> returns only <code>{ data }</code> by default (no meta)</li>
 </ul>
+<h2 id="provider">Provider</h2>
+<p>React context provider that makes the Figbird instance available to all hooks in your component tree. Wrap your app once at the root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-tsx" data-lang="tsx"><span class="line"><span class="cl"><span class="p">&lt;</span><span class="nt">FigbirdProvider</span> <span class="na">figbird</span><span class="o">=</span><span class="p">{</span><span class="nx">figbird</span><span class="p">}&gt;{</span><span class="nx">children</span><span class="p">}&lt;/</span><span class="nt">FigbirdProvider</span><span class="p">&gt;</span>
+</span></span></code></pre></div><h4 id="props">Props</h4>
+<ul>
+<li><code>figbird</code> - figbird instance</li>
+</ul>
+<h2 id="createhooks">createHooks</h2>
+<p><code>createHooks(figbird)</code> binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns <code>{ useFind, useGet, useMutation, useFeathers }</code> with full service- and adapter-aware TypeScript types.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span><span class="p">,</span> <span class="nx">FeathersAdapter</span><span class="p">,</span> <span class="nx">createHooks</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span><span class="p">,</span> <span class="nx">schema</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="kr">export</span> <span class="kr">const</span> <span class="p">{</span> <span class="nx">useFind</span><span class="p">,</span> <span class="nx">useGet</span><span class="p">,</span> <span class="nx">useMutation</span><span class="p">,</span> <span class="nx">useFeathers</span> <span class="p">}</span> <span class="o">=</span> <span class="nx">createHooks</span><span class="p">(</span><span class="nx">figbird</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">// Later in components
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kd">function</span> <span class="nx">People() {</span>
+</span></span><span class="line"><span class="cl">  <span class="c1">// serviceName literal narrows types
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>  <span class="kr">const</span> <span class="nx">res</span> <span class="o">=</span> <span class="nx">useFind</span><span class="p">(</span><span class="s1">&#39;api/people&#39;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">name</span><span class="o">:</span> <span class="s1">&#39;Ada&#39;</span><span class="p">,</span> <span class="nx">$limit</span>: <span class="kt">10</span> <span class="p">}</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl">  <span class="c1">//          ^ QueryResult&lt;Person[], FindMeta&gt;
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>  <span class="k">return</span> <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;{</span><span class="nx">res</span><span class="p">.</span><span class="nx">data</span><span class="o">?</span><span class="p">.</span><span class="nx">length</span> <span class="o">??</span> <span class="mi">0</span><span class="p">}&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">TaskView</span><span class="p">({</span> <span class="nx">id</span> <span class="p">}</span><span class="o">:</span> <span class="p">{</span> <span class="nx">id</span>: <span class="kt">string</span> <span class="p">})</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="nx">res</span> <span class="o">=</span> <span class="nx">useGet</span><span class="p">(</span><span class="s1">&#39;tasks&#39;</span><span class="p">,</span> <span class="nx">id</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">  <span class="c1">//          ^ QueryResult&lt;Task&gt; (no meta by default)
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>  <span class="k">return</span> <span class="p">&lt;</span><span class="nt">div</span><span class="p">&gt;{</span><span class="nx">res</span><span class="p">.</span><span class="nx">data</span><span class="o">?</span><span class="p">.</span><span class="nx">title</span><span class="p">}&lt;/</span><span class="nt">div</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><h4 id="arguments-5">Arguments</h4>
+<ul>
+<li><code>figbird</code> - figbird instance</li>
+</ul>
+<h1 id="advanced-usage">Advanced Usage</h1>
 <h2 id="realtime">Realtime</h2>
 <p>Figbird is compatible with the Feathers realtime model out of the box. The moment you mount a component with a <code>useFind</code> or <code>useGet</code> hook, Figbird will start listening to realtime events for the services in use. It will only at most subscribe once per service. All realtime events will get processed in the following manner:</p>
 <ul>
@@ -474,27 +410,25 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 <li><code>removed</code> - remove this object from cache and any <code>find</code> queries referencing it</li>
 </ul>
 <p>This behaviour can be configured on a per hook basis by passing a <code>realtime</code> param with one of the following values.</p>
-<h3 id="merge"><code>merge</code></h3>
+<h3 id="merge">merge</h3>
 <p>This is the default mode that merges all realtime events into cached queries as described above.</p>
-<h3 id="refetch"><code>refetch</code></h3>
-<p>Sometimes, the client does not have the full information to make a decision about how to merge an individual realtime event into the local query result set. For example, if you have a server side query that picks the latest record of each kind and some record is removed - the client might not want to remove it from the query set, but instead show the correct record in it&rsquo;s place. In these cases, setting <code>realtime</code> param to <code>refetch</code> might be useful.</p>
+<h3 id="refetch">refetch</h3>
+<p>Sometimes, the client does not have the full information to make a decision about how to merge an individual realtime event into the local query result set. For example, if you have a server side query that picks the latest record of each kind and some record is removed - the client might not want to remove it from the query set, but instead show the correct record in its place. In these cases, setting <code>realtime</code> param to <code>refetch</code> might be useful.</p>
 <p>In <code>refetch</code> mode, the <code>useGet</code> and <code>useFind</code> results are not shared with other components that are in realtime mode, instead the objects are cached locally to those queries and those components. And once a realtime event is received, instead of merging that event as described above, the <code>find</code> or <code>get</code> is refetched in full. That is, the server told us that something in this service changed, and we use that as a signal to update our local result set.</p>
-<h3 id="disabled"><code>disabled</code></h3>
+<h3 id="disabled">disabled</h3>
 <p>Setting <code>realtime</code> to <code>disabled</code> will not share them with components that are in <code>realtime</code> or <code>refetch</code> mode. This way, the results will stay as they are even as realtime events are received. You can still manually trigger a refetch using the <code>refetch</code> function which is returned by the <code>useGet</code> and <code>useFind</code> hooks.</p>
-<h2 id="fetch-policies-1">Fetch Policies</h2>
+<h2 id="fetch-policies">Fetch policies</h2>
 <p>Fetch policy controls when Figbird uses data from cache or network and can be configured by passing the <code>fetchPolicy</code> param to <code>useGet</code> and <code>useFind</code> hooks.</p>
-<h3 id="swr"><code>swr</code></h3>
+<h3 id="swr">swr</h3>
 <p>This is the default and stands for <code>stale-while-revalidate</code>. With this policy, Figbird will show cached data if possible upon mounting the component and will refetch it in the background.</p>
-<h3 id="cache-first"><code>cache-first</code></h3>
+<h3 id="cache-first">cache-first</h3>
 <p>With this policy, Figbird will show cached data if possible upon mounting the component and will only fetch data from the server if data was not found in cache.</p>
-<h3 id="network-only"><code>network-only</code></h3>
+<h3 id="network-only">network-only</h3>
 <p>With this policy, Figbird will never show cached data on mount and will always fetch on component mount.</p>
-<h2 id="advanced-usage">Advanced usage</h2>
-<h3 id="inspect-cache-contents">Inspect cache contents</h3>
-<p>If you want to have a look at the cache contents for debugging reasons, you can do so as shown above.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-jsx" data-lang="jsx"><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">React</span><span class="p">,</span> <span class="p">{</span> <span class="nx">useState</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;react&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">createFeathersClient</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/feathers&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span><span class="p">,</span> <span class="nx">FeathersAdapter</span><span class="p">,</span> <span class="nx">Provider</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
+<h2 id="inspect-cache-contents">Inspect cache contents</h2>
+<p>If you want to have a look at the cache contents for debugging reasons, you can do so as shown below.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-jsx" data-lang="jsx"><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">createFeathersClient</span> <span class="nx">from</span> <span class="s1">&#39;@feathersjs/feathers&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span><span class="p">,</span> <span class="nx">FeathersAdapter</span><span class="p">,</span> <span class="nx">FigbirdProvider</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;figbird&#39;</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">feathers</span> <span class="o">=</span> <span class="nx">createFeathersClient</span><span class="p">()</span>
 </span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">)</span>
@@ -502,31 +436,42 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="kr">export</span> <span class="kd">function</span> <span class="nx">App</span><span class="p">({</span> <span class="nx">children</span> <span class="p">})</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">  <span class="k">return</span> <span class="p">(</span>
-</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">Provider</span> <span class="na">figbird</span><span class="o">=</span><span class="p">{</span><span class="nx">figbird</span><span class="p">}&gt;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">&lt;</span><span class="nt">FigbirdProvider</span> <span class="na">figbird</span><span class="o">=</span><span class="p">{</span><span class="nx">figbird</span><span class="p">}&gt;</span>
 </span></span><span class="line"><span class="cl">      <span class="p">{</span><span class="nx">children</span><span class="p">}</span>
-</span></span><span class="line"><span class="cl">    <span class="p">&lt;/</span><span class="nt">Provider</span><span class="p">&gt;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">&lt;/</span><span class="nt">FigbirdProvider</span><span class="p">&gt;</span>
 </span></span><span class="line"><span class="cl">  <span class="p">)</span>
 </span></span><span class="line"><span class="cl"><span class="p">}</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1">// inspect the state of all of the queries in figbird
-</span></span></span><span class="line"><span class="cl"><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">figbird</span><span class="p">.</span><span class="nx">getState</span><span class="p">())</span>
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">figbird</span><span class="p">.</span><span class="nx">getState</span><span class="p">())</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1">// subscribe to figbird state changes
-</span></span></span><span class="line"><span class="cl"><span class="nx">figbird</span><span class="p">.</span><span class="nx">subscribeToStateChanges</span><span class="p">(</span><span class="nx">state</span> <span class="p">=&gt;</span> <span class="p">{})</span>
-</span></span></code></pre></div><h3 id="run-queries-outside-of-react">Run queries outside of React</h3>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">React</span><span class="p">,</span> <span class="p">{</span> <span class="nx">useState</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;react&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="nx">createFeathersClient</span> <span class="kr">from</span> <span class="s1">&#39;@feathersjs/feathers&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span><span class="p">,</span> <span class="nx">FeathersAdapter</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nx">figbird</span><span class="p">.</span><span class="nx">subscribeToStateChanges</span><span class="p">(</span><span class="nx">state</span> <span class="p">=&gt;</span> <span class="p">{})</span>
+</span></span></code></pre></div><h2 id="using-outside-react">Using outside React</h2>
+<p>Figbird&rsquo;s core is framework-agnostic. You can create and subscribe to queries directly without React, which is useful for background sync, testing, or non-React parts of your app.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span><span class="p">,</span> <span class="nx">schema</span> <span class="p">})</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">feathers</span> <span class="o">=</span> <span class="nx">createFeathersClient</span><span class="p">()</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span> <span class="nx">adapter</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">query</span> <span class="o">=</span> <span class="nx">figbird</span><span class="p">.</span><span class="nx">query</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">serviceName</span><span class="o">:</span> <span class="s1">&#39;tasks&#39;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;find&#39;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">params</span><span class="o">:</span> <span class="p">{</span> <span class="nx">query</span><span class="o">:</span> <span class="p">{</span> <span class="nx">completed</span>: <span class="kt">true</span> <span class="p">}</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">q</span> <span class="o">=</span> <span class="nx">figbird</span><span class="p">.</span><span class="nx">query</span><span class="p">({</span> <span class="nx">serviceName</span><span class="o">:</span> <span class="s1">&#39;notes&#39;</span><span class="p">,</span> <span class="nx">method</span><span class="o">:</span> <span class="s1">&#39;find&#39;</span> <span class="p">})</span>
-</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">unsub</span> <span class="o">=</span> <span class="nx">q</span><span class="p">.</span><span class="nx">subscribe</span><span class="p">(</span><span class="nx">state</span> <span class="o">=&gt;</span> <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">state</span><span class="p">))</span> <span class="c1">// fetches data and listens to realtime updates
-</span></span></span><span class="line"><span class="cl"><span class="nx">q</span><span class="p">.</span><span class="nx">getSnapshot</span><span class="p">()</span> <span class="c1">// { data, meta, status, isFetching, error }
-</span></span></span><span class="line"><span class="cl"><span class="nx">q</span><span class="p">.</span><span class="nx">refetch</span><span class="p">()</span> <span class="c1">// manually refetch the query
-</span></span></span></code></pre></div><h3 id="use-with-a-custom-api">Use with a custom API</h3>
+</span></span><span class="line"><span class="cl"><span class="c1">// Subscribe to get data and updates
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="kr">const</span> <span class="nx">unsub</span> <span class="o">=</span> <span class="nx">query</span><span class="p">.</span><span class="nx">subscribe</span><span class="p">(</span><span class="nx">state</span> <span class="o">=&gt;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">data</span><span class="p">)</span>  <span class="c1">// Task[] | null
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>  <span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="nx">state</span><span class="p">.</span><span class="nx">status</span><span class="p">)</span> <span class="c1">// &#39;loading&#39; | &#39;success&#39; | &#39;error&#39;
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="p">})</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">// { data, meta, status, isFetching, error }
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nx">query</span><span class="p">.</span><span class="nx">getSnapshot</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">// Manually refetch
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nx">query</span><span class="p">.</span><span class="nx">refetch</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">// Clean up
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="nx">unsub</span><span class="p">()</span>
+</span></span></code></pre></div><h2 id="custom-api-adapters">Custom API adapters</h2>
 <p>In principle, you could use Figbird with any REST / Websocket / RPC API as long as you wrap your API into a Figbird compatible adapter.</p>
 <ol>
 <li>Structure your API around services or resources</li>
@@ -540,7 +485,7 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
 <li><code>POST /comments</code></li>
 <li><code>PUT /comments/:id</code></li>
 <li><code>PATCH /comments/:id</code></li>
-<li><code>DELETE /comments/id</code></li>
+<li><code>DELETE /comments/:id</code></li>
 </ul>
 <p>The result of the <code>find</code> operation or <code>GET /comments</code> would be an object of shape <code>{ data, total, limit, skip }</code> or similar. You can customise how all this gets mapped to your API by implementing a custom Adapter. See <code>adapters/feathers.js</code> for an example.</p>
 
@@ -550,66 +495,52 @@ useGet useFind useMutation Live Queries Works with Feathers realtime events and 
   <nav id="TOC">
     <nav id="TableOfContents">
   <ul>
-    <li>
+    <li><a href="#figbird">Figbird</a>
       <ul>
-        <li></li>
+        <li><a href="#installation">Installation</a></li>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#why-figbird">Why Figbird</a></li>
+        <li><a href="#quick-start">Quick Start</a></li>
       </ul>
     </li>
-    <li><a href="#install">Install</a></li>
-    <li><a href="#example">Example</a></li>
-    <li><a href="#typescript-types">TypeScript Types</a>
+    <li><a href="#typescript">TypeScript</a>
       <ul>
-        <li><a href="#overview">Overview</a></li>
-        <li><a href="#schemas">Schemas</a></li>
+        <li><a href="#defining-a-schema">Defining a Schema</a></li>
+        <li><a href="#type-safe-hooks">Type-Safe Hooks</a></li>
+        <li><a href="#query-parameters">Query Parameters</a></li>
+        <li><a href="#typed-mutations">Typed Mutations</a></li>
+        <li><a href="#custom-service-methods">Custom Service Methods</a></li>
       </ul>
     </li>
-    <li><a href="#api-reference">API Reference</a></li>
-    <li><a href="#createhooks"><code>createHooks</code></a>
+    <li><a href="#api-reference">API Reference</a>
       <ul>
-        <li><a href="#useget"><code>useGet</code></a></li>
-        <li><a href="#usefind"><code>useFind</code></a></li>
-        <li><a href="#usemutation"><code>useMutation</code></a></li>
-        <li><a href="#usefeathers"><code>useFeathers</code></a></li>
-        <li><a href="#provider"><code>Provider</code></a></li>
-        <li><a href="#figbird-1"><code>Figbird</code></a></li>
-        <li><a href="#feathersadapter"><code>FeathersAdapter</code></a></li>
+        <li><a href="#useget">useGet</a></li>
+        <li><a href="#usefind">useFind</a></li>
+        <li><a href="#usemutation">useMutation</a></li>
+        <li><a href="#usefeathers">useFeathers</a></li>
+        <li><a href="#figbird-1">Figbird</a></li>
+        <li><a href="#feathersadapter">FeathersAdapter</a></li>
+        <li><a href="#provider">Provider</a></li>
+        <li><a href="#createhooks">createHooks</a></li>
       </ul>
     </li>
-    <li><a href="#realtime">Realtime</a>
+    <li><a href="#advanced-usage">Advanced Usage</a>
       <ul>
-        <li><a href="#merge"><code>merge</code></a></li>
-        <li><a href="#refetch"><code>refetch</code></a></li>
-        <li><a href="#disabled"><code>disabled</code></a></li>
-      </ul>
-    </li>
-    <li><a href="#fetch-policies-1">Fetch Policies</a>
-      <ul>
-        <li><a href="#swr"><code>swr</code></a></li>
-        <li><a href="#cache-first"><code>cache-first</code></a></li>
-        <li><a href="#network-only"><code>network-only</code></a></li>
-      </ul>
-    </li>
-    <li><a href="#advanced-usage">Advanced usage</a>
-      <ul>
+        <li><a href="#realtime">Realtime</a></li>
+        <li><a href="#fetch-policies">Fetch policies</a></li>
         <li><a href="#inspect-cache-contents">Inspect cache contents</a></li>
-        <li><a href="#run-queries-outside-of-react">Run queries outside of React</a></li>
-        <li><a href="#use-with-a-custom-api">Use with a custom API</a></li>
+        <li><a href="#using-outside-react">Using outside React</a></li>
+        <li><a href="#custom-api-adapters">Custom API adapters</a></li>
       </ul>
     </li>
   </ul>
 </nav>
-    <div class="github">
-  <a href="https://github.com/humaans/figbird">
-    <svg style="width:24px;height:24px" viewBox="0 0 24 24">
-      <path fill="#000000" d="M12,2A10,10 0 0,0 2,12C2,16.42 4.87,20.17 8.84,21.5C9.34,21.58 9.5,21.27 9.5,21C9.5,20.77 9.5,20.14 9.5,19.31C6.73,19.91 6.14,17.97 6.14,17.97C5.68,16.81 5.03,16.5 5.03,16.5C4.12,15.88 5.1,15.9 5.1,15.9C6.1,15.97 6.63,16.93 6.63,16.93C7.5,18.45 8.97,18 9.54,17.76C9.63,17.11 9.89,16.67 10.17,16.42C7.95,16.17 5.62,15.31 5.62,11.5C5.62,10.39 6,9.5 6.65,8.79C6.55,8.54 6.2,7.5 6.75,6.15C6.75,6.15 7.59,5.88 9.5,7.17C10.29,6.95 11.15,6.84 12,6.84C12.85,6.84 13.71,6.95 14.5,7.17C16.41,5.88 17.25,6.15 17.25,6.15C17.8,7.5 17.45,8.54 17.35,8.79C18,9.5 18.38,10.39 18.38,11.5C18.38,15.32 16.04,16.16 13.81,16.41C14.17,16.72 14.5,17.33 14.5,18.26C14.5,19.6 14.5,20.68 14.5,21C14.5,21.27 14.66,21.59 15.17,21.5C19.14,20.16 22,16.42 22,12A10,10 0 0,0 12,2Z" />
-    </svg> View on Github →</a>
-</div>
-
+    <div class="made-by">Made by <a href="https://humaans.io">Humaans</a></div>
   </nav>
   
 </div>
 </main>
-  <script src="/js/master.js" type="text/javascript"></script>
+  <script src="https://humaans.github.io/figbird/js/master.js" type="text/javascript"></script>
 </body>
 
 </html>
