@@ -18,7 +18,7 @@ import {
 } from './useInfiniteFind.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import {
-  usePaginatedFind as useBasePaginatedFind,
+  createUsePaginatedFind,
   type UsePaginatedFindConfig,
   type UsePaginatedFindResult,
 } from './usePaginatedFind.js'
@@ -67,7 +67,7 @@ type UseInfiniteFindForSchema<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 > = <N extends ServiceNames<S>>(
   serviceName: N,
-  config?: Omit<UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>, 'query'> & {
+  config?: Omit<UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>>, 'query'> & {
     query?: ServiceQuery<S, N>
   } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
 ) => UseInfiniteFindResult<ServiceItem<S, N>, TMeta>
@@ -78,9 +78,8 @@ type UsePaginatedFindForSchema<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
 > = <N extends ServiceNames<S>>(
   serviceName: N,
-  config: Omit<UsePaginatedFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>, 'query'> & {
-    query?: ServiceQuery<S, N>
-  } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
+  config: UsePaginatedFindConfig<ServiceQuery<S, N>> &
+    Omit<WithServiceQuery<S, N, TParams>, 'query'>,
 ) => UsePaginatedFindResult<ServiceItem<S, N>, TMeta>
 
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
@@ -167,7 +166,7 @@ export function createHooks<F extends Figbird<any, any>>(
 
   function useTypedInfiniteFind<N extends ServiceNames<S>>(
     serviceName: N,
-    config?: Omit<UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>, 'query'> & {
+    config?: Omit<UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>>, 'query'> & {
       query?: ServiceQuery<S, N>
     } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
   ) {
@@ -175,23 +174,25 @@ export function createHooks<F extends Figbird<any, any>>(
     const actualServiceName = service?.name ?? serviceName
     return useBaseInfiniteFind<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
       actualServiceName,
-      config as UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>,
+      config as UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>>,
     )
   }
 
-  function useTypedPaginatedFind<N extends ServiceNames<S>>(
-    serviceName: N,
-    config: Omit<UsePaginatedFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>, 'query'> & {
-      query?: ServiceQuery<S, N>
-    } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
-  ) {
-    const service = findServiceByName(figbird.schema, serviceName)
-    const actualServiceName = service?.name ?? serviceName
-    return useBasePaginatedFind<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
-      actualServiceName,
-      config as UsePaginatedFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>, TMeta>,
-    )
-  }
+  // Create the paginated find hook using the factory with our typed useFind
+  const useTypedPaginatedFind = createUsePaginatedFind<
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any,
+    TMeta,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  >(
+    useTypedFind as (
+      serviceName: string,
+      params?: Record<string, unknown>,
+    ) => QueryResult<unknown[], TMeta>,
+  )
 
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
     const service = findServiceByName(figbird.schema, serviceName)

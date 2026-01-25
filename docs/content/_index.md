@@ -327,11 +327,10 @@ const {
 - `limit` - page size (uses adapter default if not specified)
 - `skip` - setting to true will not fetch the data
 - `realtime` - one of `merge` (default), `refetch` or `disabled`
-- `fetchAllPages` - fetch all pages automatically on initial load
 - `matcher` - custom matcher function for realtime events
 - `sorter` - custom sorter for inserting realtime events in correct order
-- `getPageParam` - custom function to extract next page param from response
-- `getHasNextPage` - custom function to determine if more pages exist
+
+Pagination logic is configured at the adapter level. See `FeathersAdapter` options for `getNextPageParam` and `getHasNextPage`.
 
 #### Returns
 
@@ -349,6 +348,10 @@ const {
 ## usePaginatedFind
 
 Fetches resources with traditional page-based navigation. Shows one page at a time with navigation controls. Previous page data stays visible during transitions for a smooth UX.
+
+Supports both offset pagination (random access to any page) and cursor pagination (sequential navigation only). The mode is auto-detected from the server response:
+- **Offset mode**: Server returns `total` - all navigation methods work, `totalPages` is computed
+- **Cursor mode**: Server returns `endCursor` or no `total` - `totalPages` is -1, `setPage(n)` silently ignores non-sequential jumps, `nextPage()`/`prevPage()` work using cursor history
 
 ```ts
 const {
@@ -380,9 +383,7 @@ const {
 - `limit` - page size (required)
 - `initialPage` - starting page number, 1-indexed (default: 1)
 - `skip` - setting to true will not fetch the data
-- `realtime` - one of `merge` (default), `refetch` or `disabled`
-- `matcher` - custom matcher function for realtime events
-- `getTotal` - custom function to extract total count from meta
+- `realtime` - one of `refetch` (default), `merge` or `disabled`. Refetch is recommended for pagination since creates/removes can shift page boundaries.
 
 #### Returns
 
@@ -392,10 +393,10 @@ const {
 - `isFetching` - `true` if fetching data
 - `error` - error object if request failed
 - `page` - current page number (1-indexed)
-- `totalPages` - total number of pages
+- `totalPages` - total number of pages (-1 for cursor mode)
 - `hasNextPage` - whether there is a next page
 - `hasPrevPage` - whether there is a previous page
-- `setPage` - function to navigate to a specific page
+- `setPage` - function to navigate to a specific page (silently ignores non-sequential jumps in cursor mode)
 - `nextPage` - function to go to next page
 - `prevPage` - function to go to previous page
 - `refetch` - function to refetch current page
@@ -466,6 +467,8 @@ const adapter = new FeathersAdapter(feathers, options)
   - `updatedAtField` - string or function, defaults to `item => item.updatedAt || item.updated_at`, used to avoid overwriting newer data in cache with older data when `get` or realtime `patched` requests are racing
   - `defaultPageSize` - a default page size in `query.$limit` to use when fetching, unset by default so that the server gets to decide
   - `defaultPageSizeWhenFetchingAll` - a default page size to use in `query.$limit` when fetching using `allPages: true`, unset by default so that the server gets to decide
+  - `getNextPageParam` - function `(meta, data) => string | number | null` to extract next page param from response. Auto-detects by default: uses `meta.endCursor` for cursor pagination, otherwise calculates next `$skip` for offset pagination
+  - `getHasNextPage` - function `(meta, data) => boolean` to determine if more pages exist. Uses `meta.hasNextPage` if available, otherwise derives from `getNextPageParam`
 
 Meta behavior:
 

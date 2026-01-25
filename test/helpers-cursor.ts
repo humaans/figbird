@@ -22,7 +22,7 @@ interface FindParams {
   query?: {
     $limit?: number
     $skip?: number
-    cursor?: string
+    $cursor?: string
     $sort?: Record<string, 1 | -1>
     [key: string]: unknown
   }
@@ -101,7 +101,7 @@ class CursorService extends EventEmitter {
     }
 
     const limit = params.query?.$limit ?? this.pageSize
-    const cursor = params.query?.cursor
+    const cursor = params.query?.$cursor
     const skip = params.query?.$skip ?? 0
 
     // Get all items in original order
@@ -109,7 +109,7 @@ class CursorService extends EventEmitter {
       .map(id => this.#data.get(id))
       .filter((item): item is TestItem => item !== undefined)
 
-    // Find starting index based on cursor (cursor mode) or $skip (offset mode)
+    // Find starting index based on $cursor (cursor mode) or $skip (offset mode)
     let startIndex = 0
     if (this.#mode === 'cursor' && cursor) {
       const cursorId = parseInt(cursor, 10)
@@ -120,7 +120,7 @@ class CursorService extends EventEmitter {
     } else if (this.#mode === 'offset') {
       startIndex = skip
     } else if (cursor) {
-      // Cursor mode with cursor param
+      // Cursor mode with $cursor param
       const cursorId = parseInt(cursor, 10)
       startIndex = this.#originalOrder.findIndex(id => id === cursorId)
       if (startIndex === -1) {

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import type { Adapter, EventHandlers } from '../adapters/adapter.js'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import type { Figbird } from '../core/figbird.js'
+import type { AnySchema } from '../core/schema.js'
+import type { QueryResult } from './useQuery.js'
 import { useFigbird } from './react.js'
 
 /**
  * Configuration for paginated queries (traditional page-based navigation)
  */
-export interface UsePaginatedFindConfig<TItem, TQuery, TMeta> {
+export interface UsePaginatedFindConfig<TQuery> {
   /** Query parameters for filtering/sorting */
   query?: TQuery
   /** Page size (required) */
@@ -14,12 +16,8 @@ export interface UsePaginatedFindConfig<TItem, TQuery, TMeta> {
   initialPage?: number
   /** Skip fetching entirely */
   skip?: boolean
-  /** Realtime strategy: 'merge' updates current page, 'refetch' refetches current page, 'disabled' ignores events */
+  /** Realtime strategy: 'refetch' (default) refetches current page, 'merge' updates in place, 'disabled' ignores events */
   realtime?: 'merge' | 'refetch' | 'disabled'
-  /** Custom matcher for realtime events (default: built from query using adapter.matcher/sift) */
-  matcher?: (query: TQuery | undefined) => (item: TItem) => boolean
-  /** Custom function to extract total count from meta */
-  getTotal?: (meta: TMeta) => number
 }
 
 /**
@@ -39,14 +37,14 @@ export interface UsePaginatedFindResult<TItem, TMeta> {
 
   /** Current page number (1-indexed) */
   page: number
-  /** Total number of pages */
+  /** Total number of pages (-1 for cursor mode where total is unknown) */
   totalPages: number
   /** Whether there is a next page */
   hasNextPage: boolean
   /** Whether there is a previous page */
   hasPrevPage: boolean
 
-  /** Navigate to a specific page (1-indexed) */
+  /** Navigate to a specific page (1-indexed). In cursor mode, silently ignores non-sequential jumps. */
   setPage: (page: number) => void
   /** Navigate to the next page */
   nextPage: () => void
@@ -56,88 +54,249 @@ export interface UsePaginatedFindResult<TItem, TMeta> {
   refetch: () => void
 }
 
-// State shape for the reducer
-interface PaginatedState<TItem, TMeta> {
-  status: 'loading' | 'success' | 'error'
-  data: TItem[]
-  meta: TMeta
-  isFetching: boolean
-  error: Error | null
-  page: number
-  total: number
+/**
+ * Keep previous data during loading transitions
+ */
+function usePreviousData<T>(data: T, keepPrevious: boolean): T {
+  const ref = useRef(data)
+  if (!keepPrevious && data != null) {
+    ref.current = data
+  }
+  return ref.current
 }
 
-// Action types
-type PaginatedAction<TItem, TMeta> =
-  | { type: 'FETCH_START' }
-  | { type: 'FETCH_SUCCESS'; data: TItem[]; meta: TMeta; total: number }
-  | { type: 'FETCH_ERROR'; error: Error }
-  | { type: 'SET_PAGE'; page: number }
-  | { type: 'RESET_PAGE' }
-  | { type: 'REALTIME_UPDATE'; data: TItem[] }
+/**
+ * Create a paginated find hook from a base useFind hook.
+ * This is a thin wrapper that adds page state management on top of useFind.
+ * Supports both offset pagination (traditional) and cursor pagination (sequential navigation only).
+ *
+ * @param useFind - The base useFind hook (typed or untyped)
+ * @returns A usePaginatedFind hook
+ */
+export function createUsePaginatedFind<
+  TItem,
+  TMeta extends Record<string, unknown>,
+  TQuery,
+  TParams extends Record<string, unknown>,
+>(
+  useFind: (serviceName: string, params?: TParams) => QueryResult<TItem[], TMeta>,
+): (
+  serviceName: string,
+  config: UsePaginatedFindConfig<TQuery> & Omit<TParams, 'query'>,
+) => UsePaginatedFindResult<TItem, TMeta> {
+  return function usePaginatedFind(
+    serviceName: string,
+    config: UsePaginatedFindConfig<TQuery> & Omit<TParams, 'query'>,
+  ): UsePaginatedFindResult<TItem, TMeta> {
+    const figbird = useFigbird() as Figbird<AnySchema>
+    const {
+      query,
+      limit,
+      initialPage = 1,
+      skip = false,
+      realtime = 'refetch',
+      ...restParams
+    } = config
 
-function createReducer<TItem, TMeta>(emptyMeta: TMeta, initialPage: number) {
-  return function reducer(
-    state: PaginatedState<TItem, TMeta>,
-    action: PaginatedAction<TItem, TMeta>,
-  ): PaginatedState<TItem, TMeta> {
-    switch (action.type) {
-      case 'FETCH_START':
-        return {
-          ...state,
-          isFetching: true,
-          error: null,
-        }
-      case 'FETCH_SUCCESS':
-        return {
-          status: 'success',
-          data: action.data,
-          meta: action.meta,
-          isFetching: false,
-          error: null,
-          page: state.page,
-          total: action.total,
-        }
-      case 'FETCH_ERROR':
-        return {
-          ...state,
-          status: 'error',
-          isFetching: false,
-          error: action.error,
-        }
-      case 'SET_PAGE':
-        return {
-          ...state,
-          page: action.page,
-          isFetching: true,
-          error: null,
-        }
-      case 'RESET_PAGE':
-        return {
-          status: 'loading',
-          data: [],
-          meta: emptyMeta,
-          isFetching: true,
-          error: null,
-          page: initialPage,
-          total: 0,
-        }
-      case 'REALTIME_UPDATE':
-        return {
-          ...state,
-          data: action.data,
-        }
-      default:
-        return state
+    // Page index for cursor mode (0-indexed internally)
+    const [pageIndex, setPageIndex] = useState(initialPage - 1)
+    // Cursor history for navigating backwards in cursor mode
+    // cursorHistory[0] = null (first page), cursorHistory[1] = cursor for page 2, etc.
+    const [cursorHistory, setCursorHistory] = useState<(string | null)[]>([null])
+
+    // Track if we've detected cursor mode
+    const [isCursorMode, setIsCursorMode] = useState<boolean | null>(null)
+
+    // Reset to page 1 when query changes
+    const queryKey = JSON.stringify(query)
+    const prevQueryKeyRef = useRef(queryKey)
+    if (prevQueryKeyRef.current !== queryKey) {
+      prevQueryKeyRef.current = queryKey
+      if (pageIndex !== 0) {
+        setPageIndex(0)
+        setCursorHistory([null])
+        setIsCursorMode(null)
+      }
     }
+
+    // Create a matcher that uses only the filter query (without $skip/$limit/$cursor)
+    const matcher = useMemo(() => {
+      if (realtime !== 'merge') return undefined
+      return (_queryWithPagination: unknown) =>
+        figbird.adapter.matcher(query as Record<string, unknown> | undefined)
+    }, [figbird.adapter, queryKey, realtime])
+
+    // Determine what pagination param to use
+    const currentCursor = cursorHistory[pageIndex] ?? null
+    const usesCursor = isCursorMode === true || (isCursorMode === null && pageIndex > 0)
+
+    // Build params for useFind with pagination
+    const params = useMemo(
+      () =>
+        ({
+          ...restParams,
+          query: {
+            ...(query as object),
+            $limit: limit,
+            // Use cursor if in cursor mode and we have one, otherwise use skip
+            ...(usesCursor && currentCursor != null
+              ? { $cursor: currentCursor }
+              : { $skip: pageIndex * limit }),
+          },
+          skip,
+          realtime,
+          ...(matcher && { matcher }),
+        }) as unknown as TParams,
+      [
+        queryKey,
+        pageIndex,
+        limit,
+        skip,
+        realtime,
+        matcher,
+        currentCursor,
+        usesCursor,
+        JSON.stringify(restParams),
+      ],
+    )
+
+    const result = useFind(serviceName, params)
+
+    // Detect pagination mode from meta response
+    const meta = (result as { meta?: TMeta }).meta
+    const hasEndCursor = meta && 'endCursor' in meta
+    const hasTotal = meta && 'total' in meta && typeof meta.total === 'number' && meta.total >= 0
+
+    // Once we have a response, determine if we're in cursor mode
+    // Cursor mode: has endCursor OR no valid total
+    const detectedCursorMode =
+      result.status === 'success' ? hasEndCursor || !hasTotal : isCursorMode
+    if (detectedCursorMode !== null && detectedCursorMode !== isCursorMode) {
+      setIsCursorMode(detectedCursorMode)
+    }
+
+    // Get the next cursor from meta for advancing cursor history
+    const nextCursor = hasEndCursor ? (meta.endCursor as string | null) : null
+
+    // Calculate pagination values
+    const total = hasTotal ? (meta.total as number) : 0
+    const totalPages = detectedCursorMode ? -1 : Math.max(1, Math.ceil(total / limit))
+    const page = pageIndex + 1 // 1-indexed for external API
+
+    // Determine hasNextPage
+    const hasNextPageFromAdapter = meta
+      ? figbird.adapter.getHasNextPage(meta, result.data ?? [])
+      : false
+    const hasNextPage = detectedCursorMode ? hasNextPageFromAdapter : page < totalPages
+    const hasPrevPage = pageIndex > 0
+
+    // Keep previous data during page transitions
+    const showPrevious = result.isFetching || result.status === 'loading'
+    const displayData = usePreviousData(result.data ?? [], showPrevious)
+    const displayMeta = usePreviousData(meta as TMeta, showPrevious)
+
+    // Store refs for callbacks
+    const totalPagesRef = useRef(totalPages)
+    totalPagesRef.current = totalPages
+    const hasNextPageRef = useRef(hasNextPage)
+    hasNextPageRef.current = hasNextPage
+    const nextCursorRef = useRef(nextCursor)
+    nextCursorRef.current = nextCursor
+    const isCursorModeRef = useRef(detectedCursorMode)
+    isCursorModeRef.current = detectedCursorMode
+
+    const nextPage = useCallback(() => {
+      if (isCursorModeRef.current) {
+        // Cursor mode: advance and store cursor
+        if (hasNextPageRef.current && nextCursorRef.current !== null) {
+          setCursorHistory(h => {
+            const newHistory = [...h]
+            // Store cursor for the next page index
+            newHistory[pageIndex + 1] = nextCursorRef.current
+            return newHistory
+          })
+          setPageIndex(i => i + 1)
+        }
+      } else {
+        // Offset mode
+        setPageIndex(i => Math.min(i + 1, totalPagesRef.current - 1))
+      }
+    }, [pageIndex])
+
+    const prevPage = useCallback(() => {
+      setPageIndex(i => Math.max(i - 1, 0))
+    }, [])
+
+    const setPage = useCallback(
+      (newPage: number) => {
+        const newIndex = newPage - 1 // Convert to 0-indexed
+
+        if (isCursorModeRef.current) {
+          // Cursor mode: only allow sequential navigation
+          // Silently ignore non-sequential jumps
+          if (newIndex === pageIndex + 1) {
+            nextPage()
+          } else if (newIndex === pageIndex - 1) {
+            prevPage()
+          }
+          // All other values are silently ignored
+          return
+        }
+
+        // Offset mode: clamp and set
+        const clamped = Math.max(0, Math.min(newIndex, totalPagesRef.current - 1))
+        setPageIndex(clamped)
+      },
+      [pageIndex, nextPage, prevPage],
+    )
+
+    return useMemo(
+      () => ({
+        status: result.status,
+        data: displayData,
+        meta: displayMeta,
+        isFetching: result.isFetching,
+        error: result.error,
+        page,
+        totalPages,
+        hasNextPage,
+        hasPrevPage,
+        setPage,
+        nextPage,
+        prevPage,
+        refetch: result.refetch,
+      }),
+      [
+        result.status,
+        displayData,
+        displayMeta,
+        result.isFetching,
+        result.error,
+        page,
+        totalPages,
+        hasNextPage,
+        hasPrevPage,
+        setPage,
+        nextPage,
+        prevPage,
+        result.refetch,
+      ],
+    )
   }
 }
 
 /**
- * Hook for traditional page-based pagination with caching, smooth transitions, and realtime updates.
+ * Hook for traditional page-based pagination.
  *
- * Each page is cached separately, making back-navigation instant.
- * Previous page data is kept visible during page transitions (keepPreviousData behavior).
+ * This is a thin wrapper around useFind that adds page state management.
+ * Each page is fetched independently and realtime updates come free from useFind.
+ * Previous page data is kept visible during page transitions for smooth UX.
+ *
+ * Supports both offset pagination (random access) and cursor pagination (sequential only).
+ * In cursor mode:
+ * - totalPages is -1 (unknown)
+ * - setPage(n) silently ignores non-sequential jumps
+ * - nextPage()/prevPage() work correctly using cursor history
  *
  * @example
  * ```tsx
@@ -147,291 +306,4 @@ function createReducer<TItem, TMeta>(emptyMeta: TMeta, initialPage: number) {
  * )
  * ```
  */
-export function usePaginatedFind<
-  TItem,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
->(
-  serviceName: string,
-  config: UsePaginatedFindConfig<TItem, TQuery, TMeta>,
-): UsePaginatedFindResult<TItem, TMeta> {
-  const figbird = useFigbird()
-  const adapter = figbird.adapter as Adapter<unknown, TMeta, TQuery & Record<string, unknown>>
-
-  const {
-    query,
-    limit,
-    initialPage = 1,
-    skip = false,
-    realtime = 'merge',
-    matcher: customMatcher,
-    getTotal: customGetTotal,
-  } = config
-
-  // Default getTotal: extract from meta.total
-  const getTotal = customGetTotal ?? ((meta: TMeta) => (meta as { total?: number }).total ?? 0)
-
-  const emptyMeta = useMemo(() => adapter.emptyMeta(), [adapter])
-  const reducer = useMemo(
-    () => createReducer<TItem, TMeta>(emptyMeta, initialPage),
-    [emptyMeta, initialPage],
-  )
-
-  const [state, dispatch] = useReducer(reducer, {
-    status: 'loading',
-    data: [],
-    meta: emptyMeta,
-    isFetching: !skip,
-    error: null,
-    page: initialPage,
-    total: 0,
-  })
-
-  // Build matcher for realtime events
-  const itemMatcher = useMemo(() => {
-    if (realtime !== 'merge') return () => false
-    if (customMatcher) return customMatcher(query)
-    return adapter.matcher(query as (TQuery & Record<string, unknown>) | undefined) as (
-      item: TItem,
-    ) => boolean
-  }, [adapter, query, realtime, customMatcher])
-
-  // Ref for keeping previous data during transitions
-  const prevDataRef = useRef<{ data: TItem[]; meta: TMeta } | null>(null)
-
-  // Track query changes to reset to page 1
-  const queryKey = JSON.stringify(query)
-  const prevQueryKeyRef = useRef(queryKey)
-
-  // Refs to access latest values in callbacks
-  const stateRef = useRef(state)
-  stateRef.current = state
-
-  const configRef = useRef({ query, limit, getTotal })
-  configRef.current = { query, limit, getTotal }
-
-  // Fetch function
-  const fetchPage = useCallback(
-    async (pageNum: number) => {
-      const { query: currentQuery, limit: currentLimit, getTotal: gt } = configRef.current
-
-      const $skip = (pageNum - 1) * currentLimit
-      const params: Record<string, unknown> = {
-        query: {
-          ...currentQuery,
-          $skip,
-          $limit: currentLimit,
-        },
-      }
-
-      try {
-        const result = await adapter.find(serviceName, params)
-        const data = result.data as TItem[]
-        const meta = result.meta as TMeta
-        const total = gt(meta)
-
-        dispatch({
-          type: 'FETCH_SUCCESS',
-          data,
-          meta,
-          total,
-        })
-
-        return { data, meta, total }
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err))
-        dispatch({ type: 'FETCH_ERROR', error })
-        return null
-      }
-    },
-    [adapter, serviceName],
-  )
-
-  // Reset to page 1 when query changes
-  useEffect(() => {
-    if (prevQueryKeyRef.current !== queryKey) {
-      prevQueryKeyRef.current = queryKey
-      prevDataRef.current = null
-      dispatch({ type: 'RESET_PAGE' })
-    }
-  }, [queryKey])
-
-  // Fetch effect - triggers when page or query changes
-  useEffect(() => {
-    if (skip) return
-
-    let cancelled = false
-
-    async function doFetch() {
-      dispatch({ type: 'FETCH_START' })
-      const result = await fetchPage(state.page)
-      if (cancelled || !result) return
-    }
-
-    doFetch()
-
-    return () => {
-      cancelled = true
-    }
-  }, [skip, fetchPage, state.page, queryKey])
-
-  // Store successful results for smooth transitions
-  useEffect(() => {
-    if (state.status === 'success' && state.data) {
-      prevDataRef.current = { data: state.data, meta: state.meta }
-    }
-  }, [state.status, state.data, state.meta])
-
-  // Calculate pagination info
-  const totalPages = Math.max(1, Math.ceil(state.total / limit))
-  const hasNextPage = state.page < totalPages
-  const hasPrevPage = state.page > 1
-
-  // Navigation functions
-  const setPage = useCallback(
-    (newPage: number) => {
-      const currentTotal = stateRef.current.total
-      const currentTotalPages = Math.max(1, Math.ceil(currentTotal / limit))
-      const clamped = Math.max(1, Math.min(newPage, currentTotalPages))
-      if (clamped !== stateRef.current.page) {
-        dispatch({ type: 'SET_PAGE', page: clamped })
-      }
-    },
-    [limit],
-  )
-
-  const nextPage = useCallback(() => {
-    const currentState = stateRef.current
-    const currentTotalPages = Math.max(1, Math.ceil(currentState.total / limit))
-    if (currentState.page < currentTotalPages) {
-      dispatch({ type: 'SET_PAGE', page: currentState.page + 1 })
-    }
-  }, [limit])
-
-  const prevPage = useCallback(() => {
-    const currentState = stateRef.current
-    if (currentState.page > 1) {
-      dispatch({ type: 'SET_PAGE', page: currentState.page - 1 })
-    }
-  }, [])
-
-  const refetch = useCallback(() => {
-    dispatch({ type: 'FETCH_START' })
-    fetchPage(stateRef.current.page)
-  }, [fetchPage])
-
-  // Realtime subscription effect
-  useEffect(() => {
-    if (skip || realtime === 'disabled' || !adapter.subscribe) {
-      return
-    }
-
-    const getId = (item: unknown) => adapter.getId(item)
-
-    const handlers: EventHandlers = {
-      created: (item: unknown) => {
-        if (realtime === 'refetch') {
-          refetch()
-          return
-        }
-
-        const typedItem = item as TItem
-        if (!itemMatcher(typedItem)) return
-
-        // For created events in merge mode, refetch to get accurate page data
-        // (since insertion position depends on sorting and may affect pagination)
-        refetch()
-      },
-      updated: (item: unknown) => {
-        if (realtime === 'refetch') {
-          refetch()
-          return
-        }
-
-        const typedItem = item as TItem
-        const itemId = getId(typedItem)
-        const currentData = stateRef.current.data
-        const existingIndex = currentData.findIndex(d => getId(d) === itemId)
-        const matches = itemMatcher(typedItem)
-
-        if (existingIndex >= 0 && !matches) {
-          // Item no longer matches - refetch to get replacement item
-          refetch()
-        } else if (existingIndex >= 0 && matches) {
-          // Update in place
-          const newData = [...currentData]
-          newData[existingIndex] = typedItem
-          dispatch({ type: 'REALTIME_UPDATE', data: newData })
-        }
-        // If item matches but wasn't in our page, we don't add it
-        // (it may belong on a different page)
-      },
-      patched: (item: unknown) => {
-        // Same logic as updated
-        handlers.updated(item)
-      },
-      removed: (item: unknown) => {
-        if (realtime === 'refetch') {
-          refetch()
-          return
-        }
-
-        const typedItem = item as TItem
-        const itemId = getId(typedItem)
-        const currentData = stateRef.current.data
-        const existingIndex = currentData.findIndex(d => getId(d) === itemId)
-
-        if (existingIndex >= 0) {
-          // Item was on our page - refetch to get replacement item
-          refetch()
-        }
-      },
-    }
-
-    const unsubscribe = adapter.subscribe(serviceName, handlers)
-    return unsubscribe
-  }, [serviceName, skip, realtime, adapter, itemMatcher, refetch])
-
-  // Use previous data during loading for smooth transitions
-  const displayData =
-    state.isFetching && state.status !== 'loading' && prevDataRef.current
-      ? prevDataRef.current.data
-      : state.data
-  const displayMeta =
-    state.isFetching && state.status !== 'loading' && prevDataRef.current
-      ? prevDataRef.current.meta
-      : state.meta
-
-  return useMemo(
-    () => ({
-      status: state.status,
-      data: displayData,
-      meta: displayMeta,
-      isFetching: state.isFetching,
-      error: state.error,
-      page: state.page,
-      totalPages,
-      hasNextPage,
-      hasPrevPage,
-      setPage,
-      nextPage,
-      prevPage,
-      refetch,
-    }),
-    [
-      state.status,
-      displayData,
-      displayMeta,
-      state.isFetching,
-      state.error,
-      state.page,
-      totalPages,
-      hasNextPage,
-      hasPrevPage,
-      setPage,
-      nextPage,
-      prevPage,
-      refetch,
-    ],
-  )
-}
+export { createUsePaginatedFind as usePaginatedFind }

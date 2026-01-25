@@ -163,11 +163,20 @@ export type TypedFeathersClient<S extends Schema> = {
   >
 }
 
+/** Type for getNextPageParam function */
+type GetNextPageParamFn = (meta: FeathersFindMeta, data: unknown[]) => string | number | null
+/** Type for getHasNextPage function */
+type GetHasNextPageFn = (meta: FeathersFindMeta, data: unknown[]) => boolean
+
 interface FeathersAdapterOptions {
   idField?: IdFieldType
   updatedAtField?: UpdatedAtFieldType
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
+  /** Extract next page param from response. Auto-detects: cursor (endCursor) takes priority, fallback to offset ($skip). */
+  getNextPageParam?: GetNextPageParamFn
+  /** Determine if there are more pages available */
+  getHasNextPage?: GetHasNextPageFn
 }
 
 /**
@@ -182,6 +191,35 @@ function toEpochMs(ts: Timestamp): number | null {
   return ts instanceof Date ? ts.getTime() : null
 }
 
+/**
+ * Default getNextPageParam implementation.
+ * Auto-detects pagination mode: cursor (endCursor) takes priority, fallback to offset ($skip).
+ */
+function defaultGetNextPageParam(meta: FeathersFindMeta, data: unknown[]): string | number | null {
+  // Cursor mode takes priority
+  if (meta.endCursor != null) {
+    return meta.endCursor
+  }
+  // Offset mode fallback
+  const currentSkip = meta.skip ?? 0
+  const nextSkip = currentSkip + data.length
+  if (meta.total != null && meta.total >= 0 && nextSkip >= meta.total) return null
+  if (meta.limit != null && data.length < meta.limit) return null
+  if (data.length === 0) return null
+  return nextSkip
+}
+
+/**
+ * Default getHasNextPage implementation.
+ * Uses meta.hasNextPage if available, otherwise derives from getNextPageParam.
+ */
+function defaultGetHasNextPage(meta: FeathersFindMeta, data: unknown[]): boolean {
+  if (typeof meta.hasNextPage === 'boolean') {
+    return meta.hasNextPage
+  }
+  return defaultGetNextPageParam(meta, data) !== null
+}
+
 export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapter<
   FeathersParams<TQuery>,
   FeathersFindMeta,
@@ -192,6 +230,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #updatedAtField: UpdatedAtFieldType
   #defaultPageSize: number | undefined
   #defaultPageSizeWhenFetchingAll: number | undefined
+  #getNextPageParam: GetNextPageParamFn
+  #getHasNextPage: GetHasNextPageFn
 
   /**
    * Helper to merge query parameters while maintaining type safety
@@ -219,6 +259,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       },
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
+      getNextPageParam = defaultGetNextPageParam,
+      getHasNextPage = defaultGetHasNextPage,
     }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
@@ -226,6 +268,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#updatedAtField = updatedAtField
     this.#defaultPageSize = defaultPageSize
     this.#defaultPageSizeWhenFetchingAll = defaultPageSizeWhenFetchingAll
+    this.#getNextPageParam = getNextPageParam
+    this.#getHasNextPage = getHasNextPage
   }
 
   #service(serviceName: string): FeathersService {
@@ -308,29 +352,29 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
 
     const result: QueryResponse<unknown[], FeathersFindMeta> = {
       data: [],
-      meta: { total: -1, limit: 0, skip: 0 },
+      meta: this.emptyMeta(),
     }
-    let $skip = 0
+    let pageParam: string | number | null = null
 
     while (true) {
+      const pageQuery: Record<string, unknown> = {
+        ...(typeof pageParam === 'string' && { $cursor: pageParam }),
+        ...(typeof pageParam === 'number' && { $skip: pageParam }),
+      }
+
       const { data, meta } = await this.#_find(
         serviceName,
-        this.#mergeQueryParams(baseParams, { $skip }),
+        this.#mergeQueryParams(baseParams, pageQuery),
       )
 
-      result.meta = { ...result.meta, ...meta }
+      result.meta = meta
       result.data.push(...data)
 
-      const done =
-        data.length === 0 ||
-        data.length < meta.limit ||
-        // allow total to be -1 to indicate that total will not be available on this endpoint
-        (meta.total > 0 && result.data.length >= meta.total)
-
-      if (done) return result
-
-      $skip = result.data.length
+      pageParam = this.#getNextPageParam(meta, data)
+      if (pageParam === null) break
     }
+
+    return result
   }
 
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
@@ -414,5 +458,13 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
 
   emptyMeta(): FeathersFindMeta {
     return { total: -1, limit: 0, skip: 0 }
+  }
+
+  getNextPageParam(meta: FeathersFindMeta, data: unknown[]): string | number | null {
+    return this.#getNextPageParam(meta, data)
+  }
+
+  getHasNextPage(meta: FeathersFindMeta, data: unknown[]): boolean {
+    return this.#getHasNextPage(meta, data)
   }
 }

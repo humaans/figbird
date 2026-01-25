@@ -371,15 +371,21 @@ test('usePaginatedFind previous data shown during page transitions', async t => 
   // Navigate to next page - during transition, old data should still be shown
   click($('.next')!)
 
-  // Status should stay success and data should be available during transition
-  t.is($('.status')?.textContent, 'success')
-  // Data should still be visible
+  // Status shows actual query state (loading for new page), but data is preserved
+  // This is stale-while-revalidate behavior - show old data while fetching new
+  t.is($('.isFetching')?.textContent, 'true')
+  // Data from previous page should still be visible during loading
   t.is($('.count')?.textContent, '2')
+  t.deepEqual(
+    $all('.doc').map(el => el.textContent),
+    ['Doc 1', 'Doc 2'],
+  )
 
   await flush()
 
   // Now should have new data
   t.is($('.status')?.textContent, 'success')
+  t.is($('.isFetching')?.textContent, 'false')
   t.deepEqual(
     $all('.doc').map(el => el.textContent),
     ['Doc 3', 'Doc 4'],
@@ -404,11 +410,13 @@ test('usePaginatedFind realtime updates work for current page', async t => {
     },
   })
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  // Disable event batching for tests so realtime updates are processed immediately
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
   const { usePaginatedFind } = createHooks(figbird)
 
   function App() {
-    const { data } = usePaginatedFind('api/documents', { limit: 10 })
+    // Use realtime: 'merge' to test in-place updates (default is 'refetch')
+    const { data } = usePaginatedFind('api/documents', { limit: 10, realtime: 'merge' })
 
     return (
       <div>
@@ -432,9 +440,10 @@ test('usePaginatedFind realtime updates work for current page', async t => {
   t.is($all('.doc').length, 2)
   t.is($all('.doc')[0]?.textContent, 'Doc 1')
 
-  // Update an existing document
-  await feathers.service('api/documents').patch(1, { title: 'Doc 1 Updated' })
-  await flush()
+  // Update an existing document - wrap in flush callback to ensure proper event processing
+  await flush(async () => {
+    await feathers.service('api/documents').patch(1, { title: 'Doc 1 Updated' })
+  })
 
   const docs = $all('.doc').map(el => el.textContent)
   t.deepEqual(docs, ['Doc 1 Updated', 'Doc 2'])
@@ -988,6 +997,215 @@ test('usePaginatedFind with query and sorting', async t => {
   t.is($('.page')?.textContent, '1')
   t.is($('.totalPages')?.textContent, '2')
   t.is($all('.doc').length, 2)
+
+  unmount()
+})
+
+// Cursor pagination tests
+
+test('usePaginatedFind cursor mode: totalPages is -1', async t => {
+  const { $, flush, render, unmount } = dom()
+
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 300 },
+    { id: 2, title: 'Doc 2', createdAt: 200 },
+    { id: 3, title: 'Doc 3', createdAt: 100 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 2,
+      mode: 'cursor',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { usePaginatedFind } = createHooks(figbird)
+
+  function App() {
+    const { status, data, page, totalPages, hasNextPage, hasPrevPage } = usePaginatedFind(
+      'api/documents',
+      { limit: 2 },
+    )
+
+    return (
+      <div>
+        <span className='status'>{status}</span>
+        <span className='count'>{data.length}</span>
+        <span className='page'>{page}</span>
+        <span className='totalPages'>{totalPages}</span>
+        <span className='hasNextPage'>{String(hasNextPage)}</span>
+        <span className='hasPrevPage'>{String(hasPrevPage)}</span>
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  t.is($('.status')?.textContent, 'success')
+  t.is($('.count')?.textContent, '2')
+  t.is($('.page')?.textContent, '1')
+  t.is($('.totalPages')?.textContent, '-1') // Unknown in cursor mode
+  t.is($('.hasNextPage')?.textContent, 'true')
+  t.is($('.hasPrevPage')?.textContent, 'false')
+
+  unmount()
+})
+
+test('usePaginatedFind cursor mode: nextPage/prevPage navigation', async t => {
+  const { $, $all, flush, render, unmount, click } = dom()
+
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 300 },
+    { id: 2, title: 'Doc 2', createdAt: 200 },
+    { id: 3, title: 'Doc 3', createdAt: 100 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 2,
+      mode: 'cursor',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { usePaginatedFind } = createHooks(figbird)
+
+  function App() {
+    const { data, page, hasNextPage, hasPrevPage, nextPage, prevPage } = usePaginatedFind(
+      'api/documents',
+      { limit: 2 },
+    )
+
+    return (
+      <div>
+        <span className='page'>{page}</span>
+        <span className='hasNextPage'>{String(hasNextPage)}</span>
+        <span className='hasPrevPage'>{String(hasPrevPage)}</span>
+        {data.map(d => (
+          <span key={d.id} className='doc'>
+            {d.title}
+          </span>
+        ))}
+        <button onClick={prevPage} disabled={!hasPrevPage} className='prev'>
+          Previous
+        </button>
+        <button onClick={nextPage} disabled={!hasNextPage} className='next'>
+          Next
+        </button>
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  t.is($('.page')?.textContent, '1')
+  t.deepEqual(
+    $all('.doc').map(el => el.textContent),
+    ['Doc 1', 'Doc 2'],
+  )
+  t.is($('.hasNextPage')?.textContent, 'true')
+  t.is($('.hasPrevPage')?.textContent, 'false')
+
+  // Next page
+  click($('.next')!)
+  await flush()
+
+  t.is($('.page')?.textContent, '2')
+  t.deepEqual(
+    $all('.doc').map(el => el.textContent),
+    ['Doc 3'],
+  )
+  t.is($('.hasNextPage')?.textContent, 'false')
+  t.is($('.hasPrevPage')?.textContent, 'true')
+
+  // Previous page - should navigate back using cursor history
+  click($('.prev')!)
+  await flush()
+
+  t.is($('.page')?.textContent, '1')
+  t.deepEqual(
+    $all('.doc').map(el => el.textContent),
+    ['Doc 1', 'Doc 2'],
+  )
+
+  unmount()
+})
+
+test('usePaginatedFind cursor mode: setPage ignores non-sequential jumps', async t => {
+  const { $, flush, render, unmount, click } = dom()
+
+  const documents = [
+    { id: 1, title: 'Doc 1', createdAt: 500 },
+    { id: 2, title: 'Doc 2', createdAt: 400 },
+    { id: 3, title: 'Doc 3', createdAt: 300 },
+    { id: 4, title: 'Doc 4', createdAt: 200 },
+    { id: 5, title: 'Doc 5', createdAt: 100 },
+  ]
+
+  const feathers = mockCursorFeathers({
+    'api/documents': {
+      data: documents,
+      pageSize: 2,
+      mode: 'cursor',
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter })
+  const { usePaginatedFind } = createHooks(figbird)
+
+  function App() {
+    const { page, setPage } = usePaginatedFind('api/documents', { limit: 2 })
+
+    return (
+      <div>
+        <span className='page'>{page}</span>
+        <button onClick={() => setPage(3)} className='go-page-3'>
+          Go to Page 3
+        </button>
+        <button onClick={() => setPage(1)} className='go-page-1'>
+          Go to Page 1
+        </button>
+      </div>
+    )
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+
+  t.is($('.page')?.textContent, '1')
+
+  // Try to jump to page 3 (should be silently ignored in cursor mode)
+  click($('.go-page-3')!)
+  await flush()
+
+  // Still on page 1 because non-sequential jumps are ignored
+  t.is($('.page')?.textContent, '1')
+
+  // Try to go to page 1 (same page, should also be ignored)
+  click($('.go-page-1')!)
+  await flush()
+
+  t.is($('.page')?.textContent, '1')
 
   unmount()
 })
