@@ -77,7 +77,9 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   pending: boolean
   dirty: boolean
   filterItem: (item: ElementType<T>) => boolean
-  state: QueryState<T, TMeta>
+  /** Sorter for infinite queries to insert realtime events in order */
+  sorter?: (a: ElementType<T>, b: ElementType<T>) => number
+  state: QueryState<T, TMeta> | InfiniteQueryState<ElementType<T>, TMeta>
 }
 
 /**
@@ -109,9 +111,20 @@ export interface FindDescriptor {
 }
 
 /**
+ * Query descriptor for infinite find operations
+ */
+export interface InfiniteFindDescriptor {
+  serviceName: string
+  method: 'infiniteFind'
+  params?: unknown
+  /** Unique ID to make each hook instance a separate query (pagination state is per-instance) */
+  instanceId: string
+}
+
+/**
  * Discriminated union of query descriptors
  */
-export type QueryDescriptor = GetDescriptor | FindDescriptor
+export type QueryDescriptor = GetDescriptor | FindDescriptor | InfiniteFindDescriptor
 
 /**
  * Helper type to extract element type from arrays
@@ -174,11 +187,69 @@ export interface FindQueryConfig<TItem = unknown, TQuery = unknown> extends Base
 }
 
 /**
+ * Configuration for infinite find queries
+ */
+export interface InfiniteFindQueryConfig<TItem = unknown, TQuery = unknown> extends Omit<
+  BaseQueryConfig<TItem, TQuery>,
+  'fetchPolicy'
+> {
+  /**
+   * Page size limit for each fetch
+   */
+  limit?: number
+
+  /**
+   * Custom sorter for inserting realtime events in sorted order.
+   * Default: built from query.$sort
+   */
+  sorter?: (a: ElementType<TItem>, b: ElementType<TItem>) => number
+}
+
+/**
+ * Query state for infinite find queries - extended with pagination state
+ */
+export type InfiniteQueryState<T, TMeta = Record<string, unknown>> =
+  | {
+      status: 'loading'
+      data: T[]
+      meta: TMeta
+      isFetching: boolean
+      isLoadingMore: boolean
+      loadMoreError: null
+      error: null
+      hasNextPage: boolean
+      pageParam: string | number | null
+    }
+  | {
+      status: 'success'
+      data: T[]
+      meta: TMeta
+      isFetching: boolean
+      isLoadingMore: boolean
+      loadMoreError: Error | null
+      error: null
+      hasNextPage: boolean
+      pageParam: string | number | null
+    }
+  | {
+      status: 'error'
+      data: T[]
+      meta: TMeta
+      isFetching: boolean
+      isLoadingMore: boolean
+      loadMoreError: Error | null
+      error: Error
+      hasNextPage: boolean
+      pageParam: string | number | null
+    }
+
+/**
  * Discriminated union of query configurations
  */
 export type QueryConfig<TItem = unknown, TQuery = unknown> =
   | GetQueryConfig<TItem, TQuery>
   | FindQueryConfig<TItem, TQuery>
+  | InfiniteFindQueryConfig<TItem, TQuery>
 
 /**
  * Combined config for get operations
@@ -199,7 +270,16 @@ export type CombinedFindConfig<TItem = unknown, TQuery = unknown> = FindDescript
   }
 
 /**
- * Combined config for internal use
+ * Combined config for infinite find operations
+ */
+export type CombinedInfiniteFindConfig<TItem = unknown, TQuery = unknown> = InfiniteFindDescriptor &
+  InfiniteFindQueryConfig<TItem, TQuery> & {
+    [key: string]: unknown
+  }
+
+/**
+ * Combined config for internal use (used by splitConfig for get/find queries)
+ * Note: InfiniteFindConfig is not included as infinite queries use a different code path
  */
 export type CombinedConfig<TItem = unknown, TQuery = unknown> =
   | CombinedGetConfig<TItem, TQuery>
@@ -405,6 +485,23 @@ export class Figbird<
     AdapterFindMeta<A>,
     AdapterQuery<A>
   >
+  /** Create a typed `infiniteFind` query reference. */
+  query<N extends ServiceNames<S>>(
+    desc: {
+      serviceName: N
+      method: 'infiniteFind'
+      params?: ParamsWithServiceQuery<S, N, A>
+      instanceId: string
+    },
+    config?: InfiniteFindQueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>,
+  ): QueryRef<
+    ServiceItem<S, N>[],
+    ServiceQuery<S, N>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
   // Generic fallback overload (for dynamic descriptors)
   query<D extends QueryDescriptor>(
     desc: D,
@@ -421,8 +518,9 @@ export class Figbird<
   query(
     desc: {
       serviceName: string
-      method: 'find' | 'get'
+      method: 'find' | 'get' | 'infiniteFind'
       resourceId?: string | number
+      instanceId?: string
       params?: unknown
     },
     config?: QueryConfig<unknown, unknown>,
@@ -615,8 +713,11 @@ class QueryRef<
   }
 
   /** Returns the latest known state for this query, if available. */
-  getSnapshot(): QueryState<T, TMeta> | undefined {
+  getSnapshot(): QueryState<T, TMeta> | InfiniteQueryState<ElementType<T>, TMeta> | undefined {
     this.#queryStore.materialize(this)
+    if (this.#desc.method === 'infiniteFind') {
+      return this.#queryStore.getInfiniteQueryState<ElementType<T>>(this.#queryId)
+    }
     return this.#queryStore.getQueryState<T>(this.#queryId)
   }
 
@@ -624,6 +725,15 @@ class QueryRef<
   refetch(): void {
     this.#queryStore.materialize(this)
     return this.#queryStore.refetch(this.#queryId)
+  }
+
+  /** Load the next page for an infinite query. */
+  loadMore(): void {
+    if (this.#desc.method !== 'infiniteFind') {
+      throw new Error('loadMore is only available for infinite queries')
+    }
+    this.#queryStore.materialize(this)
+    this.#queryStore.loadMore(this.#queryId)
   }
 }
 
@@ -676,6 +786,11 @@ class QueryStore<
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
   }
 
+  /** Returns the current state for an infinite query by id, if present. */
+  getInfiniteQueryState<T>(queryId: string): InfiniteQueryState<T, TMeta> | undefined {
+    return this.#getQuery(queryId)?.state as InfiniteQueryState<T, TMeta> | undefined
+  }
+
   /**
    * Ensures that backing state exists for the given QueryRef by creating
    * service/query structures on first use.
@@ -689,27 +804,86 @@ class QueryStore<
       this.#transactOverService(
         queryId,
         service => {
-          service.queries.set(queryId, {
-            queryId,
-            desc,
-            config: config as QueryConfig<unknown, unknown>,
-            pending: !config.skip,
-            dirty: false,
-            filterItem: this.#createItemFilter<unknown, unknown>(
+          if (desc.method === 'infiniteFind') {
+            const infiniteConfig = config as InfiniteFindQueryConfig<unknown, unknown>
+            service.queries.set(queryId, {
+              queryId,
               desc,
-              config as QueryConfig<unknown, unknown>,
-            ) as (item: unknown) => boolean,
-            state: {
-              status: 'loading' as const,
-              data: null,
-              meta: this.#adapter.emptyMeta(),
-              isFetching: !config.skip,
-              error: null,
-            },
-          })
+              config: config as QueryConfig<unknown, unknown>,
+              pending: !config.skip,
+              dirty: false,
+              filterItem: this.#createItemFilter<unknown, unknown>(
+                desc,
+                config as QueryConfig<unknown, unknown>,
+              ) as (item: unknown) => boolean,
+              sorter: infiniteConfig.sorter ?? this.#createSorter(desc),
+              state: {
+                status: 'loading' as const,
+                data: [],
+                meta: this.#adapter.emptyMeta(),
+                isFetching: !config.skip,
+                isLoadingMore: false,
+                loadMoreError: null,
+                error: null,
+                hasNextPage: false,
+                pageParam: null,
+              } as InfiniteQueryState<unknown, TMeta>,
+            })
+          } else {
+            service.queries.set(queryId, {
+              queryId,
+              desc,
+              config: config as QueryConfig<unknown, unknown>,
+              pending: !config.skip,
+              dirty: false,
+              filterItem: this.#createItemFilter<unknown, unknown>(
+                desc,
+                config as QueryConfig<unknown, unknown>,
+              ) as (item: unknown) => boolean,
+              state: {
+                status: 'loading' as const,
+                data: null,
+                meta: this.#adapter.emptyMeta(),
+                isFetching: !config.skip,
+                error: null,
+              },
+            })
+          }
         },
         { silent: true },
       )
+    }
+  }
+
+  #createSorter(desc: QueryDescriptor): (a: unknown, b: unknown) => number {
+    const sort = (desc.params as { query?: { $sort?: Record<string, 1 | -1> } })?.query?.$sort
+    if (!sort || Object.keys(sort).length === 0) {
+      return () => 0
+    }
+    const sortEntries = Object.entries(sort)
+    return (a: unknown, b: unknown) => {
+      for (const [key, direction] of sortEntries) {
+        const aVal = (a as Record<string, unknown>)[key]
+        const bVal = (b as Record<string, unknown>)[key]
+        let cmp = 0
+        if (aVal == null && bVal == null) {
+          cmp = 0
+        } else if (aVal == null) {
+          cmp = 1
+        } else if (bVal == null) {
+          cmp = -1
+        } else if (typeof aVal === 'string' && typeof bVal === 'string') {
+          cmp = aVal.localeCompare(bVal)
+        } else if (aVal < bVal) {
+          cmp = -1
+        } else if (aVal > bVal) {
+          cmp = 1
+        }
+        if (cmp !== 0) {
+          return cmp * direction
+        }
+      }
+      return 0
     }
   }
 
@@ -785,19 +959,29 @@ class QueryStore<
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
 
-    if (
-      q.pending ||
-      (q.state.status === 'success' && q.config.fetchPolicy === 'swr' && !q.state.isFetching) ||
-      (q.state.status === 'error' && !q.state.isFetching)
-    ) {
-      this.#queue(queryId)
+    // Infinite queries always fetch on first subscribe, but don't have SWR behavior
+    if (q.desc.method === 'infiniteFind') {
+      if (q.pending || (q.state.status === 'error' && !q.state.isFetching)) {
+        this.#queueInfinite(queryId, false)
+      }
+    } else {
+      const fetchPolicy = (q.config as BaseQueryConfig<unknown, unknown>).fetchPolicy
+      if (
+        q.pending ||
+        (q.state.status === 'success' && fetchPolicy === 'swr' && !q.state.isFetching) ||
+        (q.state.status === 'error' && !q.state.isFetching)
+      ) {
+        this.#queue(queryId)
+      }
     }
 
     const removeListener = this.#addListener(queryId, fn)
 
     this.#subscribeToRealtime(queryId)
 
-    const shouldVacuumByDefault = q.config.fetchPolicy === 'network-only'
+    // Infinite queries always vacuum (each has unique instanceId)
+    const fetchPolicy = (q.config as BaseQueryConfig<unknown, unknown>).fetchPolicy
+    const shouldVacuumByDefault = fetchPolicy === 'network-only' || q.desc.method === 'infiniteFind'
     return ({ vacuum = shouldVacuumByDefault }: { vacuum?: boolean } = {}) => {
       removeListener()
       if (vacuum && this.#listenerCount(queryId) === 0) {
@@ -816,6 +1000,11 @@ class QueryStore<
     const q = this.#getQuery(queryId)
     if (!q) return
 
+    if (q.desc.method === 'infiniteFind') {
+      this.refetchInfinite(queryId)
+      return
+    }
+
     if (!q.state.isFetching) {
       this.#queue(queryId)
     } else {
@@ -830,6 +1019,284 @@ class QueryStore<
         },
         { silent: true },
       )
+    }
+  }
+
+  /** Refetch an infinite query from the beginning (reset pagination). */
+  refetchInfinite(queryId: string): void {
+    const q = this.#getQuery(queryId)
+    if (!q || q.desc.method !== 'infiniteFind') return
+
+    const state = q.state as InfiniteQueryState<unknown, TMeta>
+    if (state.isFetching || state.isLoadingMore) {
+      // Mark as dirty to refetch after current fetch completes
+      this.#transactOverService(
+        queryId,
+        (service, query) => {
+          service.queries.set(queryId, {
+            ...query!,
+            dirty: true,
+          })
+        },
+        { silent: true },
+      )
+      return
+    }
+
+    // Reset state and refetch from beginning
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+      service.queries.set(queryId, {
+        ...query,
+        state: {
+          status: 'loading' as const,
+          data: [],
+          meta: this.#adapter.emptyMeta(),
+          isFetching: true,
+          isLoadingMore: false,
+          loadMoreError: null,
+          error: null,
+          hasNextPage: false,
+          pageParam: null,
+        } as InfiniteQueryState<unknown, TMeta>,
+      })
+    })
+
+    this.#queueInfinite(queryId, false)
+  }
+
+  /** Load more data for an infinite query. */
+  loadMore(queryId: string): void {
+    const q = this.#getQuery(queryId)
+    if (!q || q.desc.method !== 'infiniteFind') return
+
+    const state = q.state as InfiniteQueryState<unknown, TMeta>
+    if (state.isLoadingMore || !state.hasNextPage || state.pageParam === null) {
+      return
+    }
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+      const currentState = query.state as InfiniteQueryState<unknown, TMeta>
+      service.queries.set(queryId, {
+        ...query,
+        state: {
+          ...currentState,
+          isLoadingMore: true,
+          loadMoreError: null,
+        },
+      })
+    })
+
+    this.#queueInfinite(queryId, true)
+  }
+
+  async #queueInfinite(queryId: string, isLoadMore: boolean): Promise<void> {
+    if (!isLoadMore) {
+      this.#fetchingInfinite({ queryId })
+    }
+    try {
+      const result = await this.#fetchInfinite(queryId, isLoadMore)
+      this.#fetchedInfinite({ queryId, result, isLoadMore })
+    } catch (err) {
+      this.#fetchFailedInfinite({
+        queryId,
+        error: err instanceof Error ? err : new Error(String(err)),
+        isLoadMore,
+      })
+    }
+  }
+
+  #fetchInfinite(queryId: string, isLoadMore: boolean): Promise<QueryResponse<unknown[], TMeta>> {
+    const query = this.#getQuery(queryId)
+    if (!query || query.desc.method !== 'infiniteFind') {
+      return Promise.reject(new Error('Infinite query not found'))
+    }
+
+    const { desc, config } = query
+    const infiniteConfig = config as InfiniteFindQueryConfig<unknown, unknown>
+    const state = query.state as InfiniteQueryState<unknown, TMeta>
+
+    const baseQuery = (desc.params as { query?: Record<string, unknown> })?.query || {}
+    const pageParam = isLoadMore ? state.pageParam : null
+
+    const params: TParams = {
+      query: {
+        ...baseQuery,
+        ...(infiniteConfig.limit && { $limit: infiniteConfig.limit }),
+        ...(typeof pageParam === 'string' && { $cursor: pageParam }),
+        ...(typeof pageParam === 'number' && { $skip: pageParam }),
+      },
+    } as TParams
+
+    return this.#adapter.find(desc.serviceName, params)
+  }
+
+  #fetchingInfinite({ queryId }: { queryId: string }): void {
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+      const state = query.state as InfiniteQueryState<unknown, TMeta>
+
+      // Preserve the status while updating fetching state
+      const newState: InfiniteQueryState<unknown, TMeta> =
+        state.status === 'success'
+          ? { ...state, isFetching: true }
+          : state.status === 'error'
+            ? {
+                status: 'loading' as const,
+                data: state.data,
+                meta: state.meta,
+                isFetching: true,
+                isLoadingMore: false,
+                loadMoreError: null,
+                error: null,
+                hasNextPage: state.hasNextPage,
+                pageParam: state.pageParam,
+              }
+            : { ...state, isFetching: true }
+
+      service.queries.set(queryId, {
+        ...query,
+        pending: false,
+        dirty: false,
+        state: newState,
+      })
+    })
+  }
+
+  #fetchedInfinite({
+    queryId,
+    result,
+    isLoadMore,
+  }: {
+    queryId: string
+    result: QueryResponse<unknown[], TMeta>
+    isLoadMore: boolean
+  }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      const data = result.data
+      const meta = result.meta as TMeta
+      const getId = (item: unknown) => this.#adapter.getId(item)
+      const nextPageParam = this.#adapter.getNextPageParam(meta, data)
+      const hasNextPage = this.#adapter.getHasNextPage(meta, data)
+
+      // Store entities in central cache
+      for (const item of data) {
+        const itemId = getId(item)
+        if (itemId !== undefined) {
+          service.entities.set(itemId, item)
+          if (!service.itemQueryIndex.has(itemId)) {
+            service.itemQueryIndex.set(itemId, new Set())
+          }
+          service.itemQueryIndex.get(itemId)!.add(queryId)
+        }
+      }
+
+      shouldRefetch = query.dirty
+      const currentState = query.state as InfiniteQueryState<unknown, TMeta>
+
+      if (isLoadMore) {
+        service.queries.set(queryId, {
+          ...query,
+          dirty: false,
+          state: {
+            ...currentState,
+            data: [...(currentState.data as unknown[]), ...data],
+            meta,
+            isLoadingMore: false,
+            hasNextPage,
+            pageParam: nextPageParam,
+          },
+        })
+      } else {
+        service.queries.set(queryId, {
+          ...query,
+          dirty: false,
+          state: {
+            status: 'success' as const,
+            data,
+            meta,
+            isFetching: false,
+            isLoadingMore: false,
+            loadMoreError: null,
+            error: null,
+            hasNextPage,
+            pageParam: nextPageParam,
+          } as InfiniteQueryState<unknown, TMeta>,
+        })
+      }
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.refetchInfinite(queryId)
+    }
+  }
+
+  #fetchFailedInfinite({
+    queryId,
+    error,
+    isLoadMore,
+  }: {
+    queryId: string
+    error: Error
+    isLoadMore: boolean
+  }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      shouldRefetch = query.dirty
+      const currentState = query.state as InfiniteQueryState<unknown, TMeta>
+
+      let newState: InfiniteQueryState<unknown, TMeta>
+      if (isLoadMore) {
+        // For loadMore failure, keep the current status and update loadMoreError
+        if (currentState.status === 'success') {
+          newState = {
+            ...currentState,
+            isLoadingMore: false,
+            loadMoreError: error,
+          }
+        } else if (currentState.status === 'error') {
+          newState = {
+            ...currentState,
+            isLoadingMore: false,
+            loadMoreError: error,
+          }
+        } else {
+          newState = {
+            ...currentState,
+            isLoadingMore: false,
+          }
+        }
+      } else {
+        newState = {
+          status: 'error' as const,
+          data: currentState.data,
+          meta: this.#adapter.emptyMeta(),
+          isFetching: false,
+          isLoadingMore: false,
+          loadMoreError: null,
+          error,
+          hasNextPage: false,
+          pageParam: null,
+        }
+      }
+
+      service.queries.set(queryId, {
+        ...query,
+        dirty: false,
+        state: newState,
+      })
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.refetchInfinite(queryId)
     }
   }
 
@@ -853,11 +1320,13 @@ class QueryStore<
 
     if (desc.method === 'get') {
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
-    } else {
+    } else if (desc.method === 'find') {
       const findConfig = config as FindQueryConfig<unknown, unknown>
       return findConfig.allPages
         ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
         : this.#adapter.find(desc.serviceName, desc.params as TParams)
+    } else {
+      return Promise.reject(new Error('Unsupported query method'))
     }
   }
 
@@ -1039,7 +1508,8 @@ class QueryStore<
             continue
           }
 
-          if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
+          const fetchPolicy = (query.config as BaseQueryConfig<unknown, unknown>).fetchPolicy
+          if (query.desc.method === 'find' && fetchPolicy === 'network-only') {
             continue
           }
 
@@ -1050,27 +1520,76 @@ class QueryStore<
           }
 
           const hasItem = itemQueryIndex.has(queryId)
+
+          // Handle infiniteFind queries separately
+          if (query.desc.method === 'infiniteFind') {
+            const state = query.state as InfiniteQueryState<unknown, TMeta>
+            if (state.status !== 'success') continue
+
+            if (hasItem && !matches) {
+              // Remove: item no longer matches
+              const newData = state.data.filter((x: unknown) => getId(x) !== itemId)
+              service.queries.set(queryId, {
+                ...query,
+                state: {
+                  ...state,
+                  meta: itemRemoved(state.meta),
+                  data: newData,
+                },
+              })
+              itemQueryIndex.delete(queryId)
+              touch(queryId)
+            } else if (hasItem && matches) {
+              // Update in place
+              const newData = state.data.map((x: unknown) => (getId(x) === itemId ? item : x))
+              service.queries.set(queryId, {
+                ...query,
+                state: {
+                  ...state,
+                  data: newData,
+                },
+              })
+              touch(queryId)
+            } else if (matches && state.data) {
+              // Insert at sorted position
+              const sorter = query.sorter || (() => 0)
+              const newData = insertSorted(state.data, item, sorter)
+              service.queries.set(queryId, {
+                ...query,
+                state: {
+                  ...state,
+                  meta: itemAdded(state.meta),
+                  data: newData,
+                },
+              })
+              itemQueryIndex.add(queryId)
+              touch(queryId)
+            }
+            continue
+          }
+
+          // Handle get and find queries (infiniteFind already handled above)
+          const queryState = query.state as QueryState<unknown, TMeta>
           if (hasItem && !matches) {
             // remove
-            const query = service.queries.get(queryId)!
             const nextState: QueryState<unknown, TMeta> =
-              query.desc.method === 'get' && query.state.status === 'success'
+              query.desc.method === 'get' && queryState.status === 'success'
                 ? {
                     status: 'loading' as const,
                     data: null,
-                    meta: itemRemoved(query.state.meta),
+                    meta: itemRemoved(queryState.meta),
                     isFetching: false,
                     error: null,
                   }
-                : query.state.status === 'success'
+                : queryState.status === 'success'
                   ? {
-                      ...query.state,
-                      meta: itemRemoved(query.state.meta),
-                      data: (query.state.data as unknown[]).filter(
+                      ...queryState,
+                      meta: itemRemoved(queryState.meta),
+                      data: (queryState.data as unknown[]).filter(
                         (x: unknown) => getId(x) !== itemId,
                       ),
                     }
-                  : query.state
+                  : queryState
             service.queries.set(queryId, {
               ...query,
               state: nextState,
@@ -1082,30 +1601,30 @@ class QueryStore<
             service.queries.set(queryId, {
               ...query,
               state:
-                query.state.status === 'success'
+                queryState.status === 'success'
                   ? {
-                      ...query.state,
+                      ...queryState,
                       data:
                         query.desc.method === 'get'
                           ? item
-                          : (query.state.data as unknown[]).map((x: unknown) =>
+                          : (queryState.data as unknown[]).map((x: unknown) =>
                               getId(x) === itemId ? item : x,
                             ),
                     }
-                  : query.state,
+                  : queryState,
             })
             touch(queryId)
-          } else if (matches && query.desc.method === 'find' && query.state.data) {
+          } else if (matches && query.desc.method === 'find' && queryState.data) {
             service.queries.set(queryId, {
               ...query,
               state:
-                query.state.status === 'success'
+                queryState.status === 'success'
                   ? {
-                      ...query.state,
-                      meta: itemAdded(query.state.meta),
-                      data: (query.state.data as unknown[]).concat(item),
+                      ...queryState,
+                      meta: itemAdded(queryState.meta),
+                      data: (queryState.data as unknown[]).concat(item),
                     }
-                  : query.state,
+                  : queryState,
             })
             itemQueryIndex.add(queryId)
             touch(queryId)
@@ -1332,4 +1851,25 @@ function getItems<TMeta = Record<string, unknown>>(
     : query.state.data
       ? [query.state.data]
       : []
+}
+
+/**
+ * Insert an item into a sorted array at the correct position using binary search.
+ */
+function insertSorted<T>(data: T[], item: T, sorter: (a: T, b: T) => number): T[] {
+  const result = [...data]
+  let low = 0
+  let high = result.length
+
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (sorter(item, result[mid]!) <= 0) {
+      high = mid
+    } else {
+      low = mid + 1
+    }
+  }
+
+  result.splice(low, 0, item)
+  return result
 }

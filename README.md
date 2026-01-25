@@ -46,6 +46,7 @@ function Notes() {
 - **Live queries** - results update as records are created, modified, or removed
 - **Shared cache** - same data across components, always consistent
 - **Realtime built-in** - Feathers websocket events update your UI automatically
+- **Pagination hooks** - infinite scroll and page-based navigation with realtime support
 - **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
 - **Full TypeScript** - define a schema once, get inference everywhere
 

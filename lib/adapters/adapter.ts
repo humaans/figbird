@@ -57,6 +57,12 @@ export interface Adapter<
 
   // Initialize empty meta to avoid unsafe casts
   emptyMeta(): TMeta
+
+  // Pagination methods for infinite/paginated queries
+  /** Extract next page param from response. Returns cursor string, skip number, or null if no more pages. */
+  getNextPageParam(meta: TMeta, data: unknown[]): string | number | null
+  /** Determine if there are more pages available */
+  getHasNextPage(meta: TMeta, data: unknown[]): boolean
 }
 
 // Helper types to extract adapter properties

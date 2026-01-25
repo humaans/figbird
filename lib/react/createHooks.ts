@@ -11,7 +11,17 @@ import type {
   ServiceUpdate,
 } from '../core/schema.js'
 import { findServiceByName } from '../core/schema.js'
+import {
+  useInfiniteFind as useBaseInfiniteFind,
+  type UseInfiniteFindConfig,
+  type UseInfiniteFindResult,
+} from './useInfiniteFind.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
+import {
+  createUsePaginatedFind,
+  type UsePaginatedFindConfig,
+  type UsePaginatedFindResult,
+} from './usePaginatedFind.js'
 import { useQuery, type QueryResult } from './useQuery.js'
 
 /**
@@ -51,6 +61,27 @@ type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   ServicePatch<S, N>
 >
 
+type UseInfiniteFindForSchema<
+  S extends Schema,
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+> = <N extends ServiceNames<S>>(
+  serviceName: N,
+  config?: Omit<UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>>, 'query'> & {
+    query?: ServiceQuery<S, N>
+  } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
+) => UseInfiniteFindResult<ServiceItem<S, N>, TMeta>
+
+type UsePaginatedFindForSchema<
+  S extends Schema,
+  TParams = unknown,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+> = <N extends ServiceNames<S>>(
+  serviceName: N,
+  config: UsePaginatedFindConfig<ServiceQuery<S, N>> &
+    Omit<WithServiceQuery<S, N, TParams>, 'query'>,
+) => UsePaginatedFindResult<ServiceItem<S, N>, TMeta>
+
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
 // Type helper to extract schema and adapter types from a Figbird instance
@@ -85,6 +116,8 @@ export function createHooks<F extends Figbird<any, any>>(
 ): {
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
+  useInfiniteFind: UseInfiniteFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
+  usePaginatedFind: UsePaginatedFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
 } {
@@ -131,6 +164,36 @@ export function createHooks<F extends Figbird<any, any>>(
     return useQuery<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(desc, config)
   }
 
+  function useTypedInfiniteFind<N extends ServiceNames<S>>(
+    serviceName: N,
+    config?: Omit<UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>>, 'query'> & {
+      query?: ServiceQuery<S, N>
+    } & Omit<WithServiceQuery<S, N, TParams>, 'query'>,
+  ) {
+    const service = findServiceByName(figbird.schema, serviceName)
+    const actualServiceName = service?.name ?? serviceName
+    return useBaseInfiniteFind<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
+      actualServiceName,
+      config as UseInfiniteFindConfig<ServiceItem<S, N>, ServiceQuery<S, N>>,
+    )
+  }
+
+  // Create the paginated find hook using the factory with our typed useFind
+  const useTypedPaginatedFind = createUsePaginatedFind<
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any,
+    TMeta,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  >(
+    useTypedFind as (
+      serviceName: string,
+      params?: Record<string, unknown>,
+    ) => QueryResult<unknown[], TMeta>,
+  )
+
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
@@ -155,6 +218,8 @@ export function createHooks<F extends Figbird<any, any>>(
   return {
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
+    useInfiniteFind: useTypedInfiniteFind as UseInfiniteFindForSchema<S, TParams, TMeta>,
+    usePaginatedFind: useTypedPaginatedFind as UsePaginatedFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
   }
