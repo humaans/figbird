@@ -46,7 +46,7 @@ export type QueryStatus = 'idle' | 'loading' | 'success' | 'error'
  */
 export type QueryState<T, TMeta = Record<string, unknown>> =
   | {
-      status: 'idle' | 'loading'
+      status: 'loading'
       data: null
       meta: TMeta
       isFetching: boolean
@@ -125,7 +125,7 @@ type ElementType<T> = T extends (infer E)[] ? E : T
 interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
   /**
    * Skip fetching entirely. Useful for conditional queries.
-   * When true, status is 'idle' and no network request is made.
+   * When true, status is 'loading' with isFetching: false and no network request is made.
    */
   skip?: boolean
 
@@ -699,21 +699,13 @@ class QueryStore<
               desc,
               config as QueryConfig<unknown, unknown>,
             ) as (item: unknown) => boolean,
-            state: config.skip
-              ? {
-                  status: 'idle' as const,
-                  data: null,
-                  meta: this.#adapter.emptyMeta(),
-                  isFetching: false,
-                  error: null,
-                }
-              : {
-                  status: 'loading' as const,
-                  data: null,
-                  meta: this.#adapter.emptyMeta(),
-                  isFetching: true,
-                  error: null,
-                },
+            state: {
+              status: 'loading' as const,
+              data: null,
+              meta: this.#adapter.emptyMeta(),
+              isFetching: !config.skip,
+              error: null,
+            },
           })
         },
         { silent: true },
@@ -1064,7 +1056,7 @@ class QueryStore<
             const nextState: QueryState<unknown, TMeta> =
               query.desc.method === 'get' && query.state.status === 'success'
                 ? {
-                    status: 'idle' as const,
+                    status: 'loading' as const,
                     data: null,
                     meta: itemRemoved(query.state.meta),
                     isFetching: false,

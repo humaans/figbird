@@ -11,46 +11,13 @@ type BaseQueryResult = {
 export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
   (TMeta extends undefined
     ?
-        | {
-            status: 'idle' | 'loading'
-            data: null
-            isFetching: boolean
-            error: null
-          }
-        | {
-            status: 'success'
-            data: T
-            isFetching: boolean
-            error: null
-          }
-        | {
-            status: 'error'
-            data: null
-            isFetching: boolean
-            error: Error
-          }
+        | { status: 'loading'; data: null; isFetching: boolean; error: null }
+        | { status: 'success'; data: T; isFetching: boolean; error: null }
+        | { status: 'error'; data: null; isFetching: boolean; error: Error }
     :
-        | {
-            status: 'idle' | 'loading'
-            data: null
-            meta: TMeta
-            isFetching: boolean
-            error: null
-          }
-        | {
-            status: 'success'
-            data: T
-            meta: TMeta
-            isFetching: boolean
-            error: null
-          }
-        | {
-            status: 'error'
-            data: null
-            meta: TMeta
-            isFetching: boolean
-            error: Error
-          })
+        | { status: 'loading'; data: null; meta: TMeta; isFetching: boolean; error: null }
+        | { status: 'success'; data: T; meta: TMeta; isFetching: boolean; error: null }
+        | { status: 'error'; data: null; meta: TMeta; isFetching: boolean; error: Error })
 
 /**
  * Hook for fetching a single item by ID.
@@ -198,7 +165,7 @@ export function useQuery<
       }
       return result as QueryResult<T, TMeta>
     } else {
-      // status === 'idle' || status === 'loading'
+      // status === 'loading'
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result: any = {
         status: queryResult.status,
