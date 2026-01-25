@@ -1,5 +1,10 @@
 # Figbird Changelog
 
+## 0.21.1
+
+- Remove the `idle` status from `useFind` and `useGet` result to keep consumer code simpler. For cases where `idle` was previously useful look for combination of status `loading` and `isFetching` false.
+- Fix `data` type narrowing so that `null` is excluded when `status` is `success`.
+
 ## 0.21.0
 
 Full TypeScript support with schema-driven type inference:
