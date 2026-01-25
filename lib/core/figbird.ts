@@ -122,6 +122,10 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   /** Sorter for infinite queries to insert realtime events in order */
   sorter?: (a: ElementType<T>, b: ElementType<T>) => number
   state: QueryState<T, TMeta> | InfiniteQueryState<ElementType<T>, TMeta>
+  /** Number of retry attempts made for the current fetch */
+  retryCount: number
+  /** Timestamp when data was last successfully fetched */
+  fetchedAt: number | null
 }
 
 /**
@@ -178,6 +182,12 @@ export type QueryDescriptor = GetDescriptor | FindDescriptor | InfiniteFindDescr
 type ElementType<T> = T extends (infer E)[] ? E : T
 
 /**
+ * Retry delay configuration - either a number (ms) or a function that receives
+ * the attempt number (0-indexed) and returns the delay in milliseconds.
+ */
+export type RetryDelayFn = (attempt: number) => number
+
+/**
  * Base query configuration shared by all query types.
  * Add these alongside adapter params when calling useFind/useGet.
  */
@@ -211,6 +221,32 @@ interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
    * Note: For find queries, the matcher works with individual items, not arrays.
    */
   matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
+
+  /**
+   * Number of times to retry failed fetches. Set to `false` to disable retries.
+   * Default: 3
+   */
+  retry?: number | false
+
+  /**
+   * Delay between retries. Can be a number (ms) or a function receiving attempt number.
+   * Default: exponential backoff (1s, 2s, 4s... capped at 30s)
+   */
+  retryDelay?: number | RetryDelayFn
+
+  /**
+   * Time in milliseconds that cached data is considered "fresh".
+   * During this window, cache-hit queries won't trigger background refetches.
+   * Default: 30000 (30 seconds) - prevents refetch storms from rapid tab switching
+   * while still catching missed realtime events reasonably quickly.
+   */
+  staleTime?: number
+
+  /**
+   * Refetch stale queries when the browser window regains focus.
+   * Default: true
+   */
+  refetchOnWindowFocus?: boolean
 }
 
 /**
@@ -429,6 +465,16 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
     unsub()
 */
 /**
+ * Default query configuration options that can be set globally
+ */
+export interface DefaultQueryConfig {
+  retry?: number | false
+  retryDelay?: number | RetryDelayFn
+  staleTime?: number
+  refetchOnWindowFocus?: boolean
+}
+
+/**
  * Figbird core instance holding the adapter and shared query state.
  * Prefer `createHooks(figbird)` in React apps to get strongly-typed hooks.
  */
@@ -446,21 +492,25 @@ export class Figbird<
    * @param adapter Data adapter (e.g. FeathersAdapter)
    * @param eventBatchProcessingInterval Optional interval (ms) for batching realtime events
    * @param schema Optional schema to enable full TypeScript inference
+   * @param defaultQueryConfig Global defaults for query options (retry, staleTime, etc.)
    */
   constructor({
     adapter,
     eventBatchProcessingInterval,
     schema,
+    defaultQueryConfig,
   }: {
     adapter: A
     eventBatchProcessingInterval?: number
     schema?: S
+    defaultQueryConfig?: DefaultQueryConfig
   }) {
     this.adapter = adapter
     this.schema = schema
     this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
-      eventBatchProcessingInterval: eventBatchProcessingInterval,
+      eventBatchProcessingInterval,
+      ...(defaultQueryConfig && { defaultQueryConfig }),
     })
   }
 
@@ -627,6 +677,10 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
     realtime = 'merge',
     fetchPolicy = 'swr',
     matcher,
+    retry,
+    retryDelay,
+    staleTime,
+    refetchOnWindowFocus,
     ...rest
   } = combinedConfig
 
@@ -645,6 +699,10 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       realtime,
       fetchPolicy,
       ...(matcher !== undefined && { matcher }),
+      ...(retry !== undefined && { retry }),
+      ...(retryDelay !== undefined && { retryDelay }),
+      ...(staleTime !== undefined && { staleTime }),
+      ...(refetchOnWindowFocus !== undefined && { refetchOnWindowFocus }),
     }
 
     return { desc, config }
@@ -663,6 +721,10 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       fetchPolicy,
       ...(matcher !== undefined && { matcher }),
       ...(allPages !== undefined && { allPages }),
+      ...(retry !== undefined && { retry }),
+      ...(retryDelay !== undefined && { retryDelay }),
+      ...(staleTime !== undefined && { staleTime }),
+      ...(refetchOnWindowFocus !== undefined && { refetchOnWindowFocus }),
     }
 
     return { desc, config }
@@ -758,6 +820,26 @@ class QueryRef<
 // ==================== QUERY STORE CLASS ====================
 
 /**
+ * Default exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
+ */
+function defaultRetryDelay(attempt: number): number {
+  return Math.min(1000 * Math.pow(2, attempt), 30000)
+}
+
+/**
+ * Compute retry delay from config
+ */
+function computeRetryDelay(attempt: number, retryDelay: number | RetryDelayFn | undefined): number {
+  if (typeof retryDelay === 'function') {
+    return retryDelay(attempt)
+  }
+  if (typeof retryDelay === 'number') {
+    return retryDelay
+  }
+  return defaultRetryDelay(attempt)
+}
+
+/**
  * Internal query store managing entities, queries, and subscriptions.
  */
 class QueryStore<
@@ -769,6 +851,7 @@ class QueryStore<
   // ==================== SHARED STATE ====================
 
   #adapter: Adapter<TParams, TMeta, TQuery>
+  #defaultQueryConfig: DefaultQueryConfig
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
@@ -784,12 +867,62 @@ class QueryStore<
   constructor({
     adapter,
     eventBatchProcessingInterval = 100,
+    defaultQueryConfig = {},
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchProcessingInterval?: number | undefined
+    defaultQueryConfig?: DefaultQueryConfig
   }) {
     this.#adapter = adapter
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
+    this.#defaultQueryConfig = defaultQueryConfig
+    this.#setupWindowFocusListener()
+  }
+
+  #setupWindowFocusListener(): void {
+    // SSR guard - both window and document must exist
+    if (typeof window === 'undefined' || typeof document === 'undefined') return
+
+    const onFocus = () => this.#onWindowFocus()
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') onFocus()
+    })
+  }
+
+  #onWindowFocus(): void {
+    for (const [, service] of this.#state) {
+      for (const [queryId, query] of service.queries) {
+        if (this.#listenerCount(queryId) === 0) continue
+        if (!this.#getEffectiveConfig(query.config).refetchOnWindowFocus) continue
+        if (!this.#isStale(query)) continue
+        if (query.state.isFetching) continue
+        this.#queue(queryId)
+      }
+    }
+  }
+
+  #getEffectiveConfig(config: QueryConfig<unknown, unknown>): {
+    retry: number | false
+    retryDelay: number | RetryDelayFn | undefined
+    staleTime: number
+    refetchOnWindowFocus: boolean
+  } {
+    return {
+      retry: config.retry ?? this.#defaultQueryConfig.retry ?? 3,
+      retryDelay: config.retryDelay ?? this.#defaultQueryConfig.retryDelay,
+      staleTime: config.staleTime ?? this.#defaultQueryConfig.staleTime ?? 30_000,
+      refetchOnWindowFocus:
+        config.refetchOnWindowFocus ?? this.#defaultQueryConfig.refetchOnWindowFocus ?? true,
+    }
+  }
+
+  #isStale(query: Query<unknown, TMeta, unknown>): boolean {
+    if (query.state.status !== 'success') return true
+    if (query.fetchedAt === null) return true
+    const { staleTime } = this.#getEffectiveConfig(query.config)
+    return staleTime === 0 || Date.now() - query.fetchedAt > staleTime
   }
 
   // ==================== PUBLIC API ====================
@@ -846,6 +979,8 @@ class QueryStore<
                 hasNextPage: false,
                 pageParam: null,
               } as InfiniteQueryState<unknown, TMeta>,
+              retryCount: 0,
+              fetchedAt: null,
             })
           } else {
             service.queries.set(queryId, {
@@ -865,6 +1000,8 @@ class QueryStore<
                 isFetching: !config.skip,
                 error: null,
               },
+              retryCount: 0,
+              fetchedAt: null,
             })
           }
         },
@@ -888,11 +1025,15 @@ class QueryStore<
       }
     } else {
       const fetchPolicy = (q.config as BaseQueryConfig<unknown, unknown>).fetchPolicy
-      if (
+      const shouldFetch =
         q.pending ||
-        (q.state.status === 'success' && fetchPolicy === 'swr' && !q.state.isFetching) ||
+        (q.state.status === 'success' &&
+          fetchPolicy === 'swr' &&
+          !q.state.isFetching &&
+          this.#isStale(q)) ||
         (q.state.status === 'error' && !q.state.isFetching)
-      ) {
+
+      if (shouldFetch) {
         this.#queue(queryId)
       }
     }
@@ -1040,8 +1181,45 @@ class QueryStore<
       const result = await this.#fetch(queryId)
       this.#fetched({ queryId, result })
     } catch (err) {
-      this.#fetchFailed({ queryId, error: err instanceof Error ? err : new Error(String(err)) })
+      await this.#handleFetchError({
+        queryId,
+        error: err instanceof Error ? err : new Error(String(err)),
+      })
     }
+  }
+
+  async #handleFetchError({ queryId, error }: { queryId: string; error: Error }): Promise<void> {
+    const query = this.#getQuery(queryId)
+    if (!query) {
+      this.#fetchFailed({ queryId, error })
+      return
+    }
+
+    const { retry: maxRetries, retryDelay } = this.#getEffectiveConfig(query.config)
+
+    if (maxRetries !== false && query.retryCount < maxRetries) {
+      const delay = computeRetryDelay(query.retryCount, retryDelay)
+
+      // Increment retryCount
+      this.#transactOverService(
+        queryId,
+        (service, q) => {
+          if (q) {
+            service.queries.set(queryId, { ...q, retryCount: q.retryCount + 1 })
+          }
+        },
+        { silent: true },
+      )
+
+      await new Promise(r => setTimeout(r, delay))
+
+      // Only retry if still has listeners
+      if (this.#listenerCount(queryId) > 0) {
+        return this.#queue(queryId)
+      }
+    }
+
+    this.#fetchFailed({ queryId, error })
   }
 
   #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta | undefined>> {
@@ -1126,6 +1304,8 @@ class QueryStore<
 
       service.queries.set(queryId, {
         ...query,
+        retryCount: 0,
+        fetchedAt: Date.now(),
         state: {
           status: 'success' as const,
           data,
@@ -1151,6 +1331,7 @@ class QueryStore<
 
       service.queries.set(queryId, {
         ...query!,
+        retryCount: 0, // Reset for next attempt
         state: {
           status: 'error' as const,
           data: null,

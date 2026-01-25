@@ -48,6 +48,7 @@ function Notes() {
 - **Realtime built-in** - Feathers websocket events update your UI automatically
 - **Pagination hooks** - infinite scroll and page-based navigation with realtime support
 - **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
+- **Automatic retry** - exponential backoff on failures with configurable stale time
 - **Full TypeScript** - define a schema once, get inference everywhere
 
 ## Documentation

@@ -41,6 +41,7 @@ Queries are live - if a record is created that matches your query, it appears. I
 - **Realtime built-in** - Feathers websocket events update your UI automatically
 - **Pagination hooks** - infinite scroll and page-based navigation with realtime support
 - **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
+- **Automatic retry** - exponential backoff on failures with configurable stale time
 - **Full TypeScript** - define a schema once, get inference everywhere
 - **Framework-agnostic core** - works outside React for SSR, testing, or background sync
 
@@ -246,6 +247,10 @@ const note = useGet('notes', '1') // note: QueryResult<Note>
 - `skip` - setting to true will not fetch the data
 - `realtime` - one of `merge` (default), `refetch` or `disabled`
 - `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
+- `retry` - number of retry attempts on failure, or `false` to disable (default: 3)
+- `retryDelay` - delay between retries in ms, or function `(attempt) => ms` (default: exponential backoff)
+- `staleTime` - time in ms that data is considered fresh (default: 30000)
+- `refetchOnWindowFocus` - refetch stale data when window regains focus (default: true)
 
 #### Returns
 
@@ -284,6 +289,10 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 - `parallel` - when used in combination with `allPages` will fetch all pages in parallel
 - `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
 - `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache
+- `retry` - number of retry attempts on failure, or `false` to disable (default: 3)
+- `retryDelay` - delay between retries in ms, or function `(attempt) => ms` (default: exponential backoff)
+- `staleTime` - time in ms that data is considered fresh (default: 30000)
+- `refetchOnWindowFocus` - refetch stale data when window regains focus (default: true)
 
 #### Returns
 
@@ -450,6 +459,22 @@ const figbird = new Figbird({ adapter, schema })
 
 - `adapter` - an instance of a data fetching adapter
 - `schema` - optional schema to enable full TypeScript inference
+- `defaultQueryConfig` - optional global defaults for query options
+
+```ts
+const figbird = new Figbird({
+  adapter,
+  schema,
+  defaultQueryConfig: {
+    retry: 3,
+    retryDelay: 1000,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+  },
+})
+```
+
+These defaults apply to all queries and can be overridden per-query.
 
 ## FeathersAdapter
 
@@ -565,6 +590,51 @@ With this policy, Figbird will show cached data if possible upon mounting the co
 ### network-only
 
 With this policy, Figbird will never show cached data on mount and will always fetch on component mount.
+
+## Retry and data freshness
+
+Figbird provides built-in retry logic and freshness control to handle network failures and keep data up to date.
+
+### Automatic retry
+
+Failed fetches automatically retry with exponential backoff. By default, queries retry 3 times with delays of 1s, 2s, 4s (capped at 30s).
+
+```ts
+// Disable retry for a specific query
+useFind('notes', { retry: false })
+
+// Custom retry count
+useFind('notes', { retry: 5 })
+
+// Fixed delay between retries
+useFind('notes', { retryDelay: 2000 })
+
+// Custom delay function
+useFind('notes', { retryDelay: (attempt) => attempt * 1000 })
+```
+
+### Stale time
+
+The `staleTime` option controls how long data is considered "fresh" before Figbird will refetch in the background. This prevents refetch storms from rapid tab switching while still catching missed realtime events.
+
+```ts
+// Data is fresh for 60 seconds
+useFind('notes', { staleTime: 60_000 })
+
+// Always refetch (staleTime of 0)
+useFind('notes', { staleTime: 0 })
+```
+
+Default is 30 seconds - a balance between responsiveness and efficiency.
+
+### Refetch on window focus
+
+When enabled (default), Figbird refetches stale queries when the browser window regains focus. This catches any realtime events that may have been missed while the tab was in the background.
+
+```ts
+// Disable for a specific query
+useFind('notes', { refetchOnWindowFocus: false })
+```
 
 ## Inspect cache contents
 
