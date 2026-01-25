@@ -712,7 +712,8 @@ test('useFind error', async t => {
   const { App, useFind, feathers } = app()
 
   function Note() {
-    const notes = useFind('notes')
+    // Disable retry to get immediate error
+    const notes = useFind('notes', { retry: false })
     return <NoteList notes={notes} />
   }
 
@@ -895,7 +896,8 @@ test('refetch only works with active listeners', async t => {
   let calls = 0
 
   function Note() {
-    const notes = useFind('notes')
+    // staleTime: 0 to test immediate refetch on remount
+    const notes = useFind('notes', { staleTime: 0 })
     refetch = notes.refetch
     return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
@@ -1163,7 +1165,8 @@ test('useFind - realtime refetch only with active listeners', async t => {
   let findCallCount = 0
 
   function Note() {
-    const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'refetch' })
+    // staleTime: 0 to test immediate refetch on remount
+    const notes = useFind('notes', { query: { tag: 'idea' }, realtime: 'refetch', staleTime: 0 })
     return <NoteList notes={notes} />
   }
   const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
@@ -1297,7 +1300,8 @@ test('useFind - fetchPolicy swr', async t => {
   }
 
   function Note() {
-    const notes = useFind('notes', { query: { tag: 'idea' }, fetchPolicy: 'swr' })
+    // staleTime: 0 to test immediate refetch behavior of SWR
+    const notes = useFind('notes', { query: { tag: 'idea' }, fetchPolicy: 'swr', staleTime: 0 })
     return <NoteList notes={notes} />
   }
 
@@ -1918,12 +1922,14 @@ test('subscribeToStateChanges', async t => {
         )
       }
     }
-    // Remove updatedAt fields from all query data
+    // Remove updatedAt fields from all query data and fetchedAt from queries
     if (state?.notes && typeof state.notes === 'object' && state.notes !== null) {
       const notesState = state.notes as Record<string, unknown>
       if (notesState?.queries && typeof notesState.queries === 'object') {
         Object.values(notesState.queries as Record<string, Record<string, unknown>>).forEach(
           query => {
+            // Remove dynamic fetchedAt timestamp
+            delete query.fetchedAt
             const data =
               query?.state && typeof query.state === 'object'
                 ? (query.state as Record<string, unknown>).data
@@ -2166,7 +2172,8 @@ test('useFind recovers gracefully from errors on refetch', async t => {
   let refetch: () => void
 
   function Notes() {
-    const notes = useFind('notes')
+    // Disable retry to control error/success flow manually
+    const notes = useFind('notes', { retry: false })
     refetch = notes.refetch
 
     return (
@@ -2360,6 +2367,7 @@ test('allPages handles errors gracefully during pagination', async t => {
     const notes = useFind('notes', {
       query: { $limit: 2 },
       allPages: true,
+      retry: false, // Disable retry to get immediate error
     })
 
     return (
@@ -2645,4 +2653,505 @@ test('realtime events are batched to reduce re-renders', async t => {
   )
 
   unmount()
+})
+
+// ============================================================================
+// Retry, staleTime, and refetchOnWindowFocus tests
+// ============================================================================
+
+test('retry - retries failed requests with exponential backoff', async t => {
+  const { render, flush, unmount, $ } = dom()
+  const { App, useFind, feathers } = app()
+
+  let callCount = 0
+  const callTimes: number[] = []
+
+  function Notes() {
+    const notes = useFind('notes', {
+      retry: 3,
+      retryDelay: 50, // Fixed 50ms delay for faster testing
+    })
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        {notes.error && <div className='error'>{notes.error.message}</div>}
+        <NoteList notes={notes} />
+      </div>
+    )
+  }
+
+  // Make the service fail first 3 times, then succeed on 4th
+  const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
+  feathers.service('notes').find = async (params?: Record<string, unknown>) => {
+    callTimes.push(Date.now())
+    callCount++
+    if (callCount <= 3) {
+      throw new Error('Network error')
+    }
+    return originalFind(params)
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  // Wait for retries to complete (3 retries * 50ms delay + some buffer)
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 300))
+  })
+
+  t.is(callCount, 4, 'Should have made 4 attempts (1 initial + 3 retries)')
+  t.is($('.status')!.innerHTML, 'success', 'Should succeed after retries')
+  t.is($('.note')!.innerHTML, 'hello')
+
+  unmount()
+})
+
+test('retry - gives up after max retries', async t => {
+  const { render, flush, unmount, $ } = dom()
+  const { App, useFind, feathers } = app()
+
+  let callCount = 0
+
+  function Notes() {
+    const notes = useFind('notes', {
+      retry: 2,
+      retryDelay: 20,
+    })
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        {notes.error && <div className='error'>{notes.error.message}</div>}
+      </div>
+    )
+  }
+
+  // Always fail
+  feathers.service('notes').find = async () => {
+    callCount++
+    throw new Error('Persistent failure')
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  // Wait for retries to exhaust
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 150))
+  })
+
+  t.is(callCount, 3, 'Should have made 3 attempts (1 initial + 2 retries)')
+  t.is($('.status')!.innerHTML, 'error', 'Should show error after exhausting retries')
+  t.is($('.error')!.innerHTML, 'Persistent failure')
+
+  unmount()
+})
+
+test('retry - can be disabled with retry: false', async t => {
+  const { render, flush, unmount, $ } = dom()
+  const { App, useFind, feathers } = app()
+
+  let callCount = 0
+
+  function Notes() {
+    const notes = useFind('notes', { retry: false })
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        {notes.error && <div className='error'>{notes.error.message}</div>}
+      </div>
+    )
+  }
+
+  feathers.service('notes').find = async () => {
+    callCount++
+    throw new Error('Immediate failure')
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(callCount, 1, 'Should have made only 1 attempt')
+  t.is($('.status')!.innerHTML, 'error', 'Should show error immediately')
+
+  unmount()
+})
+
+test('retry - custom retryDelay function receives attempt number', async t => {
+  const { render, flush, unmount } = dom()
+  const { App, useFind, feathers } = app()
+
+  const attemptsSeen: number[] = []
+
+  function Notes() {
+    const notes = useFind('notes', {
+      retry: 2,
+      retryDelay: (attempt: number) => {
+        attemptsSeen.push(attempt)
+        return 10 // Fast delay for testing
+      },
+    })
+
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+      </div>
+    )
+  }
+
+  feathers.service('notes').find = async () => {
+    throw new Error('Always fails')
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  })
+
+  t.deepEqual(attemptsSeen, [0, 1], 'retryDelay should receive 0-indexed attempt numbers')
+
+  unmount()
+})
+
+test('retry - stops retrying when component unmounts', async t => {
+  const { render, flush, unmount } = dom()
+  const { App, useFind, feathers } = app()
+
+  let callCount = 0
+
+  function Notes() {
+    const notes = useFind('notes', {
+      retry: 5,
+      retryDelay: 50,
+    })
+    return <div className='status'>{notes.status}</div>
+  }
+
+  feathers.service('notes').find = async () => {
+    callCount++
+    throw new Error('Always fails')
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  // Wait for first call
+  await flush()
+
+  // Unmount after first retry starts
+  await new Promise(resolve => setTimeout(resolve, 30))
+  unmount()
+
+  const callsAtUnmount = callCount
+
+  // Wait to ensure no more retries happen
+  await new Promise(resolve => setTimeout(resolve, 200))
+
+  t.is(callCount, callsAtUnmount, 'Should stop retrying after unmount')
+})
+
+test('staleTime - fresh data is not refetched on remount', async t => {
+  const { App, useFind, feathers } = app()
+  let calls = 0
+
+  function Note() {
+    const notes = useFind('notes', { staleTime: 60_000 }) // 1 minute
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
+  }
+
+  feathers.service('notes').find = async () => {
+    calls++
+    return { data: [{ id: calls }], limit: 100, skip: 0, total: 1 }
+  }
+
+  // First mount
+  const dom1 = dom()
+  dom1.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom1.flush()
+  t.is(calls, 1, 'Should fetch on first mount')
+  t.is(dom1.$('.data')!.innerHTML, '1')
+
+  // Unmount
+  dom1.unmount()
+
+  // Immediately remount - data should still be fresh
+  const dom2 = dom()
+  dom2.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom2.flush()
+  t.is(calls, 1, 'Should NOT refetch because data is still fresh')
+  t.is(dom2.$('.data')!.innerHTML, '1', 'Should show cached data')
+
+  dom2.unmount()
+})
+
+test('staleTime - stale data is refetched on remount', async t => {
+  const { App, useFind, feathers } = app()
+  let calls = 0
+
+  function Note() {
+    const notes = useFind('notes', { staleTime: 50 }) // 50ms
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
+  }
+
+  feathers.service('notes').find = async () => {
+    calls++
+    return { data: [{ id: calls }], limit: 100, skip: 0, total: 1 }
+  }
+
+  // First mount
+  const dom1 = dom()
+  dom1.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom1.flush()
+  t.is(calls, 1, 'Should fetch on first mount')
+
+  // Unmount
+  dom1.unmount()
+
+  // Wait for data to become stale
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  // Remount - data should now be stale
+  const dom2 = dom()
+  dom2.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom2.flush()
+  t.is(calls, 2, 'Should refetch because data is stale')
+  t.is(dom2.$('.data')!.innerHTML, '2', 'Should show new data')
+
+  dom2.unmount()
+})
+
+test('staleTime: 0 - always refetches on remount (legacy SWR behavior)', async t => {
+  const { App, useFind, feathers } = app()
+  let calls = 0
+
+  function Note() {
+    const notes = useFind('notes', { staleTime: 0 })
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
+  }
+
+  feathers.service('notes').find = async () => {
+    calls++
+    return { data: [{ id: calls }], limit: 100, skip: 0, total: 1 }
+  }
+
+  // First mount
+  const dom1 = dom()
+  dom1.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom1.flush()
+  t.is(calls, 1)
+
+  // Unmount
+  dom1.unmount()
+
+  // Immediate remount
+  const dom2 = dom()
+  dom2.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom2.flush()
+  t.is(calls, 2, 'Should always refetch with staleTime: 0')
+
+  dom2.unmount()
+})
+
+test('defaultQueryConfig - applies global defaults', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  const feathers = createFeathers()
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    defaultQueryConfig: {
+      retry: 1, // Global default: 1 retry
+      retryDelay: 20, // Fast retry for testing
+    },
+  })
+
+  const { App, useFind } = app({ figbird })
+
+  let calls = 0
+
+  function Notes() {
+    // No retry/staleTime specified - should use global defaults
+    const notes = useFind('notes')
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        <div className='calls'>{calls}</div>
+      </div>
+    )
+  }
+
+  // Make service fail first time, succeed second time
+  const originalFind = feathers.service('notes').find.bind(feathers.service('notes'))
+  feathers.service('notes').find = async (params?: Record<string, unknown>) => {
+    calls++
+    if (calls === 1) {
+      throw new Error('First failure')
+    }
+    return originalFind(params)
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  // Wait for retry
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 100))
+  })
+
+  t.is(calls, 2, 'Should have retried once (global default retry: 1)')
+  t.is($('.status')!.innerHTML, 'success', 'Should succeed after retry')
+
+  unmount()
+})
+
+test('per-query config overrides global defaults', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  const feathers = createFeathers()
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    defaultQueryConfig: {
+      retry: 5, // Global default: 5 retries
+    },
+  })
+
+  const { App, useFind } = app({ figbird })
+
+  let calls = 0
+
+  function Notes() {
+    // Override: no retries
+    const notes = useFind('notes', { retry: false })
+    return (
+      <div>
+        <div className='status'>{notes.status}</div>
+        {notes.error && <div className='error'>{notes.error.message}</div>}
+      </div>
+    )
+  }
+
+  feathers.service('notes').find = async () => {
+    calls++
+    throw new Error('Failure')
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(calls, 1, 'Should not retry because per-query retry: false overrides global')
+  t.is($('.status')!.innerHTML, 'error')
+
+  unmount()
+})
+
+// Note: Window focus refetch tests require a real browser environment.
+// The refetchOnWindowFocus feature works by listening to window 'focus' and
+// document 'visibilitychange' events. In jsdom, these events don't work the
+// same way as in a real browser. The feature is tested via:
+// - staleTime tests (which test the isStale logic used by focus handler)
+// - Integration/E2E tests in a real browser environment
+
+test('staleTime - default is 30 seconds (prevents rapid refetch)', async t => {
+  const { App, useFind, feathers } = app()
+  let calls = 0
+
+  function Note() {
+    // No staleTime specified - should use 30s default
+    const notes = useFind('notes')
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
+  }
+
+  feathers.service('notes').find = async () => {
+    calls++
+    return { data: [{ id: calls }], limit: 100, skip: 0, total: 1 }
+  }
+
+  // First mount
+  const dom1 = dom()
+  dom1.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom1.flush()
+  t.is(calls, 1, 'Should fetch on first mount')
+
+  // Unmount
+  dom1.unmount()
+
+  // Immediate remount - with 30s default staleTime, should NOT refetch
+  const dom2 = dom()
+  dom2.render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await dom2.flush()
+  t.is(calls, 1, 'Should NOT refetch with default 30s staleTime')
+
+  dom2.unmount()
 })

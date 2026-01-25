@@ -755,7 +755,7 @@ test('usePaginatedFind error handling', async t => {
   const { usePaginatedFind } = createHooks(figbird)
 
   function App() {
-    const { status, error } = usePaginatedFind('api/documents', { limit: 10 })
+    const { status, error } = usePaginatedFind('api/documents', { limit: 10, retry: false })
 
     return (
       <div>
