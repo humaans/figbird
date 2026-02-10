@@ -39,6 +39,16 @@ function Notes() {
     </div>
   ))
 }
+
+function IntegrationSync({ integrationId }) {
+  const { call, status, error } = useMutation('api/integrations/provider')
+
+  const refreshUsers = async () => {
+    await call('listSyncedUsers', { integrationId })
+  }
+
+  return <button onClick={refreshUsers}>{status === 'loading' ? 'Syncing...' : 'Sync users'}</button>
+}
 ```
 
 ## Features

@@ -26,6 +26,14 @@ interface Note {
 
 interface NoteService {
   item: Note
+  methods: {
+    listSyncedUsers: (params: { integrationId: string }) => Promise<Note[]>
+    disconnectUser: (params: {
+      employmentId: string
+      personId: string
+      integrationId: string
+    }) => Promise<{ success: boolean }>
+  }
 }
 
 // Create schema for typed hooks
@@ -580,6 +588,142 @@ test('useMutation handles errors', async t => {
   t.is($('.error')!.innerHTML, 'unexpected')
 
   t.is(handled, 'unexpected')
+
+  unmount()
+})
+
+test('useMutation call updates state and does not auto-merge query cache', async t => {
+  const { render, flush, unmount, $ } = dom()
+  const { App, useFind, useMutation, feathers } = app()
+  let runCall: () => Promise<Note[]>
+  let callPromise: Promise<Note[]> | undefined
+  let resolveListSyncedUsers: ((users: Note[]) => void) | undefined
+  ;(
+    feathers.service('notes') as unknown as {
+      listSyncedUsers: (params: { integrationId: string }) => Promise<Note[]>
+    }
+  ).listSyncedUsers = ({ integrationId }) => {
+    return new Promise<Note[]>(resolve => {
+      resolveListSyncedUsers = users =>
+        resolve(users.map(user => ({ ...user, content: `${user.content}-${integrationId}` })))
+    })
+  }
+
+  function Notes() {
+    const notes = useFind('notes')
+    const { call, data, status, error } = useMutation('notes')
+
+    runCall = () => call('listSyncedUsers', { integrationId: 'provider-1' })
+
+    return (
+      <div>
+        <div className='mutation-status'>{status}</div>
+        <div className='mutation-error'>{error?.message ?? ''}</div>
+        <div className='mutation-result-size'>{Array.isArray(data) ? data.length : 0}</div>
+        <div className='query-count'>{notes.data?.length || 0}</div>
+        <div className='query-first'>{notes.data?.[0]?.content || ''}</div>
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  t.is($('.mutation-status')!.innerHTML, 'idle')
+  t.is($('.mutation-result-size')!.innerHTML, '0')
+  t.is($('.query-count')!.innerHTML, '1')
+  t.is($('.query-first')!.innerHTML, 'hello')
+
+  await flush(async () => {
+    callPromise = runCall!()
+  })
+
+  t.is($('.mutation-status')!.innerHTML, 'loading')
+
+  await flush(async () => {
+    resolveListSyncedUsers!([{ id: 200, content: 'synced' }])
+    await callPromise!
+  })
+
+  t.is($('.mutation-status')!.innerHTML, 'success')
+  t.is($('.mutation-error')!.innerHTML, '')
+  t.is($('.mutation-result-size')!.innerHTML, '1')
+  t.is($('.query-count')!.innerHTML, '1')
+  t.is($('.query-first')!.innerHTML, 'hello')
+
+  unmount()
+})
+
+test('useMutation call error sets error state', async t => {
+  const { render, flush, unmount, $ } = dom()
+  const { App, useMutation, feathers } = app()
+  let runCall: () => Promise<{ success: boolean }>
+  let callPromise: Promise<{ success: boolean }> | undefined
+  let rejectDisconnectUser: ((reason?: unknown) => void) | undefined
+  let handledError = ''
+
+  ;(
+    feathers.service('notes') as unknown as {
+      disconnectUser: (params: {
+        employmentId: string
+        personId: string
+        integrationId: string
+      }) => Promise<{ success: boolean }>
+    }
+  ).disconnectUser = async () => {
+    return new Promise<{ success: boolean }>((_resolve, reject) => {
+      rejectDisconnectUser = reject
+    })
+  }
+
+  function Notes() {
+    const { call, status, error } = useMutation('notes')
+
+    runCall = () =>
+      call('disconnectUser', {
+        employmentId: 'emp-1',
+        personId: 'person-1',
+        integrationId: 'provider-1',
+      })
+
+    return (
+      <div>
+        <div className='mutation-status'>{status}</div>
+        <div className='mutation-error'>{error?.message ?? ''}</div>
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <Notes />
+    </App>,
+  )
+
+  await flush()
+
+  await flush(async () => {
+    callPromise = runCall!().catch((err: Error) => {
+      handledError = err.message
+      return Promise.reject(err)
+    })
+  })
+
+  t.is($('.mutation-status')!.innerHTML, 'loading')
+
+  await flush(async () => {
+    rejectDisconnectUser!(new Error('disconnect failed'))
+    await callPromise!.catch(() => {})
+  })
+
+  t.is(handledError, 'disconnect failed')
+  t.is($('.mutation-status')!.innerHTML, 'error')
+  t.is($('.mutation-error')!.innerHTML, 'disconnect failed')
 
   unmount()
 })

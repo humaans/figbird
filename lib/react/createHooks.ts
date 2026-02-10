@@ -5,6 +5,9 @@ import type {
   Schema,
   ServiceCreate,
   ServiceItem,
+  ServiceMethodNames,
+  ServiceMethodReturns,
+  ServiceMethods,
   ServiceNames,
   ServicePatch,
   ServiceQuery,
@@ -42,14 +45,25 @@ type UseFindForSchema<
     Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
 ) => QueryResult<ServiceItem<S, N>[], TMeta>
 
+type TypedMutationResultForSchema<S extends Schema, N extends ServiceNames<S>> = Omit<
+  UseMutationResult<
+    ServiceItem<S, N>,
+    ServiceCreate<S, N>,
+    ServiceUpdate<S, N>,
+    ServicePatch<S, N>
+  >,
+  'call' | 'data'
+> & {
+  call: <M extends ServiceMethodNames<S, N>>(
+    method: M,
+    ...args: ServiceMethods<S, N>[M] extends (...args: infer A) => unknown ? A : never
+  ) => Promise<ServiceMethods<S, N>[M] extends (...args: never[]) => infer R ? Awaited<R> : never>
+  data: ServiceItem<S, N> | ServiceItem<S, N>[] | ServiceMethodReturns<S, N> | null
+}
+
 type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   serviceName: N,
-) => UseMutationResult<
-  ServiceItem<S, N>,
-  ServiceCreate<S, N>,
-  ServiceUpdate<S, N>,
-  ServicePatch<S, N>
->
+) => TypedMutationResultForSchema<S, N>
 
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
@@ -134,12 +148,7 @@ export function createHooks<F extends Figbird<any, any>>(
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
     const service = findServiceByName(figbird.schema, serviceName)
     const actualServiceName = service?.name ?? serviceName
-    return useBaseMutation(actualServiceName) as UseMutationResult<
-      ServiceItem<S, N>,
-      ServiceCreate<S, N>,
-      ServiceUpdate<S, N>,
-      ServicePatch<S, N>
-    >
+    return useBaseMutation(actualServiceName) as TypedMutationResultForSchema<S, N>
   }
 
   function useTypedFeathers() {

@@ -296,9 +296,10 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 ## useMutation
 
 Provides methods to create, update, patch, and remove resources. Mutations automatically update the cache, so all components using related queries re-render with fresh data.
+Also supports imperative custom service method calls via `call(method, ...args)`.
 
 ```ts
-const { data, status, error, create, update, patch, remove } = useMutation(serviceName, params)
+const { data, status, error, create, update, patch, remove, call } = useMutation(serviceName)
 ```
 
 #### Arguments
@@ -311,9 +312,22 @@ const { data, status, error, create, update, patch, remove } = useMutation(servi
 - `update(id, data, params)` - update
 - `patch(id, data, params)` - patch
 - `remove(id, params)` - remove
+- `call(method, ...args)` - call a custom service method imperatively
 - `status` - one of `idle`, `loading`, `success` or `error`
 - `data` - starts off as `null` and is set to the latest mutation result
 - `error` - error object of the last failed mutation
+
+#### Custom method example
+
+```ts
+const { call, status, data, error } = useMutation('api/integrations/provider')
+
+const users = await call('listSyncedUsers', { integrationId })
+await call('disconnectUser', { employmentId, personId, integrationId })
+```
+
+Custom method calls are imperative and do **not** auto-merge results into Figbird query cache.
+If your UI depends on cached query data, call `refetch()` on affected queries after `call(...)`.
 
 ## useFeathers
 

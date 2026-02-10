@@ -54,8 +54,8 @@ type DerivePatch<TServiceDef extends ServiceTypeDefinition> = TServiceDef['patch
 
 type DeriveMethods<TServiceDef extends ServiceTypeDefinition> =
   TServiceDef['methods'] extends undefined
-    ? Record<string, never>
-    : NonNullable<TServiceDef['methods']> & AnyMethodsType
+    ? Record<never, never>
+    : NonNullable<TServiceDef['methods']>
 
 type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends keyof TServiceDef
   ? Exclude<TServiceDef['query'], undefined>
@@ -146,7 +146,22 @@ type AnyMethods = Record<string, (...args: any[]) => any>
 export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
   ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends AnyMethods } }
     ? M
-    : Record<string, never>
+    : Record<never, never>
+
+export type ServiceMethodNames<
+  S extends Schema,
+  N extends ServiceNames<S>,
+> = string extends keyof ServiceMethods<S, N> ? never : keyof ServiceMethods<S, N> & string
+
+export type ServiceMethodReturn<
+  S extends Schema,
+  N extends ServiceNames<S>,
+  M extends ServiceMethodNames<S, N>,
+> = ServiceMethods<S, N>[M] extends (...args: never[]) => infer R ? Awaited<R> : never
+
+export type ServiceMethodReturns<S extends Schema, N extends ServiceNames<S>> = {
+  [M in ServiceMethodNames<S, N>]: ServiceMethodReturn<S, N, M>
+}[ServiceMethodNames<S, N>]
 
 // Utility type to extract item type from a service
 export type Item<S> = S extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>

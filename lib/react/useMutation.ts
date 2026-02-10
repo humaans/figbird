@@ -18,6 +18,7 @@ export interface UseMutationResult<
   TCreate = Partial<TItem>,
   TUpdate = TItem,
   TPatch = Partial<TItem>,
+  TData = TItem | TItem[],
 > {
   // Overloaded create method for better type inference
   create(data: TCreate, params?: unknown): Promise<TItem>
@@ -26,7 +27,8 @@ export interface UseMutationResult<
   update: (id: string | number, data: TUpdate, params?: unknown) => Promise<TItem>
   patch: (id: string | number, data: TPatch, params?: unknown) => Promise<TItem>
   remove: (id: string | number, params?: unknown) => Promise<TItem>
-  data: TItem | TItem[] | null
+  call: (method: string, ...args: unknown[]) => Promise<unknown>
+  data: TData | null
   status: 'idle' | 'loading' | 'success' | 'error'
   error: Error | null
 }
@@ -37,10 +39,12 @@ export interface UseMutationResult<
  * of calling these operations needs to be handled
  * by the caller. As you create/update/patch/remove
  * entities using this helper, the entities cache gets updated.
+ * Custom method calls are imperative and do not auto-merge
+ * into the query cache.
  *
  * Returns untyped data. For type-safe mutations, use createHooks(figbird).
  *
- * const { create, patch, remove, status, data, error } = useMutation('notes')
+ * const { create, patch, remove, call, status, data, error } = useMutation('notes')
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function useMutation(serviceName: string): UseMutationResult<any, any, any, any> {
@@ -137,6 +141,11 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
       ),
     [executeMutation, figbird, actualServiceName],
   )
+  const call = useCallback(
+    (method: string, ...args: unknown[]) =>
+      executeMutation(figbird.adapter.mutate(actualServiceName, method, args)),
+    [executeMutation, figbird, actualServiceName],
+  )
 
   return useMemo(
     () => ({
@@ -144,11 +153,12 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
       update,
       patch,
       remove,
+      call,
       data: state.data,
       status: state.status,
       error: state.error,
     }),
-    [create, update, patch, remove, state],
+    [create, update, patch, remove, call, state],
   )
 }
 

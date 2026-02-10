@@ -224,3 +224,64 @@ test('optional query definitions are inferred', t => {
 
   t.is(taskQueryType, 'TaskQuery')
 })
+
+test('useMutation call infers custom method names, args, returns, and data union', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'use-mutation-custom-methods.ts')
+
+  const schemaMethodNamesType = getTypeAtPosition(fixturePath, 'IntegrationSchemaMethodNames')
+  const listArgsType = getTypeAtPosition(fixturePath, 'IntegrationCallListSyncedUsersArgs')
+  const disconnectArgsType = getTypeAtPosition(fixturePath, 'IntegrationCallDisconnectUserArgs')
+  const listReturnType = getTypeAtPosition(fixturePath, 'IntegrationCallListSyncedUsersReturn')
+  const disconnectReturnType = getTypeAtPosition(fixturePath, 'IntegrationCallDisconnectUserReturn')
+  const mutationDataType = getTypeAtPosition(fixturePath, 'IntegrationMutationData')
+
+  // method names are preserved in schema (call restrictions are asserted in fixture via @ts-expect-error)
+  t.true(
+    schemaMethodNamesType.includes('"listSyncedUsers"') &&
+      schemaMethodNamesType.includes('"disconnectUser"'),
+    `Expected method names to include custom methods, got: ${schemaMethodNamesType}`,
+  )
+
+  // args are inferred per method
+  t.true(
+    listArgsType.includes('method: "listSyncedUsers"') &&
+      listArgsType.includes('integrationId: string'),
+    `Expected listSyncedUsers args inference, got: ${listArgsType}`,
+  )
+  t.true(
+    disconnectArgsType.includes('method: "disconnectUser"') &&
+      disconnectArgsType.includes('employmentId: string') &&
+      disconnectArgsType.includes('personId: string') &&
+      disconnectArgsType.includes('integrationId: string'),
+    `Expected disconnectUser args inference, got: ${disconnectArgsType}`,
+  )
+
+  // return types are inferred from methods
+  t.is(listReturnType, 'SyncedUser[]')
+  t.is(disconnectReturnType, '{ disconnected: boolean; }')
+
+  // mutation data union includes CRUD and custom method returns
+  t.true(
+    mutationDataType.includes('Integration') &&
+      mutationDataType.includes('SyncedUser[]') &&
+      mutationDataType.includes('{ disconnected: boolean; }') &&
+      mutationDataType.includes('null'),
+    `Expected data union to include CRUD + custom method returns, got: ${mutationDataType}`,
+  )
+
+  // CRUD regression: existing methods remain correctly typed
+  const taskMethodNameType = getTypeAtPosition(fixturePath, 'TaskMutationMethodName')
+  const taskCreateType = getTypeAtPosition(fixturePath, 'TaskCreateReturn')
+  const taskPatchType = getTypeAtPosition(fixturePath, 'TaskPatchReturn')
+  const taskUpdateType = getTypeAtPosition(fixturePath, 'TaskUpdateReturn')
+  const taskRemoveType = getTypeAtPosition(fixturePath, 'TaskRemoveReturn')
+
+  t.is(taskMethodNameType, 'never')
+  t.true(
+    taskCreateType === 'Task' || taskCreateType === 'Task[]' || taskCreateType === 'Task | Task[]',
+    `Expected create return to remain Task|Task[], got: ${taskCreateType}`,
+  )
+  t.is(taskPatchType, 'Task')
+  t.is(taskUpdateType, 'Task')
+  t.is(taskRemoveType, 'Task')
+})
