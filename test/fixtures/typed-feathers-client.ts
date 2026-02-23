@@ -64,11 +64,11 @@ const { useFeathers } = createHooks(figbird)
 const typedFeathers = useFeathers()
 
 // Get notes service
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// oxlint-disable-next-line @typescript-eslint/no-unused-vars
 const _notesService = typedFeathers.service('notes')
 
 // Get tasks service
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// oxlint-disable-next-line @typescript-eslint/no-unused-vars
 const _tasksService = typedFeathers.service('tasks')
 
 // ========================================

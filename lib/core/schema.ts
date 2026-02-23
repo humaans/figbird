@@ -13,11 +13,11 @@ export interface ServiceTypeDefinition {
   update?: unknown
   patch?: unknown
   query?: unknown
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   methods?: Record<string, (...args: any[]) => any>
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyMethodsType = Record<string, (...args: any[]) => any>
 
 // Internal service representation - matches expected type structure
@@ -140,7 +140,7 @@ export type ServicePatch<S extends Schema, N extends ServiceNames<S>> =
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
   ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyMethods = Record<string, (...args: any[]) => any>
 
 export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =

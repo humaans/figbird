@@ -26,25 +26,25 @@ export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
 export function useGet(
   serviceName: string,
   resourceId: string | number,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   params: Record<string, any> = {},
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 ): QueryResult<any> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   const { desc, config } = splitConfig<any, Record<string, unknown>>({
     serviceName: actualServiceName,
     method: 'get' as const,
     resourceId,
     ...params,
   })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   return useQuery<any, Record<string, unknown>, Record<string, unknown>>(
     desc,
     config,
-  ) as QueryResult<any> // eslint-disable-line @typescript-eslint/no-explicit-any
+  ) as QueryResult<any> // oxlint-disable-line @typescript-eslint/no-explicit-any
 }
 
 /**
@@ -53,20 +53,20 @@ export function useGet(
  */
 export function useFind(
   serviceName: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   params: Record<string, any> = {},
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 ): QueryResult<any[], Record<string, unknown>> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   const { desc, config } = splitConfig<any[], Record<string, unknown>>({
     serviceName: actualServiceName,
     method: 'find' as const,
     ...params,
   })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   return useQuery<any[], Record<string, unknown>, Record<string, unknown>>(desc, config)
 }
 
@@ -115,7 +115,9 @@ export function useQuery<
   } as QueryConfig<unknown, unknown>)
 
   // a bit of React foo to create stable fn references
-  const q = useMemo(() => _q, [_q.hash()])
+  const hash = _q.hash()
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on hash, not _q identity
+  const q = useMemo(() => _q, [hash])
   const refetch = useCallback(() => q.refetch(), [q])
   const subscribe = useCallback((onStoreChange: () => void) => q.subscribe(onStoreChange), [q])
 
@@ -139,7 +141,7 @@ export function useQuery<
   return useMemo(() => {
     // Handle each case of the discriminated union explicitly
     if (queryResult.status === 'success') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       const result: any = {
         status: 'success' as const,
         data: queryResult.data,
@@ -152,7 +154,7 @@ export function useQuery<
       }
       return result as QueryResult<T, TMeta>
     } else if (queryResult.status === 'error') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       const result: any = {
         status: 'error' as const,
         data: null,
@@ -166,7 +168,7 @@ export function useQuery<
       return result as QueryResult<T, TMeta>
     } else {
       // status === 'loading'
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       const result: any = {
         status: queryResult.status,
         data: null,

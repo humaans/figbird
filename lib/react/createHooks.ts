@@ -54,9 +54,9 @@ type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
 // Type helper to extract schema and adapter types from a Figbird instance
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type InferSchema<F> = F extends Figbird<infer S, any> ? S : never
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type InferAdapter<F> = F extends Figbird<any, infer A> ? A : never
 type InferParams<F> = AdapterParams<InferAdapter<F>>
 type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
@@ -79,7 +79,7 @@ type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
  * ```
  */
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export function createHooks<F extends Figbird<any, any>>(
   figbird: F,
 ): {

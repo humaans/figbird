@@ -1,5 +1,10 @@
 # Figbird Changelog
 
+## 0.21.2
+
+- Replace ESLint with oxlint for faster linting.
+- Fix minimatch security vulnerability via npm override.
+
 ## 0.21.1
 
 - Remove the `idle` status from `useFind` and `useGet` result to keep consumer code simpler. For cases where `idle` was previously useful look for combination of status `loading` and `isFetching` false.

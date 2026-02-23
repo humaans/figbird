@@ -42,13 +42,13 @@ export interface UseMutationResult<
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export function useMutation(serviceName: string): UseMutationResult<any, any, any, any> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   const [state, dispatch] = useReducer(mutationReducer<any>, {
     status: 'idle',
     data: null,
@@ -64,7 +64,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
   }, [])
 
   const executeMutation = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     async (promise: Promise<any>): Promise<any> => {
       dispatch({ type: 'mutating' })
       try {
@@ -85,7 +85,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
   )
 
   const create = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     (data: any, params?: unknown) =>
       executeMutation(
         figbird.mutate({
@@ -98,7 +98,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
     [executeMutation, figbird, actualServiceName],
   )
   const update = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     (id: string | number, data: any, params?: unknown) =>
       executeMutation(
         figbird.mutate({
@@ -112,7 +112,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
     [executeMutation, figbird, actualServiceName],
   )
   const patch = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     (id: string | number, data: any, params?: unknown) =>
       executeMutation(
         figbird.mutate({

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/* oxlint-disable @typescript-eslint/no-unused-vars */
 import type { FeathersClient } from '../../lib'
 import { FeathersAdapter, Figbird, createSchema, service } from '../../lib'
 

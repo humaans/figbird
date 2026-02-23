@@ -214,48 +214,48 @@ export type ItemMatcher<T> = (item: T) => boolean
  * Helper type to infer data type from schema and query descriptor
  */
 type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema
-  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ? // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     any
   : D extends { serviceName: infer N; method: 'find' }
     ? N extends ServiceNames<S>
       ? ServiceItem<S, N>[]
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
         any
     : D extends { serviceName: infer N; method: 'get' }
       ? N extends ServiceNames<S>
         ? ServiceItem<S, N>
-        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
           any
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
         any
 
 /**
  * Helper type to infer data type from schema and mutation descriptor
  */
 type InferMutationData<S extends Schema, D extends MutationDescriptor> = S extends AnySchema
-  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ? // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     any
   : D extends { serviceName: infer N; method: 'create' }
     ? N extends ServiceNames<S>
       ? ServiceItem<S, N>
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
         any
     : D extends { serviceName: infer N; method: 'update' }
       ? N extends ServiceNames<S>
         ? ServiceItem<S, N>
-        : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
           any
       : D extends { serviceName: infer N; method: 'patch' }
         ? N extends ServiceNames<S>
           ? ServiceItem<S, N>
-          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
             any
         : D extends { serviceName: infer N; method: 'remove' }
           ? N extends ServiceNames<S>
             ? ServiceItem<S, N>
-            : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
               any
-          : // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
             any
 
 /**
@@ -340,7 +340,7 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
  */
 export class Figbird<
   S extends Schema = AnySchema,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 > {
   adapter: A
@@ -426,7 +426,7 @@ export class Figbird<
       params?: unknown
     },
     config?: QueryConfig<unknown, unknown>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   ): any {
     return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
       {
@@ -482,7 +482,7 @@ export class Figbird<
   }): Promise<ServiceItem<S, N>>
 
   // Implementation
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   mutate(desc: MutationDescriptor): Promise<any> {
     return this.queryStore.mutate(desc)
   }

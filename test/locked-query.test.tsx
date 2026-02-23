@@ -197,7 +197,7 @@ test('allPages works correctly with proper pagination fields', async t => {
   }
 
   const feathers = mockFeathers({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     todos: { data: data as any },
   })
 
