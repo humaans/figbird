@@ -119,7 +119,7 @@ export type TypedFeathersService<
   TUpdate,
   TPatch,
   TQuery,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   TMethods extends Record<string, (...args: any[]) => any>,
 > = {
   get(id: string | number, params?: FeathersParams<TQuery>): Promise<TItem>

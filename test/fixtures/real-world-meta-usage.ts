@@ -212,5 +212,5 @@ export type CommentListResult = ReturnType<typeof CommentList>
 export type ArticleTableResult = ReturnType<typeof ArticleTable>
 
 // Mock React hooks for the example
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 declare const useState: any

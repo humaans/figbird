@@ -57,7 +57,7 @@ const createFeathers = ({ skipTotal }: CreateFeathersOptions = {}) =>
 
 interface AppOptions {
   feathers?: ReturnType<typeof mockFeathers>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   figbird?: Figbird<AppSchema, any>
   config?: Record<string, unknown>
 }
@@ -113,13 +113,13 @@ class ErrorHandler extends React.Component<{ children: React.ReactNode }, ErrorH
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 interface NoteListProps<TMeta = any> {
   notes: QueryResult<Note | Note[], TMeta>
   keyField?: string
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 function NoteList<TMeta = any>({ notes, keyField = 'id' }: NoteListProps<TMeta>) {
   if (notes.status === 'error') {
     return <div className='error'>{notes.error.message}</div>
@@ -2065,7 +2065,7 @@ test('useFind - stale realtime event is ignored', async t => {
 test('recursive serializer for maps and sets', async t => {
   t.deepEqual(
     serialize(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       new Map<string, any>([
         ['a', 1],
         ['b', new Set([1, 2, 3])],
@@ -2255,6 +2255,7 @@ test('concurrent mutations maintain data consistency', async t => {
         patch1(id, { content: 'update1', version: 1 })
         patch2(id, { content: 'update2', version: 2 })
       }
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- test: fire once when data arrives
     }, [notes.data, patch1, patch2])
 
     return <NoteList notes={notes} />
@@ -2457,6 +2458,7 @@ test('mutations work correctly when no queries are active', async t => {
         removeResult = await remove(100)
         mutationsCompleted = true
       })()
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- test: run once on mount
     }, [])
 
     return <div>Mutations only - no queries</div>
@@ -2509,6 +2511,7 @@ test('mutate methods return the mutated item', async t => {
         // Test remove returns the removed item
         removeResult = await remove(101)
       })()
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- test: run once on mount
     }, [])
 
     return <div>Testing mutations</div>
