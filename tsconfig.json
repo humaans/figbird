@@ -31,15 +31,14 @@
     "useUnknownInCatchVariables": true,
 
     // Interop constraints
-    "esModuleInterop": false,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "skipLibCheck": true,
 
     // JSX support (for React)
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
   },
   "include": ["lib/**/*", "test/**/*"],
-  "exclude": ["node_modules", "dist", "coverage", "docs"]
+  "exclude": ["node_modules", "dist", "coverage", "docs"],
 }

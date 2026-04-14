@@ -3,6 +3,7 @@
 ## 0.21.3
 
 - Upgrade all deps
+- Upgrade to TypeScript 6
 
 ## 0.21.2
 

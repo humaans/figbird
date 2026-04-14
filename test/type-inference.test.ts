@@ -76,7 +76,11 @@ function getTypeAtPosition(
 
   // Get the type at this node
   const type = checker.getTypeAtLocation(exportNode)
-  return checker.typeToString(type, exportNode, ts.TypeFormatFlags.NoTruncation)
+  const raw = checker.typeToString(type, exportNode, ts.TypeFormatFlags.NoTruncation)
+
+  // Normalize all import("...") paths to import("figbird") so assertions are stable
+  // across TS versions (TS 6+ emits relative paths instead of absolute ones).
+  return raw.replace(/import\("[^"]+"\)/g, 'import("figbird")')
 }
 
 test('type narrowing works correctly with multiple services', t => {
@@ -95,13 +99,13 @@ test('type narrowing works correctly with multiple services', t => {
   // Test that the key types are working correctly (Service has more type parameters now)
   t.true(
     personServiceType.startsWith(
-      'import("/Users/karolis/projects/figbird/lib/index").Service<Person, Record<string, unknown>, "api/people"',
+      'import("figbird").Service<Person, Record<string, unknown>, "api/people"',
     ),
     `Expected personServiceType to start with Service<Person, ...>, got: ${personServiceType}`,
   )
   t.true(
     taskServiceType.startsWith(
-      'import("/Users/karolis/projects/figbird/lib/index").Service<Task, Record<string, unknown>, "api/tasks"',
+      'import("figbird").Service<Task, Record<string, unknown>, "api/tasks"',
     ),
     `Expected taskServiceType to start with Service<Task, ...>, got: ${taskServiceType}`,
   )
@@ -111,14 +115,8 @@ test('type narrowing works correctly with multiple services', t => {
   t.is(taskItemType, 'Task')
 
   // Test that useFind correctly narrows to specific types (no more unions!)
-  t.is(
-    peopleType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
-  )
-  t.is(
-    tasksType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryResult<Task[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
-  )
+  t.is(peopleType, 'import("figbird").QueryResult<Person[], import("figbird").FeathersFindMeta>')
+  t.is(tasksType, 'import("figbird").QueryResult<Task[], import("figbird").FeathersFindMeta>')
 
   // Verify type narrowing - ensure services don't cross-contaminate
   t.not(peopleType, tasksType, 'People and tasks should have different types')
@@ -150,7 +148,7 @@ test('meta type is automatically inferred from Figbird instance', t => {
 
   // Verify that meta is automatically inferred as FeathersFindMeta for find
   // without having to pass it explicitly to createHooks
-  t.is(tasksMetaType, 'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta')
+  t.is(tasksMetaType, 'import("figbird").FeathersFindMeta')
 
   // Verify individual meta properties are typed correctly
   t.is(tasksMetaTotalType, 'number')
@@ -158,10 +156,7 @@ test('meta type is automatically inferred from Figbird instance', t => {
   t.is(tasksMetaSkipType, 'number')
 
   // Verify that meta type is always inferred from the adapter (FeathersFindMeta in this case)
-  t.is(
-    backwardCompatMetaType,
-    'import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta',
-  )
+  t.is(backwardCompatMetaType, 'import("figbird").FeathersFindMeta')
 })
 
 test('combined params includes both QueryConfig and FeathersParams', t => {
@@ -206,11 +201,11 @@ test('Figbird methods infer types from schema (query, subscribe, mutate)', t => 
   // Query subscribe param should carry QueryState with inferred data + Feathers meta
   t.is(
     findSubscribeStateType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person[], import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
+    'import("figbird").QueryState<Person[], import("figbird").FeathersFindMeta>',
   )
   t.is(
     getSubscribeStateType,
-    'import("/Users/karolis/projects/figbird/lib/index").QueryState<Person, import("/Users/karolis/projects/figbird/lib/index").FeathersFindMeta>',
+    'import("figbird").QueryState<Person, import("figbird").FeathersFindMeta>',
   )
 
   // Mutate create should resolve to Person
