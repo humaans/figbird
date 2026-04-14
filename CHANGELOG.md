@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.21.3
+
+- Upgrade all deps
+
 ## 0.21.2
 
 - Replace ESLint with oxlint for faster linting.
