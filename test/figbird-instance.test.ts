@@ -202,6 +202,58 @@ test('figbird.query with find returns any data when no schema is provided', asyn
   t.deepEqual(result, [{ id: 1, content: 'hello' }])
 })
 
+test('figbird.query defaults to realtime merge updates', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'hello' },
+      },
+    },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
+
+  const query = figbird.query({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  let resolveInitial: (note: Note) => void = () => {}
+  let resolveUpdated: (note: Note) => void = () => {}
+  const initialState = new Promise<Note>(resolve => {
+    resolveInitial = resolve
+  })
+  const updatedState = new Promise<Note>(resolve => {
+    resolveUpdated = resolve
+  })
+
+  const unsubscribe = query.subscribe(state => {
+    if (state.status !== 'success') return
+
+    if (state.data.content === 'hello') {
+      resolveInitial(state.data)
+    } else if (state.data.content === 'realtime') {
+      resolveUpdated(state.data)
+    }
+  })
+
+  t.deepEqual(await initialState, { id: 1, content: 'hello' })
+
+  await feathers.service('notes').patch(1, { content: 'realtime' })
+
+  const updated = await Promise.race([
+    updatedState,
+    new Promise<null>(resolve => {
+      setTimeout(() => resolve(null), 100)
+    }),
+  ])
+
+  unsubscribe()
+
+  if (!updated) {
+    t.fail('Expected direct query to receive realtime update')
+    return
+  }
+
+  t.like(updated, { id: 1, content: 'realtime' })
+})
+
 test('figbird.mutate with create', async t => {
   const feathers = mockFeathers({
     notes: {
