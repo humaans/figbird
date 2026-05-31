@@ -1,10 +1,15 @@
 import type { AdapterFindMeta, AdapterParams } from '../adapters/adapter.js'
-import type { FeathersClient, TypedFeathersClient } from '../adapters/feathers.js'
+import type {
+  FeathersClient,
+  TypedFeathersClient,
+  TypedFeathersService,
+} from '../adapters/feathers.js'
 import { splitConfig, type Figbird, type QueryConfig } from '../core/figbird.js'
 import type {
   Schema,
   ServiceCreate,
   ServiceItem,
+  ServiceMethods,
   ServiceNames,
   ServicePatch,
   ServiceQuery,
@@ -51,6 +56,19 @@ type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   ServicePatch<S, N>
 >
 
+type TypedServiceForSchema<S extends Schema, N extends ServiceNames<S>> = TypedFeathersService<
+  ServiceItem<S, N>,
+  ServiceCreate<S, N>,
+  ServiceUpdate<S, N>,
+  ServicePatch<S, N>,
+  ServiceQuery<S, N>,
+  ServiceMethods<S, N>
+>
+
+type UseServiceForSchema<S extends Schema> = <N extends ServiceNames<S>>(
+  serviceName: N,
+) => TypedServiceForSchema<S, N>
+
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
 // Type helper to extract schema and adapter types from a Figbird instance
@@ -75,6 +93,7 @@ type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
  *
  * function MyComponent() {
  *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
+ *   const peopleService = useService('api/people') // Fully typed Feathers service
  * }
  * ```
  */
@@ -86,6 +105,7 @@ export function createHooks<F extends Figbird<any, any>>(
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
+  useService: UseServiceForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
 } {
   type S = InferSchema<F>
@@ -142,6 +162,12 @@ export function createHooks<F extends Figbird<any, any>>(
     >
   }
 
+  function useTypedService<N extends ServiceNames<S>>(serviceName: N) {
+    const service = findServiceByName(figbird.schema, serviceName)
+    const actualServiceName = service?.name ?? serviceName
+    return useTypedFeathers().service(actualServiceName as N)
+  }
+
   function useTypedFeathers() {
     const adapter = figbird.adapter as { feathers?: FeathersClient }
     if (!adapter?.feathers) {
@@ -156,6 +182,7 @@ export function createHooks<F extends Figbird<any, any>>(
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
+    useService: useTypedService as UseServiceForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
   }
 }

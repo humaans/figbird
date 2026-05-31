@@ -131,6 +131,25 @@ test('typed feathers client - search custom method returns correct type', t => {
   t.is(type, 'Note[]')
 })
 
+test('typed useService hook - CRUD methods return schema types', t => {
+  const getType = getTypeAtPosition(fixturePath, 'NotesHookGetResult')
+  const createType = getTypeAtPosition(fixturePath, 'NotesHookCreateResult')
+
+  t.is(getType, 'Note')
+  t.true(
+    createType === 'Note' || createType === 'Note[]' || createType === 'Note | Note[]',
+    `Expected Note, Note[], or Note | Note[], got: ${createType}`,
+  )
+})
+
+test('typed useService hook - custom methods return schema types', t => {
+  const archiveType = getTypeAtPosition(fixturePath, 'NotesHookArchiveResult')
+  const searchType = getTypeAtPosition(fixturePath, 'NotesHookSearchResult')
+
+  t.is(archiveType, '{ count: number; }')
+  t.is(searchType, 'Note[]')
+})
+
 // ========================================
 // Service type narrowing tests
 // ========================================
@@ -143,6 +162,7 @@ test('typed feathers client - tasks service returns Task type', t => {
 test('typed feathers client - service types are correctly narrowed and distinct', t => {
   const notesType = getTypeAtPosition(fixturePath, 'NotesServiceType')
   const tasksType = getTypeAtPosition(fixturePath, 'TasksServiceType')
+  const notesHookType = getTypeAtPosition(fixturePath, 'NotesHookServiceType')
 
   // Types should be different - each service should have its own typed methods
   t.not(notesType, tasksType, 'Notes and Tasks service types should be distinct')
@@ -152,4 +172,10 @@ test('typed feathers client - service types are correctly narrowed and distinct'
 
   // Tasks service should include Task type
   t.true(tasksType.includes('Task'), `Tasks service type should include Task, got: ${tasksType}`)
+
+  // useService should expose the same service-specific custom methods
+  t.true(
+    notesHookType.includes('archive') && notesHookType.includes('search'),
+    `useService notes type should include custom methods, got: ${notesHookType}`,
+  )
 })
