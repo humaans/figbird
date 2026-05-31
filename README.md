@@ -19,7 +19,7 @@ const figbird = new Figbird({
   adapter: new FeathersAdapter(feathersClient),
 })
 
-export const { useFind, useGet, useMutation, useService } = createHooks(figbird)
+export const { useFind, useGet, useMutation, useService, useMethod } = createHooks(figbird)
 
 function App() {
   return (
@@ -39,6 +39,19 @@ function Notes() {
     </div>
   ))
 }
+
+function SendDocumentButton({ id }: { id: string }) {
+  const [requestSendDocument, { status, data, error }] = useMethod(
+    'api/esign-instances',
+    'requestSendDocument',
+  )
+
+  return (
+    <button disabled={status === 'loading'} onClick={() => requestSendDocument(id)}>
+      {data ? 'Sent' : error ? `Retry: ${error.message}` : 'Send'}
+    </button>
+  )
+}
 ```
 
 `useService('notes')` returns the Feathers service for that schema service. When you create hooks
@@ -51,6 +64,7 @@ includes typed CRUD methods plus any custom methods declared in the schema.
 - **Shared cache** - same data across components, always consistent
 - **Realtime built-in** - Feathers websocket events update your UI automatically
 - **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
+- **Custom methods** - typed service method calls with `status`, `data`, `error`, and `reset`
 - **Full TypeScript** - define a schema once, get inference everywhere
 
 ## Generated Schemas

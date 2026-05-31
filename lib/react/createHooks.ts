@@ -16,6 +16,7 @@ import type {
   ServiceUpdate,
 } from '../core/schema.js'
 import { findServiceByName } from '../core/schema.js'
+import { useMethod as useBaseMethod, type UseMethodResult } from './useMethod.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import { useQuery, type QueryResult } from './useQuery.js'
 
@@ -69,6 +70,24 @@ type UseServiceForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   serviceName: N,
 ) => TypedServiceForSchema<S, N>
 
+type MethodArgs<TMethod> = TMethod extends (...args: infer TArgs extends unknown[]) => unknown
+  ? TArgs
+  : never
+
+type MethodData<TMethod> = TMethod extends (...args: infer TArgs extends unknown[]) => infer TResult
+  ? TArgs extends unknown[]
+    ? Awaited<TResult>
+    : never
+  : never
+
+type UseMethodForSchema<S extends Schema> = <
+  N extends ServiceNames<S>,
+  M extends keyof ServiceMethods<S, N> & string,
+>(
+  serviceName: N,
+  methodName: M,
+) => UseMethodResult<MethodArgs<ServiceMethods<S, N>[M]>, MethodData<ServiceMethods<S, N>[M]>>
+
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
 // Type helper to extract schema and adapter types from a Figbird instance
@@ -106,6 +125,7 @@ export function createHooks<F extends Figbird<any, any>>(
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
   useService: UseServiceForSchema<InferSchema<F>>
+  useMethod: UseMethodForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
 } {
   type S = InferSchema<F>
@@ -168,6 +188,18 @@ export function createHooks<F extends Figbird<any, any>>(
     return useTypedFeathers().service(actualServiceName as N)
   }
 
+  function useTypedMethod<N extends ServiceNames<S>, M extends keyof ServiceMethods<S, N> & string>(
+    serviceName: N,
+    methodName: M,
+  ) {
+    const service = findServiceByName(figbird.schema, serviceName)
+    const actualServiceName = service?.name ?? serviceName
+    return useBaseMethod<MethodArgs<ServiceMethods<S, N>[M]>, MethodData<ServiceMethods<S, N>[M]>>(
+      actualServiceName,
+      methodName,
+    )
+  }
+
   function useTypedFeathers() {
     const adapter = figbird.adapter as { feathers?: FeathersClient }
     if (!adapter?.feathers) {
@@ -183,6 +215,7 @@ export function createHooks<F extends Figbird<any, any>>(
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
     useService: useTypedService as UseServiceForSchema<S>,
+    useMethod: useTypedMethod as UseMethodForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
   }
 }

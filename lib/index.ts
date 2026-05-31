@@ -44,6 +44,7 @@ export type {
 export { createHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird } from './react/react.js'
 export { useFeathers } from './react/useFeathers.js'
+export { useMethod } from './react/useMethod.js'
 export { useMutation } from './react/useMutation.js'
 export { useFind, useGet } from './react/useQuery.js'
 export { useService } from './react/useService.js'
@@ -58,6 +59,12 @@ export type {
 } from './core/figbird.js'
 
 // React hook result types (already exported but let's be complete)
+export type {
+  UseMethodCall,
+  UseMethodResult,
+  UseMethodState,
+  UseMethodStatus,
+} from './react/useMethod.js'
 export type { UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQuery.js'
 
