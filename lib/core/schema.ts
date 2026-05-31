@@ -55,8 +55,10 @@ type DerivePatch<TServiceDef extends ServiceTypeDefinition> = 'patch' extends ke
   : Partial<TServiceDef['item']>
 
 type DeriveMethods<TServiceDef extends ServiceTypeDefinition> = 'methods' extends keyof TServiceDef
-  ? Exclude<TServiceDef['methods'], undefined> & AnyMethodsType
-  : Record<string, never>
+  ? Exclude<TServiceDef['methods'], undefined> extends infer M extends AnyMethodsType
+    ? M
+    : Record<never, never>
+  : Record<never, never>
 
 type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends keyof TServiceDef
   ? Exclude<TServiceDef['query'], undefined>

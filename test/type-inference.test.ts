@@ -83,6 +83,14 @@ function getTypeAtPosition(
   return raw.replace(/import\("[^"]+"\)/g, 'import("figbird")')
 }
 
+function getDiagnostics(filePath: string, tsConfigOptions: ts.CompilerOptions = {}): string[] {
+  const { program, sourceFile } = getProgramAndChecker(filePath, tsConfigOptions)
+  return [
+    ...program.getSyntacticDiagnostics(sourceFile),
+    ...program.getSemanticDiagnostics(sourceFile),
+  ].map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+}
+
 test('type narrowing works correctly with multiple services', t => {
   const fixturePath = join(__dirname, 'fixtures', 'multi-service-inference.ts')
 
@@ -243,4 +251,20 @@ test('generated schema helpers infer service contracts without intersections', t
     `Expected defineSchemaFor to preserve the generated service contract, got: ${peopleServiceType}`,
   )
   t.is(peopleType, 'import("figbird").QueryResult<Person[], import("figbird").FeathersFindMeta>')
+})
+
+test('useMethod infers custom method args and result types', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'use-method-inference.ts')
+
+  const requestSendArgs = getTypeAtPosition(fixturePath, 'RequestSendArgs')
+  const requestSendResult = getTypeAtPosition(fixturePath, 'RequestSendResult')
+  const requestSendPromiseResult = getTypeAtPosition(fixturePath, 'RequestSendPromiseResult')
+  const requestSendData = getTypeAtPosition(fixturePath, 'RequestSendData')
+  const diagnostics = getDiagnostics(fixturePath)
+
+  t.is(requestSendArgs, '[id: string, options?: SendDocumentOptions | undefined]')
+  t.is(requestSendResult, 'SendDocumentResult')
+  t.is(requestSendPromiseResult, 'SendDocumentResult')
+  t.is(requestSendData, 'SendDocumentResult | null')
+  t.deepEqual(diagnostics, [])
 })

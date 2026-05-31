@@ -5,6 +5,7 @@ import type {
   FeathersService,
   QueryResult,
   QueryStatus,
+  UseMethodResult,
   UseMutationResult,
 } from '../lib'
 import {
@@ -36,6 +37,10 @@ interface NoteService {
   item: Note
   methods: {
     archive: (id: number) => Promise<{ id: number; archived: boolean }>
+    requestSendDocument: (
+      id: number,
+      payload: { message: string },
+    ) => Promise<{ id: number; message: string; queued: boolean }>
   }
 }
 
@@ -81,7 +86,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
     figbird || new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
 
   // Create typed hooks from the figbird instance
-  const { useGet, useFind, useMutation, useService } = createHooks(figbirdInstance)
+  const { useGet, useFind, useMutation, useService, useMethod } = createHooks(figbirdInstance)
 
   function App({ children }: { children?: React.ReactNode }) {
     return (
@@ -93,7 +98,16 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
     )
   }
 
-  return { App, useGet, useFind, useMutation, useService, figbird: figbirdInstance, feathers }
+  return {
+    App,
+    useGet,
+    useFind,
+    useMutation,
+    useService,
+    useMethod,
+    figbird: figbirdInstance,
+    feathers,
+  }
 }
 
 interface ErrorHandlerState {
@@ -635,6 +649,89 @@ test('useMutation handles errors', async t => {
   t.is($('.error')!.innerHTML, 'unexpected')
 
   t.is(handled, 'unexpected')
+
+  unmount()
+})
+
+test('useMethod tracks status, data, error, and reset without cache updates', async t => {
+  const { render, flush, unmount, $ } = dom()
+  const { App, useMethod, figbird, feathers } = app()
+  const notesService = feathers.service('notes') as ReturnType<typeof feathers.service> & {
+    requestSendDocument: (
+      id: number,
+      payload: { message: string },
+    ) => Promise<{ id: number; message: string; queued: boolean }>
+  }
+
+  let resolveRequest: (value: { id: number; message: string; queued: boolean }) => void = () => {}
+  notesService.requestSendDocument = (id, payload) => {
+    if (payload.message === 'fail') {
+      return Promise.reject(new Error('request failed'))
+    }
+    return new Promise(resolve => {
+      resolveRequest = resolve
+    }).then(() => ({ id, message: payload.message, queued: true }))
+  }
+
+  let call: UseMethodResult<
+    [number, { message: string }],
+    { id: number; message: string; queued: boolean }
+  >[0]
+  let reset: UseMethodResult[1]['reset']
+
+  function NoteMethod() {
+    const [requestSendDocument, request] = useMethod('notes', 'requestSendDocument')
+    call = requestSendDocument
+    reset = request.reset
+
+    return (
+      <>
+        <div className='status'>{request.status}</div>
+        <div className='data'>{request.data?.message ?? ''}</div>
+        <div className='error'>{request.error?.message ?? ''}</div>
+      </>
+    )
+  }
+
+  render(
+    <App>
+      <NoteMethod />
+    </App>,
+  )
+
+  t.is($('.status')!.innerHTML, 'idle')
+  t.is(figbird.getState().get('notes')?.entities.get(1), undefined)
+
+  let result: Promise<{ id: number; message: string; queued: boolean }>
+  await flush(async () => {
+    result = call(1, { message: 'please sign' })
+    await Promise.resolve()
+  })
+
+  t.is($('.status')!.innerHTML, 'loading')
+  t.is($('.data')!.innerHTML, '')
+
+  await flush(async () => {
+    resolveRequest({ id: 1, message: 'please sign', queued: true })
+    await result
+  })
+
+  t.is($('.status')!.innerHTML, 'success')
+  t.is($('.data')!.innerHTML, 'please sign')
+  t.is(figbird.getState().get('notes')?.entities.get(1), undefined)
+
+  await flush(() => reset())
+  t.is($('.status')!.innerHTML, 'idle')
+  t.is($('.data')!.innerHTML, '')
+  t.is($('.error')!.innerHTML, '')
+
+  await flush(async () => {
+    await call(1, { message: 'fail' }).catch(() => {})
+  })
+
+  t.is($('.status')!.innerHTML, 'error')
+  t.is($('.data')!.innerHTML, '')
+  t.is($('.error')!.innerHTML, 'request failed')
 
   unmount()
 })
