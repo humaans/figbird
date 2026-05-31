@@ -1,5 +1,5 @@
 // core
-export { Figbird } from './core/figbird.js'
+export { Figbird, isFetching, isIdle, isLoading, isPending } from './core/figbird.js'
 
 export type { EventType } from './core/figbird.js'
 

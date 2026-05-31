@@ -308,6 +308,8 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 - `error` - error object if request failed
 - `refetch` - function to refetch data
 
+Use `isPending(query)`, `isFetching(query)`, `isLoading(query)`, and `isIdle(query)` to make the two-axis state model explicit. `status` tells you whether a usable result exists (`loading`, `success`, or `error`); `isFetching` tells you whether a request is currently in flight. A skipped query is `loading` with `isFetching: false`.
+
 ## useMutation
 
 Provides methods to create, update, patch, and remove resources. Mutations automatically update the cache, so all components using related queries re-render with fresh data.
