@@ -53,6 +53,19 @@ includes typed CRUD methods plus any custom methods declared in the schema.
 - **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
 - **Full TypeScript** - define a schema once, get inference everywhere
 
+## Generated Schemas
+
+If your API contract is generated as a service map, use `defineSchemaFor` to create a typed schema from service names.
+
+```ts
+import { defineSchemaFor } from 'figbird'
+import type { ApiSchemaTypes } from './generated-api'
+
+const schema = defineSchemaFor<ApiSchemaTypes>()({
+  services: ['api/people', 'api/tasks'],
+})
+```
+
 ## Documentation
 
 Visit [humaans.github.io/figbird](https://humaans.github.io/figbird/) for full documentation and API reference.

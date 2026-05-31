@@ -9,11 +9,11 @@ import type {
 } from '../lib'
 import {
   createHooks,
-  createSchema,
+  defineSchema,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
-  service,
+  defineService,
   useFeathers,
   useService as useGlobalService,
 } from '../lib'
@@ -40,9 +40,9 @@ interface NoteService {
 }
 
 // Create schema for typed hooks
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    notes: service<NoteService>(),
+    notes: defineService<NoteService>(),
   },
 })
 

@@ -7,7 +7,7 @@
  */
 
 import type { FeathersClient } from '../../lib'
-import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
+import { createHooks, defineSchema, FeathersAdapter, Figbird, defineService } from '../../lib'
 
 // Define a model
 interface Product {
@@ -24,9 +24,9 @@ interface ProductService {
 }
 
 // Create schema
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    products: service<ProductService>(),
+    products: defineService<ProductService>(),
   },
 })
 

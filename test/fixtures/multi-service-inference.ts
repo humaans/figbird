@@ -1,10 +1,10 @@
 import type { FeathersClient } from '../../lib'
 import {
   createHooks,
-  createSchema,
+  defineSchema,
   FeathersAdapter,
   Figbird,
-  service,
+  defineService,
   type ServiceItem,
 } from '../../lib'
 
@@ -32,10 +32,10 @@ interface TaskService {
   item: Task
 }
 
-export const schema = createSchema({
+export const schema = defineSchema({
   services: {
-    'api/people': service<PersonService>(),
-    'api/tasks': service<TaskService>(),
+    'api/people': defineService<PersonService>(),
+    'api/tasks': defineService<TaskService>(),
   },
 })
 

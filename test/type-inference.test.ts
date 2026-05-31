@@ -219,3 +219,28 @@ test('optional query definitions are inferred', t => {
 
   t.is(taskQueryType, 'TaskQuery')
 })
+
+test('generated schema helpers infer service contracts without intersections', t => {
+  const fixturePath = join(__dirname, 'fixtures', 'generated-schema-helpers.ts')
+
+  const peopleItemType = getTypeAtPosition(fixturePath, 'PeopleItem')
+  const peopleQueryType = getTypeAtPosition(fixturePath, 'PeopleQuery')
+  const peopleCreateType = getTypeAtPosition(fixturePath, 'PeopleCreate')
+  const peoplePatchType = getTypeAtPosition(fixturePath, 'PeoplePatch')
+  const taskCreateType = getTypeAtPosition(fixturePath, 'TaskCreate')
+  const peopleServiceType = getTypeAtPosition(fixturePath, 'PeopleService')
+  const peopleType = getTypeAtPosition(fixturePath, 'people')
+
+  t.is(peopleItemType, 'Person')
+  t.is(peopleQueryType, 'PersonQuery')
+  t.is(peopleCreateType, 'PersonCreate')
+  t.is(peoplePatchType, 'PersonPatch')
+  t.is(taskCreateType, 'Partial<Task>')
+  t.true(
+    peopleServiceType.startsWith(
+      'import("figbird").Service<Person, PersonQuery, "api/people", PersonCreate',
+    ),
+    `Expected defineSchemaFor to preserve the generated service contract, got: ${peopleServiceType}`,
+  )
+  t.is(peopleType, 'import("figbird").QueryResult<Person[], import("figbird").FeathersFindMeta>')
+})
