@@ -1,7 +1,11 @@
 import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
-import type { QueryState } from '../core/figbird.js'
-import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import { findServiceByName } from '../core/schema.js'
+import {
+  splitConfig,
+  type QueryConfig,
+  type QueryDescriptor,
+  type QueryState,
+} from '../core/queryTypes.js'
 import { useFigbird } from './react.js'
 
 type BaseQueryResult = {

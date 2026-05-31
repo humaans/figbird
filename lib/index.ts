@@ -1,8 +1,6 @@
 // core
 export { Figbird, isFetching, isIdle, isLoading, isPending } from './core/figbird.js'
 
-export type { EventType } from './core/figbird.js'
-
 // schema
 export { defineSchema, defineSchemaFor, defineService } from './core/schema.js'
 export type {
@@ -34,13 +32,7 @@ export { FeathersAdapter } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
 // Adapter interface and types
-export type {
-  Adapter,
-  AdapterFindMeta,
-  AdapterParams,
-  AdapterQuery,
-  EventHandlers,
-} from './adapters/adapter.js'
+export type { Adapter, EventHandlers } from './adapters/adapter.js'
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
@@ -52,21 +44,10 @@ export { useFind, useGet } from './react/useQuery.js'
 export { useService } from './react/useService.js'
 
 // Query-related types for advanced usage
-export type {
-  FindQueryConfig,
-  GetQueryConfig,
-  QueryConfig,
-  QueryState,
-  QueryStatus,
-} from './core/figbird.js'
+export type { QueryConfig, QueryState, QueryStatus } from './core/figbird.js'
 
-// React hook result types (already exported but let's be complete)
-export type {
-  UseMethodCall,
-  UseMethodResult,
-  UseMethodState,
-  UseMethodStatus,
-} from './react/useMethod.js'
+// React hook result types
+export type { UseMethodResult } from './react/useMethod.js'
 export type { UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQuery.js'
 

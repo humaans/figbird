@@ -4,7 +4,8 @@ import type {
   TypedFeathersClient,
   TypedFeathersService,
 } from '../adapters/feathers.js'
-import { splitConfig, type Figbird, type QueryConfig } from '../core/figbird.js'
+import type { Figbird } from '../core/figbird.js'
+import { splitConfig, type QueryConfig } from '../core/queryTypes.js'
 import type {
   Schema,
   ServiceCreate,
