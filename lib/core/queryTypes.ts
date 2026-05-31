@@ -158,6 +158,8 @@ interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
    * Receives the prepared query object; returns a predicate for items.
    * Provide this if your adapter needs custom client-side matching logic.
    * Note: For find queries, the matcher works with individual items, not arrays.
+   * Queries with a matcher use isolated cache identity because functions cannot
+   * be serialized into a stable shared cache key.
    */
   matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
 }

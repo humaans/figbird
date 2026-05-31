@@ -161,8 +161,8 @@ const figbird = new Figbird({
 const { useFind, useGet, useMutation } = createHooks(figbird)
 
 // Types flow automatically
-const tasks = useFind('tasks')       // QueryResult<Task[], FindMeta>
-const task = useGet('tasks', '123')  // QueryResult<Task>
+const tasks = useFind('tasks') // QueryResult<Task[], FindMeta>
+const task = useGet('tasks', '123') // QueryResult<Task>
 ```
 
 ## Query Parameters
@@ -172,8 +172,8 @@ Query parameters combine your domain filters with adapter controls. You define t
 ```ts
 useFind('tasks', {
   query: {
-    completed: true,  // domain filter (from TaskQuery)
-    $limit: 10,       // adapter control (from Feathers)
+    completed: true, // domain filter (from TaskQuery)
+    $limit: 10, // adapter control (from Feathers)
     $sort: { title: 1 },
   },
 })
@@ -199,9 +199,9 @@ If you omit payload types, Figbird uses sensible defaults: `Partial<item>` for c
 ```ts
 const { create, patch, remove } = useMutation('tasks')
 
-const newTask = await create({ title: 'Ship it' })  // typed payload, returns Task
-await patch('id-1', { completed: true })            // typed patch payload
-await remove('id-1')                                // returns removed Task
+const newTask = await create({ title: 'Ship it' }) // typed payload, returns Task
+await patch('id-1', { completed: true }) // typed patch payload
+await remove('id-1') // returns removed Task
 ```
 
 ## Custom Service Methods
@@ -230,8 +230,8 @@ Access custom methods through the typed Feathers client returned by `useFeathers
 const { useFeathers } = createHooks(figbird)
 const feathers = useFeathers()
 
-await feathers.service('notes').archive(['1', '2'])  // { count: number }
-await feathers.service('notes').search('hello')      // Note[]
+await feathers.service('notes').archive(['1', '2']) // { count: number }
+await feathers.service('notes').search('hello') // Note[]
 ```
 
 # API Reference
@@ -295,7 +295,9 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 - `realtime` - one of `merge` (default), `refetch` or `disabled`
 - `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
 - `allPages` - fetch all pages
-- `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache
+- `parallel` - when used in combination with `allPages` will fetch all pages in parallel
+- `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
+- `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache. Queries with custom matchers use isolated cache identity because matcher functions cannot be serialized into a stable shared cache key.
 
 #### Returns
 
@@ -420,7 +422,7 @@ function TaskView({ id }: { id: string }) {
 
 #### Arguments
 
-* `figbird` - figbird instance
+- `figbird` - figbird instance
 
 # Advanced Usage
 
@@ -477,11 +479,7 @@ const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ adapter })
 
 export function App({ children }) {
-  return (
-    <FigbirdProvider figbird={figbird}>
-      {children}
-    </FigbirdProvider>
-  )
+  return <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
 }
 
 // inspect the state of all of the queries in figbird
@@ -506,7 +504,7 @@ const query = figbird.query({
 
 // Subscribe to get data and updates
 const unsub = query.subscribe(state => {
-  console.log(state.data)  // Task[] | null
+  console.log(state.data) // Task[] | null
   console.log(state.status) // 'loading' | 'success' | 'error'
 })
 

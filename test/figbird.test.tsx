@@ -1828,6 +1828,65 @@ test('useFind - with custom matcher', async t => {
   unmount()
 })
 
+test('useFind - queries with different custom matchers do not share cache identity', async t => {
+  const { render, flush, unmount, $all } = dom()
+  const { App, useFind, feathers } = app()
+
+  function FooNotes() {
+    const notes = useFind('notes', {
+      query: { tag: 'post' },
+      matcher: _query => item => item.foo === true,
+    })
+    return (
+      <div className='foo-notes'>
+        <NoteList notes={notes} />
+      </div>
+    )
+  }
+
+  function ArchivedNotes() {
+    const notes = useFind('notes', {
+      query: { tag: 'post' },
+      matcher: _query => item => item.archived === true,
+    })
+    return (
+      <div className='archived-notes'>
+        <NoteList notes={notes} />
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <FooNotes />
+      <ArchivedNotes />
+    </App>,
+  )
+
+  await flush()
+
+  await flush(async () => {
+    await feathers.service('notes').create({ id: 2, tag: 'post', content: 'foo', foo: true })
+    await feathers.service('notes').create({
+      id: 3,
+      tag: 'post',
+      content: 'archived',
+      archived: true,
+    })
+  })
+
+  t.deepEqual(
+    $all('.foo-notes .note').map(n => n.innerHTML),
+    ['hello', 'foo'],
+  )
+  t.deepEqual(
+    $all('.archived-notes .note').map(n => n.innerHTML),
+    ['hello', 'archived'],
+  )
+
+  unmount()
+})
+
 test('items get updated in cache even if not currently relevant to any query', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers, figbird } = app({ config: { noUpdatedAt: true } })

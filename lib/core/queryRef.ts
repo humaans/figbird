@@ -1,4 +1,4 @@
-import { hashObject } from './hash.js'
+import { createQueryId } from './queryIdentity.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryStore } from './queryStore.js'
 import type { QueryConfig, QueryDescriptor, QueryState } from './queryTypes.js'
@@ -33,7 +33,7 @@ export class QueryRef<
     config: QueryConfig<T, TQueryType>
     queryStore: QueryStore<S, TParams, TMeta, TQuery>
   }) {
-    this.#queryId = `q/${hashObject({ desc, config })}`
+    this.#queryId = createQueryId(desc, config)
     this.#desc = desc
     this.#config = config
     this.#queryStore = queryStore

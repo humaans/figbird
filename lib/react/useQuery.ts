@@ -1,4 +1,5 @@
 import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
+import { queryIdentityKey, type QueryIdentityConfig } from '../core/queryIdentity.js'
 import { findServiceByName } from '../core/schema.js'
 import {
   splitConfig,
@@ -99,8 +100,8 @@ export function useQuery<
 >(desc: QueryDescriptor, config: QueryConfig<T, TQuery>): QueryResult<T, TMeta> {
   const figbird = useFigbird()
 
-  // For network-only queries, we need a unique ID for each hook instance
-  // to ensure that queries are not shared between components.
+  // For network-only and custom matcher queries, we need a unique ID for each hook
+  // instance to ensure that queries are not shared between components.
   // useId provides a stable, unique ID for the lifetime of the component.
   const uniqueId = useId()
 
@@ -109,10 +110,14 @@ export function useQuery<
   // the q.subscribe and q.getSnapshot stable and avoid unsubbing and resubbing
   // you don't need to do this outside React where you can more easily create a
   // stable reference to a query and use it for as long as you want
-  const _q = figbird.query(desc, {
-    ...config,
-    ...(config.fetchPolicy === 'network-only' ? { uid: uniqueId } : {}),
-  } as QueryConfig<unknown, unknown>)
+  const shouldScopeToHook = config.fetchPolicy === 'network-only' || config.matcher
+  const queryConfig = shouldScopeToHook
+    ? ({
+        ...config,
+        [queryIdentityKey]: uniqueId,
+      } as QueryConfig<unknown, unknown> & QueryIdentityConfig)
+    : (config as QueryConfig<unknown, unknown>)
+  const _q = figbird.query(desc, queryConfig)
 
   // a bit of React foo to create stable fn references
   const hash = _q.hash()
