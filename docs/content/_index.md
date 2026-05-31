@@ -295,8 +295,6 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 - `realtime` - one of `merge` (default), `refetch` or `disabled`
 - `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
 - `allPages` - fetch all pages
-- `parallel` - when used in combination with `allPages` will fetch all pages in parallel
-- `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
 - `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache
 
 #### Returns
