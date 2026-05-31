@@ -2,7 +2,7 @@
  * Example demonstrating combined Figbird and adapter params
  *
  * When using hooks like useFind and useGet, the params parameter accepts BOTH:
- * 1. Figbird-specific params (QueryConfig): skip, realtime, fetchPolicy, allPages, matcher
+ * 1. Figbird-specific params (QueryConfig): skip, realtime, fetchPolicy, allPages, parallel, parallelLimit, matcher
  * 2. Adapter-specific params (FeathersParams): query, headers, etc.
  */
 
@@ -61,6 +61,8 @@ export const complexQuery = useFind('products', {
   fetchPolicy: 'cache-first',
   realtime: 'merge',
   allPages: false,
+  parallel: false,
+  parallelLimit: 4,
   skip: false,
   matcher: _query => item => {
     // Additional client-side filtering
@@ -82,6 +84,8 @@ export const testCombinedParams: CombinedParamsType = {
   realtime: 'merge',
   fetchPolicy: 'swr',
   allPages: true,
+  parallel: true,
+  parallelLimit: 2,
   matcher: () => () => true,
 
   // FeathersParams properties

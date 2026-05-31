@@ -1,4 +1,4 @@
-import type { Adapter, EventHandlers, QueryResponse } from './adapter.js'
+import type { Adapter, EventHandlers, FindAllOptions, QueryResponse } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type {
   Schema,
@@ -20,6 +20,8 @@ type UpdatedAtExtractor = (item: unknown) => string | Date | number | null | und
 type UpdatedAtFieldType = string | UpdatedAtExtractor
 
 type Timestamp = string | number | Date | null | undefined
+
+const DEFAULT_PARALLEL_LIMIT = 4
 
 // Feathers-specific types for the Feathers adapter
 
@@ -267,6 +269,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   async findAll(
     serviceName: string,
     params?: FeathersParams<TQuery>,
+    options: FindAllOptions = {},
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     const queryLimit = (params?.query as Record<string, unknown>)?.$limit
@@ -279,27 +282,106 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       data: [],
       meta: { total: -1, limit: 0, skip: 0 },
     }
-    let $skip = 0
 
+    const firstPage = await this.#_find(
+      serviceName,
+      this.#mergeQueryParams(baseParams, { $skip: 0 }),
+    )
+    result.meta = { ...result.meta, ...firstPage.meta }
+    result.data.push(...firstPage.data)
+
+    if (this.#isAllPagesFetchDone(result, firstPage)) {
+      return result
+    }
+
+    if (!options.parallel || firstPage.meta.total < 0 || firstPage.meta.limit <= 0) {
+      return this.#findAllSequential(serviceName, baseParams, result)
+    }
+
+    return this.#findAllParallel(serviceName, baseParams, result, firstPage.meta, options)
+  }
+
+  async #findAllSequential(
+    serviceName: string,
+    baseParams: FeathersParams<TQuery>,
+    result: QueryResponse<unknown[], FeathersFindMeta>,
+  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     while (true) {
-      const { data, meta } = await this.#_find(
+      const page = await this.#_find(
         serviceName,
-        this.#mergeQueryParams(baseParams, { $skip }),
+        this.#mergeQueryParams(baseParams, { $skip: result.data.length }),
       )
 
-      result.meta = { ...result.meta, ...meta }
-      result.data.push(...data)
+      result.meta = { ...result.meta, ...page.meta }
+      result.data.push(...page.data)
 
-      const done =
-        data.length === 0 ||
-        data.length < meta.limit ||
-        // allow total to be -1 to indicate that total will not be available on this endpoint
-        (meta.total > 0 && result.data.length >= meta.total)
-
-      if (done) return result
-
-      $skip = result.data.length
+      if (this.#isAllPagesFetchDone(result, page)) {
+        return result
+      }
     }
+  }
+
+  async #findAllParallel(
+    serviceName: string,
+    baseParams: FeathersParams<TQuery>,
+    result: QueryResponse<unknown[], FeathersFindMeta>,
+    firstPageMeta: FeathersFindMeta,
+    options: FindAllOptions,
+  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
+    const limit = Math.max(1, Math.floor(options.parallelLimit ?? DEFAULT_PARALLEL_LIMIT))
+    const skips: number[] = []
+
+    for (
+      let $skip = result.data.length;
+      $skip < firstPageMeta.total;
+      $skip += firstPageMeta.limit
+    ) {
+      skips.push($skip)
+    }
+
+    const pages = await this.#mapWithConcurrency(skips, limit, $skip =>
+      this.#_find(serviceName, this.#mergeQueryParams(baseParams, { $skip })),
+    )
+
+    for (const page of pages) {
+      result.meta = { ...result.meta, ...page.meta }
+      result.data.push(...page.data)
+    }
+
+    return result
+  }
+
+  #isAllPagesFetchDone(
+    result: QueryResponse<unknown[], FeathersFindMeta>,
+    page: QueryResponse<unknown[], FeathersFindMeta>,
+  ): boolean {
+    return (
+      page.data.length === 0 ||
+      page.data.length < page.meta.limit ||
+      // allow total to be -1 to indicate that total will not be available on this endpoint
+      (page.meta.total > 0 && result.data.length >= page.meta.total)
+    )
+  }
+
+  async #mapWithConcurrency<T, R>(
+    items: T[],
+    limit: number,
+    mapper: (item: T) => Promise<R>,
+  ): Promise<R[]> {
+    const results: R[] = []
+    let nextIndex = 0
+
+    async function worker(): Promise<void> {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex
+        nextIndex++
+        results[currentIndex] = await mapper(items[currentIndex]!)
+      }
+    }
+
+    const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker())
+    await Promise.all(workers)
+    return results
   }
 
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
