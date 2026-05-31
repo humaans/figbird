@@ -1112,12 +1112,12 @@ test('refetch only works with active listeners', async t => {
   dom2.unmount()
 })
 
-test('useFind with allPages and parallel', async t => {
+test('useFind with allPages', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
 
   function Note() {
-    const notes = useFind('notes', { query: { $limit: 1 }, allPages: true, parallel: true })
+    const notes = useFind('notes', { query: { $limit: 1 }, allPages: true })
     return <NoteList notes={notes} />
   }
 

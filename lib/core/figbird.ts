@@ -196,16 +196,6 @@ export interface FindQueryConfig<TItem = unknown, TQuery = unknown> extends Base
    * Honors adapter pagination controls (e.g. $limit/$skip for Feathers).
    */
   allPages?: boolean
-
-  /**
-   * When used with allPages, fetches known remaining pages in parallel.
-   */
-  parallel?: boolean
-
-  /**
-   * Maximum number of parallel page requests when parallel is enabled.
-   */
-  parallelLimit?: number
 }
 
 /**
@@ -552,10 +542,7 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
 
     return { desc, config }
   } else {
-    const { allPages, parallel, parallelLimit, ...params } = rest as CombinedFindConfig<
-      TItem,
-      TQuery
-    >
+    const { allPages, ...params } = rest as CombinedFindConfig<TItem, TQuery>
 
     const desc: FindDescriptor = {
       serviceName,
@@ -569,8 +556,6 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       fetchPolicy,
       ...(matcher !== undefined && { matcher }),
       ...(allPages !== undefined && { allPages }),
-      ...(parallel !== undefined && { parallel }),
-      ...(parallelLimit !== undefined && { parallelLimit }),
     }
 
     return { desc, config }
@@ -829,12 +814,7 @@ class QueryStore<
     } else {
       const findConfig = config as FindQueryConfig<unknown, unknown>
       return findConfig.allPages
-        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams, {
-            ...(findConfig.parallel !== undefined && { parallel: findConfig.parallel }),
-            ...(findConfig.parallelLimit !== undefined && {
-              parallelLimit: findConfig.parallelLimit,
-            }),
-          })
+        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
         : this.#adapter.find(desc.serviceName, desc.params as TParams)
     }
   }

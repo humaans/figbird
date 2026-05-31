@@ -18,14 +18,6 @@ export interface EventHandlers {
 }
 
 /**
- * Options for adapter-level all-pages fetches.
- */
-export interface FindAllOptions {
-  parallel?: boolean
-  parallelLimit?: number
-}
-
-/**
  * Unified adapter interface
  * The adapter is service-agnostic and works with unknown items
  * Type safety comes from the Schema, not the adapter
@@ -44,11 +36,7 @@ export interface Adapter<
 
   find(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
 
-  findAll(
-    serviceName: string,
-    params?: TParams,
-    options?: FindAllOptions,
-  ): Promise<QueryResponse<unknown[], TMeta>>
+  findAll(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
 
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 
