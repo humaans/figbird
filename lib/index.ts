@@ -4,7 +4,7 @@ export { Figbird } from './core/figbird.js'
 export type { EventType } from './core/figbird.js'
 
 // schema
-export { createSchema, service } from './core/schema.js'
+export { defineSchema, defineSchemaFor, defineService } from './core/schema.js'
 export type {
   AnySchema,
   Create,

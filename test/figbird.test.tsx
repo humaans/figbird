@@ -3,11 +3,11 @@ import React, { StrictMode, useEffect, useState } from 'react'
 import type { FeathersClient, QueryResult, QueryStatus, UseMutationResult } from '../lib'
 import {
   createHooks,
-  createSchema,
+  defineSchema,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
-  service,
+  defineService,
   useFeathers,
 } from '../lib'
 import { dom, mockFeathers, queueTask } from './helpers'
@@ -29,9 +29,9 @@ interface NoteService {
 }
 
 // Create schema for typed hooks
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    notes: service<NoteService>(),
+    notes: defineService<NoteService>(),
   },
 })
 

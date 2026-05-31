@@ -42,44 +42,63 @@ export interface Service<
 }
 
 // Helper types to derive payload types from service definition
-type DeriveCreate<TServiceDef extends ServiceTypeDefinition> =
-  TServiceDef['create'] extends undefined ? Partial<TServiceDef['item']> : TServiceDef['create']
+type DeriveCreate<TServiceDef extends ServiceTypeDefinition> = 'create' extends keyof TServiceDef
+  ? Exclude<TServiceDef['create'], undefined>
+  : Partial<TServiceDef['item']>
 
-type DeriveUpdate<TServiceDef extends ServiceTypeDefinition> =
-  TServiceDef['update'] extends undefined ? TServiceDef['item'] : TServiceDef['update']
+type DeriveUpdate<TServiceDef extends ServiceTypeDefinition> = 'update' extends keyof TServiceDef
+  ? Exclude<TServiceDef['update'], undefined>
+  : TServiceDef['item']
 
-type DerivePatch<TServiceDef extends ServiceTypeDefinition> = TServiceDef['patch'] extends undefined
-  ? Partial<TServiceDef['item']>
-  : TServiceDef['patch']
+type DerivePatch<TServiceDef extends ServiceTypeDefinition> = 'patch' extends keyof TServiceDef
+  ? Exclude<TServiceDef['patch'], undefined>
+  : Partial<TServiceDef['item']>
 
-type DeriveMethods<TServiceDef extends ServiceTypeDefinition> =
-  TServiceDef['methods'] extends undefined
-    ? Record<string, never>
-    : NonNullable<TServiceDef['methods']> & AnyMethodsType
+type DeriveMethods<TServiceDef extends ServiceTypeDefinition> = 'methods' extends keyof TServiceDef
+  ? Exclude<TServiceDef['methods'], undefined> & AnyMethodsType
+  : Record<string, never>
 
 type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends keyof TServiceDef
   ? Exclude<TServiceDef['query'], undefined>
   : Record<string, unknown>
 
-// Phase 1: Create a service definition (no name yet)
-export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
+type ServiceDefinitions<TServiceDefs> = {
+  [K in keyof TServiceDefs]: ServiceTypeDefinition
+}
+
+type ServiceFromDefinition<
+  TServiceDef extends ServiceTypeDefinition,
+  TName extends string = string,
+> = Service<
   TServiceDef['item'],
   DeriveQuery<TServiceDef>,
-  string,
+  TName,
   DeriveCreate<TServiceDef>,
   DeriveUpdate<TServiceDef>,
   DerivePatch<TServiceDef>,
   DeriveMethods<TServiceDef>
-> {
-  return { name: '' } as Service<
-    TServiceDef['item'],
-    DeriveQuery<TServiceDef>,
-    string,
-    DeriveCreate<TServiceDef>,
-    DeriveUpdate<TServiceDef>,
-    DerivePatch<TServiceDef>,
-    DeriveMethods<TServiceDef>
-  >
+>
+
+type ServiceMapFromDefinitions<
+  TServiceDefs extends ServiceDefinitions<TServiceDefs>,
+  TServiceName extends keyof TServiceDefs & string,
+> = {
+  readonly [K in TServiceName]: ServiceFromDefinition<TServiceDefs[K], K>
+}
+
+type DefineSchemaFor<TServiceDefs extends ServiceDefinitions<TServiceDefs>> = <
+  const TServiceNames extends readonly (keyof TServiceDefs & string)[],
+>(config: {
+  services: TServiceNames
+}) => {
+  services: ServiceMapFromDefinitions<TServiceDefs, TServiceNames[number]>
+}
+
+// Phase 1: Create a service definition (no name yet)
+export function defineService<
+  TServiceDef extends ServiceTypeDefinition,
+>(): ServiceFromDefinition<TServiceDef> {
+  return { name: '' } as ServiceFromDefinition<TServiceDef>
 }
 
 // Base schema interface - flexible to preserve specific service types
@@ -102,7 +121,7 @@ type ExtractServiceWithName<S, N extends string> =
     : never
 
 // Phase 2: Create a schema with services object map (preserves literal keys)
-export function createSchema<
+export function defineSchema<
   const TServiceMap extends Record<string, Service<unknown, unknown, string>>,
 >(config: {
   services: TServiceMap
@@ -118,6 +137,26 @@ export function createSchema<
     readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
   }
   return { services: serviceMap }
+}
+
+// Create a schema directly from a generated service contract map
+export function defineSchemaFor<
+  const TServiceDefs extends ServiceDefinitions<TServiceDefs>,
+>(): DefineSchemaFor<TServiceDefs> {
+  return (<const TServiceNames extends readonly (keyof TServiceDefs & string)[]>(config: {
+    services: TServiceNames
+  }) => {
+    const services = Object.fromEntries(
+      config.services.map(name => [
+        name,
+        { name } as ServiceFromDefinition<TServiceDefs[typeof name], typeof name>,
+      ]),
+    ) as unknown as ServiceMapFromDefinitions<TServiceDefs, TServiceNames[number]>
+
+    return defineSchema({ services }) as {
+      services: ServiceMapFromDefinitions<TServiceDefs, TServiceNames[number]>
+    }
+  }) as DefineSchemaFor<TServiceDefs>
 }
 
 // Type helpers to extract types from schema

@@ -50,8 +50,8 @@ import {
   Figbird,
   FeathersAdapter,
   FigbirdProvider,
-  createSchema,
-  service,
+  defineSchema,
+  defineService,
   createHooks
 } from 'figbird'
 import { feathersClient } from './feathers'
@@ -62,9 +62,9 @@ interface Note {
   content: string
 }
 
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    notes: service<{ item: Note }>(),
+    notes: defineService<{ item: Note }>(),
   },
 })
 
@@ -105,7 +105,7 @@ Figbird provides full TypeScript inference through a lightweight schema DSL. Def
 A schema declares your services and their types. Each service specifies an `item` shape, and optionally custom types for queries and mutation payloads.
 
 ```ts
-import { createSchema, service } from 'figbird'
+import { defineSchema, defineService } from 'figbird'
 
 interface Task {
   id: string
@@ -122,14 +122,29 @@ interface TaskService {
   query?: TaskQuery
 }
 
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    tasks: service<TaskService>(),
+    tasks: defineService<TaskService>(),
   },
 })
 ```
 
 Service keys are preserved as literal types - so `'api/people'` and `'tasks'` remain distinct, and all APIs narrow correctly based on the service name you pass.
+
+## Generated Schema Maps
+
+If your API contract already exists as a generated map, you can derive Figbird services from it without manually wrapping every entry in `ServiceTypeDefinition`.
+
+```ts
+import { defineSchemaFor } from 'figbird'
+import type { ApiSchemaTypes } from './generated-api'
+
+const schema = defineSchemaFor<ApiSchemaTypes>()({
+  services: ['api/people', 'api/tasks'],
+})
+```
+
+Each generated service entry should follow Figbird's service contract shape: `item` is required, while `query`, `create`, `update`, `patch`, and `methods` are optional.
 
 ## Type-Safe Hooks
 
@@ -202,9 +217,9 @@ interface NotesService {
   }
 }
 
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    notes: service<NotesService>(),
+    notes: defineService<NotesService>(),
   },
 })
 ```

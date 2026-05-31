@@ -2,11 +2,11 @@ import test from 'ava'
 import { useEffect, useState } from 'react'
 import {
   createHooks,
-  createSchema,
+  defineSchema,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
-  service,
+  defineService,
   useFigbird,
   useFind as useUntypedFind,
   useGet as useUntypedGet,
@@ -63,11 +63,11 @@ interface ProjectService {
 }
 
 // Define schema with typed services
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    'api/people': service<PersonService>(),
-    'api/tasks': service<TaskService>(),
-    'api/projects': service<ProjectService>(),
+    'api/people': defineService<PersonService>(),
+    'api/tasks': defineService<TaskService>(),
+    'api/projects': defineService<ProjectService>(),
   },
 })
 
@@ -305,10 +305,10 @@ test('schema with array of services', t => {
   const { render, unmount, flush, $ } = dom()
 
   // Services are defined in an object map
-  const schema = createSchema({
+  const schema = defineSchema({
     services: {
-      'api/people': service<PersonService>(),
-      'api/tasks': service<TaskService>(),
+      'api/people': defineService<PersonService>(),
+      'api/tasks': defineService<TaskService>(),
     },
   })
 

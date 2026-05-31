@@ -1,7 +1,7 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers.js'
 import { Figbird } from '../lib/core/figbird.js'
-import { createSchema, service } from '../lib/core/schema.js'
+import { defineSchema, defineService } from '../lib/core/schema.js'
 import { createHooks } from '../lib/react/createHooks.js'
 import { FigbirdProvider } from '../lib/react/react.js'
 import { dom, mockFeathers } from './helpers.js'
@@ -48,17 +48,17 @@ interface Note {
 }
 
 test('locked-down query types work correctly', async t => {
-  const schema = createSchema({
+  const schema = defineSchema({
     services: {
-      people: service<{
+      people: defineService<{
         item: Person
         query: StrictQuery
       }>(),
-      todos: service<{
+      todos: defineService<{
         item: Todo
         query: PaginatedQuery
       }>(),
-      notes: service<{
+      notes: defineService<{
         item: Note
         query: MinimalQuery
       }>(),
@@ -176,9 +176,9 @@ test('locked-down query types work correctly', async t => {
 // The server will reject invalid query fields if someone bypasses TypeScript
 
 test('allPages works correctly with proper pagination fields', async t => {
-  const schema = createSchema({
+  const schema = defineSchema({
     services: {
-      todos: service<{
+      todos: defineService<{
         item: Todo
         query: PaginatedQuery
       }>(),
@@ -236,9 +236,9 @@ test('allPages works correctly with proper pagination fields', async t => {
 test('React hooks work with locked-down query types', async t => {
   const { $all, render, unmount, flush } = dom()
 
-  const schema = createSchema({
+  const schema = defineSchema({
     services: {
-      people: service<{
+      people: defineService<{
         item: Person
         query: StrictQuery
       }>(),

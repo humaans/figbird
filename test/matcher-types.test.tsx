@@ -1,7 +1,7 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers.js'
 import { Figbird } from '../lib/core/figbird.js'
-import { createSchema, service } from '../lib/core/schema.js'
+import { defineSchema, defineService } from '../lib/core/schema.js'
 import { createHooks } from '../lib/react/createHooks.js'
 import { FigbirdProvider } from '../lib/react/react.js'
 import { dom, mockFeathers } from './helpers.js'
@@ -38,13 +38,13 @@ interface User {
 }
 
 test('matcher receives properly typed query from schema', async t => {
-  const schema = createSchema({
+  const schema = defineSchema({
     services: {
-      todos: service<{
+      todos: defineService<{
         item: Todo
         query: TodoQuery
       }>(),
-      users: service<{
+      users: defineService<{
         item: User
         query: UserQuery
       }>(),
@@ -159,9 +159,9 @@ test('matcher receives properly typed query from schema', async t => {
 test('React hooks provide typed query in matcher', async t => {
   const { render, unmount, flush } = dom()
 
-  const schema = createSchema({
+  const schema = defineSchema({
     services: {
-      todos: service<{
+      todos: defineService<{
         item: Todo
         query: TodoQuery
       }>(),
@@ -250,9 +250,9 @@ test('React hooks provide typed query in matcher', async t => {
 })
 
 test('matcher with undefined query works correctly', async t => {
-  const schema = createSchema({
+  const schema = defineSchema({
     services: {
-      items: service<{
+      items: defineService<{
         item: { id: string; name: string }
         query: { search?: string }
       }>(),

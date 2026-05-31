@@ -1,4 +1,4 @@
-import { createSchema, service } from '../../lib'
+import { defineSchema, defineService } from '../../lib'
 
 interface Task {
   id: string
@@ -16,9 +16,9 @@ interface TaskServiceDefinition {
   query?: TaskQuery
 }
 
-export const schema = createSchema({
+export const schema = defineSchema({
   services: {
-    tasks: service<TaskServiceDefinition>(),
+    tasks: defineService<TaskServiceDefinition>(),
   },
 })
 

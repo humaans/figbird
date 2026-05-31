@@ -1,7 +1,7 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
-import { createSchema, service } from '../lib/core/schema'
+import { defineSchema, defineService } from '../lib/core/schema'
 import { mockFeathers } from './helpers'
 
 interface Note {
@@ -18,10 +18,10 @@ interface Post {
   updatedAt?: number
 }
 
-const schema = createSchema({
+const schema = defineSchema({
   services: {
-    notes: service<{ item: Note }>(),
-    posts: service<{ item: Post }>(),
+    notes: defineService<{ item: Note }>(),
+    posts: defineService<{ item: Post }>(),
   },
 })
 
