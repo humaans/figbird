@@ -1,5 +1,12 @@
 # Figbird Changelog
 
+## 0.22.0
+
+- Add `useService` and `useMethod` hooks, including typed versions from `createHooks`.
+- Add `defineSchemaFor` for schemas backed by generated service contract maps.
+- Rename schema helpers from `createSchema`/`service` to `defineSchema`/`defineService`.
+- Export `isPending`, `isFetching`, `isLoading`, and `isIdle` query state helpers.
+
 ## 0.21.3
 
 - Upgrade all deps
