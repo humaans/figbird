@@ -865,10 +865,36 @@ class QueryStore<
 
       const data = result.data
       const meta = (result as { meta?: TMeta }).meta
-      const items = Array.isArray(data) ? data : [data]
       const getId = (item: unknown) => this.#adapter.getId(item)
+      const getFreshItem = (item: unknown) => {
+        const itemId = getId(item)
+        if (itemId === undefined) {
+          return item
+        }
 
-      for (const item of items) {
+        const currItem = service.entities.get(itemId)
+        if (!currItem || !this.#adapter.isItemStale(currItem, item)) {
+          return item
+        }
+
+        if (query.desc.method === 'find' && !query.filterItem(currItem)) {
+          return undefined
+        }
+
+        return currItem
+      }
+      const freshData = Array.isArray(data)
+        ? data.reduce<unknown[]>((acc, item) => {
+            const freshItem = getFreshItem(item)
+            if (freshItem !== undefined) {
+              acc.push(freshItem)
+            }
+            return acc
+          }, [])
+        : getFreshItem(data)
+      const freshItems = Array.isArray(freshData) ? freshData : [freshData]
+
+      for (const item of freshItems) {
         const itemId = getId(item)
         if (itemId !== undefined) {
           service.entities.set(itemId, item)
@@ -885,7 +911,7 @@ class QueryStore<
         ...query,
         state: {
           status: 'success' as const,
-          data,
+          data: freshData,
           meta: meta || this.#adapter.emptyMeta(),
           isFetching: false,
           error: null,

@@ -2214,6 +2214,86 @@ test('useFind - stale realtime event is ignored', async t => {
   unmount()
 })
 
+test('useFind - stale fetch result does not overwrite newer realtime item', async t => {
+  const { render, flush, unmount, $ } = dom()
+
+  function Note() {
+    const notes = useFind('notes')
+    return <NoteList notes={notes} />
+  }
+
+  const { App, useFind, feathers, figbird } = app()
+  feathers.service('notes').setDelay(50)
+
+  render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await feathers.service('notes').patch(1, {
+      content: 'newer update',
+      updatedAt: new Date('2024-03-01').getTime(),
+    })
+    await new Promise(resolve => setTimeout(resolve, 80))
+  })
+
+  t.is($('.note')!.innerHTML, 'newer update')
+  t.is((figbird.getState().get('notes')?.entities.get(1) as Note)?.content, 'newer update')
+
+  unmount()
+})
+
+test('useFind - stale fetch result omits newer realtime item that no longer matches', async t => {
+  const { render, flush, unmount, $all } = dom()
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: {
+          id: 1,
+          content: 'hello',
+          tag: 'post',
+          updatedAt: new Date('2024-02-02').getTime(),
+        },
+      },
+    },
+  })
+
+  function Note() {
+    const notes = useFind('notes', { query: { tag: 'post' } })
+    return <NoteList notes={notes} />
+  }
+
+  const { App, useFind, figbird } = app({ feathers })
+  feathers.service('notes').setDelay(50)
+
+  render(
+    <App>
+      <Note />
+    </App>,
+  )
+
+  await flush(async () => {
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await feathers.service('notes').patch(1, {
+      content: 'draft update',
+      tag: 'draft',
+      updatedAt: new Date('2024-03-01').getTime(),
+    })
+    await new Promise(resolve => setTimeout(resolve, 80))
+  })
+
+  t.deepEqual(
+    $all('.note').map(n => n.innerHTML),
+    [],
+  )
+  t.is((figbird.getState().get('notes')?.entities.get(1) as Note)?.content, 'draft update')
+
+  unmount()
+})
+
 test('recursive serializer for maps and sets', async t => {
   t.deepEqual(
     serialize(
