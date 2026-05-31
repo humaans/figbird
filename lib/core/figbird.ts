@@ -438,7 +438,7 @@ export class Figbird<
     return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
       {
         desc: desc as QueryDescriptor,
-        config: (config || {}) as QueryConfig<unknown, unknown>,
+        config: normalizeQueryConfig(config),
         queryStore: this.queryStore,
       },
     )
@@ -512,16 +512,8 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
   desc: QueryDescriptor
   config: QueryConfig<TItem, TQuery>
 } {
-  // Extract common properties with defaults
-  const {
-    serviceName,
-    method,
-    skip,
-    realtime = 'merge',
-    fetchPolicy = 'swr',
-    matcher,
-    ...rest
-  } = combinedConfig
+  // Extract common properties
+  const { serviceName, method, skip, realtime, fetchPolicy, matcher, ...rest } = combinedConfig
 
   if (method === 'get') {
     const { resourceId, ...params } = rest as CombinedGetConfig<TItem, TQuery>
@@ -535,12 +527,12 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
 
     const config: GetQueryConfig<TItem, TQuery> = {
       ...(skip !== undefined && { skip }),
-      realtime,
-      fetchPolicy,
+      ...(realtime !== undefined && { realtime }),
+      ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
     }
 
-    return { desc, config }
+    return { desc, config: normalizeQueryConfig(config) }
   } else {
     const { allPages, ...params } = rest as CombinedFindConfig<TItem, TQuery>
 
@@ -552,13 +544,23 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
 
     const config: FindQueryConfig<TItem, TQuery> = {
       ...(skip !== undefined && { skip }),
-      realtime,
-      fetchPolicy,
+      ...(realtime !== undefined && { realtime }),
+      ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
       ...(allPages !== undefined && { allPages }),
     }
 
-    return { desc, config }
+    return { desc, config: normalizeQueryConfig(config) }
+  }
+}
+
+function normalizeQueryConfig<TItem = unknown, TQuery = unknown>(
+  config: QueryConfig<TItem, TQuery> = {},
+): QueryConfig<TItem, TQuery> {
+  return {
+    realtime: 'merge',
+    fetchPolicy: 'swr',
+    ...config,
   }
 }
 
