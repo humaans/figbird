@@ -39,7 +39,28 @@ export interface QueuedEvent {
   items: unknown[]
 }
 
-export type QueryStatus = 'idle' | 'loading' | 'success' | 'error'
+export type QueryStatus = 'loading' | 'success' | 'error'
+
+type QueryStatusState = {
+  status: QueryStatus
+  isFetching: boolean
+}
+
+export function isPending(query: QueryStatusState): boolean {
+  return query.status === 'loading'
+}
+
+export function isFetching(query: QueryStatusState): boolean {
+  return query.isFetching
+}
+
+export function isLoading(query: QueryStatusState): boolean {
+  return query.status === 'loading' && query.isFetching
+}
+
+export function isIdle(query: QueryStatusState): boolean {
+  return query.status === 'loading' && !query.isFetching
+}
 
 /**
  * Query state representation - discriminated union for better type safety
