@@ -6,7 +6,6 @@
   "types": "./dist/esm/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
-    "./package-lock.json": "./package-lock.json",
     "./tsconfig.json": "./tsconfig.json",
     ".": {
       "types": "./dist/esm/index.d.ts",
@@ -19,6 +18,14 @@
       "import": "./dist/esm/*.js"
     }
   },
+  "files": [
+    "dist",
+    "lib",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE.md",
+    "tsconfig.json"
+  ],
   "scripts": {
     "test": "tsc --noEmit && oxlint -c oxlintrc.json && prettier --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
     "lint": "oxlint -c oxlintrc.json",
@@ -27,6 +34,7 @@
     "format": "prettier --write '**/*.{ts,tsx,js,jsx,css,yml}'",
     "coverage": "c8 -r html -r text ava",
     "build": "node ./tasks/build.js",
+    "prepack": "npm run build",
     "watch": "node ./tasks/build.js -w",
     "release": "np",
     "release:beta": "np --tag=beta",
