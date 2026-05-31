@@ -866,6 +866,7 @@ class QueryStore<
       const data = result.data
       const meta = (result as { meta?: TMeta }).meta
       const getId = (item: unknown) => this.#adapter.getId(item)
+      const nextItemIds = new Set<string | number>()
       const getFreshItem = (item: unknown) => {
         const itemId = getId(item)
         if (itemId === undefined) {
@@ -897,11 +898,18 @@ class QueryStore<
       for (const item of freshItems) {
         const itemId = getId(item)
         if (itemId !== undefined) {
+          nextItemIds.add(itemId)
           service.entities.set(itemId, item)
           if (!service.itemQueryIndex.has(itemId)) {
             service.itemQueryIndex.set(itemId, new Set())
           }
           service.itemQueryIndex.get(itemId)!.add(queryId)
+        }
+      }
+
+      for (const [itemId, queryIds] of service.itemQueryIndex) {
+        if (!nextItemIds.has(itemId)) {
+          queryIds.delete(queryId)
         }
       }
 
