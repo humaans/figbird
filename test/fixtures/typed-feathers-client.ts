@@ -57,8 +57,8 @@ const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ schema, adapter })
 
-// Create typed hooks including useFeathers
-const { useFeathers } = createHooks(figbird)
+// Create typed hooks including useFeathers and useService
+const { useFeathers, useService } = createHooks(figbird)
 
 // Get typed feathers client
 const typedFeathers = useFeathers()
@@ -70,6 +70,10 @@ const _notesService = typedFeathers.service('notes')
 // Get tasks service
 // oxlint-disable-next-line @typescript-eslint/no-unused-vars
 const _tasksService = typedFeathers.service('tasks')
+
+// Get typed service directly from the hook
+// oxlint-disable-next-line @typescript-eslint/no-unused-vars
+const _notesHookService = useService('notes')
 
 // ========================================
 // Type exports for CRUD methods on notes
@@ -110,9 +114,19 @@ export type NotesArchiveResult = Awaited<ReturnType<typeof _notesService.archive
 export type NotesSearchResult = Awaited<ReturnType<typeof _notesService.search>>
 
 // ========================================
+// useService hook type exports
+// ========================================
+
+export type NotesHookGetResult = Awaited<ReturnType<typeof _notesHookService.get>>
+export type NotesHookCreateResult = Awaited<ReturnType<typeof _notesHookService.create>>
+export type NotesHookArchiveResult = Awaited<ReturnType<typeof _notesHookService.archive>>
+export type NotesHookSearchResult = Awaited<ReturnType<typeof _notesHookService.search>>
+
+// ========================================
 // Test service type is correctly narrowed
 // ========================================
 
 // The typed client should narrow based on service name
 export type NotesServiceType = typeof _notesService
 export type TasksServiceType = typeof _tasksService
+export type NotesHookServiceType = typeof _notesHookService

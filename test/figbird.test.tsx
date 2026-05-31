@@ -1,6 +1,12 @@
 import test from 'ava'
 import React, { StrictMode, useEffect, useState } from 'react'
-import type { FeathersClient, QueryResult, QueryStatus, UseMutationResult } from '../lib'
+import type {
+  FeathersClient,
+  FeathersService,
+  QueryResult,
+  QueryStatus,
+  UseMutationResult,
+} from '../lib'
 import {
   createHooks,
   createSchema,
@@ -9,6 +15,7 @@ import {
   FigbirdProvider,
   service,
   useFeathers,
+  useService as useGlobalService,
 } from '../lib'
 import { dom, mockFeathers, queueTask } from './helpers'
 
@@ -22,10 +29,14 @@ interface Note {
   _xid?: number
   _foo?: number
   version?: number
+  archived?: boolean
 }
 
 interface NoteService {
   item: Note
+  methods: {
+    archive: (id: number) => Promise<{ id: number; archived: boolean }>
+  }
 }
 
 // Create schema for typed hooks
@@ -70,7 +81,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
     figbird || new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
 
   // Create typed hooks from the figbird instance
-  const { useGet, useFind, useMutation } = createHooks(figbirdInstance)
+  const { useGet, useFind, useMutation, useService } = createHooks(figbirdInstance)
 
   function App({ children }: { children?: React.ReactNode }) {
     return (
@@ -82,7 +93,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
     )
   }
 
-  return { App, useGet, useFind, useMutation, figbird: figbirdInstance, feathers }
+  return { App, useGet, useFind, useMutation, useService, figbird: figbirdInstance, feathers }
 }
 
 interface ErrorHandlerState {
@@ -202,6 +213,50 @@ test('useGet updates after realtime patch', async t => {
   })
 
   t.is($('.note')!.innerHTML, 'realtime')
+
+  unmount()
+})
+
+test('useService returns a Feathers service with CRUD and custom methods', async t => {
+  const { render, flush, unmount } = dom()
+  const { App, useService, feathers } = app()
+  type ArchiveService = FeathersService & { archive: NoteService['methods']['archive'] }
+  const notesService = feathers.service('notes') as unknown as ArchiveService
+  notesService.archive = async id => {
+    const note = (await notesService.patch(id, { archived: true })) as Note
+    return { id: note.id, archived: note.archived === true }
+  }
+
+  let typedGetResult: Note | undefined
+  let typedArchiveResult: { id: number; archived: boolean } | undefined
+  let globalGetResult: Note | undefined
+
+  function NoteServiceUser() {
+    const typedNotes = useService('notes')
+    const globalNotes = useGlobalService('notes')
+
+    useEffect(() => {
+      ;(async () => {
+        typedGetResult = await typedNotes.get(1)
+        typedArchiveResult = await typedNotes.archive(1)
+        globalGetResult = (await globalNotes.get(1)) as Note
+      })()
+    }, [globalNotes, typedNotes])
+
+    return <div>Testing service hook</div>
+  }
+
+  render(
+    <App>
+      <NoteServiceUser />
+    </App>,
+  )
+
+  await flush()
+
+  t.is(typedGetResult!.content, 'hello')
+  t.deepEqual(typedArchiveResult, { id: 1, archived: true })
+  t.true(globalGetResult!.archived)
 
   unmount()
 })

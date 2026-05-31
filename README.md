@@ -19,7 +19,7 @@ const figbird = new Figbird({
   adapter: new FeathersAdapter(feathersClient),
 })
 
-export const { useFind, useGet, useMutation } = createHooks(figbird)
+export const { useFind, useGet, useMutation, useService } = createHooks(figbird)
 
 function App() {
   return (
@@ -31,15 +31,19 @@ function App() {
 
 function Notes() {
   const { data } = useFind('notes')
-  const { patch } = useMutation('notes')
+  const notesService = useService('notes')
 
   return data?.map(note => (
-    <div key={note.id} onClick={() => patch(note.id, { read: true })}>
+    <div key={note.id} onClick={() => notesService.patch(note.id, { read: true })}>
       {note.content}
     </div>
   ))
 }
 ```
+
+`useService('notes')` returns the Feathers service for that schema service. When you create hooks
+from a typed Figbird instance, the returned service is narrowed by the literal service name and
+includes typed CRUD methods plus any custom methods declared in the schema.
 
 ## Features
 

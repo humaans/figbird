@@ -46,6 +46,7 @@ export { FigbirdProvider, useFigbird } from './react/react.js'
 export { useFeathers } from './react/useFeathers.js'
 export { useMutation } from './react/useMutation.js'
 export { useFind, useGet } from './react/useQuery.js'
+export { useService } from './react/useService.js'
 
 // Query-related types for advanced usage
 export type {
