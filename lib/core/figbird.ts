@@ -667,15 +667,10 @@ class QueryStore<
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
   }
 
-  #getQuery(queryId: string): Query<unknown, TMeta, unknown> | undefined {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
-    if (serviceName) {
-      const service = this.getState().get(serviceName)
-      if (service) {
-        return service.queries.get(queryId)
-      }
-    }
-    return undefined
+  // Public store API
+  /** Returns the entire store state map keyed by service name. */
+  getState(): Map<string, ServiceState<TMeta>> {
+    return this.#state
   }
 
   /** Returns the current state for a query by id, if present. */
@@ -718,70 +713,6 @@ class QueryStore<
         { silent: true },
       )
     }
-  }
-
-  #createItemFilter<T, TQueryType>(
-    desc: QueryDescriptor,
-    config: QueryConfig<T, TQueryType>,
-  ): ItemMatcher<ElementType<T>> {
-    // if this query is not using the realtime mode
-    // we will never be merging events into the cache
-    // and will never call the matcher, so to avoid
-    // the issue where custom query filters or operators
-    // cause the default matcher to throw an error without
-    // additional configuration, let's avoid creating a matcher
-    // altogether
-    if (config.realtime !== 'merge') {
-      return () => false
-    }
-
-    const query = (desc.params as Record<string, unknown>)?.query || undefined
-    if (config.matcher) {
-      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
-    }
-    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
-  }
-
-  #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
-    if (!this.#listeners.has(queryId)) {
-      this.#listeners.set(queryId, new Set())
-    }
-    this.#listeners.get(queryId)!.add(fn as (state: QueryState<unknown, TMeta>) => void)
-    return () => {
-      const listeners = this.#listeners.get(queryId)
-      if (listeners) {
-        listeners.delete(fn as (state: QueryState<unknown, TMeta>) => void)
-        if (listeners.size === 0) {
-          this.#listeners.delete(queryId)
-        }
-      }
-    }
-  }
-
-  #invokeListeners(queryId: string): void {
-    const listeners = this.#listeners.get(queryId)
-    if (listeners) {
-      const state = this.getQueryState(queryId)
-      if (state) {
-        listeners.forEach(listener => listener(state))
-      }
-    }
-  }
-
-  #addGlobalListener(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
-    this.#globalListeners.add(fn)
-    return () => {
-      this.#globalListeners.delete(fn)
-    }
-  }
-
-  #invokeGlobalListeners(): void {
-    const state = this.getState()
-    this.#globalListeners.forEach(listener => listener(state))
-  }
-
-  #listenerCount(queryId: string): number {
-    return this.#listeners.get(queryId)?.size || 0
   }
 
   /**
@@ -840,6 +771,26 @@ class QueryStore<
     }
   }
 
+  /** Perform a service mutation and update the store from the result. */
+  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+    const { serviceName, method } = desc
+    const updaters: Record<string, (item: unknown) => void> = {
+      create: item => this.#processEvent(serviceName, { type: 'created', item }),
+      update: item => this.#processEvent(serviceName, { type: 'updated', item }),
+      patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
+      remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
+    }
+
+    // Convert named params to args array for the adapter
+    const args = this.#buildMutationArgs(desc)
+
+    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
+      updaters[method]?.(item)
+      return item as InferMutationData<S, D>
+    })
+  }
+
+  // Query lifecycle
   async #queue(queryId: string): Promise<void> {
     this.#fetching({ queryId })
     try {
@@ -868,38 +819,109 @@ class QueryStore<
     }
   }
 
-  /** Perform a service mutation and update the store from the result. */
-  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
-    const { serviceName, method } = desc
-    const updaters: Record<string, (item: unknown) => void> = {
-      create: item => this.#processEvent(serviceName, { type: 'created', item }),
-      update: item => this.#processEvent(serviceName, { type: 'updated', item }),
-      patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
-      remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
-    }
+  #fetching({ queryId }: { queryId: string }): void {
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
 
-    // Convert named params to args array for the adapter
-    const args = this.#buildMutationArgs(desc)
-
-    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
-      updaters[method]?.(item)
-      return item as InferMutationData<S, D>
+      service.queries.set(queryId, {
+        ...query,
+        pending: false,
+        dirty: false,
+        state:
+          query.state.status === 'error'
+            ? {
+                status: 'loading' as const,
+                data: null,
+                meta: query.state.meta,
+                isFetching: true,
+                error: null,
+              }
+            : query.state.status === 'success'
+              ? { ...query.state, isFetching: true }
+              : {
+                  status: query.state.status,
+                  data: null,
+                  meta: query.state.meta,
+                  isFetching: true,
+                  error: null,
+                },
+      })
     })
   }
 
-  /** Convert mutation descriptor to args array for adapter */
-  #buildMutationArgs(desc: MutationDescriptor): unknown[] {
-    switch (desc.method) {
-      case 'create':
-        return desc.params !== undefined ? [desc.data, desc.params] : [desc.data]
-      case 'update':
-      case 'patch':
-        return desc.params !== undefined ? [desc.id, desc.data, desc.params] : [desc.id, desc.data]
-      case 'remove':
-        return desc.params !== undefined ? [desc.id, desc.params] : [desc.id]
+  #fetched({
+    queryId,
+    result,
+  }: {
+    queryId: string
+    result: QueryResponse<unknown, TMeta | undefined>
+  }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      const data = result.data
+      const meta = (result as { meta?: TMeta }).meta
+      const items = Array.isArray(data) ? data : [data]
+      const getId = (item: unknown) => this.#adapter.getId(item)
+
+      for (const item of items) {
+        const itemId = getId(item)
+        if (itemId !== undefined) {
+          service.entities.set(itemId, item)
+          if (!service.itemQueryIndex.has(itemId)) {
+            service.itemQueryIndex.set(itemId, new Set())
+          }
+          service.itemQueryIndex.get(itemId)!.add(queryId)
+        }
+      }
+
+      shouldRefetch = query.dirty
+
+      service.queries.set(queryId, {
+        ...query,
+        state: {
+          status: 'success' as const,
+          data,
+          meta: meta || this.#adapter.emptyMeta(),
+          isFetching: false,
+          error: null,
+        },
+      })
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.#queue(queryId)
     }
   }
 
+  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
+    let shouldRefetch = false
+
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      shouldRefetch = query.dirty
+
+      service.queries.set(queryId, {
+        ...query!,
+        state: {
+          status: 'error' as const,
+          data: null,
+          meta: this.#adapter.emptyMeta(),
+          isFetching: false,
+          error,
+        },
+      })
+    })
+
+    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      this.#queue(queryId)
+    }
+  }
+
+  // Realtime event handling
   #subscribeToRealtime(queryId: string): void {
     const query = this.#getQuery(queryId)
     if (!query) return
@@ -1133,9 +1155,16 @@ class QueryStore<
     }
   }
 
-  /** Returns the entire store state map keyed by service name. */
-  getState(): Map<string, ServiceState<TMeta>> {
-    return this.#state
+  // State management
+  #getQuery(queryId: string): Query<unknown, TMeta, unknown> | undefined {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (serviceName) {
+      const service = this.getState().get(serviceName)
+      if (service) {
+        return service.queries.get(queryId)
+      }
+    }
+    return undefined
   }
 
   #updateState(
@@ -1206,108 +1235,6 @@ class QueryStore<
     }
   }
 
-  #fetching({ queryId }: { queryId: string }): void {
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
-
-      service.queries.set(queryId, {
-        ...query,
-        pending: false,
-        dirty: false,
-        state:
-          query.state.status === 'error'
-            ? {
-                status: 'loading' as const,
-                data: null,
-                meta: query.state.meta,
-                isFetching: true,
-                error: null,
-              }
-            : query.state.status === 'success'
-              ? { ...query.state, isFetching: true }
-              : {
-                  status: query.state.status,
-                  data: null,
-                  meta: query.state.meta,
-                  isFetching: true,
-                  error: null,
-                },
-      })
-    })
-  }
-
-  #fetched({
-    queryId,
-    result,
-  }: {
-    queryId: string
-    result: QueryResponse<unknown, TMeta | undefined>
-  }): void {
-    let shouldRefetch = false
-
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
-
-      const data = result.data
-      const meta = (result as { meta?: TMeta }).meta
-      const items = Array.isArray(data) ? data : [data]
-      const getId = (item: unknown) => this.#adapter.getId(item)
-
-      for (const item of items) {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          service.entities.set(itemId, item)
-          if (!service.itemQueryIndex.has(itemId)) {
-            service.itemQueryIndex.set(itemId, new Set())
-          }
-          service.itemQueryIndex.get(itemId)!.add(queryId)
-        }
-      }
-
-      shouldRefetch = query.dirty
-
-      service.queries.set(queryId, {
-        ...query,
-        state: {
-          status: 'success' as const,
-          data,
-          meta: meta || this.#adapter.emptyMeta(),
-          isFetching: false,
-          error: null,
-        },
-      })
-    })
-
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
-      this.#queue(queryId)
-    }
-  }
-
-  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
-    let shouldRefetch = false
-
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
-
-      shouldRefetch = query.dirty
-
-      service.queries.set(queryId, {
-        ...query!,
-        state: {
-          status: 'error' as const,
-          data: null,
-          meta: this.#adapter.emptyMeta(),
-          isFetching: false,
-          error,
-        },
-      })
-    })
-
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
-      this.#queue(queryId)
-    }
-  }
-
   #vacuum({ queryId }: { queryId: string }): void {
     this.#transactOverService(
       queryId,
@@ -1328,6 +1255,84 @@ class QueryStore<
       },
       { silent: true },
     )
+  }
+
+  // Internal helpers
+  #createItemFilter<T, TQueryType>(
+    desc: QueryDescriptor,
+    config: QueryConfig<T, TQueryType>,
+  ): ItemMatcher<ElementType<T>> {
+    // if this query is not using the realtime mode
+    // we will never be merging events into the cache
+    // and will never call the matcher, so to avoid
+    // the issue where custom query filters or operators
+    // cause the default matcher to throw an error without
+    // additional configuration, let's avoid creating a matcher
+    // altogether
+    if (config.realtime !== 'merge') {
+      return () => false
+    }
+
+    const query = (desc.params as Record<string, unknown>)?.query || undefined
+    if (config.matcher) {
+      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
+    }
+    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
+  }
+
+  /** Convert mutation descriptor to args array for adapter */
+  #buildMutationArgs(desc: MutationDescriptor): unknown[] {
+    switch (desc.method) {
+      case 'create':
+        return desc.params !== undefined ? [desc.data, desc.params] : [desc.data]
+      case 'update':
+      case 'patch':
+        return desc.params !== undefined ? [desc.id, desc.data, desc.params] : [desc.id, desc.data]
+      case 'remove':
+        return desc.params !== undefined ? [desc.id, desc.params] : [desc.id]
+    }
+  }
+
+  #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
+    if (!this.#listeners.has(queryId)) {
+      this.#listeners.set(queryId, new Set())
+    }
+    this.#listeners.get(queryId)!.add(fn as (state: QueryState<unknown, TMeta>) => void)
+    return () => {
+      const listeners = this.#listeners.get(queryId)
+      if (listeners) {
+        listeners.delete(fn as (state: QueryState<unknown, TMeta>) => void)
+        if (listeners.size === 0) {
+          this.#listeners.delete(queryId)
+        }
+      }
+    }
+  }
+
+  #invokeListeners(queryId: string): void {
+    const listeners = this.#listeners.get(queryId)
+    if (listeners) {
+      const state = this.getQueryState(queryId)
+      if (state) {
+        listeners.forEach(listener => listener(state))
+      }
+    }
+  }
+
+  #addGlobalListener(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
+    this.#globalListeners.add(fn)
+    return () => {
+      this.#globalListeners.delete(fn)
+    }
+  }
+
+  #invokeGlobalListeners(): void {
+    const state = this.getState()
+    this.#globalListeners.forEach(listener => listener(state))
+  }
+
+  #listenerCount(queryId: string): number {
+    return this.#listeners.get(queryId)?.size || 0
   }
 }
 
