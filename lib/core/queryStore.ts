@@ -117,7 +117,8 @@ export class QueryStore<
 
     this.#subscribeToRealtime(queryId)
 
-    const shouldVacuumByDefault = q.config.fetchPolicy === 'network-only'
+    const shouldVacuumByDefault =
+      q.config.fetchPolicy === 'network-only' || Boolean(q.config.matcher)
     return ({ vacuum = shouldVacuumByDefault }: { vacuum?: boolean } = {}) => {
       removeListener()
       if (vacuum && this.#listenerCount(queryId) === 0) {
