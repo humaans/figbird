@@ -918,7 +918,7 @@ test('useFind with skip', async t => {
 
 test('useFind with refetch', async t => {
   const { render, flush, unmount, $ } = dom()
-  const { App, useFind, feathers } = app()
+  const { App, useFind, feathers, figbird } = app()
   let refetch: () => void
 
   function Note() {
@@ -926,7 +926,12 @@ test('useFind with refetch', async t => {
 
     refetch = notes.refetch
 
-    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
+    return (
+      <>
+        <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
+        <div className='total'>{notes.status === 'success' ? notes.meta.total : null}</div>
+      </>
+    )
   }
 
   const results = [
@@ -961,6 +966,19 @@ test('useFind with refetch', async t => {
   })
 
   t.is($('.data')!.innerHTML, '2')
+  t.is($('.total')!.innerHTML, '1')
+
+  const notesState = figbird.getState().get('notes')!
+  const queryId = Array.from(notesState.queries.keys())[0]!
+  t.false(notesState.itemQueryIndex.get(1)?.has(queryId) ?? false)
+  t.true(notesState.itemQueryIndex.get(2)?.has(queryId) ?? false)
+
+  await flush(async () => {
+    await feathers.service('notes').remove(1)
+  })
+
+  t.is($('.data')!.innerHTML, '2')
+  t.is($('.total')!.innerHTML, '1')
 
   unmount()
 
