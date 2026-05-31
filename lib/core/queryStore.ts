@@ -37,6 +37,7 @@ export class QueryStore<
   #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number | undefined = 100
+  #processingEventQueue = false
 
   constructor({
     adapter,
@@ -382,12 +383,12 @@ export class QueryStore<
       items: Array.isArray(event.item) ? event.item : [event.item],
     })
 
-    if (!this.#eventBatchProcessingTimer) {
+    if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later
       if (this.#eventBatchProcessingInterval) {
         this.#eventBatchProcessingTimer = setTimeout(() => {
-          this.#processQueuedEvents()
           this.#eventBatchProcessingTimer = null
+          this.#processQueuedEvents()
         }, this.#eventBatchProcessingInterval)
       } else {
         // batching is disabled, process each event immediately
@@ -397,41 +398,48 @@ export class QueryStore<
   }
 
   #processQueuedEvents(): void {
-    if (this.#eventQueue.length === 0) {
+    if (this.#processingEventQueue || this.#eventQueue.length === 0) {
       return
     }
 
-    const eventsByService = groupQueuedEvents(this.#eventQueue)
-    const getId = (item: unknown) => this.#adapter.getId(item)
-    const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
+    this.#processingEventQueue = true
+    try {
+      const getId = (item: unknown) => this.#adapter.getId(item)
+      const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
 
-    for (const [serviceName, events] of Object.entries(eventsByService)) {
-      this.#transactOverServiceByName(serviceName, (service, touch) => {
-        const appliedEvents = applyEventsToService({
-          service,
-          events,
-          getId,
-          isItemStale,
-        })
+      while (this.#eventQueue.length > 0) {
+        const eventsByService = groupQueuedEvents(this.#eventQueue)
+        this.#eventQueue = []
 
-        // Update queries only for non-stale items
-        if (appliedEvents.length > 0) {
-          updateQueriesFromEvents({
-            service,
-            appliedEvents,
-            touch,
-            getId,
-            itemAdded: meta => this.#adapter.itemAdded(meta),
-            itemRemoved: meta => this.#adapter.itemRemoved(meta),
+        for (const [serviceName, events] of Object.entries(eventsByService)) {
+          this.#transactOverServiceByName(serviceName, (service, touch) => {
+            const appliedEvents = applyEventsToService({
+              service,
+              events,
+              getId,
+              isItemStale,
+            })
+
+            // Update queries only for non-stale items
+            if (appliedEvents.length > 0) {
+              updateQueriesFromEvents({
+                service,
+                appliedEvents,
+                touch,
+                getId,
+                itemAdded: meta => this.#adapter.itemAdded(meta),
+                itemRemoved: meta => this.#adapter.itemRemoved(meta),
+              })
+            }
           })
+
+          // Refetch refetchable queries if needed
+          this.#refetchRefetchableQueries(serviceName)
         }
-      })
-
-      // Refetch refetchable queries if needed
-      this.#refetchRefetchableQueries(serviceName)
+      }
+    } finally {
+      this.#processingEventQueue = false
     }
-
-    this.#eventQueue = []
   }
 
   #refetchRefetchableQueries(serviceName: string): void {

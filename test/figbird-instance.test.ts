@@ -25,6 +25,10 @@ const schema = defineSchema({
   },
 })
 
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 test('Figbird instance can be created', t => {
   const feathers = mockFeathers({
     notes: {
@@ -252,6 +256,55 @@ test('figbird.query defaults to realtime merge updates', async t => {
   }
 
   t.like(updated, { id: 1, content: 'realtime' })
+})
+
+test('realtime events queued while a batch flushes are not dropped', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'initial' },
+      },
+    },
+  })
+  const adapter = new FeathersAdapter(feathers, { updatedAtField: () => undefined })
+  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 10 })
+  const query = figbird.query({ serviceName: 'notes', method: 'find' })
+  const service = feathers.service('notes')
+
+  let resolveInitial: () => void = () => {}
+  const initial = new Promise<void>(resolve => {
+    resolveInitial = resolve
+  })
+  let sawInitial = false
+  let emittedSecond = false
+  const unsubscribe = query.subscribe(state => {
+    if (state.status !== 'success') return
+
+    const content = state.data[0]?.content
+    if (!sawInitial) {
+      sawInitial = true
+      resolveInitial()
+      return
+    }
+
+    if (content === 'first' && !emittedSecond) {
+      emittedSecond = true
+      service.emit('patched', { id: 1, content: 'second' })
+    }
+  })
+
+  await initial
+
+  service.emit('patched', { id: 1, content: 'first' })
+  await wait(30)
+
+  unsubscribe()
+
+  const snapshot = query.getSnapshot()
+  t.is(snapshot?.status, 'success')
+  if (snapshot?.status !== 'success') return
+
+  t.is(snapshot.data[0]?.content, 'second')
 })
 
 test('figbird.mutate with create', async t => {
