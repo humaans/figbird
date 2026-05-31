@@ -9,6 +9,7 @@ import type {
   ServicePatch,
   ServiceQuery,
   ServiceMethods,
+  ServiceMethodsMap,
 } from '../core/schema.js'
 
 // Helper types for field extraction
@@ -119,8 +120,7 @@ export type TypedFeathersService<
   TUpdate,
   TPatch,
   TQuery,
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  TMethods extends Record<string, (...args: any[]) => any>,
+  TMethods extends ServiceMethodsMap,
 > = {
   get(id: string | number, params?: FeathersParams<TQuery>): Promise<TItem>
   find(

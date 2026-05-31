@@ -139,6 +139,10 @@ export type QueryDescriptor = GetDescriptor | FindDescriptor
  */
 type ElementType<T> = T extends (infer E)[] ? E : T
 
+// Public untyped APIs intentionally resolve to `any` for backwards compatibility.
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+type UntypedData = any
+
 /**
  * Base query configuration shared by all query types.
  * Add these alongside adapter params when calling useFind/useGet.
@@ -235,49 +239,31 @@ export type ItemMatcher<T> = (item: T) => boolean
  * Helper type to infer data type from schema and query descriptor
  */
 type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema
-  ? // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    any
-  : D extends { serviceName: infer N; method: 'find' }
+  ? UntypedData
+  : D extends { serviceName: infer N extends string; method: infer M }
     ? N extends ServiceNames<S>
-      ? ServiceItem<S, N>[]
-      : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-        any
-    : D extends { serviceName: infer N; method: 'get' }
-      ? N extends ServiceNames<S>
-        ? ServiceItem<S, N>
-        : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-          any
-      : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-        any
+      ? M extends 'find'
+        ? ServiceItem<S, N>[]
+        : M extends 'get'
+          ? ServiceItem<S, N>
+          : UntypedData
+      : UntypedData
+    : UntypedData
 
 /**
  * Helper type to infer data type from schema and mutation descriptor
  */
 type InferMutationData<S extends Schema, D extends MutationDescriptor> = S extends AnySchema
-  ? // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    any
-  : D extends { serviceName: infer N; method: 'create' }
+  ? UntypedData
+  : D extends { serviceName: infer N extends string; data: readonly unknown[] }
     ? N extends ServiceNames<S>
-      ? ServiceItem<S, N>
-      : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-        any
-    : D extends { serviceName: infer N; method: 'update' }
+      ? ServiceItem<S, N>[]
+      : UntypedData
+    : D extends { serviceName: infer N extends string }
       ? N extends ServiceNames<S>
         ? ServiceItem<S, N>
-        : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-          any
-      : D extends { serviceName: infer N; method: 'patch' }
-        ? N extends ServiceNames<S>
-          ? ServiceItem<S, N>
-          : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-            any
-        : D extends { serviceName: infer N; method: 'remove' }
-          ? N extends ServiceNames<S>
-            ? ServiceItem<S, N>
-            : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-              any
-          : // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-            any
+        : UntypedData
+      : UntypedData
 
 /**
  * Base mutation descriptor with common fields

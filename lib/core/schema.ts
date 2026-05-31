@@ -6,6 +6,12 @@
 // Unique symbol for phantom types - keeps internal typing machinery hidden
 declare const $phantom: unique symbol
 
+// Arbitrary service methods must preserve their own argument and return types.
+// `any` is intentional here: `unknown[]` would reject concrete method signatures.
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type ServiceMethod = (...args: any[]) => any
+export type ServiceMethodsMap = Record<string, ServiceMethod>
+
 // Base service type definition interface that users provide
 export interface ServiceTypeDefinition {
   item: unknown
@@ -13,12 +19,8 @@ export interface ServiceTypeDefinition {
   update?: unknown
   patch?: unknown
   query?: unknown
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  methods?: Record<string, (...args: any[]) => any>
+  methods?: ServiceMethodsMap
 }
-
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyMethodsType = Record<string, (...args: any[]) => any>
 
 // Internal service representation - matches expected type structure
 export interface Service<
@@ -28,7 +30,7 @@ export interface Service<
   TCreate = unknown,
   TUpdate = unknown,
   TPatch = unknown,
-  TMethods extends AnyMethodsType = AnyMethodsType,
+  TMethods extends ServiceMethodsMap = ServiceMethodsMap,
 > {
   readonly name: TName
   readonly [$phantom]?: {
@@ -55,7 +57,7 @@ type DerivePatch<TServiceDef extends ServiceTypeDefinition> = 'patch' extends ke
   : Partial<TServiceDef['item']>
 
 type DeriveMethods<TServiceDef extends ServiceTypeDefinition> = 'methods' extends keyof TServiceDef
-  ? Exclude<TServiceDef['methods'], undefined> extends infer M extends AnyMethodsType
+  ? Exclude<TServiceDef['methods'], undefined> extends infer M extends ServiceMethodsMap
     ? M
     : Record<never, never>
   : Record<never, never>
@@ -117,7 +119,7 @@ type ExtractServiceWithName<S, N extends string> =
     infer TCreate,
     infer TUpdate,
     infer TPatch,
-    infer TMethods extends AnyMethodsType
+    infer TMethods extends ServiceMethodsMap
   >
     ? Service<TItem, TQuery, N, TCreate, TUpdate, TPatch, TMethods>
     : never
@@ -181,11 +183,8 @@ export type ServicePatch<S extends Schema, N extends ServiceNames<S>> =
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
   ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
 
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyMethods = Record<string, (...args: any[]) => any>
-
 export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends AnyMethods } }
+  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends ServiceMethodsMap } }
     ? M
     : Record<string, never>
 

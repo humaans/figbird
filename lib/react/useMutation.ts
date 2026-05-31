@@ -31,6 +31,10 @@ export interface UseMutationResult<
   error: Error | null
 }
 
+// Public untyped mutation hook intentionally returns `any` for backwards compatibility.
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+type UntypedData = any
+
 /**
  * Simple mutation hook exposing crud methods
  * of any feathers service. The resulting state
@@ -42,14 +46,14 @@ export interface UseMutationResult<
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-export function useMutation(serviceName: string): UseMutationResult<any, any, any, any> {
+export function useMutation(
+  serviceName: string,
+): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
   const figbird = useFigbird()
   const service = findServiceByName(figbird.schema, serviceName)
   const actualServiceName = service?.name ?? serviceName
 
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  const [state, dispatch] = useReducer(mutationReducer<any>, {
+  const [state, dispatch] = useReducer(mutationReducer<UntypedData | UntypedData[]>, {
     status: 'idle',
     data: null,
     error: null,
@@ -64,8 +68,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
   }, [])
 
   const executeMutation = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    async (promise: Promise<any>): Promise<any> => {
+    async <TResult>(promise: Promise<TResult>): Promise<TResult> => {
       dispatch({ type: 'mutating' })
       try {
         const item = await promise
@@ -85,21 +88,19 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
   )
 
   const create = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    (data: any, params?: unknown) =>
+    (data: UntypedData | UntypedData[], params?: unknown) =>
       executeMutation(
         figbird.mutate({
           serviceName: actualServiceName,
           method: 'create' as const,
           data,
           params,
-        }),
+        }) as Promise<UntypedData | UntypedData[]>,
       ),
     [executeMutation, figbird, actualServiceName],
-  )
+  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['create']
   const update = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    (id: string | number, data: any, params?: unknown) =>
+    (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
         figbird.mutate({
           serviceName: actualServiceName,
@@ -107,13 +108,12 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
           id,
           data,
           params,
-        }),
+        }) as Promise<UntypedData>,
       ),
     [executeMutation, figbird, actualServiceName],
-  )
+  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['update']
   const patch = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    (id: string | number, data: any, params?: unknown) =>
+    (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
         figbird.mutate({
           serviceName: actualServiceName,
@@ -121,10 +121,10 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
           id,
           data,
           params,
-        }),
+        }) as Promise<UntypedData>,
       ),
     [executeMutation, figbird, actualServiceName],
-  )
+  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['patch']
   const remove = useCallback(
     (id: string | number, params?: unknown) =>
       executeMutation(
@@ -133,10 +133,10 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
           method: 'remove' as const,
           id,
           params,
-        }),
+        }) as Promise<UntypedData>,
       ),
     [executeMutation, figbird, actualServiceName],
-  )
+  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['remove']
 
   return useMemo(
     () => ({
