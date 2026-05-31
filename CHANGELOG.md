@@ -6,6 +6,10 @@
 - Add `defineSchemaFor` for schemas backed by generated service contract maps.
 - Rename schema helpers from `createSchema`/`service` to `defineSchema`/`defineService`.
 - Export `isPending`, `isFetching`, `isLoading`, and `isIdle` query state helpers.
+- Align direct `Figbird.query()` calls with hook defaults for realtime merge and stale-while-revalidate fetching.
+- Prevent stale fetch responses from overwriting newer realtime or mutation cache updates.
+- Keep query-to-item cache indexes in sync after refetches so later realtime events only update current query results.
+- Isolate cache identity for queries with custom `matcher` functions to avoid sharing results across incompatible matchers.
 
 ## 0.21.3
 
