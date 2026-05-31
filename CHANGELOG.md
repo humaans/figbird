@@ -1,5 +1,10 @@
 # Figbird Changelog
 
+## 0.22.1
+
+- Rebuild package artifacts during `npm pack`/`npm publish` so `npm run release` publishes fresh `dist` entrypoints.
+- Limit the published npm package to the library source, built artifacts, and public project metadata.
+
 ## 0.22.0
 
 - Add `useService` and `useMethod` hooks, including typed versions from `createHooks`.

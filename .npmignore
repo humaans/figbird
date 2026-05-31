@@ -1,7 +1,9 @@
 docs
+demo
 test
 tasks
 coverage
 .nyc_output
+.claude
 .git
 node_modules
