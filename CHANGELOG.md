@@ -1,6 +1,6 @@
 # Figbird Changelog
 
-## Unreleased
+## 0.23.0
 
 - Breaking: replace `defineSchema`/`defineService` service-object schemas with a canonical service-definition map passed to `defineSchema<ServiceMap>()`.
 - Breaking: remove `defineSchemaFor`; generated and handwritten schemas now use the same `defineSchema` API.
