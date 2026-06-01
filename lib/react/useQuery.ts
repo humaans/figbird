@@ -1,6 +1,5 @@
 import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
 import { queryIdentityKey, type QueryIdentityConfig } from '../core/queryIdentity.js'
-import { findServiceByName } from '../core/schema.js'
 import {
   splitConfig,
   type QueryConfig,
@@ -37,11 +36,8 @@ export function useGet(
   resourceId: string | number,
   params: Record<string, unknown> = {},
 ): QueryResult<UntypedData> {
-  const figbird = useFigbird()
-  const service = findServiceByName(figbird.schema, serviceName)
-  const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig<UntypedData, Record<string, unknown>>({
-    serviceName: actualServiceName,
+    serviceName,
     method: 'get' as const,
     resourceId,
     ...params,
@@ -60,11 +56,8 @@ export function useFind(
   serviceName: string,
   params: Record<string, unknown> = {},
 ): QueryResult<UntypedData[], Record<string, unknown>> {
-  const figbird = useFigbird()
-  const service = findServiceByName(figbird.schema, serviceName)
-  const actualServiceName = service?.name ?? serviceName
   const { desc, config } = splitConfig<UntypedData[], Record<string, unknown>>({
-    serviceName: actualServiceName,
+    serviceName,
     method: 'find' as const,
     ...params,
   })

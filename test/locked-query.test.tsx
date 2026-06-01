@@ -1,7 +1,7 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers.js'
 import { Figbird } from '../lib/core/figbird.js'
-import { defineSchema, defineService } from '../lib/core/schema.js'
+import { defineSchema } from '../lib/core/schema.js'
 import { createHooks } from '../lib/react/createHooks.js'
 import { FigbirdProvider } from '../lib/react/react.js'
 import { dom, mockFeathers } from './helpers.js'
@@ -48,22 +48,20 @@ interface Note {
 }
 
 test('locked-down query types work correctly', async t => {
-  const schema = defineSchema({
-    services: {
-      people: defineService<{
-        item: Person
-        query: StrictQuery
-      }>(),
-      todos: defineService<{
-        item: Todo
-        query: PaginatedQuery
-      }>(),
-      notes: defineService<{
-        item: Note
-        query: MinimalQuery
-      }>(),
-    },
-  })
+  const schema = defineSchema<{
+    people: {
+      item: Person
+      query: StrictQuery
+    }
+    todos: {
+      item: Todo
+      query: PaginatedQuery
+    }
+    notes: {
+      item: Note
+      query: MinimalQuery
+    }
+  }>()
 
   const feathers = mockFeathers({
     people: {
@@ -176,14 +174,12 @@ test('locked-down query types work correctly', async t => {
 // The server will reject invalid query fields if someone bypasses TypeScript
 
 test('allPages works correctly with proper pagination fields', async t => {
-  const schema = defineSchema({
-    services: {
-      todos: defineService<{
-        item: Todo
-        query: PaginatedQuery
-      }>(),
-    },
-  })
+  const schema = defineSchema<{
+    todos: {
+      item: Todo
+      query: PaginatedQuery
+    }
+  }>()
 
   // Create 10 items for pagination testing
   const data: Record<string, Todo> = {}
@@ -236,14 +232,12 @@ test('allPages works correctly with proper pagination fields', async t => {
 test('React hooks work with locked-down query types', async t => {
   const { $all, render, unmount, flush } = dom()
 
-  const schema = defineSchema({
-    services: {
-      people: defineService<{
-        item: Person
-        query: StrictQuery
-      }>(),
-    },
-  })
+  const schema = defineSchema<{
+    people: {
+      item: Person
+      query: StrictQuery
+    }
+  }>()
 
   const feathers = mockFeathers({
     people: {

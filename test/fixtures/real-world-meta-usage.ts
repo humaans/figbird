@@ -4,7 +4,7 @@
  */
 
 import type { FeathersClient } from '../../lib'
-import { createHooks, defineSchema, FeathersAdapter, Figbird, defineService } from '../../lib'
+import { createHooks, defineSchema, FeathersAdapter, Figbird } from '../../lib'
 
 // Define domain models
 interface Article {
@@ -32,13 +32,13 @@ interface CommentService {
   item: Comment
 }
 
+interface AppSchemaTypes {
+  articles: ArticleService
+  comments: CommentService
+}
+
 // Create schema with services
-const schema = defineSchema({
-  services: {
-    articles: defineService<ArticleService>(),
-    comments: defineService<CommentService>(),
-  },
-})
+const schema = defineSchema<AppSchemaTypes>()
 
 // Create Figbird instance with FeathersAdapter
 const feathers = {} as FeathersClient

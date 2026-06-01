@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import { findServiceByName } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 interface MutationState<T> {
@@ -50,8 +49,6 @@ export function useMutation(
   serviceName: string,
 ): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
   const figbird = useFigbird()
-  const service = findServiceByName(figbird.schema, serviceName)
-  const actualServiceName = service?.name ?? serviceName
 
   const [state, dispatch] = useReducer(mutationReducer<UntypedData | UntypedData[]>, {
     status: 'idle',
@@ -91,51 +88,51 @@ export function useMutation(
     (data: UntypedData | UntypedData[], params?: unknown) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'create' as const,
           data,
           params,
         }) as Promise<UntypedData | UntypedData[]>,
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['create']
   const update = useCallback(
     (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'update' as const,
           id,
           data,
           params,
         }) as Promise<UntypedData>,
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['update']
   const patch = useCallback(
     (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'patch' as const,
           id,
           data,
           params,
         }) as Promise<UntypedData>,
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['patch']
   const remove = useCallback(
     (id: string | number, params?: unknown) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'remove' as const,
           id,
           params,
         }) as Promise<UntypedData>,
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['remove']
 
   return useMemo(

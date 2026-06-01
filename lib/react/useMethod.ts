@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import { findServiceByName } from '../core/schema.js'
+import { resolveServicePath } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 export type UseMethodStatus = 'idle' | 'loading' | 'success' | 'error'
@@ -48,8 +48,7 @@ export function useMethod<TArgs extends unknown[] = unknown[], TResult = unknown
   methodName: string,
 ): UseMethodResult<TArgs, TResult> {
   const figbird = useFigbird()
-  const service = findServiceByName(figbird.schema, serviceName)
-  const actualServiceName = service?.name ?? serviceName
+  const servicePath = resolveServicePath(figbird.schema, serviceName)
 
   const [state, dispatch] = useReducer(methodReducer<TResult>, initialMethodState)
 
@@ -65,11 +64,7 @@ export function useMethod<TArgs extends unknown[] = unknown[], TResult = unknown
     async (...args: TArgs): Promise<TResult> => {
       dispatch({ type: 'calling' })
       try {
-        const result = (await figbird.adapter.mutate(
-          actualServiceName,
-          methodName,
-          args,
-        )) as TResult
+        const result = (await figbird.adapter.mutate(servicePath, methodName, args)) as TResult
         if (mountedRef.current) {
           dispatch({ type: 'success', payload: result })
         }
@@ -82,7 +77,7 @@ export function useMethod<TArgs extends unknown[] = unknown[], TResult = unknown
         throw error
       }
     },
-    [actualServiceName, figbird.adapter, methodName],
+    [figbird.adapter, methodName, servicePath],
   )
 
   const reset = useCallback(() => {

@@ -1,5 +1,11 @@
 # Figbird Changelog
 
+## Unreleased
+
+- Breaking: replace `defineSchema`/`defineService` service-object schemas with a canonical service-definition map passed to `defineSchema<ServiceMap>()`.
+- Breaking: remove `defineSchemaFor`; generated and handwritten schemas now use the same `defineSchema` API.
+- Add optional `defineSchema<ServiceMap>({ services: { key: { path } } })` config for mapping typed service keys to transport service paths.
+
 ## 0.22.1
 
 - Rebuild package artifacts during `npm pack`/`npm publish` so `npm run release` publishes fresh `dist` entrypoints.

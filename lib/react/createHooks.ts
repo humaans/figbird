@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { AdapterFindMeta, AdapterParams } from '../adapters/adapter.js'
 import type {
   FeathersClient,
@@ -16,7 +17,7 @@ import type {
   ServiceQuery,
   ServiceUpdate,
 } from '../core/schema.js'
-import { findServiceByName } from '../core/schema.js'
+import { resolveServicePath } from '../core/schema.js'
 import { useMethod as useBaseMethod, type UseMethodResult } from './useMethod.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
 import { useQuery, type QueryResult } from './useQuery.js'
@@ -112,8 +113,8 @@ type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
  * import { useFind } from './hooks'
  *
  * function MyComponent() {
- *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
- *   const peopleService = useService('api/people') // Fully typed Feathers service
+ *   const people = useFind('people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
+ *   const peopleService = useService('people') // Fully typed Feathers service
  * }
  * ```
  */
@@ -143,10 +144,8 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
   ) {
-    const service = findServiceByName(figbird.schema, serviceName)
-    const actualServiceName = service?.name ?? serviceName
     const combinedConfig = Object.assign(
-      { serviceName: actualServiceName, method: 'get' as const, resourceId },
+      { serviceName, method: 'get' as const, resourceId },
       params || {},
     )
     const { desc, config } = splitConfig<ServiceItem<S, N>, ServiceQuery<S, N>>(combinedConfig)
@@ -162,20 +161,13 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
   ) {
-    const service = findServiceByName(figbird.schema, serviceName)
-    const actualServiceName = service?.name ?? serviceName
-    const combinedConfig = Object.assign(
-      { serviceName: actualServiceName, method: 'find' as const },
-      params || {},
-    )
+    const combinedConfig = Object.assign({ serviceName, method: 'find' as const }, params || {})
     const { desc, config } = splitConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>(combinedConfig)
     return useQuery<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(desc, config)
   }
 
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
-    const service = findServiceByName(figbird.schema, serviceName)
-    const actualServiceName = service?.name ?? serviceName
-    return useBaseMutation(actualServiceName) as UseMutationResult<
+    return useBaseMutation(serviceName) as UseMutationResult<
       ServiceItem<S, N>,
       ServiceCreate<S, N>,
       ServiceUpdate<S, N>,
@@ -184,19 +176,22 @@ export function createHooks<F extends Figbird<any, any>>(
   }
 
   function useTypedService<N extends ServiceNames<S>>(serviceName: N) {
-    const service = findServiceByName(figbird.schema, serviceName)
-    const actualServiceName = service?.name ?? serviceName
-    return useTypedFeathers().service(actualServiceName as N)
+    const adapter = figbird.adapter as { feathers?: FeathersClient }
+    if (!adapter?.feathers) {
+      throw new Error('useService must be used with a Feathers adapter')
+    }
+
+    return adapter.feathers.service(
+      resolveServicePath(figbird.schema, serviceName),
+    ) as unknown as TypedServiceForSchema<S, N>
   }
 
   function useTypedMethod<N extends ServiceNames<S>, M extends keyof ServiceMethods<S, N> & string>(
     serviceName: N,
     methodName: M,
   ) {
-    const service = findServiceByName(figbird.schema, serviceName)
-    const actualServiceName = service?.name ?? serviceName
     return useBaseMethod<MethodArgs<ServiceMethods<S, N>[M]>, MethodData<ServiceMethods<S, N>[M]>>(
-      actualServiceName,
+      serviceName,
       methodName,
     )
   }
@@ -206,9 +201,25 @@ export function createHooks<F extends Figbird<any, any>>(
     if (!adapter?.feathers) {
       throw new Error('useFeathers must be used with a Feathers adapter')
     }
-    // Cast through unknown: FeathersClient has the same runtime shape as TypedFeathersClient,
-    // we're just adding type information based on the schema
-    return adapter.feathers as unknown as TypedFeathersClient<S>
+    const { feathers } = adapter
+
+    return useMemo(
+      () =>
+        new Proxy(feathers, {
+          get(target, prop, receiver) {
+            if (prop === 'service') {
+              return <N extends ServiceNames<S>>(serviceName: N) =>
+                target.service(
+                  resolveServicePath(figbird.schema, serviceName),
+                ) as unknown as TypedServiceForSchema<S, N>
+            }
+
+            const value = Reflect.get(target, prop, receiver)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        }) as unknown as TypedFeathersClient<S>,
+      [feathers],
+    )
   }
 
   return {

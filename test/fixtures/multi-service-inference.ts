@@ -4,7 +4,7 @@ import {
   defineSchema,
   FeathersAdapter,
   Figbird,
-  defineService,
+  type ServiceByName,
   type ServiceItem,
 } from '../../lib'
 
@@ -32,12 +32,12 @@ interface TaskService {
   item: Task
 }
 
-export const schema = defineSchema({
-  services: {
-    'api/people': defineService<PersonService>(),
-    'api/tasks': defineService<TaskService>(),
-  },
-})
+interface AppSchemaTypes {
+  'api/people': PersonService
+  'api/tasks': TaskService
+}
+
+export const schema = defineSchema<AppSchemaTypes>()
 
 type AppSchema = typeof schema
 
@@ -50,8 +50,8 @@ const figbird = new Figbird({ schema, adapter })
 const { useFind } = createHooks(figbird)
 
 // Debug types - these will be inspected by the test
-export type PersonServiceByName = AppSchema['services']['api/people']
-export type TaskServiceByName = AppSchema['services']['api/tasks']
+export type PersonServiceByName = ServiceByName<AppSchema, 'api/people'>
+export type TaskServiceByName = ServiceByName<AppSchema, 'api/tasks'>
 export type PersonServiceItem = ServiceItem<AppSchema, 'api/people'>
 export type TaskServiceItem = ServiceItem<AppSchema, 'api/tasks'>
 

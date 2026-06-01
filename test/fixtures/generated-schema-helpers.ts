@@ -1,9 +1,10 @@
 import type { FeathersClient } from '../../lib'
 import {
   createHooks,
-  defineSchemaFor,
+  defineSchema,
   FeathersAdapter,
   Figbird,
+  type ServiceByName,
   type ServiceCreate,
   type ServiceItem,
   type ServicePatch,
@@ -47,9 +48,7 @@ interface GeneratedApiSchemaTypes {
   }
 }
 
-export const schemaFromNames = defineSchemaFor<GeneratedApiSchemaTypes>()({
-  services: ['api/people', 'api/tasks'],
-})
+export const schemaFromNames = defineSchema<GeneratedApiSchemaTypes>()
 
 type AppSchema = typeof schemaFromNames
 
@@ -63,7 +62,7 @@ export type PeopleQuery = ServiceQuery<AppSchema, 'api/people'>
 export type PeopleCreate = ServiceCreate<AppSchema, 'api/people'>
 export type PeoplePatch = ServicePatch<AppSchema, 'api/people'>
 export type TaskCreate = ServiceCreate<AppSchema, 'api/tasks'>
-export type PeopleService = (typeof schemaFromNames.services)['api/people']
+export type PeopleService = ServiceByName<AppSchema, 'api/people'>
 
 export const people = useFind('api/people', {
   query: {

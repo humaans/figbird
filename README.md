@@ -67,18 +67,36 @@ includes typed CRUD methods plus any custom methods declared in the schema.
 - **Custom methods** - typed service method calls with `status`, `data`, `error`, and `reset`
 - **Full TypeScript** - define a schema once, get inference everywhere
 
-## Generated Schemas
+## Typed Schemas
 
-If your API contract is generated as a service map, use `defineSchemaFor` to create a typed schema from service names.
+Define a service map once, then bind it to a Figbird schema with `defineSchema`.
+The same shape works for handwritten schemas and generated API contracts.
 
 ```ts
-import { defineSchemaFor } from 'figbird'
-import type { ApiSchemaTypes } from './generated-api'
+import { defineSchema } from 'figbird'
 
-const schema = defineSchemaFor<ApiSchemaTypes>()({
-  services: ['api/people', 'api/tasks'],
+interface ApiSchemaTypes {
+  people: {
+    item: Person
+    create: PersonCreate
+    patch: PersonPatch
+    query: PersonQuery
+  }
+  tasks: {
+    item: Task
+  }
+}
+
+const schema = defineSchema<ApiSchemaTypes>({
+  services: {
+    people: { path: 'api/people' },
+    tasks: { path: 'api/tasks' },
+  },
 })
 ```
+
+The `services` config is optional. Omit it when your schema keys already match
+your Feathers service paths.
 
 ## Documentation
 

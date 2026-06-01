@@ -2,7 +2,7 @@
 export { Figbird, isFetching, isIdle, isLoading, isPending } from './core/figbird.js'
 
 // schema
-export { defineSchema, defineSchemaFor, defineService } from './core/schema.js'
+export { defineSchema } from './core/schema.js'
 export type {
   AnySchema,
   Create,
@@ -11,9 +11,14 @@ export type {
   Patch,
   Query,
   Schema,
-  Service,
+  SchemaConfig,
+  SchemaDefinitions,
+  SchemaServiceConfig,
   ServiceByName,
+  ServiceConfig,
   ServiceCreate,
+  ServiceDefinition,
+  ServiceDefinitionMap,
   ServiceItem,
   ServiceMethod,
   ServiceMethods,
@@ -21,8 +26,8 @@ export type {
   ServiceNames,
   ServicePatch,
   ServiceQuery,
-  ServiceTypeDefinition,
   ServiceUpdate,
+  TypedSchema,
   UntypedService,
   Update,
 } from './core/schema.js'

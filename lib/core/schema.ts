@@ -1,10 +1,13 @@
 /**
- * Schema types for Figbird
- * These types enable type-safe service definitions and query inference
+ * Schema types for Figbird.
+ *
+ * A schema is backed by a plain service-definition map:
+ * `{ serviceName: { item, create?, update?, patch?, query?, methods? } }`.
+ * Runtime configuration is optional and only describes service metadata that
+ * TypeScript cannot provide after type erasure, such as transport paths.
  */
 
-// Unique symbol for phantom types - keeps internal typing machinery hidden
-declare const $phantom: unique symbol
+declare const $schemaDefinitions: unique symbol
 
 // Arbitrary service methods must preserve their own argument and return types.
 // `any` is intentional here: `unknown[]` would reject concrete method signatures.
@@ -12,8 +15,7 @@ declare const $phantom: unique symbol
 export type ServiceMethod = (...args: any[]) => any
 export type ServiceMethodsMap = Record<string, ServiceMethod>
 
-// Base service type definition interface that users provide
-export interface ServiceTypeDefinition {
+export interface ServiceDefinition {
   item: unknown
   create?: unknown
   update?: unknown
@@ -22,197 +24,123 @@ export interface ServiceTypeDefinition {
   methods?: ServiceMethodsMap
 }
 
-// Internal service representation - matches expected type structure
-export interface Service<
-  TItem = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
-  TName extends string = string,
-  TCreate = unknown,
-  TUpdate = unknown,
-  TPatch = unknown,
-  TMethods extends ServiceMethodsMap = ServiceMethodsMap,
-> {
-  readonly name: TName
-  readonly [$phantom]?: {
-    item: TItem
-    query: TQuery
-    create: TCreate
-    update: TUpdate
-    patch: TPatch
-    methods: TMethods
-  }
+export type ServiceDefinitionMap<TServiceDefs> = {
+  [K in keyof TServiceDefs]: ServiceDefinition
 }
 
-// Helper types to derive payload types from service definition
-type DeriveCreate<TServiceDef extends ServiceTypeDefinition> = 'create' extends keyof TServiceDef
+interface UntypedServiceDefinition extends ServiceDefinition {
+  item: Record<string, unknown>
+  create: Record<string, unknown>
+  update: Record<string, unknown>
+  patch: Record<string, unknown>
+  query: Record<string, unknown>
+  methods: Record<string, never>
+}
+
+export interface ServiceConfig {
+  /**
+   * Transport-level service name. When omitted, the schema key is used.
+   *
+   * This lets app code use ergonomic schema keys (`people`) while adapters still
+   * call the real backend service path (`api/people`).
+   */
+  readonly path?: string
+}
+
+export type SchemaServiceConfig<TServiceName extends string = string> = Partial<
+  Record<TServiceName, ServiceConfig>
+>
+
+export interface SchemaConfig<TServiceName extends string = string> {
+  readonly services?: SchemaServiceConfig<TServiceName>
+}
+
+export interface Schema {
+  readonly services?: SchemaServiceConfig
+  readonly [$schemaDefinitions]?: unknown
+}
+
+export interface TypedSchema<
+  TServiceDefs extends ServiceDefinitionMap<TServiceDefs>,
+> extends Schema {
+  readonly services?: SchemaServiceConfig<keyof TServiceDefs & string>
+  readonly [$schemaDefinitions]?: TServiceDefs
+}
+
+type DeriveCreate<TServiceDef extends ServiceDefinition> = 'create' extends keyof TServiceDef
   ? Exclude<TServiceDef['create'], undefined>
   : Partial<TServiceDef['item']>
 
-type DeriveUpdate<TServiceDef extends ServiceTypeDefinition> = 'update' extends keyof TServiceDef
+type DeriveUpdate<TServiceDef extends ServiceDefinition> = 'update' extends keyof TServiceDef
   ? Exclude<TServiceDef['update'], undefined>
   : TServiceDef['item']
 
-type DerivePatch<TServiceDef extends ServiceTypeDefinition> = 'patch' extends keyof TServiceDef
+type DerivePatch<TServiceDef extends ServiceDefinition> = 'patch' extends keyof TServiceDef
   ? Exclude<TServiceDef['patch'], undefined>
   : Partial<TServiceDef['item']>
 
-type DeriveMethods<TServiceDef extends ServiceTypeDefinition> = 'methods' extends keyof TServiceDef
-  ? Exclude<TServiceDef['methods'], undefined> extends infer M extends ServiceMethodsMap
-    ? M
+type DeriveMethods<TServiceDef extends ServiceDefinition> = 'methods' extends keyof TServiceDef
+  ? Exclude<TServiceDef['methods'], undefined> extends infer TMethods extends ServiceMethodsMap
+    ? TMethods
     : Record<never, never>
   : Record<never, never>
 
-type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends keyof TServiceDef
+type DeriveQuery<TServiceDef extends ServiceDefinition> = 'query' extends keyof TServiceDef
   ? Exclude<TServiceDef['query'], undefined>
   : Record<string, unknown>
 
-type ServiceDefinitions<TServiceDefs> = {
-  [K in keyof TServiceDefs]: ServiceTypeDefinition
+export function defineSchema<const TServiceDefs extends ServiceDefinitionMap<TServiceDefs>>(
+  config: SchemaConfig<keyof TServiceDefs & string> = {},
+): TypedSchema<TServiceDefs> {
+  return config as TypedSchema<TServiceDefs>
 }
 
-type ServiceFromDefinition<
-  TServiceDef extends ServiceTypeDefinition,
-  TName extends string = string,
-> = Service<
-  TServiceDef['item'],
-  DeriveQuery<TServiceDef>,
-  TName,
-  DeriveCreate<TServiceDef>,
-  DeriveUpdate<TServiceDef>,
-  DerivePatch<TServiceDef>,
-  DeriveMethods<TServiceDef>
->
-
-type ServiceMapFromDefinitions<
-  TServiceDefs extends ServiceDefinitions<TServiceDefs>,
-  TServiceName extends keyof TServiceDefs & string,
-> = {
-  readonly [K in TServiceName]: ServiceFromDefinition<TServiceDefs[K], K>
-}
-
-type DefineSchemaFor<TServiceDefs extends ServiceDefinitions<TServiceDefs>> = <
-  const TServiceNames extends readonly (keyof TServiceDefs & string)[],
->(config: {
-  services: TServiceNames
-}) => {
-  services: ServiceMapFromDefinitions<TServiceDefs, TServiceNames[number]>
-}
-
-// Phase 1: Create a service definition (no name yet)
-export function defineService<
-  TServiceDef extends ServiceTypeDefinition,
->(): ServiceFromDefinition<TServiceDef> {
-  return { name: '' } as ServiceFromDefinition<TServiceDef>
-}
-
-// Base schema interface - flexible to preserve specific service types
-export interface Schema {
-  services: Record<string, Service<unknown, unknown, string>>
-}
-
-// Helper type to extract all service parameters and update name
-type ExtractServiceWithName<S, N extends string> =
-  S extends Service<
-    infer TItem,
-    infer TQuery,
-    string,
-    infer TCreate,
-    infer TUpdate,
-    infer TPatch,
-    infer TMethods extends ServiceMethodsMap
-  >
-    ? Service<TItem, TQuery, N, TCreate, TUpdate, TPatch, TMethods>
-    : never
-
-// Phase 2: Create a schema with services object map (preserves literal keys)
-export function defineSchema<
-  const TServiceMap extends Record<string, Service<unknown, unknown, string>>,
->(config: {
-  services: TServiceMap
-}): {
-  services: {
-    readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
-  }
-} {
-  // Assign names to services based on their keys in the map
-  const serviceMap = Object.fromEntries(
-    Object.entries(config.services).map(([name, service]) => [name, { ...service, name }]),
-  ) as {
-    readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
-  }
-  return { services: serviceMap }
-}
-
-// Create a schema directly from a generated service contract map
-export function defineSchemaFor<
-  const TServiceDefs extends ServiceDefinitions<TServiceDefs>,
->(): DefineSchemaFor<TServiceDefs> {
-  return (<const TServiceNames extends readonly (keyof TServiceDefs & string)[]>(config: {
-    services: TServiceNames
-  }) => {
-    const services = Object.fromEntries(
-      config.services.map(name => [
-        name,
-        { name } as ServiceFromDefinition<TServiceDefs[typeof name], typeof name>,
-      ]),
-    ) as unknown as ServiceMapFromDefinitions<TServiceDefs, TServiceNames[number]>
-
-    return defineSchema({ services }) as {
-      services: ServiceMapFromDefinitions<TServiceDefs, TServiceNames[number]>
-    }
-  }) as DefineSchemaFor<TServiceDefs>
-}
+export type SchemaDefinitions<S extends Schema> =
+  S extends TypedSchema<infer TServiceDefs> ? TServiceDefs : never
 
 // Type helpers to extract types from schema
-export type ServiceNames<S extends Schema> = keyof S['services'] & string
+export type ServiceNames<S extends Schema> =
+  S extends TypedSchema<infer TServiceDefs> ? keyof TServiceDefs & string : never
 
-export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = S['services'][N]
+export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = SchemaDefinitions<S>[N]
 
-export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
+export type ServiceItem<S extends Schema, N extends ServiceNames<S>> = ServiceByName<S, N>['item']
 
-export type ServiceCreate<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { create: infer C } } ? C : Record<string, unknown>
+export type ServiceCreate<S extends Schema, N extends ServiceNames<S>> = DeriveCreate<
+  ServiceByName<S, N>
+>
 
-export type ServiceUpdate<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { update: infer U } } ? U : Record<string, unknown>
+export type ServiceUpdate<S extends Schema, N extends ServiceNames<S>> = DeriveUpdate<
+  ServiceByName<S, N>
+>
 
-export type ServicePatch<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { patch: infer P } } ? P : Record<string, unknown>
+export type ServicePatch<S extends Schema, N extends ServiceNames<S>> = DerivePatch<
+  ServiceByName<S, N>
+>
 
-export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
+export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> = DeriveQuery<
+  ServiceByName<S, N>
+>
 
-export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends ServiceMethodsMap } }
-    ? M
-    : Record<string, never>
+export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> = DeriveMethods<
+  ServiceByName<S, N>
+>
 
-// Utility type to extract item type from a service
-export type Item<S> = S extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
+// Utility types to extract payloads from one service definition
+export type Item<TServiceDef extends ServiceDefinition> = TServiceDef['item']
 
-// Utility type to extract create type from a service
-export type Create<S> = S extends { [$phantom]?: { create: infer C } } ? C : Record<string, unknown>
+export type Create<TServiceDef extends ServiceDefinition> = DeriveCreate<TServiceDef>
 
-// Utility type to extract update type from a service
-export type Update<S> = S extends { [$phantom]?: { update: infer U } } ? U : Record<string, unknown>
+export type Update<TServiceDef extends ServiceDefinition> = DeriveUpdate<TServiceDef>
 
-// Utility type to extract patch type from a service
-export type Patch<S> = S extends { [$phantom]?: { patch: infer P } } ? P : Record<string, unknown>
+export type Patch<TServiceDef extends ServiceDefinition> = DerivePatch<TServiceDef>
 
-// Utility type to extract query type from a service
-export type Query<S> = S extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
+export type Query<TServiceDef extends ServiceDefinition> = DeriveQuery<TServiceDef>
 
-// Utility type to extract methods from a service
-export type Methods<S> = S extends { [$phantom]?: { methods: infer M } } ? M : Record<string, never>
+export type Methods<TServiceDef extends ServiceDefinition> = DeriveMethods<TServiceDef>
 
-// Helper to find service by name string (for runtime lookup)
-export function findServiceByName<S extends Schema>(
-  schema: S | undefined,
-  name: string,
-): Service<unknown, unknown, string> | undefined {
-  if (!schema) return undefined
-  return schema.services[name]
+export function resolveServicePath<S extends Schema>(schema: S | undefined, name: string): string {
+  return schema?.services?.[name]?.path ?? name
 }
 
 // Type guard to check if schema is defined
@@ -223,9 +151,9 @@ export function hasSchema<S extends Schema>(schema: S | undefined): schema is S 
 // Default schema type when no schema is provided
 // Use a branded subtype of Schema so we can detect "untyped schema" in conditional types
 declare const $anySchemaBrand: unique symbol
-export interface AnySchema extends Schema {
+export interface AnySchema extends TypedSchema<Record<string, UntypedServiceDefinition>> {
   readonly [$anySchemaBrand]: 'AnySchema'
 }
 
 // Type for untyped services (fallback for services not in schema)
-export type UntypedService = Service<Record<string, unknown>, unknown, string>
+export type UntypedService = { readonly name: string }

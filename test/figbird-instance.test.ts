@@ -1,7 +1,7 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
-import { defineSchema, defineService } from '../lib/core/schema'
+import { defineSchema } from '../lib/core/schema'
 import { mockFeathers } from './helpers'
 
 interface Note {
@@ -18,12 +18,12 @@ interface Post {
   updatedAt?: number
 }
 
-const schema = defineSchema({
-  services: {
-    notes: defineService<{ item: Note }>(),
-    posts: defineService<{ item: Post }>(),
-  },
-})
+interface AppSchemaTypes {
+  notes: { item: Note }
+  posts: { item: Post }
+}
+
+const schema = defineSchema<AppSchemaTypes>()
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
