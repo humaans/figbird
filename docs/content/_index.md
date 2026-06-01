@@ -51,7 +51,6 @@ import {
   FeathersAdapter,
   FigbirdProvider,
   defineSchema,
-  defineService,
   createHooks
 } from 'figbird'
 import { feathersClient } from './feathers'
@@ -62,11 +61,13 @@ interface Note {
   content: string
 }
 
-const schema = defineSchema({
-  services: {
-    notes: defineService<{ item: Note }>(),
-  },
-})
+interface AppSchemaTypes {
+  notes: {
+    item: Note
+  }
+}
+
+const schema = defineSchema<AppSchemaTypes>()
 
 // Create figbird instance
 const figbird = new Figbird({
@@ -98,14 +99,14 @@ function Notes() {
 
 # TypeScript
 
-Figbird provides full TypeScript inference through a lightweight schema DSL. Define your services once, and get type safety across all hooks, mutations, and queries - no code generation required.
+Figbird provides full TypeScript inference through a plain service-definition map. Define your services once, or generate the map from your API contract, and get type safety across all hooks, mutations, and queries.
 
 ## Defining a Schema
 
-A schema declares your services and their types. Each service specifies an `item` shape, and optionally custom types for queries and mutation payloads.
+A schema declares your services and their types. Each service specifies an `item` shape, and optionally custom types for queries, mutation payloads, and custom methods.
 
 ```ts
-import { defineSchema, defineService } from 'figbird'
+import { defineSchema } from 'figbird'
 
 interface Task {
   id: string
@@ -122,29 +123,39 @@ interface TaskService {
   query?: TaskQuery
 }
 
-const schema = defineSchema({
-  services: {
-    tasks: defineService<TaskService>(),
-  },
-})
+const schema = defineSchema<{
+  tasks: TaskService
+}>()
 ```
 
 Service keys are preserved as literal types - so `'api/people'` and `'tasks'` remain distinct, and all APIs narrow correctly based on the service name you pass.
 
-## Generated Schema Maps
-
-If your API contract already exists as a generated map, you can derive Figbird services from it without manually wrapping every entry in `ServiceTypeDefinition`.
+If you want ergonomic schema keys that differ from the Feathers service path,
+configure the runtime path separately:
 
 ```ts
-import { defineSchemaFor } from 'figbird'
-import type { ApiSchemaTypes } from './generated-api'
-
-const schema = defineSchemaFor<ApiSchemaTypes>()({
-  services: ['api/people', 'api/tasks'],
+const schema = defineSchema<{
+  tasks: TaskService
+}>({
+  services: {
+    tasks: { path: 'api/tasks' },
+  },
 })
 ```
 
-Each generated service entry should follow Figbird's service contract shape: `item` is required, while `query`, `create`, `update`, `patch`, and `methods` are optional.
+The path config is optional. When it is omitted, Figbird uses the schema key as
+the service path.
+
+## Generated Schema Maps
+
+Generated schemas use the same shape as handwritten schemas. Emit a service-definition map where `item` is required, while `query`, `create`, `update`, `patch`, and `methods` are optional.
+
+```ts
+import { defineSchema } from 'figbird'
+import type { ApiSchemaTypes } from './generated-api'
+
+const schema = defineSchema<ApiSchemaTypes>()
+```
 
 ## Type-Safe Hooks
 
@@ -217,11 +228,9 @@ interface NotesService {
   }
 }
 
-const schema = defineSchema({
-  services: {
-    notes: defineService<NotesService>(),
-  },
-})
+const schema = defineSchema<{
+  notes: NotesService
+}>()
 ```
 
 Access custom methods through the typed Feathers client returned by `useFeathers`:

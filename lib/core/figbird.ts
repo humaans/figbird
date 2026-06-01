@@ -9,6 +9,7 @@ import type {
   ServiceQuery,
   ServiceUpdate,
 } from './schema.js'
+import { resolveServicePath } from './schema.js'
 import { QueryRef } from './queryRef.js'
 import { QueryStore } from './queryStore.js'
 import {
@@ -142,9 +143,14 @@ export class Figbird<
     config?: QueryConfig<unknown, unknown>,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   ): any {
+    const resolvedDesc = {
+      ...desc,
+      serviceName: resolveServicePath(this.schema, desc.serviceName),
+    }
+
     return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
       {
-        desc: desc as QueryDescriptor,
+        desc: resolvedDesc as QueryDescriptor,
         config: normalizeQueryConfig(config),
         queryStore: this.queryStore,
       },
@@ -198,7 +204,10 @@ export class Figbird<
   // Implementation
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   mutate(desc: MutationDescriptor): Promise<any> {
-    return this.queryStore.mutate(desc)
+    return this.queryStore.mutate({
+      ...desc,
+      serviceName: resolveServicePath(this.schema, desc.serviceName),
+    })
   }
 
   /** Subscribe to any state changes within Figbird (across all queries/services). */

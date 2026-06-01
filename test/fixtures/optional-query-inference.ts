@@ -1,4 +1,4 @@
-import { defineSchema, defineService } from '../../lib'
+import { defineSchema } from '../../lib'
 
 interface Task {
   id: string
@@ -16,14 +16,14 @@ interface TaskServiceDefinition {
   query?: TaskQuery
 }
 
-export const schema = defineSchema({
-  services: {
-    tasks: defineService<TaskServiceDefinition>(),
-  },
-})
+interface AppSchemaTypes {
+  tasks: TaskServiceDefinition
+}
 
-export const taskService = schema.services.tasks
+export const schema = defineSchema<AppSchemaTypes>()
 
-type TaskService = (typeof schema.services)['tasks']
+type AppSchema = typeof schema
+
+export type TaskService = import('../../lib').ServiceByName<AppSchema, 'tasks'>
 
 export type TaskQueryType = import('../../lib').Query<TaskService>

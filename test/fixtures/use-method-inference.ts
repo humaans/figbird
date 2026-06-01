@@ -1,5 +1,5 @@
 import type { FeathersClient } from '../../lib'
-import { createHooks, defineSchema, defineService, FeathersAdapter, Figbird } from '../../lib'
+import { createHooks, defineSchema, FeathersAdapter, Figbird } from '../../lib'
 
 interface EsignInstance {
   id: string
@@ -31,12 +31,12 @@ interface MessageService {
   }
 }
 
-const schema = defineSchema({
-  services: {
-    'api/esign-instances': defineService<EsignInstanceService>(),
-    'api/messages': defineService<MessageService>(),
-  },
-})
+interface AppSchemaTypes {
+  'api/esign-instances': EsignInstanceService
+  'api/messages': MessageService
+}
+
+const schema = defineSchema<AppSchemaTypes>()
 
 const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)

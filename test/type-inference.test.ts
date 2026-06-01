@@ -104,19 +104,9 @@ test('type narrowing works correctly with multiple services', t => {
   const taskItemType = getTypeAtPosition(fixturePath, 'TaskServiceItem')
   const tasksType = getTypeAtPosition(fixturePath, 'tasks')
 
-  // Test that the key types are working correctly (Service has more type parameters now)
-  t.true(
-    personServiceType.startsWith(
-      'import("figbird").Service<Person, Record<string, unknown>, "api/people"',
-    ),
-    `Expected personServiceType to start with Service<Person, ...>, got: ${personServiceType}`,
-  )
-  t.true(
-    taskServiceType.startsWith(
-      'import("figbird").Service<Task, Record<string, unknown>, "api/tasks"',
-    ),
-    `Expected taskServiceType to start with Service<Task, ...>, got: ${taskServiceType}`,
-  )
+  // Test that the canonical service-definition map is preserved
+  t.is(personServiceType, 'PersonService')
+  t.is(taskServiceType, 'TaskService')
 
   // Test that ServiceItem extraction is working
   t.is(personItemType, 'Person')
@@ -228,7 +218,7 @@ test('optional query definitions are inferred', t => {
   t.is(taskQueryType, 'TaskQuery')
 })
 
-test('generated schema helpers infer service contracts without intersections', t => {
+test('generated schema maps infer service contracts without intersections', t => {
   const fixturePath = join(__dirname, 'fixtures', 'generated-schema-helpers.ts')
 
   const peopleItemType = getTypeAtPosition(fixturePath, 'PeopleItem')
@@ -244,11 +234,9 @@ test('generated schema helpers infer service contracts without intersections', t
   t.is(peopleCreateType, 'PersonCreate')
   t.is(peoplePatchType, 'PersonPatch')
   t.is(taskCreateType, 'Partial<Task>')
-  t.true(
-    peopleServiceType.startsWith(
-      'import("figbird").Service<Person, PersonQuery, "api/people", PersonCreate',
-    ),
-    `Expected defineSchemaFor to preserve the generated service contract, got: ${peopleServiceType}`,
+  t.is(
+    peopleServiceType,
+    '{ item: Person; create: PersonCreate; patch: PersonPatch; query: PersonQuery; }',
   )
   t.is(peopleType, 'import("figbird").QueryResult<Person[], import("figbird").FeathersFindMeta>')
 })

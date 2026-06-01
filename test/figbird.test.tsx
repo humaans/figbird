@@ -1,8 +1,7 @@
 import test from 'ava'
-import React, { StrictMode, useEffect, useState } from 'react'
+import React, { StrictMode, useEffect, useRef, useState } from 'react'
 import type {
   FeathersClient,
-  FeathersService,
   QueryResult,
   QueryStatus,
   UseMethodResult,
@@ -14,7 +13,6 @@ import {
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
-  defineService,
   useFeathers,
   useService as useGlobalService,
 } from '../lib'
@@ -44,12 +42,12 @@ interface NoteService {
   }
 }
 
+interface AppSchemaTypes {
+  notes: NoteService
+}
+
 // Create schema for typed hooks
-const schema = defineSchema({
-  services: {
-    notes: defineService<NoteService>(),
-  },
-})
+const schema = defineSchema<AppSchemaTypes>()
 
 type AppSchema = typeof schema
 
@@ -234,10 +232,12 @@ test('useGet updates after realtime patch', async t => {
 test('useService returns a Feathers service with CRUD and custom methods', async t => {
   const { render, flush, unmount } = dom()
   const { App, useService, feathers } = app()
-  type ArchiveService = FeathersService & { archive: NoteService['methods']['archive'] }
+  type ArchiveService = ReturnType<typeof feathers.service> & {
+    archive: NoteService['methods']['archive']
+  }
   const notesService = feathers.service('notes') as unknown as ArchiveService
   notesService.archive = async id => {
-    const note = (await notesService.patch(id, { archived: true })) as Note
+    const note = (await notesService.patch(id, { archived: true })) as unknown as Note
     return { id: note.id, archived: note.archived === true }
   }
 
@@ -271,6 +271,97 @@ test('useService returns a Feathers service with CRUD and custom methods', async
   t.is(typedGetResult!.content, 'hello')
   t.deepEqual(typedArchiveResult, { id: 1, archived: true })
   t.true(globalGetResult!.archived)
+
+  unmount()
+})
+
+test('schema service path config maps service keys to adapter paths', async t => {
+  const { render, flush, unmount, $ } = dom()
+  const pathSchema = defineSchema<AppSchemaTypes>({
+    services: {
+      notes: { path: 'api/notes' },
+    },
+  })
+  const feathers = mockFeathers({
+    'api/notes': {
+      data: {
+        1: {
+          id: 1,
+          content: 'hello',
+          updatedAt: new Date('2024-02-02').getTime(),
+        },
+      },
+    },
+  })
+  type ArchiveService = ReturnType<typeof feathers.service> & {
+    archive: NoteService['methods']['archive']
+  }
+  const notesService = feathers.service('api/notes') as unknown as ArchiveService
+  notesService.archive = async id => {
+    const note = (await notesService.patch(id, { archived: true })) as unknown as Note
+    return { id: note.id, archived: note.archived === true }
+  }
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ schema: pathSchema, adapter, eventBatchProcessingInterval: 0 })
+  const { useFind, useMutation, useService, useMethod, useFeathers } = createHooks(figbird)
+
+  let resolveOperations: (value: {
+    serviceGet: Note
+    feathersGet: Note
+    archived: { id: number; archived: boolean }
+    created: Note
+  }) => void = () => {}
+  const operations = new Promise<{
+    serviceGet: Note
+    feathersGet: Note
+    archived: { id: number; archived: boolean }
+    created: Note
+  }>(resolve => {
+    resolveOperations = resolve
+  })
+
+  function PathMappedNotes() {
+    const notes = useFind('notes')
+    const typedNotes = useService('notes')
+    const typedFeathers = useFeathers()
+    const { create } = useMutation('notes')
+    const [archive] = useMethod('notes', 'archive')
+    const ran = useRef(false)
+
+    useEffect(() => {
+      if (ran.current) return
+      ran.current = true
+      ;(async () => {
+        const serviceGet = await typedNotes.get(1)
+        const feathersGet = await typedFeathers.service('notes').get(1)
+        const archived = await archive(1)
+        const created = await create({ id: 2, content: 'created' })
+        resolveOperations({ serviceGet, feathersGet, archived, created })
+      })()
+    }, [archive, create, typedFeathers, typedNotes])
+
+    return <div className='path-note'>{notes.data?.[0]?.content ?? ''}</div>
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <PathMappedNotes />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+  const result = await operations
+  await flush()
+
+  t.is($('.path-note')!.innerHTML, 'hello')
+  t.is(notesService.counts.find, 1)
+  t.is(notesService.counts.get, 2)
+  t.is(notesService.counts.patch, 1)
+  t.is(notesService.counts.create, 1)
+  t.is(result.serviceGet.content, 'hello')
+  t.is(result.feathersGet.content, 'hello')
+  t.deepEqual(result.archived, { id: 1, archived: true })
+  t.is(result.created.content, 'created')
 
   unmount()
 })

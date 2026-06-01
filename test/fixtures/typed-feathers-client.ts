@@ -1,5 +1,5 @@
 import type { FeathersClient } from '../../lib'
-import { createHooks, defineSchema, FeathersAdapter, Figbird, defineService } from '../../lib'
+import { createHooks, defineSchema, FeathersAdapter, Figbird } from '../../lib'
 
 // Test typed Feathers client with CRUD methods
 interface Note {
@@ -45,12 +45,12 @@ interface TaskService {
   item: Task
 }
 
-export const schema = defineSchema({
-  services: {
-    notes: defineService<NotesService>(),
-    tasks: defineService<TaskService>(),
-  },
-})
+interface AppSchemaTypes {
+  notes: NotesService
+  tasks: TaskService
+}
+
+export const schema = defineSchema<AppSchemaTypes>()
 
 // Create Figbird instance
 const feathers = {} as FeathersClient

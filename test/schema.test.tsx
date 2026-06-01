@@ -6,7 +6,6 @@ import {
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
-  defineService,
   useFigbird,
   useFind as useUntypedFind,
   useGet as useUntypedGet,
@@ -62,14 +61,14 @@ interface ProjectService {
   item: Project
 }
 
+interface AppSchemaTypes {
+  'api/people': PersonService
+  'api/tasks': TaskService
+  'api/projects': ProjectService
+}
+
 // Define schema with typed services
-const schema = defineSchema({
-  services: {
-    'api/people': defineService<PersonService>(),
-    'api/tasks': defineService<TaskService>(),
-    'api/projects': defineService<ProjectService>(),
-  },
-})
+const schema = defineSchema<AppSchemaTypes>()
 
 type AppSchema = typeof schema
 
@@ -301,16 +300,10 @@ test('schema-based type inference', t => {
   })
 })
 
-test('schema with array of services', t => {
+test('schema type map works across multiple services', t => {
   const { render, unmount, flush, $ } = dom()
 
-  // Services are defined in an object map
-  const schema = defineSchema({
-    services: {
-      'api/people': defineService<PersonService>(),
-      'api/tasks': defineService<TaskService>(),
-    },
-  })
+  const schema = defineSchema<AppSchemaTypes>()
 
   const feathers = mockFeathers({
     'api/people': {
@@ -417,8 +410,8 @@ test('backward compatibility - untyped usage still works', t => {
 
 test('type extraction utilities', t => {
   // Test that type extraction utilities work correctly
-  type PersonService = (typeof schema.services)['api/people']
-  type PersonItem = import('../lib').Item<PersonService>
+  type PersonServiceDef = import('../lib').ServiceByName<AppSchema, 'api/people'>
+  type PersonItem = import('../lib').Item<PersonServiceDef>
 
   // These assertions are compile-time only, but we can test runtime behavior
   const person: PersonItem = {
@@ -432,8 +425,8 @@ test('type extraction utilities', t => {
   t.is(person.role, 'user')
 
   // Query type includes custom extensions
-  type TaskService = (typeof schema.services)['api/tasks']
-  type TaskQueryType = import('../lib').Query<TaskService>
+  type TaskServiceDef = import('../lib').ServiceByName<AppSchema, 'api/tasks'>
+  type TaskQueryType = import('../lib').Query<TaskServiceDef>
 
   const query: TaskQueryType = {
     $search: 'test',
