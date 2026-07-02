@@ -619,9 +619,9 @@ export class RelationalQueryRef<
 
   /**
    * Normalize the root query's data to an array. For a `find` root the data is already
-   * an array; for a `get` root, the data is a single item (or `null` after a
-   * removed event handled by QueryStore — but in that case the state has already
-   * reverted to 'loading', so this only sees non-null on success).
+   * an array; for a `get` root, the data is a single item (a removed event flips the
+   * underlying query to a terminal error state in QueryStore, so this only sees
+   * non-null on success).
    *
    * For `get` we cache the wrapper array against the underlying data ref so consecutive
    * getSnapshot() calls return the same array identity — without this cache the
