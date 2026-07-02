@@ -1,6 +1,8 @@
 import type { Adapter, QueryResponse } from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
+import { FigbirdEventEmitter, type MutationMethod } from './events.js'
+import { isServerMaintainedFindQuery } from './queryClassification.js'
 import type {
   ElementType,
   Event,
@@ -8,6 +10,7 @@ import type {
   InferMutationData,
   ItemMatcher,
   MutationDescriptor,
+  ProcessedRealtimeEvent,
   Query,
   QueryConfig,
   QueryDescriptor,
@@ -26,10 +29,12 @@ export class QueryStore<
   TQuery = Record<string, unknown>,
 > {
   #adapter: Adapter<TParams, TMeta, TQuery>
+  #events: FigbirdEventEmitter
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
+  #processedEventListeners: Set<(event: ProcessedRealtimeEvent) => void> = new Set()
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
@@ -38,22 +43,32 @@ export class QueryStore<
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number | undefined = 100
   #processingEventQueue = false
+  #fetchStartedAt: Map<string, number> = new Map()
 
   constructor({
     adapter,
     eventBatchProcessingInterval = 100,
+    events,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchProcessingInterval?: number | undefined
+    events?: FigbirdEventEmitter
   }) {
     this.#adapter = adapter
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
+    this.#events = events ?? new FigbirdEventEmitter()
+    this.#adapter.subscribeToReconnect?.(() => this.#refetchActiveQueries())
   }
 
   // Public store API
   /** Returns the entire store state map keyed by service name. */
   getState(): Map<string, ServiceState<TMeta>> {
     return this.#state
+  }
+
+  /** Returns the state for a specific service by name. */
+  getServiceState(serviceName: string): ServiceState<TMeta> | undefined {
+    return this.#state.get(serviceName)
   }
 
   /** Returns the current state for a query by id, if present. */
@@ -133,6 +148,27 @@ export class QueryStore<
     return this.#addGlobalListener(fn)
   }
 
+  /**
+   * Subscribe to realtime events after they've been applied to the entity cache.
+   * Used internally for relational-filter invalidation; each event carries the
+   * previous entity so listeners can detect which fields changed.
+   */
+  subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void {
+    this.#processedEventListeners.add(fn)
+    return () => {
+      this.#processedEventListeners.delete(fn)
+    }
+  }
+
+  /**
+   * Ensure a realtime subscription exists for a service even before any query
+   * against it is subscribed. Used by relational-filter invalidation, which needs
+   * events from dependency services the consumer never queries directly.
+   */
+  ensureRealtimeSubscription(serviceName: string): void {
+    this.#subscribeToRealtimeService(serviceName)
+  }
+
   /** Refetch a specific query by id. */
   refetch(queryId: string): void {
     const q = this.#getQuery(queryId)
@@ -158,6 +194,27 @@ export class QueryStore<
   /** Perform a service mutation and update the store from the result. */
   mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
     const { serviceName, method } = desc
+    const id = method !== 'create' ? desc.id : undefined
+    const optimistic = (desc as { optimistic?: boolean | unknown }).optimistic
+    const isOptimistic = optimistic !== undefined && optimistic !== false
+    const optimisticItem = isOptimistic ? this.#resolveOptimisticItem(desc) : null
+    const restoreItem =
+      isOptimistic && method !== 'create' && id !== undefined
+        ? this.#getEntity(serviceName, id)
+        : null
+    const startedAt = Date.now()
+    this.#events.emit({
+      kind: 'mutate:start',
+      serviceName,
+      method,
+      ...(id !== undefined ? { id } : {}),
+      optimistic: isOptimistic,
+    })
+
+    if (isOptimistic && optimisticItem !== null) {
+      this.#applyMutationEvent(serviceName, method, optimisticItem)
+    }
+
     const updaters: Record<string, (item: unknown) => void> = {
       create: item => this.#processEvent(serviceName, { type: 'created', item }),
       update: item => this.#processEvent(serviceName, { type: 'updated', item }),
@@ -168,20 +225,93 @@ export class QueryStore<
     // Convert named params to args array for the adapter
     const args = this.#buildMutationArgs(desc)
 
-    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
-      updaters[method]?.(item)
-      return item as InferMutationData<S, D>
-    })
+    return this.#adapter.mutate(serviceName, method, args).then(
+      (item: unknown) => {
+        updaters[method]?.(item)
+        this.#events.emit({
+          kind: 'mutate:end',
+          serviceName,
+          method,
+          durationMs: Date.now() - startedAt,
+          ...(id !== undefined ? { id } : {}),
+          optimistic: isOptimistic,
+        })
+        return item as InferMutationData<S, D>
+      },
+      (err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err))
+        if (isOptimistic) {
+          this.#rollbackOptimistic(serviceName, method, id, optimisticItem, restoreItem)
+          this.#events.emit({
+            kind: 'mutate:rollback',
+            serviceName,
+            method,
+            ...(id !== undefined ? { id } : {}),
+          })
+        }
+        this.#events.emit({
+          kind: 'mutate:error',
+          serviceName,
+          method,
+          durationMs: Date.now() - startedAt,
+          error,
+          ...(id !== undefined ? { id } : {}),
+          optimistic: isOptimistic,
+        })
+        throw error
+      },
+    )
   }
 
   // Query lifecycle
   async #queue(queryId: string): Promise<void> {
     this.#fetching({ queryId })
+    const query = this.#getQuery(queryId)
+    if (query) {
+      this.#fetchStartedAt.set(queryId, Date.now())
+      this.#events.emit({
+        kind: 'fetch:start',
+        serviceName: query.desc.serviceName,
+        method: query.desc.method,
+        queryId,
+        ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
+        params: query.desc.params,
+      })
+    }
     try {
       const result = await this.#fetch(queryId)
       this.#fetched({ queryId, result })
+      const startedAt = this.#fetchStartedAt.get(queryId)
+      this.#fetchStartedAt.delete(queryId)
+      const q = this.#getQuery(queryId)
+      if (q && startedAt !== undefined) {
+        const data = result.data
+        const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
+        this.#events.emit({
+          kind: 'fetch:end',
+          serviceName: q.desc.serviceName,
+          method: q.desc.method,
+          queryId,
+          durationMs: Date.now() - startedAt,
+          itemCount,
+        })
+      }
     } catch (err) {
-      this.#fetchFailed({ queryId, error: err instanceof Error ? err : new Error(String(err)) })
+      const error = err instanceof Error ? err : new Error(String(err))
+      this.#fetchFailed({ queryId, error })
+      const startedAt = this.#fetchStartedAt.get(queryId)
+      this.#fetchStartedAt.delete(queryId)
+      const q = this.#getQuery(queryId)
+      if (q && startedAt !== undefined) {
+        this.#events.emit({
+          kind: 'fetch:error',
+          serviceName: q.desc.serviceName,
+          method: q.desc.method,
+          queryId,
+          durationMs: Date.now() - startedAt,
+          error,
+        })
+      }
     }
   }
 
@@ -341,16 +471,13 @@ export class QueryStore<
     const query = this.#getQuery(queryId)
     if (!query) return
 
-    const { serviceName } = query.desc
+    this.#subscribeToRealtimeService(query.desc.serviceName)
+  }
 
+  #subscribeToRealtimeService(serviceName: string): void {
     // check if already subscribed to the events of this service
-    if (this.#realtime.has(serviceName)) {
-      return
-    }
-
-    if (!this.#adapter.subscribe) {
-      return // Real-time not supported by this adapter
-    }
+    if (this.#realtime.has(serviceName)) return
+    if (!this.#adapter.subscribe) return // Real-time not supported by this adapter
 
     const created = (item: unknown) => this.#queueEvent(serviceName, { type: 'created', item })
     const updated = (item: unknown) => this.#queueEvent(serviceName, { type: 'updated', item })
@@ -366,22 +493,37 @@ export class QueryStore<
     this.#realtime.add(serviceName)
   }
 
+  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): void {
+    for (const item of items) {
+      this.#events.emit({
+        kind: 'realtime',
+        serviceName,
+        type,
+        itemId: this.#adapter.getId(item),
+      })
+    }
+  }
+
   #processEvent(serviceName: string, event: Event): void {
+    const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
       serviceName,
       type: event.type,
-      items: Array.isArray(event.item) ? event.item : [event.item],
+      items,
     })
+    this.#emitRealtimeForItems(serviceName, event.type, items)
 
     this.#processQueuedEvents()
   }
 
   #queueEvent(serviceName: string, event: Event): void {
+    const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
       serviceName,
       type: event.type,
-      items: Array.isArray(event.item) ? event.item : [event.item],
+      items,
     })
+    this.#emitRealtimeForItems(serviceName, event.type, items)
 
     if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later
@@ -412,12 +554,17 @@ export class QueryStore<
         this.#eventQueue = []
 
         for (const [serviceName, events] of Object.entries(eventsByService)) {
+          const serverMaintainedQueriesToRefetch = new Set<string>()
+          const processedEvents: ProcessedRealtimeEvent[] = []
+
           this.#transactOverServiceByName(serviceName, (service, touch) => {
             const appliedEvents = applyEventsToService({
               service,
+              serviceName,
               events,
               getId,
               isItemStale,
+              processedEvents,
             })
 
             // Update queries only for non-stale items
@@ -429,9 +576,24 @@ export class QueryStore<
                 getId,
                 itemAdded: meta => this.#adapter.itemAdded(meta),
                 itemRemoved: meta => this.#adapter.itemRemoved(meta),
+                serverMaintainedQueriesToRefetch,
               })
             }
           })
+
+          // Server-maintained queries can't merge events locally: refetch active ones,
+          // mark inactive cached ones pending so their next subscription reconciles.
+          for (const queryId of serverMaintainedQueriesToRefetch) {
+            if (this.#listenerCount(queryId) > 0) {
+              this.refetch(queryId)
+            } else {
+              this.#markQueryPending(queryId)
+            }
+          }
+
+          for (const event of processedEvents) {
+            this.#emitProcessedEvent(event)
+          }
 
           // Refetch refetchable queries if needed
           this.#refetchRefetchableQueries(serviceName)
@@ -439,6 +601,16 @@ export class QueryStore<
       }
     } finally {
       this.#processingEventQueue = false
+    }
+  }
+
+  #emitProcessedEvent(event: ProcessedRealtimeEvent): void {
+    for (const listener of this.#processedEventListeners) {
+      try {
+        listener(event)
+      } catch {
+        // Internal invalidation listeners should not break the event loop.
+      }
     }
   }
 
@@ -450,6 +622,113 @@ export class QueryStore<
       if (query.config.realtime === 'refetch' && this.#listenerCount(query.queryId) > 0) {
         this.refetch(query.queryId)
       }
+    }
+  }
+
+  #refetchActiveQueries(): void {
+    for (const service of this.getState().values()) {
+      for (const query of service.queries.values()) {
+        if (
+          !query.config.skip &&
+          query.config.realtime !== 'disabled' &&
+          this.#listenerCount(query.queryId) > 0
+        ) {
+          this.refetch(query.queryId)
+        }
+      }
+    }
+  }
+
+  #markQueryPending(queryId: string): void {
+    this.#transactOverService(
+      queryId,
+      (service, query) => {
+        if (!query) return
+
+        service.queries.set(queryId, {
+          ...query,
+          pending: true,
+        })
+      },
+      { silent: true },
+    )
+  }
+
+  // Optimistic mutation support
+  #getEntity(serviceName: string, id: string | number): unknown {
+    return this.#state.get(serviceName)?.entities.get(id) ?? null
+  }
+
+  /**
+   * Resolve the synthetic item to apply optimistically. Falls back to the request body
+   * (create) or a merge of `data` onto the cached item (update/patch). For remove there
+   * is no explicit item — `null` is returned and the caller treats it as a delete.
+   */
+  #resolveOptimisticItem(desc: MutationDescriptor): unknown {
+    const optimistic = (desc as { optimistic?: boolean | unknown }).optimistic
+    if (optimistic !== undefined && optimistic !== true && optimistic !== false) {
+      return optimistic
+    }
+    if (desc.method === 'create') {
+      return desc.data
+    }
+    if (desc.method === 'remove') {
+      return null
+    }
+    const cached = this.#getEntity(desc.serviceName, desc.id)
+    const cachedRecord = (cached && typeof cached === 'object' ? cached : {}) as Record<
+      string,
+      unknown
+    >
+    return { ...cachedRecord, ...(desc.data as Record<string, unknown>) }
+  }
+
+  #applyMutationEvent(serviceName: string, method: MutationMethod, item: unknown): void {
+    const type =
+      method === 'create'
+        ? 'created'
+        : method === 'remove'
+          ? 'removed'
+          : method === 'update'
+            ? 'updated'
+            : 'patched'
+    this.#processEvent(serviceName, { type, item })
+  }
+
+  #rollbackOptimistic(
+    serviceName: string,
+    method: MutationMethod,
+    id: string | number | undefined,
+    optimisticItem: unknown,
+    restoreItem: unknown,
+  ): void {
+    if (method === 'create') {
+      // Drop the optimistically-created item.
+      const optimisticId =
+        optimisticItem && typeof optimisticItem === 'object'
+          ? this.#adapter.getId(optimisticItem)
+          : undefined
+      if (optimisticId !== undefined) {
+        this.#processEvent(serviceName, {
+          type: 'removed',
+          item: optimisticItem,
+        })
+      }
+      return
+    }
+    if (method === 'remove') {
+      // Restore the previously-removed item if we still have its prior shape.
+      if (restoreItem) {
+        this.#processEvent(serviceName, { type: 'created', item: restoreItem })
+      }
+      return
+    }
+    if (id === undefined) return
+    if (restoreItem) {
+      this.#processEvent(serviceName, { type: 'patched', item: restoreItem })
+    } else {
+      // No prior snapshot — best-effort: drop the optimistic patch entirely.
+      this.#processEvent(serviceName, { type: 'removed', item: { id } })
     }
   }
 
@@ -559,6 +838,11 @@ export class QueryStore<
     // additional configuration, let's avoid creating a matcher
     // altogether
     if (config.realtime !== 'merge') {
+      return () => false
+    }
+
+    // Server-maintained queries never merge events locally either — they refetch.
+    if (desc.method === 'find' && isServerMaintainedFindQuery(desc, config)) {
       return () => false
     }
 
@@ -688,14 +972,18 @@ function groupQueuedEvents(events: QueuedEvent[]): Record<string, QueuedEvent[]>
 
 function applyEventsToService<TMeta>({
   service,
+  serviceName,
   events,
   getId,
   isItemStale,
+  processedEvents,
 }: {
   service: ServiceState<TMeta>
+  serviceName: string
   events: QueuedEvent[]
   getId: (item: unknown) => ItemId | undefined
   isItemStale: (curr: unknown, next: unknown) => boolean
+  processedEvents: ProcessedRealtimeEvent[]
 }): QueuedEvent[] {
   const appliedEvents: QueuedEvent[] = []
   for (const event of events) {
@@ -704,8 +992,10 @@ function applyEventsToService<TMeta>({
       if (type === 'created') {
         const itemId = getId(item)
         if (itemId !== undefined) {
+          const previousItem = service.entities.get(itemId) ?? null
           service.entities.set(itemId, item)
           appliedEvents.push(event)
+          processedEvents.push({ serviceName, type, item, previousItem, itemId })
         }
       } else if (type === 'updated' || type === 'patched') {
         const itemId = getId(item)
@@ -714,13 +1004,22 @@ function applyEventsToService<TMeta>({
           if (!currItem || !isItemStale(currItem, item)) {
             service.entities.set(itemId, item)
             appliedEvents.push(event)
+            processedEvents.push({
+              serviceName,
+              type,
+              item,
+              previousItem: currItem ?? null,
+              itemId,
+            })
           }
         }
       } else if (type === 'removed') {
         const itemId = getId(item)
         if (itemId !== undefined) {
+          const previousItem = service.entities.get(itemId) ?? null
           service.entities.delete(itemId)
           appliedEvents.push(event)
+          processedEvents.push({ serviceName, type, item, previousItem, itemId })
         }
       }
     }
@@ -736,6 +1035,7 @@ function updateQueriesFromEvents<TMeta>({
   getId,
   itemAdded,
   itemRemoved,
+  serverMaintainedQueriesToRefetch,
 }: {
   service: ServiceState<TMeta>
   appliedEvents: QueuedEvent[]
@@ -743,6 +1043,7 @@ function updateQueriesFromEvents<TMeta>({
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
+  serverMaintainedQueriesToRefetch: Set<string>
 }): void {
   for (const { type, items } of appliedEvents) {
     for (const item of items) {
@@ -762,6 +1063,11 @@ function updateQueriesFromEvents<TMeta>({
         }
 
         if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
+          continue
+        }
+
+        if (query.desc.method === 'find' && isServerMaintainedFindQuery(query.desc, query.config)) {
+          serverMaintainedQueriesToRefetch.add(queryId)
           continue
         }
 

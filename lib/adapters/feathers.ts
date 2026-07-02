@@ -9,7 +9,6 @@ import type {
   ServicePatch,
   ServiceQuery,
   ServiceMethods,
-  ServiceMethodsMap,
 } from '../core/schema.js'
 
 // Helper types for field extraction
@@ -110,6 +109,12 @@ export interface FeathersClient {
   [key: string]: unknown
 }
 
+interface ReconnectEventSource {
+  on(event: string, listener: () => void): void
+  off?: (event: string, listener: () => void) => void
+  removeListener?: (event: string, listener: () => void) => void
+}
+
 /**
  * Typed Feathers service for a specific service in the schema.
  * Provides full type safety for CRUD methods and custom methods.
@@ -120,7 +125,8 @@ export type TypedFeathersService<
   TUpdate,
   TPatch,
   TQuery,
-  TMethods extends ServiceMethodsMap,
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  TMethods extends Record<string, (...args: any[]) => any>,
 > = {
   get(id: string | number, params?: FeathersParams<TQuery>): Promise<TItem>
   find(
@@ -325,6 +331,41 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       service.off('patched', handlers.patched)
       service.off('removed', handlers.removed)
     }
+  }
+
+  subscribeToReconnect(handler: () => void): () => void {
+    const source = this.#getReconnectEventSource()
+    if (!source) return () => {}
+
+    source.on('reconnect', handler)
+    return () => {
+      if (source.off) {
+        source.off('reconnect', handler)
+      } else {
+        source.removeListener?.('reconnect', handler)
+      }
+    }
+  }
+
+  #getReconnectEventSource(): ReconnectEventSource | null {
+    const candidates = [
+      (this.feathers as { io?: unknown }).io,
+      (this.feathers as { socket?: unknown }).socket,
+      (this.feathers as { primus?: unknown }).primus,
+    ]
+
+    for (const candidate of candidates) {
+      if (
+        candidate &&
+        typeof candidate === 'object' &&
+        'on' in candidate &&
+        typeof candidate.on === 'function'
+      ) {
+        return candidate as ReconnectEventSource
+      }
+    }
+
+    return null
   }
 
   getId(item: unknown): string | number | undefined {

@@ -2,10 +2,11 @@ import test from 'ava'
 import { useEffect, useState } from 'react'
 import {
   createHooks,
-  defineSchema,
+  createSchema,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
+  service,
   useFigbird,
   useFind as useUntypedFind,
   useGet as useUntypedGet,
@@ -61,14 +62,14 @@ interface ProjectService {
   item: Project
 }
 
-interface AppSchemaTypes {
-  'api/people': PersonService
-  'api/tasks': TaskService
-  'api/projects': ProjectService
-}
-
 // Define schema with typed services
-const schema = defineSchema<AppSchemaTypes>()
+const schema = createSchema({
+  services: {
+    'api/people': service<PersonService>(),
+    'api/tasks': service<TaskService>(),
+    'api/projects': service<ProjectService>(),
+  },
+})
 
 type AppSchema = typeof schema
 
@@ -300,10 +301,16 @@ test('schema-based type inference', t => {
   })
 })
 
-test('schema type map works across multiple services', t => {
+test('schema with array of services', t => {
   const { render, unmount, flush, $ } = dom()
 
-  const schema = defineSchema<AppSchemaTypes>()
+  // Services are defined in an object map
+  const schema = createSchema({
+    services: {
+      'api/people': service<PersonService>(),
+      'api/tasks': service<TaskService>(),
+    },
+  })
 
   const feathers = mockFeathers({
     'api/people': {
@@ -410,8 +417,8 @@ test('backward compatibility - untyped usage still works', t => {
 
 test('type extraction utilities', t => {
   // Test that type extraction utilities work correctly
-  type PersonServiceDef = import('../lib').ServiceByName<AppSchema, 'api/people'>
-  type PersonItem = import('../lib').Item<PersonServiceDef>
+  type PersonService = (typeof schema.services)['api/people']
+  type PersonItem = import('../lib').Item<PersonService>
 
   // These assertions are compile-time only, but we can test runtime behavior
   const person: PersonItem = {
@@ -425,8 +432,8 @@ test('type extraction utilities', t => {
   t.is(person.role, 'user')
 
   // Query type includes custom extensions
-  type TaskServiceDef = import('../lib').ServiceByName<AppSchema, 'api/tasks'>
-  type TaskQueryType = import('../lib').Query<TaskServiceDef>
+  type TaskService = (typeof schema.services)['api/tasks']
+  type TaskQueryType = import('../lib').Query<TaskService>
 
   const query: TaskQueryType = {
     $search: 'test',

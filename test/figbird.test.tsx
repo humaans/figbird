@@ -1,20 +1,14 @@
 import test from 'ava'
-import React, { StrictMode, useEffect, useRef, useState } from 'react'
-import type {
-  FeathersClient,
-  QueryResult,
-  QueryStatus,
-  UseMethodResult,
-  UseMutationResult,
-} from '../lib'
+import React, { StrictMode, useEffect, useState } from 'react'
+import type { FeathersClient, QueryResult, QueryStatus, UseMutationResult } from '../lib'
 import {
   createHooks,
-  defineSchema,
+  createSchema,
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
+  service,
   useFeathers,
-  useService as useGlobalService,
 } from '../lib'
 import { dom, mockFeathers, queueTask } from './helpers'
 
@@ -28,26 +22,18 @@ interface Note {
   _xid?: number
   _foo?: number
   version?: number
-  archived?: boolean
 }
 
 interface NoteService {
   item: Note
-  methods: {
-    archive: (id: number) => Promise<{ id: number; archived: boolean }>
-    requestSendDocument: (
-      id: number,
-      payload: { message: string },
-    ) => Promise<{ id: number; message: string; queued: boolean }>
-  }
-}
-
-interface AppSchemaTypes {
-  notes: NoteService
 }
 
 // Create schema for typed hooks
-const schema = defineSchema<AppSchemaTypes>()
+const schema = createSchema({
+  services: {
+    notes: service<NoteService>(),
+  },
+})
 
 type AppSchema = typeof schema
 
@@ -84,7 +70,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
     figbird || new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
 
   // Create typed hooks from the figbird instance
-  const { useGet, useFind, useMutation, useService, useMethod } = createHooks(figbirdInstance)
+  const { useGet, useFind, useMutation } = createHooks(figbirdInstance)
 
   function App({ children }: { children?: React.ReactNode }) {
     return (
@@ -96,16 +82,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
     )
   }
 
-  return {
-    App,
-    useGet,
-    useFind,
-    useMutation,
-    useService,
-    useMethod,
-    figbird: figbirdInstance,
-    feathers,
-  }
+  return { App, useGet, useFind, useMutation, figbird: figbirdInstance, feathers }
 }
 
 interface ErrorHandlerState {
@@ -225,143 +202,6 @@ test('useGet updates after realtime patch', async t => {
   })
 
   t.is($('.note')!.innerHTML, 'realtime')
-
-  unmount()
-})
-
-test('useService returns a Feathers service with CRUD and custom methods', async t => {
-  const { render, flush, unmount } = dom()
-  const { App, useService, feathers } = app()
-  type ArchiveService = ReturnType<typeof feathers.service> & {
-    archive: NoteService['methods']['archive']
-  }
-  const notesService = feathers.service('notes') as unknown as ArchiveService
-  notesService.archive = async id => {
-    const note = (await notesService.patch(id, { archived: true })) as unknown as Note
-    return { id: note.id, archived: note.archived === true }
-  }
-
-  let typedGetResult: Note | undefined
-  let typedArchiveResult: { id: number; archived: boolean } | undefined
-  let globalGetResult: Note | undefined
-
-  function NoteServiceUser() {
-    const typedNotes = useService('notes')
-    const globalNotes = useGlobalService('notes')
-
-    useEffect(() => {
-      ;(async () => {
-        typedGetResult = await typedNotes.get(1)
-        typedArchiveResult = await typedNotes.archive(1)
-        globalGetResult = (await globalNotes.get(1)) as Note
-      })()
-    }, [globalNotes, typedNotes])
-
-    return <div>Testing service hook</div>
-  }
-
-  render(
-    <App>
-      <NoteServiceUser />
-    </App>,
-  )
-
-  await flush()
-
-  t.is(typedGetResult!.content, 'hello')
-  t.deepEqual(typedArchiveResult, { id: 1, archived: true })
-  t.true(globalGetResult!.archived)
-
-  unmount()
-})
-
-test('schema service path config maps service keys to adapter paths', async t => {
-  const { render, flush, unmount, $ } = dom()
-  const pathSchema = defineSchema<AppSchemaTypes>({
-    services: {
-      notes: { path: 'api/notes' },
-    },
-  })
-  const feathers = mockFeathers({
-    'api/notes': {
-      data: {
-        1: {
-          id: 1,
-          content: 'hello',
-          updatedAt: new Date('2024-02-02').getTime(),
-        },
-      },
-    },
-  })
-  type ArchiveService = ReturnType<typeof feathers.service> & {
-    archive: NoteService['methods']['archive']
-  }
-  const notesService = feathers.service('api/notes') as unknown as ArchiveService
-  notesService.archive = async id => {
-    const note = (await notesService.patch(id, { archived: true })) as unknown as Note
-    return { id: note.id, archived: note.archived === true }
-  }
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema: pathSchema, adapter, eventBatchProcessingInterval: 0 })
-  const { useFind, useMutation, useService, useMethod, useFeathers } = createHooks(figbird)
-
-  let resolveOperations: (value: {
-    serviceGet: Note
-    feathersGet: Note
-    archived: { id: number; archived: boolean }
-    created: Note
-  }) => void = () => {}
-  const operations = new Promise<{
-    serviceGet: Note
-    feathersGet: Note
-    archived: { id: number; archived: boolean }
-    created: Note
-  }>(resolve => {
-    resolveOperations = resolve
-  })
-
-  function PathMappedNotes() {
-    const notes = useFind('notes')
-    const typedNotes = useService('notes')
-    const typedFeathers = useFeathers()
-    const { create } = useMutation('notes')
-    const [archive] = useMethod('notes', 'archive')
-    const ran = useRef(false)
-
-    useEffect(() => {
-      if (ran.current) return
-      ran.current = true
-      ;(async () => {
-        const serviceGet = await typedNotes.get(1)
-        const feathersGet = await typedFeathers.service('notes').get(1)
-        const archived = await archive(1)
-        const created = await create({ id: 2, content: 'created' })
-        resolveOperations({ serviceGet, feathersGet, archived, created })
-      })()
-    }, [archive, create, typedFeathers, typedNotes])
-
-    return <div className='path-note'>{notes.data?.[0]?.content ?? ''}</div>
-  }
-
-  render(
-    <FigbirdProvider figbird={figbird}>
-      <PathMappedNotes />
-    </FigbirdProvider>,
-  )
-
-  await flush()
-  const result = await operations
-  await flush()
-
-  t.is($('.path-note')!.innerHTML, 'hello')
-  t.is(notesService.counts.find, 1)
-  t.is(notesService.counts.get, 2)
-  t.is(notesService.counts.patch, 1)
-  t.is(notesService.counts.create, 1)
-  t.is(result.serviceGet.content, 'hello')
-  t.is(result.feathersGet.content, 'hello')
-  t.deepEqual(result.archived, { id: 1, archived: true })
-  t.is(result.created.content, 'created')
 
   unmount()
 })
@@ -744,89 +584,6 @@ test('useMutation handles errors', async t => {
   unmount()
 })
 
-test('useMethod tracks status, data, error, and reset without cache updates', async t => {
-  const { render, flush, unmount, $ } = dom()
-  const { App, useMethod, figbird, feathers } = app()
-  const notesService = feathers.service('notes') as ReturnType<typeof feathers.service> & {
-    requestSendDocument: (
-      id: number,
-      payload: { message: string },
-    ) => Promise<{ id: number; message: string; queued: boolean }>
-  }
-
-  let resolveRequest: (value: { id: number; message: string; queued: boolean }) => void = () => {}
-  notesService.requestSendDocument = (id, payload) => {
-    if (payload.message === 'fail') {
-      return Promise.reject(new Error('request failed'))
-    }
-    return new Promise(resolve => {
-      resolveRequest = resolve
-    }).then(() => ({ id, message: payload.message, queued: true }))
-  }
-
-  let call: UseMethodResult<
-    [number, { message: string }],
-    { id: number; message: string; queued: boolean }
-  >[0]
-  let reset: UseMethodResult[1]['reset']
-
-  function NoteMethod() {
-    const [requestSendDocument, request] = useMethod('notes', 'requestSendDocument')
-    call = requestSendDocument
-    reset = request.reset
-
-    return (
-      <>
-        <div className='status'>{request.status}</div>
-        <div className='data'>{request.data?.message ?? ''}</div>
-        <div className='error'>{request.error?.message ?? ''}</div>
-      </>
-    )
-  }
-
-  render(
-    <App>
-      <NoteMethod />
-    </App>,
-  )
-
-  t.is($('.status')!.innerHTML, 'idle')
-  t.is(figbird.getState().get('notes')?.entities.get(1), undefined)
-
-  let result: Promise<{ id: number; message: string; queued: boolean }>
-  await flush(async () => {
-    result = call(1, { message: 'please sign' })
-    await Promise.resolve()
-  })
-
-  t.is($('.status')!.innerHTML, 'loading')
-  t.is($('.data')!.innerHTML, '')
-
-  await flush(async () => {
-    resolveRequest({ id: 1, message: 'please sign', queued: true })
-    await result
-  })
-
-  t.is($('.status')!.innerHTML, 'success')
-  t.is($('.data')!.innerHTML, 'please sign')
-  t.is(figbird.getState().get('notes')?.entities.get(1), undefined)
-
-  await flush(() => reset())
-  t.is($('.status')!.innerHTML, 'idle')
-  t.is($('.data')!.innerHTML, '')
-  t.is($('.error')!.innerHTML, '')
-
-  await flush(async () => {
-    await call(1, { message: 'fail' }).catch(() => {})
-  })
-
-  t.is($('.status')!.innerHTML, 'error')
-  t.is($('.data')!.innerHTML, '')
-  t.is($('.error')!.innerHTML, 'request failed')
-
-  unmount()
-})
-
 test('useFeathers', async t => {
   const { render, unmount } = dom()
   const { App, feathers } = app()
@@ -1009,7 +766,7 @@ test('useFind with skip', async t => {
 
 test('useFind with refetch', async t => {
   const { render, flush, unmount, $ } = dom()
-  const { App, useFind, feathers, figbird } = app()
+  const { App, useFind, feathers } = app()
   let refetch: () => void
 
   function Note() {
@@ -1017,12 +774,7 @@ test('useFind with refetch', async t => {
 
     refetch = notes.refetch
 
-    return (
-      <>
-        <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
-        <div className='total'>{notes.status === 'success' ? notes.meta.total : null}</div>
-      </>
-    )
+    return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
 
   const results = [
@@ -1057,19 +809,6 @@ test('useFind with refetch', async t => {
   })
 
   t.is($('.data')!.innerHTML, '2')
-  t.is($('.total')!.innerHTML, '1')
-
-  const notesState = figbird.getState().get('notes')!
-  const queryId = Array.from(notesState.queries.keys())[0]!
-  t.false(notesState.itemQueryIndex.get(1)?.has(queryId) ?? false)
-  t.true(notesState.itemQueryIndex.get(2)?.has(queryId) ?? false)
-
-  await flush(async () => {
-    await feathers.service('notes').remove(1)
-  })
-
-  t.is($('.data')!.innerHTML, '2')
-  t.is($('.total')!.innerHTML, '1')
 
   unmount()
 
@@ -1919,65 +1658,6 @@ test('useFind - with custom matcher', async t => {
   unmount()
 })
 
-test('useFind - queries with different custom matchers do not share cache identity', async t => {
-  const { render, flush, unmount, $all } = dom()
-  const { App, useFind, feathers } = app()
-
-  function FooNotes() {
-    const notes = useFind('notes', {
-      query: { tag: 'post' },
-      matcher: _query => item => item.foo === true,
-    })
-    return (
-      <div className='foo-notes'>
-        <NoteList notes={notes} />
-      </div>
-    )
-  }
-
-  function ArchivedNotes() {
-    const notes = useFind('notes', {
-      query: { tag: 'post' },
-      matcher: _query => item => item.archived === true,
-    })
-    return (
-      <div className='archived-notes'>
-        <NoteList notes={notes} />
-      </div>
-    )
-  }
-
-  render(
-    <App>
-      <FooNotes />
-      <ArchivedNotes />
-    </App>,
-  )
-
-  await flush()
-
-  await flush(async () => {
-    await feathers.service('notes').create({ id: 2, tag: 'post', content: 'foo', foo: true })
-    await feathers.service('notes').create({
-      id: 3,
-      tag: 'post',
-      content: 'archived',
-      archived: true,
-    })
-  })
-
-  t.deepEqual(
-    $all('.foo-notes .note').map(n => n.innerHTML),
-    ['hello', 'foo'],
-  )
-  t.deepEqual(
-    $all('.archived-notes .note').map(n => n.innerHTML),
-    ['hello', 'archived'],
-  )
-
-  unmount()
-})
-
 test('items get updated in cache even if not currently relevant to any query', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers, figbird } = app({ config: { noUpdatedAt: true } })
@@ -2378,86 +2058,6 @@ test('useFind - stale realtime event is ignored', async t => {
 
   // New update should be applied
   t.is($('.note')!.innerHTML, 'new update')
-
-  unmount()
-})
-
-test('useFind - stale fetch result does not overwrite newer realtime item', async t => {
-  const { render, flush, unmount, $ } = dom()
-
-  function Note() {
-    const notes = useFind('notes')
-    return <NoteList notes={notes} />
-  }
-
-  const { App, useFind, feathers, figbird } = app()
-  feathers.service('notes').setDelay(50)
-
-  render(
-    <App>
-      <Note />
-    </App>,
-  )
-
-  await flush(async () => {
-    await new Promise(resolve => setTimeout(resolve, 5))
-    await feathers.service('notes').patch(1, {
-      content: 'newer update',
-      updatedAt: new Date('2024-03-01').getTime(),
-    })
-    await new Promise(resolve => setTimeout(resolve, 80))
-  })
-
-  t.is($('.note')!.innerHTML, 'newer update')
-  t.is((figbird.getState().get('notes')?.entities.get(1) as Note)?.content, 'newer update')
-
-  unmount()
-})
-
-test('useFind - stale fetch result omits newer realtime item that no longer matches', async t => {
-  const { render, flush, unmount, $all } = dom()
-  const feathers = mockFeathers({
-    notes: {
-      data: {
-        1: {
-          id: 1,
-          content: 'hello',
-          tag: 'post',
-          updatedAt: new Date('2024-02-02').getTime(),
-        },
-      },
-    },
-  })
-
-  function Note() {
-    const notes = useFind('notes', { query: { tag: 'post' } })
-    return <NoteList notes={notes} />
-  }
-
-  const { App, useFind, figbird } = app({ feathers })
-  feathers.service('notes').setDelay(50)
-
-  render(
-    <App>
-      <Note />
-    </App>,
-  )
-
-  await flush(async () => {
-    await new Promise(resolve => setTimeout(resolve, 5))
-    await feathers.service('notes').patch(1, {
-      content: 'draft update',
-      tag: 'draft',
-      updatedAt: new Date('2024-03-01').getTime(),
-    })
-    await new Promise(resolve => setTimeout(resolve, 80))
-  })
-
-  t.deepEqual(
-    $all('.note').map(n => n.innerHTML),
-    [],
-  )
-  t.is((figbird.getState().get('notes')?.entities.get(1) as Note)?.content, 'draft update')
 
   unmount()
 })

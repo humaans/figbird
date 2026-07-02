@@ -1,20 +1,13 @@
 import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
+import type { QueryState } from '../core/figbird.js'
+import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import { queryIdentityKey, type QueryIdentityConfig } from '../core/queryIdentity.js'
-import {
-  splitConfig,
-  type QueryConfig,
-  type QueryDescriptor,
-  type QueryState,
-} from '../core/queryTypes.js'
+import { resolveServicePath } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 type BaseQueryResult = {
   refetch: () => void
 }
-
-// Public untyped hooks intentionally return `any` for backwards compatibility.
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-type UntypedData = any
 
 export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
   (TMeta extends undefined
@@ -34,18 +27,24 @@ export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
 export function useGet(
   serviceName: string,
   resourceId: string | number,
-  params: Record<string, unknown> = {},
-): QueryResult<UntypedData> {
-  const { desc, config } = splitConfig<UntypedData, Record<string, unknown>>({
-    serviceName,
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  params: Record<string, any> = {},
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+): QueryResult<any> {
+  const figbird = useFigbird()
+  const actualServiceName = resolveServicePath(figbird.schema, serviceName)
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  const { desc, config } = splitConfig<any, Record<string, unknown>>({
+    serviceName: actualServiceName,
     method: 'get' as const,
     resourceId,
     ...params,
   })
-  return useQuery<UntypedData, Record<string, unknown>, Record<string, unknown>>(
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  return useQueryByDesc<any, Record<string, unknown>, Record<string, unknown>>(
     desc,
     config,
-  ) as QueryResult<UntypedData>
+  ) as QueryResult<any> // oxlint-disable-line @typescript-eslint/no-explicit-any
 }
 
 /**
@@ -54,14 +53,20 @@ export function useGet(
  */
 export function useFind(
   serviceName: string,
-  params: Record<string, unknown> = {},
-): QueryResult<UntypedData[], Record<string, unknown>> {
-  const { desc, config } = splitConfig<UntypedData[], Record<string, unknown>>({
-    serviceName,
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  params: Record<string, any> = {},
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+): QueryResult<any[], Record<string, unknown>> {
+  const figbird = useFigbird()
+  const actualServiceName = resolveServicePath(figbird.schema, serviceName)
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  const { desc, config } = splitConfig<any[], Record<string, unknown>>({
+    serviceName: actualServiceName,
     method: 'find' as const,
     ...params,
   })
-  return useQuery<UntypedData[], Record<string, unknown>, Record<string, unknown>>(desc, config)
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  return useQueryByDesc<any[], Record<string, unknown>, Record<string, unknown>>(desc, config)
 }
 
 function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
@@ -80,13 +85,13 @@ function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
 
   Usage:
 
-  const { data, status } = useQuery({
+  const { data, status } = useQueryByDesc({
     serviceName: 'notes',
     method: 'find'
   })
 
 */
-export function useQuery<
+export function useQueryByDesc<
   T,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery = unknown,
@@ -139,7 +144,8 @@ export function useQuery<
   return useMemo(() => {
     // Handle each case of the discriminated union explicitly
     if (queryResult.status === 'success') {
-      const result = {
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = {
         status: 'success' as const,
         data: queryResult.data,
         isFetching: queryResult.isFetching,
@@ -147,11 +153,12 @@ export function useQuery<
         refetch,
       }
       if ('meta' in queryResult) {
-        return { ...result, meta: queryResult.meta } as unknown as QueryResult<T, TMeta>
+        result.meta = queryResult.meta
       }
-      return result as unknown as QueryResult<T, TMeta>
+      return result as QueryResult<T, TMeta>
     } else if (queryResult.status === 'error') {
-      const result = {
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = {
         status: 'error' as const,
         data: null,
         isFetching: queryResult.isFetching,
@@ -159,12 +166,13 @@ export function useQuery<
         refetch,
       }
       if ('meta' in queryResult) {
-        return { ...result, meta: queryResult.meta } as unknown as QueryResult<T, TMeta>
+        result.meta = queryResult.meta
       }
-      return result as unknown as QueryResult<T, TMeta>
+      return result as QueryResult<T, TMeta>
     } else {
       // status === 'loading'
-      const result = {
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = {
         status: queryResult.status,
         data: null,
         isFetching: queryResult.isFetching,
@@ -172,9 +180,9 @@ export function useQuery<
         refetch,
       }
       if ('meta' in queryResult) {
-        return { ...result, meta: queryResult.meta } as unknown as QueryResult<T, TMeta>
+        result.meta = queryResult.meta
       }
-      return result as unknown as QueryResult<T, TMeta>
+      return result as QueryResult<T, TMeta>
     }
   }, [queryResult, refetch])
 }
