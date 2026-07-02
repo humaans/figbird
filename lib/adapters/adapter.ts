@@ -43,6 +43,10 @@ export interface Adapter<
   // Optional real-time support
   subscribe?(serviceName: string, handlers: EventHandlers): () => void
 
+  // Optional reconnect support. Adapters should call the handler when the transport
+  // reconnects after a period where realtime events may have been missed.
+  subscribeToReconnect?(handler: () => void): () => void
+
   // Required internal methods
   getId(item: unknown): string | number | undefined
 
@@ -60,8 +64,9 @@ export interface Adapter<
 }
 
 // Helper types to extract adapter properties
-export type AdapterParams<A> =
-  A extends Adapter<infer P, Record<string, unknown>, unknown> ? P : never
-export type AdapterFindMeta<A> = A extends Adapter<unknown, infer M, unknown> ? M : never
-export type AdapterQuery<A> =
-  A extends Adapter<unknown, Record<string, unknown>, infer Q> ? Q : never
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterParams<A> = A extends Adapter<infer P, any, any> ? P : never
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterFindMeta<A> = A extends Adapter<any, infer M, any> ? M : never
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterQuery<A> = A extends Adapter<any, any, infer Q> ? Q : never

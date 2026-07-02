@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo:client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "demo:client"],
+      "port": 5173
+    },
+    {
+      "name": "demo:server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "demo:server"],
+      "port": 3030
+    },
+    {
+      "name": "docs:watch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "docs:watch"],
+      "port": 1313
+    }
+  ]
+}

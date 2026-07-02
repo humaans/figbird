@@ -1,12 +1,17 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { AdapterFindMeta, AdapterParams } from '../adapters/adapter.js'
 import type {
   FeathersClient,
   TypedFeathersClient,
   TypedFeathersService,
 } from '../adapters/feathers.js'
-import type { Figbird } from '../core/figbird.js'
-import { splitConfig, type QueryConfig } from '../core/queryTypes.js'
+import {
+  splitConfig,
+  type Figbird,
+  type QueryConfig,
+  type RelationalQueryState,
+} from '../core/figbird.js'
+import type { QueryBuilder, QueryBuilderKind } from '../core/query-builder.js'
 import type {
   Schema,
   ServiceCreate,
@@ -20,7 +25,16 @@ import type {
 import { resolveServicePath } from '../core/schema.js'
 import { useMethod as useBaseMethod, type UseMethodResult } from './useMethod.js'
 import { useMutation as useBaseMutation, type UseMutationResult } from './useMutation.js'
-import { useQuery, type QueryResult } from './useQuery.js'
+import { useQueryByDesc, type QueryResult } from './useQueryByDesc.js'
+import { useQuery as useBaseQuery } from './useRelationalQuery.js'
+import type {
+  RelationalQueryResult,
+  SuspenseQueryResult,
+  UseQueryOptions,
+  UseRelationalQueryOptions,
+} from './useRelationalQuery.js'
+import type { QueryDefinition } from '../core/figbird.js'
+import type { QueryBuilderResult } from '../core/query-builder.js'
 
 /**
  * Strongly-typed call signatures per service name.
@@ -92,6 +106,35 @@ type UseMethodForSchema<S extends Schema> = <
 
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
+type UseRelationalQueryForSchema<S extends Schema> = <
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  B extends QueryBuilder<S, any, any, any, any, any>,
+>(
+  query: B,
+  options?: UseRelationalQueryOptions,
+) => RelationalQueryResult<QueryBuilderResult<B>>
+
+interface UseQueryForSchema<S extends Schema> {
+  // Builder
+  <
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    query: B,
+    options?: UseQueryOptions,
+  ): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
+  // Definition + args
+  <
+    Args,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    definition: QueryDefinition<Args, B>,
+    args: Args,
+    options?: UseQueryOptions,
+  ): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
+}
+
 // Type helper to extract schema and adapter types from a Figbird instance
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type InferSchema<F> = F extends Figbird<infer S, any> ? S : never
@@ -113,8 +156,7 @@ type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
  * import { useFind } from './hooks'
  *
  * function MyComponent() {
- *   const people = useFind('people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
- *   const peopleService = useService('people') // Fully typed Feathers service
+ *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
  * }
  * ```
  */
@@ -129,6 +171,8 @@ export function createHooks<F extends Figbird<any, any>>(
   useService: UseServiceForSchema<InferSchema<F>>
   useMethod: UseMethodForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
+  useRelationalQuery: UseRelationalQueryForSchema<InferSchema<F>>
+  useQuery: UseQueryForSchema<InferSchema<F>>
 } {
   type S = InferSchema<F>
   type TParams = InferParams<F>
@@ -144,13 +188,14 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
   ) {
+    const actualServiceName = resolveServicePath(figbird.schema, serviceName)
     const combinedConfig = Object.assign(
-      { serviceName, method: 'get' as const, resourceId },
+      { serviceName: actualServiceName, method: 'get' as const, resourceId },
       params || {},
     )
     const { desc, config } = splitConfig<ServiceItem<S, N>, ServiceQuery<S, N>>(combinedConfig)
     // Publicly expose get without meta by default
-    return useQuery<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
+    return useQueryByDesc<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
       desc,
       config,
     ) as unknown as QueryResult<ServiceItem<S, N>>
@@ -161,13 +206,18 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
   ) {
-    const combinedConfig = Object.assign({ serviceName, method: 'find' as const }, params || {})
+    const actualServiceName = resolveServicePath(figbird.schema, serviceName)
+    const combinedConfig = Object.assign(
+      { serviceName: actualServiceName, method: 'find' as const },
+      params || {},
+    )
     const { desc, config } = splitConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>(combinedConfig)
-    return useQuery<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(desc, config)
+    return useQueryByDesc<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(desc, config)
   }
 
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
-    return useBaseMutation(serviceName) as UseMutationResult<
+    const actualServiceName = resolveServicePath(figbird.schema, serviceName)
+    return useBaseMutation(actualServiceName) as UseMutationResult<
       ServiceItem<S, N>,
       ServiceCreate<S, N>,
       ServiceUpdate<S, N>,
@@ -222,6 +272,78 @@ export function createHooks<F extends Figbird<any, any>>(
     )
   }
 
+  // Default idle state for skipped queries
+  const idleState: RelationalQueryState<null> = {
+    status: 'idle',
+    data: null,
+    error: null,
+    isFetching: false,
+  }
+
+  function useTypedRelationalQuery<
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    query: B,
+    options: UseRelationalQueryOptions = {},
+  ): RelationalQueryResult<QueryBuilderResult<B>> {
+    type T = QueryBuilderResult<B>
+    const { skip = false } = options
+
+    // Create RelationalQueryRef on every render, but useMemo keeps the old one if hash matches
+    const _qRef = skip ? null : figbird.relationalQuery(query)
+    const qRef = useMemo(() => _qRef, [_qRef?.hash() ?? '', skip])
+
+    // Subscribe function for useSyncExternalStore
+    const subscribe = useCallback(
+      (onStoreChange: () => void) => {
+        if (!qRef) return () => {}
+        return qRef.subscribe(onStoreChange)
+      },
+      [qRef],
+    )
+
+    // Get snapshot function for useSyncExternalStore
+    const getSnapshot = useCallback((): RelationalQueryState<T> => {
+      if (!qRef) return idleState as RelationalQueryState<T>
+      return qRef.getSnapshot() as RelationalQueryState<T>
+    }, [qRef])
+
+    // Use useSyncExternalStore for efficient subscription
+    const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
+    // Build the result object with refetch function
+    return useMemo((): RelationalQueryResult<T> => {
+      const refetch = () => qRef?.refetch()
+
+      if (state.status === 'success') {
+        return {
+          status: 'success',
+          data: state.data,
+          error: null,
+          isFetching: state.isFetching,
+          refetch,
+        }
+      } else if (state.status === 'error') {
+        return {
+          status: 'error',
+          data: null,
+          error: state.error,
+          isFetching: state.isFetching,
+          refetch,
+        }
+      } else {
+        return {
+          status: state.status,
+          data: null,
+          error: null,
+          isFetching: state.isFetching,
+          refetch,
+        }
+      }
+    }, [state, qRef])
+  }
+
   return {
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
@@ -229,5 +351,9 @@ export function createHooks<F extends Figbird<any, any>>(
     useService: useTypedService as UseServiceForSchema<S>,
     useMethod: useTypedMethod as UseMethodForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
+    useRelationalQuery: useTypedRelationalQuery as UseRelationalQueryForSchema<S>,
+    // useQuery delegates directly to the base hook — the typed schema binding is already
+    // enforced via QueryBuilder<S, T> on the call signature.
+    useQuery: useBaseQuery as unknown as UseQueryForSchema<S>,
   }
 }

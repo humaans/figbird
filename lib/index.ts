@@ -1,8 +1,28 @@
 // core
-export { Figbird, isFetching, isIdle, isLoading, isPending } from './core/figbird.js'
+export {
+  Figbird,
+  QUERY_DEFINITION_BRAND,
+  QueryArgsError,
+  isFetching,
+  isIdle,
+  isLoading,
+  isPending,
+  isQueryDefinition,
+} from './core/figbird.js'
+
+export type {
+  EventType,
+  FigbirdEvent,
+  FigbirdEvents,
+  MutationMethod,
+  MutationOptions,
+  PreparedQuery,
+  QueryDefinition,
+  StandardSchemaV1,
+} from './core/figbird.js'
 
 // schema
-export { defineSchema } from './core/schema.js'
+export { createSchema, service, one, many, embed } from './core/schema.js'
 export type {
   AnySchema,
   Create,
@@ -10,34 +30,46 @@ export type {
   Methods,
   Patch,
   Query,
+  RelationshipDef,
+  RelationshipHelpers,
+  RelationshipHop,
+  RelationshipsFactory,
   Schema,
-  SchemaConfig,
-  SchemaDefinitions,
-  SchemaServiceConfig,
+  SchemaRelationships,
+  Service,
   ServiceByName,
-  ServiceConfig,
   ServiceCreate,
-  ServiceDefinition,
-  ServiceDefinitionMap,
   ServiceItem,
-  ServiceMethod,
   ServiceMethods,
-  ServiceMethodsMap,
   ServiceNames,
   ServicePatch,
   ServiceQuery,
+  ServiceTypeDefinition,
   ServiceUpdate,
-  TypedSchema,
   UntypedService,
   Update,
 } from './core/schema.js'
+
+// query builder
+export { QueryBuilder, createQueryBuilderProxy } from './core/query-builder.js'
+export type { QueryAST, QueryBuilderProxy, FeathersQuery } from './core/query-builder.js'
+
+// relational query
+export { RelationalQueryRef } from './core/figbird.js'
+export type { RelationalQueryState } from './core/figbird.js'
 
 // adapters
 export { FeathersAdapter } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
 // Adapter interface and types
-export type { Adapter, EventHandlers } from './adapters/adapter.js'
+export type {
+  Adapter,
+  AdapterFindMeta,
+  AdapterParams,
+  AdapterQuery,
+  EventHandlers,
+} from './adapters/adapter.js'
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
@@ -45,16 +77,33 @@ export { FigbirdProvider, useFigbird } from './react/react.js'
 export { useFeathers } from './react/useFeathers.js'
 export { useMethod } from './react/useMethod.js'
 export { useMutation } from './react/useMutation.js'
-export { useFind, useGet } from './react/useQuery.js'
+export { useFind, useGet } from './react/useQueryByDesc.js'
 export { useService } from './react/useService.js'
+// useQuery is the unified, Suspense-by-default builder hook. useRelationalQuery stays
+// exported as the classic tagged-union variant for back-compat and for code that prefers
+// explicit status handling.
+export { useQuery, useRelationalQuery } from './react/useRelationalQuery.js'
+export { useDelayedFlag } from './react/useDelayedFlag.js'
+export type {
+  RelationalQueryResult,
+  SuspenseQueryResult,
+  UseQueryOptions,
+  UseRelationalQueryOptions,
+} from './react/useRelationalQuery.js'
 
 // Query-related types for advanced usage
-export type { QueryConfig, QueryState, QueryStatus } from './core/figbird.js'
+export type {
+  FindQueryConfig,
+  GetQueryConfig,
+  QueryConfig,
+  QueryState,
+  QueryStatus,
+} from './core/figbird.js'
 
-// React hook result types
+// React hook result types (already exported but let's be complete)
 export type { UseMethodResult } from './react/useMethod.js'
 export type { UseMutationResult } from './react/useMutation.js'
-export type { QueryResult } from './react/useQuery.js'
+export type { QueryResult } from './react/useQueryByDesc.js'
 
 // Feathers-specific types for TypeScript users
 export type {

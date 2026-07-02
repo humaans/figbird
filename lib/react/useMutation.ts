@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import type { MutationOptions } from '../core/figbird.js'
+import { resolveServicePath } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 interface MutationState<T> {
@@ -12,6 +14,14 @@ type MutationAction<T> =
   | { type: 'success'; payload: T }
   | { type: 'error'; payload: Error }
 
+/**
+ * Per-call mutation options. Combines `MutationOptions` (e.g. `optimistic`)
+ * with the adapter `params` passthrough.
+ */
+export interface MutationCallOptions<TItem = unknown> extends MutationOptions<TItem> {
+  params?: unknown
+}
+
 export interface UseMutationResult<
   TItem,
   TCreate = Partial<TItem>,
@@ -19,20 +29,23 @@ export interface UseMutationResult<
   TPatch = Partial<TItem>,
 > {
   // Overloaded create method for better type inference
-  create(data: TCreate, params?: unknown): Promise<TItem>
-  create(data: TCreate[], params?: unknown): Promise<TItem[]>
-  create(data: TCreate | TCreate[], params?: unknown): Promise<TItem | TItem[]>
-  update: (id: string | number, data: TUpdate, params?: unknown) => Promise<TItem>
-  patch: (id: string | number, data: TPatch, params?: unknown) => Promise<TItem>
-  remove: (id: string | number, params?: unknown) => Promise<TItem>
+  create(data: TCreate, options?: MutationCallOptions<TItem>): Promise<TItem>
+  create(data: TCreate[], options?: MutationCallOptions<TItem[]>): Promise<TItem[]>
+  create(
+    data: TCreate | TCreate[],
+    options?: MutationCallOptions<TItem | TItem[]>,
+  ): Promise<TItem | TItem[]>
+  update: (
+    id: string | number,
+    data: TUpdate,
+    options?: MutationCallOptions<TItem>,
+  ) => Promise<TItem>
+  patch: (id: string | number, data: TPatch, options?: MutationCallOptions<TItem>) => Promise<TItem>
+  remove: (id: string | number, options?: MutationCallOptions<TItem>) => Promise<TItem>
   data: TItem | TItem[] | null
   status: 'idle' | 'loading' | 'success' | 'error'
   error: Error | null
 }
-
-// Public untyped mutation hook intentionally returns `any` for backwards compatibility.
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-type UntypedData = any
 
 /**
  * Simple mutation hook exposing crud methods
@@ -45,12 +58,13 @@ type UntypedData = any
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-export function useMutation(
-  serviceName: string,
-): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export function useMutation(serviceName: string): UseMutationResult<any, any, any, any> {
   const figbird = useFigbird()
+  const actualServiceName = resolveServicePath(figbird.schema, serviceName)
 
-  const [state, dispatch] = useReducer(mutationReducer<UntypedData | UntypedData[]>, {
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  const [state, dispatch] = useReducer(mutationReducer<any>, {
     status: 'idle',
     data: null,
     error: null,
@@ -65,7 +79,8 @@ export function useMutation(
   }, [])
 
   const executeMutation = useCallback(
-    async <TResult>(promise: Promise<TResult>): Promise<TResult> => {
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    async (promise: Promise<any>): Promise<any> => {
       dispatch({ type: 'mutating' })
       try {
         const item = await promise
@@ -85,55 +100,62 @@ export function useMutation(
   )
 
   const create = useCallback(
-    (data: UntypedData | UntypedData[], params?: unknown) =>
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    (data: any, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName,
+          serviceName: actualServiceName,
           method: 'create' as const,
           data,
-          params,
-        }) as Promise<UntypedData | UntypedData[]>,
+          params: options?.params,
+          optimistic: options?.optimistic,
+        }),
       ),
-    [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['create']
+    [executeMutation, figbird, actualServiceName],
+  )
   const update = useCallback(
-    (id: string | number, data: UntypedData, params?: unknown) =>
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    (id: string | number, data: any, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName,
+          serviceName: actualServiceName,
           method: 'update' as const,
           id,
           data,
-          params,
-        }) as Promise<UntypedData>,
+          params: options?.params,
+          optimistic: options?.optimistic,
+        }),
       ),
-    [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['update']
+    [executeMutation, figbird, actualServiceName],
+  )
   const patch = useCallback(
-    (id: string | number, data: UntypedData, params?: unknown) =>
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    (id: string | number, data: any, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName,
+          serviceName: actualServiceName,
           method: 'patch' as const,
           id,
           data,
-          params,
-        }) as Promise<UntypedData>,
+          params: options?.params,
+          optimistic: options?.optimistic,
+        }),
       ),
-    [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['patch']
+    [executeMutation, figbird, actualServiceName],
+  )
   const remove = useCallback(
-    (id: string | number, params?: unknown) =>
+    (id: string | number, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName,
+          serviceName: actualServiceName,
           method: 'remove' as const,
           id,
-          params,
-        }) as Promise<UntypedData>,
+          params: options?.params,
+          optimistic: Boolean(options?.optimistic),
+        }),
       ),
-    [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['remove']
+    [executeMutation, figbird, actualServiceName],
+  )
 
   return useMemo(
     () => ({

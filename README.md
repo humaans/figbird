@@ -19,7 +19,7 @@ const figbird = new Figbird({
   adapter: new FeathersAdapter(feathersClient),
 })
 
-export const { useFind, useGet, useMutation, useService, useMethod } = createHooks(figbird)
+export const { useFind, useGet, useMutation } = createHooks(figbird)
 
 function App() {
   return (
@@ -31,32 +31,15 @@ function App() {
 
 function Notes() {
   const { data } = useFind('notes')
-  const notesService = useService('notes')
+  const { patch } = useMutation('notes')
 
   return data?.map(note => (
-    <div key={note.id} onClick={() => notesService.patch(note.id, { read: true })}>
+    <div key={note.id} onClick={() => patch(note.id, { read: true })}>
       {note.content}
     </div>
   ))
 }
-
-function SendDocumentButton({ id }: { id: string }) {
-  const [requestSendDocument, { status, data, error }] = useMethod(
-    'api/esign-instances',
-    'requestSendDocument',
-  )
-
-  return (
-    <button disabled={status === 'loading'} onClick={() => requestSendDocument(id)}>
-      {data ? 'Sent' : error ? `Retry: ${error.message}` : 'Send'}
-    </button>
-  )
-}
 ```
-
-`useService('notes')` returns the Feathers service for that schema service. When you create hooks
-from a typed Figbird instance, the returned service is narrowed by the literal service name and
-includes typed CRUD methods plus any custom methods declared in the schema.
 
 ## Features
 
@@ -64,39 +47,7 @@ includes typed CRUD methods plus any custom methods declared in the schema.
 - **Shared cache** - same data across components, always consistent
 - **Realtime built-in** - Feathers websocket events update your UI automatically
 - **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
-- **Custom methods** - typed service method calls with `status`, `data`, `error`, and `reset`
 - **Full TypeScript** - define a schema once, get inference everywhere
-
-## Typed Schemas
-
-Define a service map once, then bind it to a Figbird schema with `defineSchema`.
-The same shape works for handwritten schemas and generated API contracts.
-
-```ts
-import { defineSchema } from 'figbird'
-
-interface ApiSchemaTypes {
-  people: {
-    item: Person
-    create: PersonCreate
-    patch: PersonPatch
-    query: PersonQuery
-  }
-  tasks: {
-    item: Task
-  }
-}
-
-const schema = defineSchema<ApiSchemaTypes>({
-  services: {
-    people: { path: 'api/people' },
-    tasks: { path: 'api/tasks' },
-  },
-})
-```
-
-The `services` config is optional. Omit it when your schema keys already match
-your Feathers service paths.
 
 ## Documentation
 

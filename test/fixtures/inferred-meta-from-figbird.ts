@@ -4,7 +4,7 @@
  */
 
 import type { FeathersClient } from '../../lib'
-import { createHooks, defineSchema, FeathersAdapter, Figbird } from '../../lib'
+import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
 
 // Define domain types
 interface Task {
@@ -29,13 +29,13 @@ interface ProjectService {
   item: Project
 }
 
-interface AppSchemaTypes {
-  tasks: TaskService
-  projects: ProjectService
-}
-
 // Create schema
-const schema = defineSchema<AppSchemaTypes>()
+const schema = createSchema({
+  services: {
+    tasks: service<TaskService>(),
+    projects: service<ProjectService>(),
+  },
+})
 
 // Mock Feathers client
 const feathersClient = {} as FeathersClient

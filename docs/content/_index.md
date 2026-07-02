@@ -50,7 +50,8 @@ import {
   Figbird,
   FeathersAdapter,
   FigbirdProvider,
-  defineSchema,
+  createSchema,
+  service,
   createHooks
 } from 'figbird'
 import { feathersClient } from './feathers'
@@ -61,13 +62,11 @@ interface Note {
   content: string
 }
 
-interface AppSchemaTypes {
-  notes: {
-    item: Note
-  }
-}
-
-const schema = defineSchema<AppSchemaTypes>()
+const schema = createSchema({
+  services: {
+    notes: service<{ item: Note }>(),
+  },
+})
 
 // Create figbird instance
 const figbird = new Figbird({
@@ -99,14 +98,14 @@ function Notes() {
 
 # TypeScript
 
-Figbird provides full TypeScript inference through a plain service-definition map. Define your services once, or generate the map from your API contract, and get type safety across all hooks, mutations, and queries.
+Figbird provides full TypeScript inference through a lightweight schema DSL. Define your services once, and get type safety across all hooks, mutations, and queries - no code generation required.
 
 ## Defining a Schema
 
-A schema declares your services and their types. Each service specifies an `item` shape, and optionally custom types for queries, mutation payloads, and custom methods.
+A schema declares your services and their types. Each service specifies an `item` shape, and optionally custom types for queries and mutation payloads.
 
 ```ts
-import { defineSchema } from 'figbird'
+import { createSchema, service } from 'figbird'
 
 interface Task {
   id: string
@@ -123,39 +122,14 @@ interface TaskService {
   query?: TaskQuery
 }
 
-const schema = defineSchema<{
-  tasks: TaskService
-}>()
-```
-
-Service keys are preserved as literal types - so `'api/people'` and `'tasks'` remain distinct, and all APIs narrow correctly based on the service name you pass.
-
-If you want ergonomic schema keys that differ from the Feathers service path,
-configure the runtime path separately:
-
-```ts
-const schema = defineSchema<{
-  tasks: TaskService
-}>({
+const schema = createSchema({
   services: {
-    tasks: { path: 'api/tasks' },
+    tasks: service<TaskService>(),
   },
 })
 ```
 
-The path config is optional. When it is omitted, Figbird uses the schema key as
-the service path.
-
-## Generated Schema Maps
-
-Generated schemas use the same shape as handwritten schemas. Emit a service-definition map where `item` is required, while `query`, `create`, `update`, `patch`, and `methods` are optional.
-
-```ts
-import { defineSchema } from 'figbird'
-import type { ApiSchemaTypes } from './generated-api'
-
-const schema = defineSchema<ApiSchemaTypes>()
-```
+Service keys are preserved as literal types - so `'api/people'` and `'tasks'` remain distinct, and all APIs narrow correctly based on the service name you pass.
 
 ## Type-Safe Hooks
 
@@ -172,8 +146,8 @@ const figbird = new Figbird({
 const { useFind, useGet, useMutation } = createHooks(figbird)
 
 // Types flow automatically
-const tasks = useFind('tasks') // QueryResult<Task[], FindMeta>
-const task = useGet('tasks', '123') // QueryResult<Task>
+const tasks = useFind('tasks')       // QueryResult<Task[], FindMeta>
+const task = useGet('tasks', '123')  // QueryResult<Task>
 ```
 
 ## Query Parameters
@@ -183,8 +157,8 @@ Query parameters combine your domain filters with adapter controls. You define t
 ```ts
 useFind('tasks', {
   query: {
-    completed: true, // domain filter (from TaskQuery)
-    $limit: 10, // adapter control (from Feathers)
+    completed: true,  // domain filter (from TaskQuery)
+    $limit: 10,       // adapter control (from Feathers)
     $sort: { title: 1 },
   },
 })
@@ -210,9 +184,9 @@ If you omit payload types, Figbird uses sensible defaults: `Partial<item>` for c
 ```ts
 const { create, patch, remove } = useMutation('tasks')
 
-const newTask = await create({ title: 'Ship it' }) // typed payload, returns Task
-await patch('id-1', { completed: true }) // typed patch payload
-await remove('id-1') // returns removed Task
+const newTask = await create({ title: 'Ship it' })  // typed payload, returns Task
+await patch('id-1', { completed: true })            // typed patch payload
+await remove('id-1')                                // returns removed Task
 ```
 
 ## Custom Service Methods
@@ -228,9 +202,11 @@ interface NotesService {
   }
 }
 
-const schema = defineSchema<{
-  notes: NotesService
-}>()
+const schema = createSchema({
+  services: {
+    notes: service<NotesService>(),
+  },
+})
 ```
 
 Access custom methods through the typed Feathers client returned by `useFeathers`:
@@ -239,8 +215,8 @@ Access custom methods through the typed Feathers client returned by `useFeathers
 const { useFeathers } = createHooks(figbird)
 const feathers = useFeathers()
 
-await feathers.service('notes').archive(['1', '2']) // { count: number }
-await feathers.service('notes').search('hello') // Note[]
+await feathers.service('notes').archive(['1', '2'])  // { count: number }
+await feathers.service('notes').search('hello')      // Note[]
 ```
 
 # API Reference
@@ -306,7 +282,7 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 - `allPages` - fetch all pages
 - `parallel` - when used in combination with `allPages` will fetch all pages in parallel
 - `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
-- `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache. Queries with custom matchers use isolated cache identity because matcher functions cannot be serialized into a stable shared cache key.
+- `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache
 
 #### Returns
 
@@ -316,8 +292,6 @@ const notes = useFind('notes') // QueryResult<Note[], FindMeta>
 - `isFetching` - `true` if fetching data for the first time or in the background
 - `error` - error object if request failed
 - `refetch` - function to refetch data
-
-Use `isPending(query)`, `isFetching(query)`, `isLoading(query)`, and `isIdle(query)` to make the two-axis state model explicit. `status` tells you whether a usable result exists (`loading`, `success`, or `error`); `isFetching` tells you whether a request is currently in flight. A skipped query is `loading` with `isFetching: false`.
 
 ## useMutation
 
@@ -431,7 +405,7 @@ function TaskView({ id }: { id: string }) {
 
 #### Arguments
 
-- `figbird` - figbird instance
+* `figbird` - figbird instance
 
 # Advanced Usage
 
@@ -488,7 +462,11 @@ const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ adapter })
 
 export function App({ children }) {
-  return <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
+  return (
+    <FigbirdProvider figbird={figbird}>
+      {children}
+    </FigbirdProvider>
+  )
 }
 
 // inspect the state of all of the queries in figbird
@@ -513,7 +491,7 @@ const query = figbird.query({
 
 // Subscribe to get data and updates
 const unsub = query.subscribe(state => {
-  console.log(state.data) // Task[] | null
+  console.log(state.data)  // Task[] | null
   console.log(state.status) // 'loading' | 'success' | 'error'
 })
 

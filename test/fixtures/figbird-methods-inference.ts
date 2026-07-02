@@ -1,6 +1,6 @@
 /* oxlint-disable @typescript-eslint/no-unused-vars */
 import type { FeathersClient } from '../../lib'
-import { FeathersAdapter, Figbird, defineSchema } from '../../lib'
+import { FeathersAdapter, Figbird, createSchema, service } from '../../lib'
 
 // Define a simple Person model
 interface Person {
@@ -13,12 +13,12 @@ interface PersonService {
   item: Person
 }
 
-interface AppSchemaTypes {
-  'api/people': PersonService
-}
-
 // Build schema with a single service
-const schema = defineSchema<AppSchemaTypes>()
+const schema = createSchema({
+  services: {
+    'api/people': service<PersonService>(),
+  },
+})
 
 // Figbird instance with Feathers adapter (meta inferred as FeathersFindMeta)
 const feathers = {} as FeathersClient

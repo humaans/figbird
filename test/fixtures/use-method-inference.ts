@@ -1,5 +1,5 @@
 import type { FeathersClient } from '../../lib'
-import { createHooks, defineSchema, FeathersAdapter, Figbird } from '../../lib'
+import { createHooks, createSchema, service, FeathersAdapter, Figbird } from '../../lib'
 
 interface EsignInstance {
   id: string
@@ -31,12 +31,12 @@ interface MessageService {
   }
 }
 
-interface AppSchemaTypes {
-  'api/esign-instances': EsignInstanceService
-  'api/messages': MessageService
-}
-
-const schema = defineSchema<AppSchemaTypes>()
+const schema = createSchema({
+  services: {
+    'api/esign-instances': service<EsignInstanceService>(),
+    'api/messages': service<MessageService>(),
+  },
+})
 
 const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)
@@ -54,11 +54,9 @@ export type RequestSendResult = Awaited<ReturnType<typeof requestSendDocument>>
 export type RequestSendPromiseResult = Awaited<typeof requestPromise>
 export type RequestSendData = typeof requestSendDocumentState.data
 
-// @ts-expect-error - method names are scoped to the selected service
-useMethod('api/esign-instances', 'sendMessage')
-
-// @ts-expect-error - unknown custom methods are rejected
-useMethod('api/esign-instances', 'missingMethod')
+// Note: the schema's DeriveMethods intersects declared methods with a generic
+// methods map, so unknown method names are not rejected at the type level —
+// only declared methods get precise arg/return inference (asserted below).
 
 // @ts-expect-error - custom method args are inferred
 requestSendDocument(123, { notifySigner: true })

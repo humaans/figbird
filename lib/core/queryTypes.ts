@@ -22,6 +22,36 @@ export interface QueuedEvent {
   items: unknown[]
 }
 
+/**
+ * A realtime event after it has been applied to the entity cache. Carries the
+ * previous entity so downstream invalidation logic (e.g. relational filters) can
+ * detect which fields changed.
+ */
+export interface ProcessedRealtimeEvent {
+  serviceName: string
+  type: EventType
+  item: unknown
+  previousItem: unknown | null
+  itemId: string | number | undefined
+}
+
+/**
+ * Options for an individual mutation call.
+ */
+export interface MutationOptions<TItem = unknown> {
+  /**
+   * Apply the change to the local store before the server has confirmed it. The store
+   * reflects the change immediately; if the request fails, the change is rolled back.
+   *
+   * - For `create`: pass `true` to use the request body as the optimistic item, or pass
+   *   a synthesized item (e.g. with a temp id and `updatedAt`) as `optimistic`.
+   * - For `update`/`patch`: pass `true` to merge the patch into the cached item, or
+   *   pass an explicit next item.
+   * - For `remove`: pass `true` to drop the item from the cache immediately.
+   */
+  optimistic?: boolean | TItem
+}
+
 export type QueryStatus = 'loading' | 'success' | 'error'
 
 type QueryStatusState = {
@@ -162,6 +192,14 @@ interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
    * be serialized into a stable shared cache key.
    */
   matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
+
+  /**
+   * Treat this query as server-maintained. Realtime events from the query's service
+   * refetch active subscribers and mark inactive cached queries pending.
+   * Use this for server-authoritative projections, virtual fields, search, or
+   * other server-only membership/order/value semantics.
+   */
+  server?: boolean
 }
 
 /**
@@ -241,6 +279,12 @@ export type InferQueryData<S extends Schema, D extends QueryDescriptor> = S exte
 interface BaseMutationDescriptor {
   serviceName: string
   params?: unknown
+  /**
+   * When set, apply a synthetic event to the local store before the network round-trip.
+   * On success the server's response replaces the optimistic item; on failure the change
+   * is rolled back and a `mutate:rollback` event is emitted.
+   */
+  optimistic?: boolean | unknown
 }
 
 /**
@@ -312,7 +356,8 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
   config: QueryConfig<TItem, TQuery>
 } {
   // Extract common properties
-  const { serviceName, method, skip, realtime, fetchPolicy, matcher, ...rest } = combinedConfig
+  const { serviceName, method, skip, realtime, fetchPolicy, matcher, server, ...rest } =
+    combinedConfig
 
   if (method === 'get') {
     const { resourceId, ...params } = rest as CombinedGetConfig<TItem, TQuery>
@@ -329,6 +374,7 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(realtime !== undefined && { realtime }),
       ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
+      ...(server !== undefined && { server }),
     }
 
     return { desc, config: normalizeQueryConfig(config) }
@@ -347,6 +393,7 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
       ...(allPages !== undefined && { allPages }),
+      ...(server !== undefined && { server }),
     }
 
     return { desc, config: normalizeQueryConfig(config) }
