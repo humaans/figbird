@@ -43,7 +43,6 @@ export class QueryStore<
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number | undefined = 100
   #processingEventQueue = false
-  #fetchStartedAt: Map<string, number> = new Map()
 
   constructor({
     adapter,
@@ -280,8 +279,8 @@ export class QueryStore<
   async #queue(queryId: string): Promise<void> {
     this.#fetching({ queryId })
     const query = this.#getQuery(queryId)
+    const startedAt = query ? Date.now() : undefined
     if (query) {
-      this.#fetchStartedAt.set(queryId, Date.now())
       this.#events.emit({
         kind: 'fetch:start',
         serviceName: query.desc.serviceName,
@@ -294,8 +293,6 @@ export class QueryStore<
     try {
       const result = await this.#fetch(queryId)
       this.#fetched({ queryId, result })
-      const startedAt = this.#fetchStartedAt.get(queryId)
-      this.#fetchStartedAt.delete(queryId)
       const q = this.#getQuery(queryId)
       if (q && startedAt !== undefined) {
         const data = result.data
@@ -312,8 +309,6 @@ export class QueryStore<
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
       this.#fetchFailed({ queryId, error })
-      const startedAt = this.#fetchStartedAt.get(queryId)
-      this.#fetchStartedAt.delete(queryId)
       const q = this.#getQuery(queryId)
       if (q && startedAt !== undefined) {
         this.#events.emit({
@@ -1009,6 +1004,13 @@ function removeQueryFromItemIndex<TMeta>({
   }
 }
 
+// Deliberately loose, unlike the strictly-keyed entity cache: get descriptors often
+// carry numeric ids as strings (route params) while entities use numbers. The server
+// performs the same coercion when resolving a get.
+function isSameId(a: ItemId, b: ItemId): boolean {
+  return String(a) === String(b)
+}
+
 function createItemRemovedError(itemId: ItemId): Error {
   const error = new Error(`Item ${String(itemId)} has been removed`)
   error.name = 'ItemRemoved'
@@ -1201,7 +1203,7 @@ function updateQueriesFromEvents<TMeta>({
           matches &&
           type === 'created' &&
           query.desc.method === 'get' &&
-          String(query.desc.resourceId) === String(itemId)
+          isSameId(query.desc.resourceId, itemId)
         ) {
           // The resource behind a get query reappeared (realtime re-create, or an
           // optimistic remove rolling back). Restore the query from the event instead

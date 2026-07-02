@@ -135,6 +135,9 @@ export function shouldRefetchRelationalFilterQuery<TMeta extends Record<string, 
   schema: Schema,
   state: Map<string, ServiceState<TMeta>>,
   ast: QueryAST,
+  // Both derived from the static AST — precomputed once at subscription time by the
+  // caller rather than re-derived on every processed event.
+  paths: RelationalFilterPath[],
   dependencies: RelationalFilterDependency[],
   event: ProcessedRealtimeEvent,
 ): boolean {
@@ -143,7 +146,6 @@ export function shouldRefetchRelationalFilterQuery<TMeta extends Record<string, 
 
   if (event.serviceName === resolveServicePath(schema, ast.service)) {
     if (event.type === 'removed') return false
-    const paths = collectRelationalFilterPaths(schema, ast.service, ast.query)
     if (paths.length === 0) return false
     const materialized = materializeRelationalFilterItem(
       schema,

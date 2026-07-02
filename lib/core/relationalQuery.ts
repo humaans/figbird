@@ -1092,6 +1092,7 @@ export class RelationalQueryRef<
     if (this.#processedEventUnsub) return
     const dependencies = collectRelationalFilterDependencies(this.#schema, this.#ast)
     if (dependencies.length === 0) return
+    const paths = collectRelationalFilterPaths(this.#schema, this.#ast.service, this.#ast.query)
 
     for (const dependency of dependencies) {
       this.#figbird.queryStore.ensureRealtimeSubscription(dependency.serviceName)
@@ -1103,6 +1104,7 @@ export class RelationalQueryRef<
           this.#schema,
           this.#figbird.getState(),
           this.#ast,
+          paths,
           dependencies,
           event,
         )
