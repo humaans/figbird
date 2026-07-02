@@ -1300,8 +1300,100 @@ export class RelationalQueryRef<
     }
   }
 
+  /**
+   * Build per-relation lookup indexes over the relation query results so per-parent
+   * matching during assembly is a map lookup instead of a linear scan — O(parents +
+   * relation rows) per reassembly rather than O(parents × relation rows).
+   *
+   * - `byKey` maps a dest-key value to the first matching entity ('one'/'embedded').
+   * - `listByKey` groups entities by dest-key value in result order ('many').
+   * - `junctionsByParent` groups junction rows by the parent-side join value (two-hop).
+   */
+  #buildAssemblyIndexes(
+    ast: QueryAST,
+    parentKey: string | null,
+    relationships: Record<string, RelationshipDef>,
+  ): Map<
+    string,
+    {
+      byKey?: Map<string | number, unknown>
+      listByKey?: Map<string | number, unknown[]>
+      junctionsByParent?: Map<string | number, unknown[]>
+    }
+  > {
+    const indexes = new Map<
+      string,
+      {
+        byKey?: Map<string | number, unknown>
+        listByKey?: Map<string | number, unknown[]>
+        junctionsByParent?: Map<string | number, unknown[]>
+      }
+    >()
+
+    for (const [relName] of Object.entries(ast.related)) {
+      const relDef = relationships[relName]
+      if (!relDef) continue
+
+      const key = parentKey ? `${parentKey}.${relName}` : relName
+      const sub = this.#relationSubs.get(key)
+      // Per-parent windowed relations are already keyed by parent — no index needed.
+      if (sub?.perParent) continue
+
+      const subState = sub?.queryRef?.getSnapshot()
+      const relationItems =
+        subState?.status === 'success' ? (subState.data as unknown[]) : ([] as unknown[])
+
+      if (relDef.via) {
+        const byKey = new Map<string | number, unknown>()
+        for (const entity of relationItems) {
+          const k = this.#getFieldValue(entity, relDef.destField)
+          if (k !== undefined && !byKey.has(k)) byKey.set(k, entity)
+        }
+        const junctionSnap = sub?.junction?.queryRef.getSnapshot()
+        const junctionItems =
+          junctionSnap?.status === 'success' ? (junctionSnap.data as unknown[]) : []
+        const junctionsByParent = new Map<string | number, unknown[]>()
+        for (const j of junctionItems) {
+          const p = this.#getFieldValue(j, relDef.via.destField)
+          if (p === undefined) continue
+          let list = junctionsByParent.get(p)
+          if (!list) {
+            list = []
+            junctionsByParent.set(p, list)
+          }
+          list.push(j)
+        }
+        indexes.set(relName, { byKey, junctionsByParent })
+      } else if (relDef.cardinality === 'one' || relDef.cardinality === 'embedded') {
+        // First match wins — mirrors the previous scan's short-circuit semantics.
+        const byKey = new Map<string | number, unknown>()
+        for (const entity of relationItems) {
+          const k = this.#getFieldValue(entity, relDef.destField)
+          if (k !== undefined && !byKey.has(k)) byKey.set(k, entity)
+        }
+        indexes.set(relName, { byKey })
+      } else {
+        const listByKey = new Map<string | number, unknown[]>()
+        for (const entity of relationItems) {
+          const k = this.#getFieldValue(entity, relDef.destField)
+          if (k === undefined) continue
+          let list = listByKey.get(k)
+          if (!list) {
+            list = []
+            listByKey.set(k, list)
+          }
+          list.push(entity)
+        }
+        indexes.set(relName, { listByKey })
+      }
+    }
+
+    return indexes
+  }
+
   #assembleRelations(items: unknown[], ast: QueryAST, parentKey: string | null): unknown[] {
     const relationships = this.#schema.relationships?.[ast.service] ?? {}
+    const indexes = this.#buildAssemblyIndexes(ast, parentKey, relationships)
 
     return items.map(item => {
       const result = { ...(item as object) }
@@ -1312,9 +1404,7 @@ export class RelationalQueryRef<
         if (!relDef) continue
 
         const sub = this.#relationSubs.get(key)
-        const subState = sub?.queryRef?.getSnapshot()
-        const relationItems =
-          subState?.status === 'success' ? (subState.data as unknown[]) : ([] as unknown[])
+        const index = indexes.get(relName)
 
         let matchedItems: unknown[]
 
@@ -1334,42 +1424,32 @@ export class RelationalQueryRef<
             // Walk the parent's id list (preserves the server-chosen order) and look up
             // each id against the materialised dest set.
             matchedItems = []
-            const destField = relDef.destField
             for (const id of sourceList) {
-              const found = relationItems.find(
-                entity => this.#getFieldValue(entity, destField) === id,
-              )
+              const found = index?.byKey?.get(id)
               if (found) matchedItems.push(found)
             }
           }
         } else if (relDef.via) {
-          // Two-hop many: walk junctions for this parent, then collect dest items keyed
-          // by the junction's outgoing FK.
+          // Two-hop many: walk this parent's junction rows, then collect dest items
+          // keyed by the junction's outgoing FK.
           const via = relDef.via
           const parentJoinValue = this.#getFieldValue(item, via.sourceField)
-          const junctionSnap = sub?.junction?.queryRef.getSnapshot()
-          const junctionItems =
-            junctionSnap?.status === 'success' ? (junctionSnap.data as unknown[]) : []
+          const junctions =
+            parentJoinValue === undefined
+              ? undefined
+              : index?.junctionsByParent?.get(parentJoinValue)
           matchedItems = []
-          for (const j of junctionItems) {
-            if (this.#getFieldValue(j, via.destField) !== parentJoinValue) continue
-            const destId = this.#getFieldValue(j, relDef.sourceField)
-            if (destId === undefined) continue
-            const found = relationItems.find(
-              entity => this.#getFieldValue(entity, relDef.destField) === destId,
-            )
-            if (found) matchedItems.push(found)
-          }
-        } else if (relDef.cardinality === 'one') {
-          // Single-hop one — short-circuit to first match.
-          const sourceValue = this.#getFieldValue(item, relDef.sourceField)
-          let found: unknown = null
-          for (const entity of relationItems) {
-            if (this.#getFieldValue(entity, relDef.destField) === sourceValue) {
-              found = entity
-              break
+          if (junctions) {
+            for (const j of junctions) {
+              const destId = this.#getFieldValue(j, relDef.sourceField)
+              if (destId === undefined) continue
+              const found = index?.byKey?.get(destId)
+              if (found) matchedItems.push(found)
             }
           }
+        } else if (relDef.cardinality === 'one') {
+          const sourceValue = this.#getFieldValue(item, relDef.sourceField)
+          const found = sourceValue === undefined ? null : (index?.byKey?.get(sourceValue) ?? null)
           ;(result as Record<string, unknown>)[relName] = found
           if (Object.keys(relAST.related).length > 0 && found) {
             const assembled = this.#assembleRelations([found], relAST, key)
@@ -1377,14 +1457,9 @@ export class RelationalQueryRef<
           }
           continue
         } else {
-          // Single-hop many — collect every match.
+          // Single-hop many — every entity whose dest key matches this parent.
           const sourceValue = this.#getFieldValue(item, relDef.sourceField)
-          matchedItems = []
-          for (const entity of relationItems) {
-            if (this.#getFieldValue(entity, relDef.destField) === sourceValue) {
-              matchedItems.push(entity)
-            }
-          }
+          matchedItems = sourceValue === undefined ? [] : (index?.listByKey?.get(sourceValue) ?? [])
         }
 
         if (Object.keys(relAST.related).length > 0 && matchedItems.length > 0) {
