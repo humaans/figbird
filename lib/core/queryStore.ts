@@ -193,9 +193,8 @@ export class QueryStore<
 
   /** Perform a service mutation and update the store from the result. */
   mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
-    const { serviceName, method } = desc
+    const { serviceName, method, optimistic } = desc
     const id = method !== 'create' ? desc.id : undefined
-    const optimistic = (desc as { optimistic?: boolean | unknown }).optimistic
     const isOptimistic = optimistic !== undefined && optimistic !== false
     const optimisticItem = isOptimistic ? this.#resolveOptimisticItem(desc) : null
     const restoreItem =
@@ -714,7 +713,7 @@ export class QueryStore<
    * is no explicit item — `null` is returned and the caller treats it as a delete.
    */
   #resolveOptimisticItem(desc: MutationDescriptor): unknown {
-    const optimistic = (desc as { optimistic?: boolean | unknown }).optimistic
+    const { optimistic } = desc
     if (optimistic !== undefined && optimistic !== true && optimistic !== false) {
       return optimistic
     }

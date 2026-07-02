@@ -2,7 +2,6 @@ import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react
 import type { QueryState } from '../core/figbird.js'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import { queryIdentityKey, type QueryIdentityConfig } from '../core/queryIdentity.js'
-import { resolveServicePath } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 type BaseQueryResult = {
@@ -31,11 +30,10 @@ export function useGet(
   params: Record<string, any> = {},
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 ): QueryResult<any> {
-  const figbird = useFigbird()
-  const actualServiceName = resolveServicePath(figbird.schema, serviceName)
+  // Service path aliases are resolved centrally by figbird.query().
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   const { desc, config } = splitConfig<any, Record<string, unknown>>({
-    serviceName: actualServiceName,
+    serviceName,
     method: 'get' as const,
     resourceId,
     ...params,
@@ -57,11 +55,10 @@ export function useFind(
   params: Record<string, any> = {},
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 ): QueryResult<any[], Record<string, unknown>> {
-  const figbird = useFigbird()
-  const actualServiceName = resolveServicePath(figbird.schema, serviceName)
+  // Service path aliases are resolved centrally by figbird.query().
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   const { desc, config } = splitConfig<any[], Record<string, unknown>>({
-    serviceName: actualServiceName,
+    serviceName,
     method: 'find' as const,
     ...params,
   })

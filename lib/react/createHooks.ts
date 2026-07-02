@@ -186,9 +186,9 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
   ) {
-    const actualServiceName = resolveServicePath(figbird.schema, serviceName)
     const combinedConfig = Object.assign(
-      { serviceName: actualServiceName, method: 'get' as const, resourceId },
+      // Service path aliases are resolved centrally by figbird.query().
+      { serviceName: serviceName as string, method: 'get' as const, resourceId },
       params || {},
     )
     const { desc, config } = splitConfig<ServiceItem<S, N>, ServiceQuery<S, N>>(combinedConfig)
@@ -204,9 +204,9 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
   ) {
-    const actualServiceName = resolveServicePath(figbird.schema, serviceName)
     const combinedConfig = Object.assign(
-      { serviceName: actualServiceName, method: 'find' as const },
+      // Service path aliases are resolved centrally by figbird.query().
+      { serviceName: serviceName as string, method: 'find' as const },
       params || {},
     )
     const { desc, config } = splitConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>(combinedConfig)
@@ -214,8 +214,7 @@ export function createHooks<F extends Figbird<any, any>>(
   }
 
   function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
-    const actualServiceName = resolveServicePath(figbird.schema, serviceName)
-    return useBaseMutation(actualServiceName) as UseMutationResult<
+    return useBaseMutation(serviceName) as UseMutationResult<
       ServiceItem<S, N>,
       ServiceCreate<S, N>,
       ServiceUpdate<S, N>,
