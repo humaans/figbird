@@ -236,7 +236,8 @@ export class Figbird<
     }
     const ast = builder.toAST()
     const ref = new RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
-      this as unknown as Figbird<S, Adapter<AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>>,
+      // Figbird structurally satisfies the engine's narrow RelationalQueryHost contract.
+      this,
       ast,
       this.schema,
       () => this.#relationalQueryCache.delete(hash),
