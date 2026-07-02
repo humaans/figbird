@@ -212,6 +212,20 @@ export class QueryStore<
     })
 
     if (isOptimistic && optimisticItem !== null) {
+      if (method === 'create') {
+        // Optimistic items are tracked (and rolled back) by id. Without one, the
+        // synthetic created event is silently dropped by the entity cache — warn so
+        // the no-op is diagnosable instead of mystifying.
+        const items = Array.isArray(optimisticItem) ? optimisticItem : [optimisticItem]
+        if (items.some(item => this.#adapter.getId(item) === undefined)) {
+          console.warn(
+            `figbird: optimistic create on service "${serviceName}" has item(s) without an id ` +
+              'and will not be applied to the cache. Optimistic creates need a client-generated ' +
+              'id so the item can be tracked and rolled back — pass one explicitly via ' +
+              '`optimistic: { id, ...data }`.',
+          )
+        }
+      }
       this.#applyMutationEvent(serviceName, method, optimisticItem)
     }
 
