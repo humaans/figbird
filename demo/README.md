@@ -1,6 +1,9 @@
 # figbird demo
 
-Self-contained app that exercises the new `useQuery` + Suspense API against a local Feathers server with simulated latency, relational data, and realtime event traffic.
+A small but real product — a realtime issue tracker — where every panel is a live figbird
+query. There are no feature tabs: search, relational filters, pagination, windowed
+relations, optimistic mutations, and realtime updates all appear as ordinary product
+behavior. The ⓘ buttons explain what figbird is doing behind each piece of UI.
 
 ## Run
 
@@ -12,35 +15,67 @@ npm run dev
 
 That starts two processes:
 
-- `server` on `http://localhost:3030` — Feathers + socket.io, in-memory data, per-service random latency, and background tickers that create comments, create reactions, and patch issue priorities. This gives you real realtime events to observe without needing a second browser tab.
-- `client` on `http://localhost:5173` — Vite + React 19 + figbird, configured to resolve `figbird` to the parent library's `lib/index.ts` (so HMR picks up library edits).
+- `server` on `http://localhost:3030` — Feathers + socket.io, in-memory data (~90 issues),
+  switchable latency profiles, and a simulated teammate that comments, reacts, nudges
+  priorities, and closes issues every few seconds.
+- `client` on `http://localhost:5173` — Vite + React 19 + figbird, configured to resolve
+  `figbird` to the parent library's `lib/index.ts` (so HMR picks up library edits).
 
-## What the demo shows
+Tip: open the client in **two windows side by side** — every change in one appears in the
+other, live.
 
-- **Suspense on first mount.** The issue list, hot queue, and detail graph mount inside `<Suspense>` boundaries. Refresh to watch delayed fallbacks, then the data.
-- **Delayed spinners (`useDelayedFlag` / `DelayedFallback`).** No spinner flashes for fast loads. If a fallback or fetching indicator lasts long enough, it becomes visible.
-- **Keep previous data on param change.** Clicking a different issue goes through `useDeferredQuery`; the previous detail pane stays visible while the new graph loads.
-- **No re-suspend on refetch.** Hit the "Refetch" button — data stays rendered, the dot appears only if the refetch is slow.
-- **Warm-cache revisit is instant.** Navigate from issue 1 → issue 2 → back to 1. The detail pane renders synchronously from cache, no fallback.
-- **Realtime propagation through relational views.** Every 6 s a new comment arrives from the server. It appears automatically in the exact issue list and the detail pane. Reactions appear nested under comments the same way.
-- **Multi-tab realtime fanout.** The demo server publishes all service events to an anonymous Socket.IO channel, so creates/patches/removes in one browser tab propagate to other connected tabs/windows.
-- **Server-window reconciliation.** The "Server window" panel runs `where({ status: 'open' }).orderBy('priorityScore', 'desc').limit(3)`. Click "Promote hidden row" and Figbird refetches the window instead of doing an approximate append.
-- **Foreign-key relation leaf changes.** "Reassign FK" and "Move team" patch relation keys. The detail graph fetches the new assignee/team leaf and updates the assembled object.
-- **Many-to-many via join services.** "Add label join" creates an `issueLabels` row. Figbird expands through `issueLabels -> label` and updates the issue labels in-place.
-- **Mutations.** The console and detail controls create, patch, and remove entities through `useMutation(...)`; active queries reconcile from the realtime events.
+## The dev-tools drawer
+
+Bottom-right corner:
+
+- **Latency** — fast (default) / realistic / slow, applied server-side. Fast shows off
+  warm-cache navigation and optimistic writes; drag to slow and watch keep-previous-data,
+  delayed spinners, and SWR revalidation degrade gracefully instead of blocking the UI.
+- **Teammate** — toggles the background traffic (on by default).
+- **log** — every fetch, realtime event, and mutation flowing through figbird's
+  observability events, with durations.
+- **queries** — every live query in the store with figbird's own classification of how it
+  is maintained: `local-exact` (realtime events merge locally), `server-window` (windowed;
+  events refetch the window), `server-authoritative` (server-only semantics; events
+  refetch), `get`.
+
+## Where each feature lives
+
+- **Paginated live list** — the issue list is one `.paginate({ pageSize: 25 })` query with
+  `returnTotal`, ordered by recency. Comment counts come from `issue.commentIds`, a
+  server-maintained id list — no comments are fetched for the list at all (the "embed"
+  pattern).
+- **Server-authoritative search** — the search box sends `title.$regex`, which the local
+  matcher can't evaluate, so the query classifies server-authoritative and reconciles by
+  refetch. Typing commits through `startTransition`, keeping previous results visible.
+- **Relational filters** — the team chips filter by `'assignee.teamId'`, a field on the
+  _related_ user. The server resolves the dotted path with a join; the client matcher
+  evaluates it against the entity cache for realtime freshness.
+- **Windowed relations** — the Teams panel asks for each team's 3 most recent issues via
+  `.related('recentIssues', i => i.orderBy(…).limit(3))` — one small per-parent query per
+  team.
+- **Cross-service activity** — the Activity panel merges three independent realtime
+  queries (comments, reactions, issues) by timestamp in the component.
+- **Optimistic mutations** — the console's create/remove and every action in the issue
+  detail pass `optimistic: true`: cache updates in the same frame, rollback on failure.
+- **Route-prepared Suspense detail** — `/issues/:id` fires `figbird.prepare()` in parallel
+  with the lazy screen chunk; the keyed Suspense boundary gives each issue its own cold
+  skeleton, and warm revisits render synchronously from cache.
 
 ## Data shape
 
 Seven services wired up relationally:
 
 ```
-issues ── creator      → users
+issues ── creator      → users ── team → teams
        ├─ assignee     → users
        ├─ team         → teams
        ├─ issueLabels  → issueLabels ── label → labels
        └─ comments     → comments
                            ├─ author    → users
                            └─ reactions → reactions
+teams  ── recentIssues → issues
 ```
 
-Check `src/figbird.ts` for the schema and `src/App.tsx` for the hook usage.
+Check `src/figbird.ts` for the schema, `src/App.tsx` for the workspace, and
+`src/pages/IssueDetail/` for the route-prepared detail screen.

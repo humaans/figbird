@@ -54,6 +54,10 @@ export type {
 export { QueryBuilder, createQueryBuilderProxy } from './core/query-builder.js'
 export type { QueryAST, QueryBuilderProxy, FeathersQuery } from './core/query-builder.js'
 
+// query classification (how a query node is maintained — useful for devtools)
+export { classifyQueryNode, hasWindowFilters } from './core/queryClassification.js'
+export type { QueryNodeClass } from './core/queryClassification.js'
+
 // relational query
 export { RelationalQueryRef } from './core/figbird.js'
 export type { RelationalQueryState } from './core/figbird.js'
