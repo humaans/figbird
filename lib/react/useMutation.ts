@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import type { MutationOptions } from '../core/figbird.js'
-import { resolveServicePath } from '../core/schema.js'
 import { useFigbird } from './react.js'
 
 interface MutationState<T> {
@@ -61,7 +60,6 @@ export interface UseMutationResult<
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export function useMutation(serviceName: string): UseMutationResult<any, any, any, any> {
   const figbird = useFigbird()
-  const actualServiceName = resolveServicePath(figbird.schema, serviceName)
 
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   const [state, dispatch] = useReducer(mutationReducer<any>, {
@@ -104,21 +102,21 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
     (data: any, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'create' as const,
           data,
           params: options?.params,
           optimistic: options?.optimistic,
         }),
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   )
   const update = useCallback(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     (id: string | number, data: any, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'update' as const,
           id,
           data,
@@ -126,14 +124,14 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
           optimistic: options?.optimistic,
         }),
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   )
   const patch = useCallback(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     (id: string | number, data: any, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'patch' as const,
           id,
           data,
@@ -141,20 +139,20 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
           optimistic: options?.optimistic,
         }),
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   )
   const remove = useCallback(
     (id: string | number, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
-          serviceName: actualServiceName,
+          serviceName,
           method: 'remove' as const,
           id,
           params: options?.params,
           optimistic: Boolean(options?.optimistic),
         }),
       ),
-    [executeMutation, figbird, actualServiceName],
+    [executeMutation, figbird, serviceName],
   )
 
   return useMemo(
