@@ -36,62 +36,67 @@ function stableSerialize(value: unknown): string {
     return val
   }
 
-  try {
-    return JSON.stringify(value, replacer)
-  } catch (error) {
-    // Fallback for any edge cases
-    console.error('Serialization error in hash:', error)
-    return JSON.stringify({ error: 'serialization_failed', type: typeof value })
-  }
+  return JSON.stringify(value, replacer)
 }
 
+// FNV-1a 32-bit parameters. Two independent accumulators with different offset
+// bases give us 64 bits of key space — a single 32-bit hash starts colliding at
+// realistic query-count scales (birthday bound: ~1% at 10k distinct keys), and a
+// collision here silently serves one query's data to another. 64 bits pushes the
+// same odds past 10^-11.
+const FNV_PRIME = 0x01000193
+const FNV_OFFSET_A = 0x811c9dc5
+// Low 32 bits of the FNV-1a 64-bit offset basis — an arbitrary but fixed second seed.
+const FNV_OFFSET_B = 0xcbf29ce4
+
 /**
- * Creates a hash of an object using FNV-1a algorithm
- * Returns a base64 string suitable for use as a cache key
+ * Creates a 64-bit hash of an object (two FNV-1a passes with independent seeds)
+ * and returns it as a base64 string suitable for use as a cache key.
  *
  * Features:
  * - Deterministic: Same input always produces same hash
  * - Stable: Object key order doesn't affect hash
  * - Fast: FNV-1a is efficient for frequent operations
- * - Collision-resistant: Sufficient for typical query caching needs
+ *
+ * Inputs must be JSON-serializable (cycles are tolerated and encoded as a
+ * marker; function-valued properties are dropped by JSON semantics). A value
+ * JSON.stringify cannot encode (e.g. BigInt) throws — a loud failure at query
+ * creation is strictly better than a silent fallback key that could collide
+ * with (or fail to match) another query's cache entry.
  */
 export function hashObject(obj: unknown): string {
-  try {
-    // Get stable serialization
-    const str = stableSerialize(obj)
+  const str = stableSerialize(obj)
 
-    // FNV-1a hash algorithm
-    const FNV_PRIME = 0x01000193
-    const FNV_OFFSET = 0x811c9dc5
-
-    let hash = FNV_OFFSET
-    for (let i = 0; i < str.length; i++) {
-      hash ^= str.charCodeAt(i)
-      hash = Math.imul(hash, FNV_PRIME)
-    }
-
-    // Convert to unsigned 32-bit integer
-    hash >>>= 0
-
-    return numberToBase64(hash)
-  } catch (error) {
-    console.error('Error hashing object:', error)
-    // Return a fallback hash based on error and timestamp
-    // This ensures we don't break but also don't accidentally share cache
-    return numberToBase64(Date.now() & 0xffffffff)
+  let hashA = FNV_OFFSET_A
+  let hashB = FNV_OFFSET_B
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i)
+    hashA ^= c
+    hashA = Math.imul(hashA, FNV_PRIME)
+    hashB ^= c
+    hashB = Math.imul(hashB, FNV_PRIME)
   }
+
+  // Convert to unsigned 32-bit integers
+  hashA >>>= 0
+  hashB >>>= 0
+
+  return numbersToBase64(hashA, hashB)
 }
 
 /**
- * Converts a 32-bit number to base64
+ * Converts two 32-bit numbers to base64 (8 bytes → 12 chars)
  */
-function numberToBase64(num: number): string {
-  // Convert number to byte array
-  const bytes = new Uint8Array(4)
-  bytes[0] = (num >> 24) & 0xff
-  bytes[1] = (num >> 16) & 0xff
-  bytes[2] = (num >> 8) & 0xff
-  bytes[3] = num & 0xff
+function numbersToBase64(a: number, b: number): string {
+  const bytes = new Uint8Array(8)
+  bytes[0] = (a >> 24) & 0xff
+  bytes[1] = (a >> 16) & 0xff
+  bytes[2] = (a >> 8) & 0xff
+  bytes[3] = a & 0xff
+  bytes[4] = (b >> 24) & 0xff
+  bytes[5] = (b >> 16) & 0xff
+  bytes[6] = (b >> 8) & 0xff
+  bytes[7] = b & 0xff
   return bytesToBase64(bytes)
 }
 
@@ -109,17 +114,5 @@ function bytesToBase64(bytes: Uint8Array): string {
     return B.from(bytes).toString('base64')
   }
 
-  // Browser fallback - handle large arrays safely
-  if (bytes.length > 1024) {
-    // For large arrays, process in chunks to avoid stack overflow
-    let result = ''
-    for (let i = 0; i < bytes.length; i += 1024) {
-      const chunk = bytes.slice(i, Math.min(i + 1024, bytes.length))
-      result += String.fromCharCode(...chunk)
-    }
-    return btoa(result)
-  }
-
-  // Small arrays can be processed directly
   return btoa(String.fromCharCode(...bytes))
 }
