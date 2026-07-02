@@ -5,6 +5,7 @@ import type { QueryAST } from './query-builder.js'
 import type { QueryRef } from './queryRef.js'
 import type { AnySchema, RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { hasWindowFilters } from './queryClassification.js'
 import type { QueryConfig, QueryDescriptor, QueryState } from './queryTypes.js'
 import {
   collectRelationalFilterDependencies,
@@ -13,6 +14,10 @@ import {
   materializeRelationalFilterItem,
   shouldRefetchRelationalFilterQuery,
 } from './relationalFilters.js'
+
+// Above this many parents, a windowed relation's per-parent queries are almost
+// certainly the wrong shape (N requests for one screen) — warn and point at embed.
+const WINDOWED_RELATION_FANOUT_WARN_THRESHOLD = 10
 
 /**
  * Pagination metadata exposed by paginated queries. Present on the snapshot only
@@ -147,6 +152,9 @@ export class RelationalQueryRef<
   #resolveSuspense: (() => void) | null = null
   #rejectSuspense: ((error: Error) => void) | null = null
   #suspenseSettled = false
+  // Relation keys that already produced a fan-out warning — warn once per relation,
+  // not on every sync pass.
+  #fanOutWarnedKeys: Set<string> = new Set()
 
   #onEvict: (() => void) | null = null
 
@@ -945,6 +953,20 @@ export class RelationalQueryRef<
       return
     }
 
+    if (
+      uniqueValues.length > WINDOWED_RELATION_FANOUT_WARN_THRESHOLD &&
+      !this.#fanOutWarnedKeys.has(key)
+    ) {
+      this.#fanOutWarnedKeys.add(key)
+      console.warn(
+        `figbird: windowed relation "${key}" on service "${this.#ast.service}" is fanning out ` +
+          `${uniqueValues.length} per-parent queries (one per parent, because per-parent ` +
+          '$limit/$sort windows cannot be expressed as a single find). For list screens, ' +
+          'consider a server-materialized id-list field declared with the `embed` relation ' +
+          'kind instead — it collapses this to one batched IN(...) fetch.',
+      )
+    }
+
     const perParent = new Map<
       string,
       {
@@ -1019,8 +1041,7 @@ export class RelationalQueryRef<
     // drop entries. When the user adds `.limit()`/`.skip()`/`.orderBy()`, that windowing
     // is the intent: respect it and let the query be server-maintained so realtime
     // events trigger a refetch of the window instead of merging locally.
-    const hasWindowing =
-      '$limit' in relAST.query || '$skip' in relAST.query || '$sort' in relAST.query
+    const hasWindowing = hasWindowFilters(relAST.query)
 
     return this.#figbird.query(
       {
@@ -1064,7 +1085,7 @@ export class RelationalQueryRef<
   }
 
   #hasRelationWindowing(relAST: QueryAST): boolean {
-    return '$limit' in relAST.query || '$skip' in relAST.query || '$sort' in relAST.query
+    return hasWindowFilters(relAST.query)
   }
 
   #subscribeToRelationalFilterInvalidations(): void {
