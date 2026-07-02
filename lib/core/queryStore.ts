@@ -567,34 +567,69 @@ export class QueryStore<
         const eventsByService = groupQueuedEvents(this.#eventQueue)
         this.#eventQueue = []
 
+        const touchedQueryIds = new Set<string>()
+        const followups: Array<{
+          serviceName: string
+          serverMaintainedQueriesToRefetch: Set<string>
+          processedEvents: ProcessedRealtimeEvent[]
+        }> = []
+
+        // Apply every service's events before notifying anyone — the batch is the
+        // atomicity unit for observers. Notifying per service would let a relational
+        // query spanning services A and B compute a wasted intermediate snapshot
+        // after A's events but before B's, and non-React subscribers would observe
+        // the intermediate state.
         for (const [serviceName, events] of Object.entries(eventsByService)) {
           const serverMaintainedQueriesToRefetch = new Set<string>()
           const processedEvents: ProcessedRealtimeEvent[] = []
 
-          this.#transactOverServiceByName(serviceName, (service, touch) => {
-            const appliedEvents = applyEventsToService({
-              service,
-              serviceName,
-              events,
-              getId,
-              isItemStale,
-              processedEvents,
-            })
-
-            // Update queries only for non-stale items
-            if (appliedEvents.length > 0) {
-              updateQueriesFromEvents({
+          const modifiedQueries = this.#transactOverServiceByName(
+            serviceName,
+            (service, touch) => {
+              const appliedEvents = applyEventsToService({
                 service,
-                appliedEvents,
-                touch,
+                serviceName,
+                events,
                 getId,
-                itemAdded: meta => this.#adapter.itemAdded(meta),
-                itemRemoved: meta => this.#adapter.itemRemoved(meta),
-                serverMaintainedQueriesToRefetch,
+                isItemStale,
+                processedEvents,
               })
-            }
-          })
 
+              // Update queries only for non-stale items
+              if (appliedEvents.length > 0) {
+                updateQueriesFromEvents({
+                  service,
+                  appliedEvents,
+                  touch,
+                  getId,
+                  itemAdded: meta => this.#adapter.itemAdded(meta),
+                  itemRemoved: meta => this.#adapter.itemRemoved(meta),
+                  serverMaintainedQueriesToRefetch,
+                })
+              }
+            },
+            { silent: true },
+          )
+
+          for (const queryId of modifiedQueries) {
+            touchedQueryIds.add(queryId)
+          }
+          followups.push({ serviceName, serverMaintainedQueriesToRefetch, processedEvents })
+        }
+
+        // Notify once per batch, after all services have applied.
+        for (const queryId of touchedQueryIds) {
+          this.#invokeListeners(queryId)
+        }
+        if (touchedQueryIds.size > 0) {
+          this.#invokeGlobalListeners()
+        }
+
+        for (const {
+          serviceName,
+          serverMaintainedQueriesToRefetch,
+          processedEvents,
+        } of followups) {
           // Server-maintained queries can't merge events locally: refetch active ones,
           // mark inactive cached ones pending so their next subscription reconciles.
           for (const queryId of serverMaintainedQueriesToRefetch) {
@@ -761,7 +796,7 @@ export class QueryStore<
   #updateState(
     mutate: (state: Map<string, ServiceState<TMeta>>, touch: (queryId: string) => void) => void,
     { silent = false } = {},
-  ): void {
+  ): Set<string> {
     const modifiedQueries = new Set<string>()
 
     // Modify fn to track changes
@@ -775,6 +810,8 @@ export class QueryStore<
       }
       this.#invokeGlobalListeners()
     }
+
+    return modifiedQueries
   }
 
   #transactOverService(
@@ -803,23 +840,23 @@ export class QueryStore<
     serviceName: string,
     fn: (service: ServiceState<TMeta>, touch: (queryId: string) => void) => void,
     { silent = false } = {},
-  ): void {
-    if (serviceName) {
-      // initialise the service structure if needed
-      if (!this.getState().get(serviceName)) {
-        this.getState().set(serviceName, createServiceState())
-      }
+  ): Set<string> {
+    if (!serviceName) return new Set()
 
-      this.#updateState(
-        (state, touch) => {
-          const service = state.get(serviceName)
-          if (service) {
-            fn(service, touch)
-          }
-        },
-        { silent },
-      )
+    // initialise the service structure if needed
+    if (!this.getState().get(serviceName)) {
+      this.getState().set(serviceName, createServiceState())
     }
+
+    return this.#updateState(
+      (state, touch) => {
+        const service = state.get(serviceName)
+        if (service) {
+          fn(service, touch)
+        }
+      },
+      { silent },
+    )
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
