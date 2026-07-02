@@ -959,6 +959,12 @@ function removeQueryFromItemIndex<TMeta>({
   }
 }
 
+function createItemRemovedError(itemId: ItemId): Error {
+  const error = new Error(`Item ${String(itemId)} has been removed`)
+  error.name = 'ItemRemoved'
+  return error
+}
+
 function groupQueuedEvents(events: QueuedEvent[]): Record<string, QueuedEvent[]> {
   const eventsByService: Record<string, QueuedEvent[]> = {}
   for (const event of events) {
@@ -1081,14 +1087,18 @@ function updateQueriesFromEvents<TMeta>({
         if (hasItem && !matches) {
           // remove
           const query = service.queries.get(queryId)!
+          // A get query whose item was removed reaches a terminal, refetchable error
+          // state (the resource no longer exists — same as a server NotFound). It must
+          // not park in 'loading': nothing would ever complete that fetch, and
+          // relational consumers would serve the stale previous snapshot forever.
           const nextState: QueryState<unknown, TMeta> =
             query.desc.method === 'get' && query.state.status === 'success'
               ? {
-                  status: 'loading' as const,
+                  status: 'error' as const,
                   data: null,
                   meta: itemRemoved(query.state.meta),
                   isFetching: false,
-                  error: null,
+                  error: createItemRemovedError(itemId),
                 }
               : query.state.status === 'success'
                 ? {
@@ -1134,6 +1144,27 @@ function updateQueriesFromEvents<TMeta>({
                     data: (query.state.data as unknown[]).concat(item),
                   }
                 : query.state,
+          })
+          itemQueryIndex.add(queryId)
+          touch(queryId)
+        } else if (
+          matches &&
+          type === 'created' &&
+          query.desc.method === 'get' &&
+          String(query.desc.resourceId) === String(itemId)
+        ) {
+          // The resource behind a get query reappeared (realtime re-create, or an
+          // optimistic remove rolling back). Restore the query from the event instead
+          // of leaving it in the removed-error state until a manual refetch.
+          service.queries.set(queryId, {
+            ...query,
+            state: {
+              status: 'success' as const,
+              data: item,
+              meta: query.state.meta,
+              isFetching: false,
+              error: null,
+            },
           })
           itemQueryIndex.add(queryId)
           touch(queryId)
