@@ -13,6 +13,7 @@ export interface User {
   id: number
   name: string
   avatar: string
+  teamId: number
 }
 export interface Team {
   id: number
@@ -28,6 +29,12 @@ export interface Issue {
   teamId: number
   priorityScore: number
   updatedAt: string
+  /**
+   * Server-maintained id list — updated by the server whenever a comment is
+   * created, so list rows can show comment counts without fetching a single
+   * comment (the "embed" pattern).
+   */
+  commentIds: number[]
 }
 export interface Comment {
   id: number
@@ -51,32 +58,6 @@ export interface Reaction {
   userId: number
   emoji: string
 }
-export interface Company {
-  id: number
-  name: string
-  segment: string
-}
-export interface OrgUnit {
-  id: number
-  label: string
-  color: string
-}
-export interface Person {
-  id: number
-  companyId: number
-  orgUnitId: number
-  name: string
-  status: 'active' | 'inactive'
-  startDate: string
-  role: string
-}
-export interface Document {
-  id: number
-  title: string
-  personId: number
-  status: 'draft' | 'published'
-  createdAt: string
-}
 
 // ----- Schema wiring -----
 
@@ -89,10 +70,6 @@ export const schema = createSchema({
     labels: service<{ item: Label }>(),
     issueLabels: service<{ item: IssueLabel }>(),
     reactions: service<{ item: Reaction }>(),
-    companies: service<{ item: Company }>(),
-    people: service<{ item: Person }>(),
-    orgUnits: service<{ item: OrgUnit }>(),
-    documents: service<{ item: Document }>(),
   },
   relationships: ({ one, many }) => ({
     issues: {
@@ -106,6 +83,15 @@ export const schema = createSchema({
         destField: ['issueId'],
       }),
     },
+    teams: {
+      // Used with a per-team window (`.orderBy().limit()`), which fans out one
+      // query per team — fine at 4 teams, and exactly the shape the fan-out
+      // warning + embed pattern exist for at larger scales.
+      recentIssues: many({ sourceField: ['id'], destService: 'issues', destField: ['teamId'] }),
+    },
+    users: {
+      team: one({ sourceField: ['teamId'], destService: 'teams', destField: ['id'] }),
+    },
     issueLabels: {
       label: one({ sourceField: ['labelId'], destService: 'labels', destField: ['id'] }),
     },
@@ -115,15 +101,6 @@ export const schema = createSchema({
     },
     reactions: {
       user: one({ sourceField: ['userId'], destService: 'users', destField: ['id'] }),
-    },
-    companies: {
-      people: many({ sourceField: ['id'], destService: 'people', destField: ['companyId'] }),
-    },
-    people: {
-      orgUnit: one({ sourceField: ['orgUnitId'], destService: 'orgUnits', destField: ['id'] }),
-    },
-    documents: {
-      person: one({ sourceField: ['personId'], destService: 'people', destField: ['id'] }),
     },
   }),
 })
@@ -146,23 +123,31 @@ export const figbird = new Figbird({ schema, adapter })
 
 /**
  * Off-schema control surface to talk to the demo server's `_demo` service.
- * Lets the dev-tools panel toggle background traffic and reset the seed.
+ * Lets the dev-tools panel switch the latency profile, toggle the simulated
+ * teammate, and reset the seed.
  */
+export type LatencyProfile = 'fast' | 'realistic' | 'slow'
+
+export interface DemoState {
+  backgroundEnabled: boolean
+  latency: LatencyProfile
+}
+
 export interface DemoControl {
-  getState(): Promise<{ backgroundEnabled: boolean }>
-  setBackgroundEnabled(enabled: boolean): Promise<{ backgroundEnabled: boolean }>
+  getState(): Promise<DemoState>
+  set(patch: Partial<DemoState>): Promise<DemoState>
   reset(): Promise<{ ok: boolean }>
 }
 
 const demoService = feathersClient.service('_demo') as unknown as {
-  find(): Promise<{ backgroundEnabled: boolean }>
-  patch(id: null, data: { backgroundEnabled: boolean }): Promise<{ backgroundEnabled: boolean }>
+  find(): Promise<DemoState>
+  patch(id: null, data: Partial<DemoState>): Promise<DemoState>
   create(data: { action: 'reset' }): Promise<{ ok: boolean }>
 }
 
 export const demoControl: DemoControl = {
   getState: () => demoService.find(),
-  setBackgroundEnabled: enabled => demoService.patch(null, { backgroundEnabled: enabled }),
+  set: patch => demoService.patch(null, patch),
   reset: () => demoService.create({ action: 'reset' }),
 }
 

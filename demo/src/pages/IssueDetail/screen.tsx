@@ -14,9 +14,9 @@ import { useMutation, useQuery } from '../../figbird'
 import { COMMENTS_PAGE_SIZE } from './constants'
 import { issueCommentsQuery, issueDetailQuery } from './queries'
 
-const userIds = [1, 2, 3, 4] as const
-const teamIds = [1, 2, 3] as const
-const labelIds = [1, 2, 3, 4, 5] as const
+const userIds = [1, 2, 3, 4, 5, 6, 7, 8] as const
+const teamIds = [1, 2, 3, 4] as const
+const labelIds = [1, 2, 3, 4, 5, 6] as const
 
 type DetailAction = 'comment' | 'reassign' | 'team' | 'priority' | 'status' | 'label'
 

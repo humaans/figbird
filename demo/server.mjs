@@ -2,20 +2,28 @@
  * Tiny Feathers server for the figbird demo.
  *
  * Exposes services over Socket.IO: issues, comments, users, teams, labels,
- * issue-label joins, reactions, companies, people.
+ * issue-label joins, reactions.
  *
- * Deliberately simulates real-world conditions:
- *   - Each service has its own per-operation latency range (min..max ms). Comments
- *     are the slow path so switching issues reliably crosses figbird's 400ms delayed-
- *     spinner threshold. Users are snappy so creators/authors come in first.
- *   - A background ticker periodically creates a new comment (and reaction) so clients
- *     can observe realtime events flowing into active queries. The ticker is OFF by
- *     default — flip it on from the dev-tools panel when you want to watch realtime
- *     events flow. Defaulting it off keeps the event log clean while you debug.
+ * Simulated conditions are a *dial*, not a tax:
+ *   - Network latency has three profiles — fast (default, LAN-ish), realistic
+ *     (median broadband API), slow (bad hotel wifi). The dev-tools drawer switches
+ *     them live via the `_demo` control service. Fast is the default so the first
+ *     impression is figbird's warm-cache/optimistic speed; drag to slow to watch
+ *     SWR keep-previous-data and delayed spinners degrade gracefully.
+ *   - A "simulated teammate" ticks every few seconds: comments, reactions,
+ *     priority nudges, the occasional close/reopen. ON by default — realtime is
+ *     the product. Toggle it off from dev tools when you want a quiet event log.
  *
- * Plus a control surface at `_demo` for the UI:
- *   - find()  → { backgroundEnabled }
- *   - patch() → toggle flags
+ * Server-maintained state worth noticing:
+ *   - `issue.commentIds` is a server-maintained id list (updated when comments are
+ *     created), so list screens can render comment counts without fetching any
+ *     comments — the "embed" pattern from DESIGN.md.
+ *   - `assignee.teamId` dotted-path filters on `issues.find` are resolved server-side
+ *     with a join, the contract relational filters require.
+ *
+ * Control surface at `_demo`:
+ *   - find()  → { backgroundEnabled, latency }
+ *   - patch(null, { backgroundEnabled?, latency? }) → update flags
  *   - create({ action: 'reset' }) → re-seed the stores back to the initial state
  *
  * CORS / auth: this is a local demo — none.
@@ -25,19 +33,43 @@ import { feathers } from '@feathersjs/feathers'
 import socketio from '@feathersjs/socketio'
 import { MemoryService } from '@feathersjs/memory'
 
-const BACKGROUND_TICK_MS = 6000 // every 6s a random comment appears
+const TICK_MS = 7000
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const rand = (min, max) => Math.floor(min + Math.random() * (max - min + 1))
 
+// Deterministic PRNG for the seed so every reset produces the same world.
+const mulberry32 = seed => () => {
+  seed |= 0
+  seed = (seed + 0x6d2b79f5) | 0
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+}
+
+// ----- Latency profiles -----
+
+const LATENCY_PROFILES = {
+  fast: { min: 30, max: 80 },
+  realistic: { min: 120, max: 300 },
+  slow: { min: 600, max: 1400 },
+}
+let latency = 'fast'
+
+const latencyTick = async (multiplier = 1) => {
+  const profile = LATENCY_PROFILES[latency]
+  await sleep(Math.round(rand(profile.min, profile.max) * multiplier))
+}
+
 class SlowMemoryService extends MemoryService {
-  constructor(opts, { minLatency, maxLatency }) {
+  // `speed` scales the active latency profile per service: reference data
+  // (users/teams/labels) is quicker than row data (issues/comments).
+  constructor(opts, { speed = 1 } = {}) {
     super(opts)
-    this._minLatency = minLatency
-    this._maxLatency = maxLatency
+    this._speed = speed
   }
   async _tick() {
-    await sleep(rand(this._minLatency, this._maxLatency))
+    await latencyTick(this._speed)
   }
   async find(params) {
     await this._tick()
@@ -75,87 +107,34 @@ app.on('connection', connection => {
 
 app.publish(() => app.channel('anonymous'))
 
-// ----- Seed services -----
+// ----- Services -----
 
-// Per-service latency profile — tuned so the common product interactions map cleanly
-// onto the "delayed spinner" UX pattern:
-//
-//   - users/teams/labels (100–300ms): snappy; relation leaves pop in first.
-//   - joins/reactions    (200–500ms): usually below the spinner threshold.
-//   - issues             (300–700ms): straddles the threshold.
-//   - comments           (700–1300ms): reliably slow; selecting a different issue waits on this
-//                 so the delayed spinner gets to show its work. On warm-cache revisits
-//                 the data comes from QueryStore instantly and the spinner stays silent.
-const users = new SlowMemoryService(
-  { multi: false, paginate: false },
-  { minLatency: 100, maxLatency: 300 },
-)
-const teams = new SlowMemoryService(
-  { multi: false, paginate: false },
-  { minLatency: 100, maxLatency: 300 },
-)
-const issues = new SlowMemoryService(
-  { multi: false, paginate: { default: 50, max: 200 } },
-  { minLatency: 300, maxLatency: 700 },
-)
+const users = new SlowMemoryService({ multi: false, paginate: false }, { speed: 0.6 })
+const teams = new SlowMemoryService({ multi: false, paginate: false }, { speed: 0.6 })
+const labels = new SlowMemoryService({ multi: false, paginate: false }, { speed: 0.6 })
+const issues = new SlowMemoryService({ multi: false, paginate: { default: 50, max: 200 } })
 const comments = new SlowMemoryService(
   { multi: false, paginate: { default: 50, max: 500 } },
-  { minLatency: 700, maxLatency: 1300 },
-)
-const labels = new SlowMemoryService(
-  { multi: false, paginate: false },
-  { minLatency: 100, maxLatency: 300 },
+  { speed: 1.2 },
 )
 const issueLabels = new SlowMemoryService(
-  { multi: false, paginate: { default: 50, max: 500 } },
-  { minLatency: 200, maxLatency: 500 },
+  { multi: false, paginate: { default: 100, max: 1000 } },
+  { speed: 0.8 },
 )
 const reactions = new SlowMemoryService(
-  { multi: false, paginate: { default: 50, max: 500 } },
-  { minLatency: 200, maxLatency: 500 },
-)
-const companies = new SlowMemoryService(
-  { multi: false, paginate: false },
-  { minLatency: 150, maxLatency: 350 },
-)
-const people = new SlowMemoryService(
-  { multi: false, paginate: { default: 50, max: 500 } },
-  { minLatency: 300, maxLatency: 650 },
-)
-const orgUnits = new SlowMemoryService(
-  { multi: false, paginate: false },
-  { minLatency: 120, maxLatency: 280 },
-)
-const documents = new SlowMemoryService(
-  { multi: false, paginate: { default: 50, max: 500 } },
-  { minLatency: 300, maxLatency: 650 },
+  { multi: false, paginate: { default: 100, max: 1000 } },
+  { speed: 0.8 },
 )
 
 app.use('users', users)
 app.use('teams', teams)
+app.use('labels', labels)
 app.use('issues', issues)
 app.use('comments', comments)
-app.use('labels', labels)
 app.use('issueLabels', issueLabels)
 app.use('reactions', reactions)
-app.use('companies', companies)
-app.use('people', people)
-app.use('orgUnits', orgUnits)
-app.use('documents', documents)
 
-const allServices = [
-  users,
-  teams,
-  issues,
-  comments,
-  labels,
-  issueLabels,
-  reactions,
-  companies,
-  people,
-  orgUnits,
-  documents,
-]
+const allServices = [users, teams, labels, issues, comments, issueLabels, reactions]
 
 const clearStores = () => {
   for (const svc of allServices) {
@@ -165,319 +144,202 @@ const clearStores = () => {
   }
 }
 
-// Seed data directly via the store (bypassing latency, internal bootstrap)
-const seed = async () => {
-  for (const u of [
-    { id: 1, name: 'Alice', avatar: '🌸' },
-    { id: 2, name: 'Bob', avatar: '🐻' },
-    { id: 3, name: 'Carol', avatar: '🎨' },
-    { id: 4, name: 'Dina', avatar: '🦊' },
-  ]) {
-    users.store[u.id] = u
-  }
-  for (const t of [
-    { id: 1, name: 'Core UI', accent: '#f97316' },
-    { id: 2, name: 'Platform', accent: '#0ea5e9' },
-    { id: 3, name: 'Data Experience', accent: '#10b981' },
-  ]) {
-    teams.store[t.id] = t
-  }
-  for (const i of [
-    {
-      id: 1,
-      title: 'Hover state on primary button is off',
-      status: 'open',
-      creatorId: 1,
-      assigneeId: 2,
-      teamId: 1,
-      priorityScore: 74,
-      updatedAt: '2026-04-25T09:12:00.000Z',
-    },
-    {
-      id: 2,
-      title: 'API returns 500 on /search with empty q',
-      status: 'open',
-      creatorId: 2,
-      assigneeId: 1,
-      teamId: 2,
-      priorityScore: 88,
-      updatedAt: '2026-04-25T09:24:00.000Z',
-    },
-    {
-      id: 3,
-      title: 'Keyboard shortcut opens wrong panel',
-      status: 'open',
-      creatorId: 3,
-      assigneeId: 4,
-      teamId: 1,
-      priorityScore: 61,
-      updatedAt: '2026-04-25T09:40:00.000Z',
-    },
-    {
-      id: 4,
-      title: 'Settings page does not remember tab',
-      status: 'closed',
-      creatorId: 1,
-      assigneeId: 3,
-      teamId: 3,
-      priorityScore: 22,
-      updatedAt: '2026-04-25T08:05:00.000Z',
-    },
-    {
-      id: 5,
-      title: 'Payroll export drops custom fields',
-      status: 'open',
-      creatorId: 4,
-      assigneeId: 3,
-      teamId: 3,
-      priorityScore: 45,
-      updatedAt: '2026-04-25T07:31:00.000Z',
-    },
-    {
-      id: 6,
-      title: 'Hidden priority candidate for window refill',
-      status: 'open',
-      creatorId: 2,
-      assigneeId: 4,
-      teamId: 2,
-      priorityScore: 12,
-      updatedAt: '2026-04-25T07:02:00.000Z',
-    },
-  ]) {
-    issues.store[i.id] = i
-  }
-  for (const l of [
-    { id: 1, name: 'bug', tone: 'red' },
-    { id: 2, name: 'frontend', tone: 'orange' },
-    { id: 3, name: 'backend', tone: 'blue' },
-    { id: 4, name: 'customer-impact', tone: 'green' },
-    { id: 5, name: 'regression', tone: 'slate' },
-  ]) {
-    labels.store[l.id] = l
-  }
-  for (const link of [
-    { id: 1, issueId: 1, labelId: 1 },
-    { id: 2, issueId: 1, labelId: 2 },
-    { id: 3, issueId: 2, labelId: 1 },
-    { id: 4, issueId: 2, labelId: 3 },
-    { id: 5, issueId: 3, labelId: 2 },
-    { id: 6, issueId: 5, labelId: 4 },
-  ]) {
-    issueLabels.store[link.id] = link
-  }
-  for (const c of [
-    { id: 1, issueId: 1, authorId: 2, body: 'Confirmed on Safari. Chrome looks fine.' },
-    { id: 2, issueId: 1, authorId: 3, body: 'Might be the :hover rule ordering.' },
-    { id: 3, issueId: 2, authorId: 1, body: 'Stack trace points at the query builder.' },
-    { id: 4, issueId: 3, authorId: 2, body: 'Repros 100% with a US keyboard layout.' },
-  ]) {
-    comments.store[c.id] = c
-  }
-  for (const r of [
-    { id: 1, commentId: 1, userId: 1, emoji: '👀' },
-    { id: 2, commentId: 1, userId: 3, emoji: '🤔' },
-    { id: 3, commentId: 2, userId: 1, emoji: '👍' },
-  ]) {
-    reactions.store[r.id] = r
-  }
-  for (const c of [
-    { id: 1, name: 'Acme', segment: 'Mid-market' },
-    { id: 2, name: 'Globex', segment: 'Enterprise' },
-    { id: 3, name: 'Umbrella', segment: 'SMB' },
-  ]) {
-    companies.store[c.id] = c
-  }
-  for (const unit of [
-    { id: 1, label: 'Engineering', color: '#2563eb' },
-    { id: 2, label: 'People', color: '#16a34a' },
-    { id: 3, label: 'Operations', color: '#9333ea' },
-  ]) {
-    orgUnits.store[unit.id] = unit
-  }
-  for (const p of [
-    {
-      id: 1,
-      companyId: 1,
-      orgUnitId: 2,
-      name: 'Alice',
-      status: 'active',
-      startDate: '2025-05-01',
-      role: 'People lead',
-    },
-    {
-      id: 2,
-      companyId: 1,
-      orgUnitId: 1,
-      name: 'Bob',
-      status: 'active',
-      startDate: '2025-04-15',
-      role: 'Engineering manager',
-    },
-    {
-      id: 3,
-      companyId: 1,
-      orgUnitId: 1,
-      name: 'Cara',
-      status: 'active',
-      startDate: '2025-03-20',
-      role: 'Product manager',
-    },
-    {
-      id: 4,
-      companyId: 1,
-      orgUnitId: 3,
-      name: 'Drew',
-      status: 'inactive',
-      startDate: '2025-06-01',
-      role: 'Advisor',
-    },
-    {
-      id: 5,
-      companyId: 2,
-      orgUnitId: 3,
-      name: 'Eve',
-      status: 'active',
-      startDate: '2025-05-01',
-      role: 'Finance lead',
-    },
-    {
-      id: 6,
-      companyId: 2,
-      orgUnitId: 2,
-      name: 'Finn',
-      status: 'active',
-      startDate: '2025-04-15',
-      role: 'Talent partner',
-    },
-    {
-      id: 7,
-      companyId: 2,
-      orgUnitId: 1,
-      name: 'Gia',
-      status: 'active',
-      startDate: '2025-01-01',
-      role: 'Operations analyst',
-    },
-    {
-      id: 8,
-      companyId: 3,
-      orgUnitId: 3,
-      name: 'Hana',
-      status: 'active',
-      startDate: '2025-03-10',
-      role: 'Founder',
-    },
-    {
-      id: 9,
-      companyId: 3,
-      orgUnitId: 1,
-      name: 'Ivo',
-      status: 'active',
-      startDate: '2025-02-10',
-      role: 'Designer',
-    },
-    {
-      id: 10,
-      companyId: 3,
-      orgUnitId: 1,
-      name: 'Jules',
-      status: 'active',
-      startDate: '2024-12-12',
-      role: 'Engineer',
-    },
-  ]) {
-    people.store[p.id] = p
-  }
-  for (const doc of [
-    {
-      id: 1,
-      title: 'Search ranking plan',
-      personId: 2,
-      status: 'draft',
-      createdAt: '2026-04-26T09:00:00.000Z',
-    },
-    {
-      id: 2,
-      title: 'Benefits rollout brief',
-      personId: 1,
-      status: 'published',
-      createdAt: '2026-04-26T09:10:00.000Z',
-    },
-    {
-      id: 3,
-      title: 'Data export runbook',
-      personId: 7,
-      status: 'draft',
-      createdAt: '2026-04-26T09:20:00.000Z',
-    },
-    {
-      id: 4,
-      title: 'Office move checklist',
-      personId: 8,
-      status: 'published',
-      createdAt: '2026-04-26T09:30:00.000Z',
-    },
-  ]) {
-    documents.store[doc.id] = doc
-  }
-}
+// ----- Seed -----
 
-await seed()
+const SEED_BASE_TIME = Date.parse('2026-06-30T12:00:00.000Z')
 
-// ----- Background traffic simulator -----
+const TITLE_LEADS = [
+  'Hover state on primary button is off',
+  'API returns 500 on empty search',
+  'Keyboard shortcut opens wrong panel',
+  'Settings page forgets selected tab',
+  'Export drops custom fields',
+  'Avatar upload fails over 2MB',
+  'Dark mode flashes on first paint',
+  'Websocket reconnect loses presence',
+  'Date picker skips DST boundary',
+  'Notification badge count is stale',
+  'Drag reorder janks on long lists',
+  'Search results flicker while typing',
+  'Emoji picker crashes on paste',
+  'Sidebar collapse state not persisted',
+  'CSV import mangles unicode names',
+  'Tooltip clipped inside modal',
+  'Session expiry logs out mid-edit',
+  'Rate limiter too aggressive on bursts',
+  'Breadcrumbs wrong after team move',
+  'Duplicate issue detection misses typos',
+  'Scroll position lost on back nav',
+  'Mentions autocomplete misses new users',
+  'Slow query on the activity endpoint',
+  'Focus ring missing on icon buttons',
+  'Timezone mismatch in due dates',
+  'Copy link includes stale filters',
+  'Print stylesheet renders blank page',
+  'Label colors fail contrast check',
+  'Undo toast dismisses too quickly',
+  'Long titles overflow the board card',
+]
 
-const sampleBodies = [
-  'Looks good to me 👍',
+const COMMENT_BODIES = [
+  'Confirmed on Safari. Chrome looks fine.',
+  'Might be the :hover rule ordering.',
+  'Stack trace points at the query builder.',
+  'Repros 100% with a US keyboard layout.',
+  'Adding myself to the thread.',
+  'Can reproduce this on staging.',
+  'Pushed a speculative fix.',
+  'Waiting on review.',
   "I can't reproduce this on Firefox latest.",
   'Just saw this happen again on staging.',
   'Might be related to the batching change from last week.',
   'Patched a hotfix locally — will send a PR.',
   'Logged timings — the call is ~700ms on the slow path.',
   'Adding a test for this.',
+  'Looks good to me 👍',
 ]
 
-let nextCommentId = 5
-let nextIssueId = 7
-let nextIssueLabelId = 7
-let nextReactionId = 4
-let nextDocumentId = 5
+const EMOJIS = ['🚀', '💯', '🔥', '✨', '👏', '🎯', '👀', '🤔', '👍']
 
-const initialIdState = {
-  nextCommentId,
-  nextIssueId,
-  nextIssueLabelId,
-  nextReactionId,
-  nextDocumentId,
+const seed = async () => {
+  const rng = mulberry32(20260630)
+  const pick = arr => arr[Math.floor(rng() * arr.length)]
+
+  for (const t of [
+    { id: 1, name: 'Core UI', accent: '#f97316' },
+    { id: 2, name: 'Platform', accent: '#0ea5e9' },
+    { id: 3, name: 'Data Experience', accent: '#10b981' },
+    { id: 4, name: 'Mobile', accent: '#a855f7' },
+  ]) {
+    teams.store[t.id] = t
+  }
+
+  for (const u of [
+    { id: 1, name: 'Alice', avatar: '🌸', teamId: 1 },
+    { id: 2, name: 'Bob', avatar: '🐻', teamId: 1 },
+    { id: 3, name: 'Carol', avatar: '🎨', teamId: 2 },
+    { id: 4, name: 'Dina', avatar: '🦊', teamId: 2 },
+    { id: 5, name: 'Elio', avatar: '🌊', teamId: 3 },
+    { id: 6, name: 'Faye', avatar: '🪐', teamId: 3 },
+    { id: 7, name: 'Gus', avatar: '🥝', teamId: 4 },
+    { id: 8, name: 'Hana', avatar: '🍁', teamId: 4 },
+  ]) {
+    users.store[u.id] = u
+  }
+
+  for (const l of [
+    { id: 1, name: 'bug', tone: 'red' },
+    { id: 2, name: 'frontend', tone: 'orange' },
+    { id: 3, name: 'backend', tone: 'blue' },
+    { id: 4, name: 'customer-impact', tone: 'green' },
+    { id: 5, name: 'regression', tone: 'slate' },
+    { id: 6, name: 'perf', tone: 'orange' },
+  ]) {
+    labels.store[l.id] = l
+  }
+
+  const userIds = Object.keys(users.store).map(Number)
+  const teamIds = Object.keys(teams.store).map(Number)
+  const labelIds = Object.keys(labels.store).map(Number)
+
+  const issueCount = 90
+  let commentId = 1
+  let issueLabelId = 1
+  let reactionId = 1
+
+  for (let i = 1; i <= issueCount; i++) {
+    const lead = TITLE_LEADS[(i - 1) % TITLE_LEADS.length]
+    const suffix = i > TITLE_LEADS.length ? ` (${Math.ceil(i / TITLE_LEADS.length)})` : ''
+    // Newest issues get the lowest age; spread over ~3 weeks with jitter.
+    const ageMinutes = (i - 1) * 340 + Math.floor(rng() * 240)
+    const issue = {
+      id: i,
+      title: `${lead}${suffix}`,
+      status: rng() < 0.28 ? 'closed' : 'open',
+      creatorId: pick(userIds),
+      assigneeId: pick(userIds),
+      teamId: pick(teamIds),
+      priorityScore: Math.floor(rng() * 100),
+      updatedAt: new Date(SEED_BASE_TIME - ageMinutes * 60_000).toISOString(),
+      commentIds: [],
+    }
+    issues.store[issue.id] = issue
+
+    // Labels: 0–3 distinct labels per issue.
+    const labelCount = Math.floor(rng() * 4)
+    const chosen = new Set()
+    for (let n = 0; n < labelCount; n++) chosen.add(pick(labelIds))
+    for (const labelId of chosen) {
+      issueLabels.store[issueLabelId] = { id: issueLabelId, issueId: issue.id, labelId }
+      issueLabelId++
+    }
+
+    // Comments: recent issues are chatty (1–5), older ones sparse.
+    const isRecent = i <= 30
+    const commentCount = isRecent ? 1 + Math.floor(rng() * 5) : Math.floor(rng() * 2)
+    for (let n = 0; n < commentCount; n++) {
+      const comment = {
+        id: commentId,
+        issueId: issue.id,
+        authorId: pick(userIds),
+        body: pick(COMMENT_BODIES),
+      }
+      comments.store[comment.id] = comment
+      issue.commentIds.push(comment.id)
+      // Reactions: roughly a third of comments get one or two.
+      if (rng() < 0.35) {
+        const rCount = 1 + Math.floor(rng() * 2)
+        for (let r = 0; r < rCount; r++) {
+          reactions.store[reactionId] = {
+            id: reactionId,
+            commentId: comment.id,
+            userId: pick(userIds),
+            emoji: pick(EMOJIS),
+          }
+          reactionId++
+        }
+      }
+      commentId++
+    }
+  }
+
+  nextIssueId = issueCount + 1
+  nextCommentId = commentId
+  nextIssueLabelId = issueLabelId
+  nextReactionId = reactionId
 }
 
-const resetIdCounters = () => {
-  nextCommentId = initialIdState.nextCommentId
-  nextIssueId = initialIdState.nextIssueId
-  nextIssueLabelId = initialIdState.nextIssueLabelId
-  nextReactionId = initialIdState.nextReactionId
-  nextDocumentId = initialIdState.nextDocumentId
-}
+let nextIssueId = 1
+let nextCommentId = 1
+let nextIssueLabelId = 1
+let nextReactionId = 1
 
-// Background traffic is OFF by default. The dev-tools toggle flips this. Keeping it off
-// by default makes the event timeline a clean signal of the user's actions.
-let backgroundEnabled = false
+await seed()
+
+// ----- Control surface -----
+
+// The teammate simulator is ON by default — realtime is the product. Toggle it off
+// from the dev-tools drawer when you want a quiet event log.
+let backgroundEnabled = true
+
+const demoState = () => ({ backgroundEnabled, latency })
 
 app.use('_demo', {
   async find() {
-    return { backgroundEnabled }
+    return demoState()
   },
   async patch(_id, data) {
-    if (data && typeof data === 'object' && 'backgroundEnabled' in data) {
-      backgroundEnabled = !!data.backgroundEnabled
+    if (data && typeof data === 'object') {
+      if ('backgroundEnabled' in data) backgroundEnabled = !!data.backgroundEnabled
+      if ('latency' in data && data.latency in LATENCY_PROFILES) latency = data.latency
     }
-    return { backgroundEnabled }
+    return demoState()
   },
   async create(data) {
     if (data?.action === 'reset') {
       clearStores()
-      resetIdCounters()
       await seed()
-      return { ok: true, backgroundEnabled }
+      return { ok: true, ...demoState() }
     }
     return { ok: false }
   },
@@ -485,6 +347,8 @@ app.use('_demo', {
 
 // Don't broadcast _demo events — they're plumbing, not domain data.
 app.service('_demo').publish(() => null)
+
+// ----- Query helpers for hooks -----
 
 const compare = (actual, expected) => {
   if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
@@ -529,40 +393,41 @@ const applyFindWindow = (rows, query, defaultLimit = 50) => {
   }
 }
 
+// ----- Issues hooks: search, relational filters, timestamps -----
+
 app.service('issues').hooks({
   before: {
     find: [
-      // Translate `query.title.$regex` (sent by figbird's server-authoritative search)
-      // into in-memory filtering. The MemoryService doesn't understand $regex, so we
-      // pull all rows, filter, then re-page. This mirrors what a real backend would
-      // do via SQL ILIKE / full-text, but transparent for the demo.
+      // Two query shapes the MemoryService can't evaluate natively:
+      //   - `title.$regex` — figbird's server-authoritative search sends it verbatim.
+      //   - `assignee.teamId` — a relational (dotted-path) filter; resolved with a
+      //     join against users, which is exactly the server contract relational
+      //     filters require (see DESIGN.md "Filtering By Related Fields").
       async context => {
-        const q = context.params?.query
-        const rx = q?.title?.$regex
-        if (!rx) return context
-        const re = new RegExp(rx, q.title.$options || 'i')
+        const q = context.params?.query || {}
+        const rx = q.title?.$regex
+        const assigneeTeam = q['assignee.teamId']
+        if (!rx && assigneeTeam == null) return context
+
         const rest = { ...q }
-        delete rest.title
-        const $skip = rest.$skip ?? 0
-        const $limit = rest.$limit ?? 50
-        delete rest.$skip
-        delete rest.$limit
-        const baseQuery = {
-          ...rest,
-          $sort: rest.$sort,
-          $limit: 200,
+        delete rest['assignee.teamId']
+        if (rx) delete rest.title
+
+        let rows = Object.values(issues.store)
+        if (rx) {
+          const re = new RegExp(rx, q.title.$options || 'i')
+          rows = rows.filter(issue => re.test(issue.title))
         }
-        const { data: pre } = await issues.find({
-          paginate: { default: 200, max: 200 },
-          query: baseQuery,
-        })
-        const filtered = pre.filter(i => re.test(i.title))
-        context.result = {
-          total: filtered.length,
-          limit: $limit,
-          skip: $skip,
-          data: filtered.slice($skip, $skip + $limit),
+        if (assigneeTeam != null) {
+          rows = rows.filter(issue => {
+            const assignee = users.store[issue.assigneeId]
+            return assignee ? compare(assignee.teamId, assigneeTeam) : false
+          })
         }
+
+        // Short-circuiting skips the service method, so pay the latency here.
+        await issues._tick()
+        context.result = applyFindWindow(rows, rest)
         return context
       },
     ],
@@ -571,6 +436,7 @@ app.service('issues').hooks({
         context.data = {
           ...context.data,
           id: context.data.id ?? nextIssueId++,
+          commentIds: context.data.commentIds ?? [],
           updatedAt: context.data.updatedAt ?? new Date().toISOString(),
         }
         return context
@@ -588,33 +454,28 @@ app.service('issues').hooks({
   },
 })
 
-app.service('documents').hooks({
+// ----- Comments hooks: ids + server-maintained commentIds on the parent issue -----
+
+app.service('comments').hooks({
   before: {
-    find: [
+    create: [
       async context => {
-        const q = context.params?.query
-        const orgUnitLabel = q?.['person.orgUnit.label']
-        if (!orgUnitLabel) return context
-
-        const rest = { ...q }
-        delete rest['person.orgUnit.label']
-
-        const rows = Object.values(documents.store).filter(doc => {
-          const person = people.store[doc.personId]
-          const unit = person ? orgUnits.store[person.orgUnitId] : null
-          return unit ? compare(unit.label, orgUnitLabel) : false
-        })
-
-        context.result = applyFindWindow(rows, rest)
+        context.data = { ...context.data, id: context.data.id ?? nextCommentId++ }
         return context
       },
     ],
+  },
+  after: {
     create: [
+      // `issue.commentIds` is a server-maintained id list — the "embed" pattern.
+      // Patching the parent re-emits it, which is what keeps clients' comment
+      // counts fresh without them fetching a single comment.
       async context => {
-        context.data = {
-          ...context.data,
-          id: context.data.id ?? nextDocumentId++,
-          createdAt: context.data.createdAt ?? new Date().toISOString(),
+        const issue = issues.store[context.result.issueId]
+        if (issue) {
+          await app.service('issues').patch(issue.id, {
+            commentIds: [...(issue.commentIds ?? []), context.result.id],
+          })
         }
         return context
       },
@@ -626,64 +487,81 @@ app.service('issueLabels').hooks({
   before: {
     create: [
       async context => {
-        context.data = {
-          ...context.data,
-          id: context.data.id ?? nextIssueLabelId++,
-        }
+        context.data = { ...context.data, id: context.data.id ?? nextIssueLabelId++ }
         return context
       },
     ],
   },
 })
 
+app.service('reactions').hooks({
+  before: {
+    create: [
+      async context => {
+        context.data = { ...context.data, id: context.data.id ?? nextReactionId++ }
+        return context
+      },
+    ],
+  },
+})
+
+// ----- Simulated teammate -----
+
+// One weighted action per tick, through app.service() so events flow through the
+// publish pipeline and reach socket subscribers.
 setInterval(async () => {
   if (!backgroundEnabled) return
-  const issueIds = Object.keys(issues.store).map(Number)
+
+  const issueRows = Object.values(issues.store)
   const userIds = Object.keys(users.store).map(Number)
-  if (issueIds.length === 0 || userIds.length === 0) return
+  if (issueRows.length === 0 || userIds.length === 0) return
 
-  const issueId = issueIds[rand(0, issueIds.length - 1)]
-  const authorId = userIds[rand(0, userIds.length - 1)]
-  const body = sampleBodies[rand(0, sampleBodies.length - 1)]
+  const openIssues = issueRows.filter(issue => issue.status === 'open')
+  const recentIssues = issueRows
+    .slice()
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .slice(0, 25)
 
-  // Go through app.service so the 'created' event flows through the publish
-  // pipeline and reaches socket subscribers. Calling the bare service ref
-  // writes to the store but skips broadcast.
-  await app.service('comments').create({
-    id: nextCommentId++,
-    issueId,
-    authorId,
-    body,
-  })
-}, BACKGROUND_TICK_MS)
-
-// Occasionally drop a reaction too, just to exercise nested-relation realtime.
-setInterval(async () => {
-  if (!backgroundEnabled) return
-  const commentIds = Object.keys(comments.store).map(Number)
-  const userIds = Object.keys(users.store).map(Number)
-  if (commentIds.length === 0) return
-  const emojis = ['🚀', '💯', '🔥', '✨', '👏', '🎯']
-
-  await app.service('reactions').create({
-    id: nextReactionId++,
-    commentId: commentIds[rand(0, commentIds.length - 1)],
-    userId: userIds[rand(0, userIds.length - 1)],
-    emoji: emojis[rand(0, emojis.length - 1)],
-  })
-}, BACKGROUND_TICK_MS * 1.5)
-
-// Nudge an issue's score so the server-window panel visibly refills over time.
-setInterval(async () => {
-  if (!backgroundEnabled) return
-  const openIssues = Object.values(issues.store).filter(issue => issue.status === 'open')
-  if (openIssues.length === 0) return
-  const issue = openIssues[rand(0, openIssues.length - 1)]
-
-  await app.service('issues').patch(issue.id, {
-    priorityScore: Math.min(99, issue.priorityScore + rand(1, 8)),
-  })
-}, BACKGROUND_TICK_MS * 2)
+  const roll = Math.random()
+  try {
+    if (roll < 0.5) {
+      // Comment on a recent issue.
+      const issue = recentIssues[rand(0, recentIssues.length - 1)]
+      await app.service('comments').create({
+        issueId: issue.id,
+        authorId: userIds[rand(0, userIds.length - 1)],
+        body: COMMENT_BODIES[rand(0, COMMENT_BODIES.length - 1)],
+      })
+    } else if (roll < 0.7) {
+      // React to a recent comment.
+      const commentIds = Object.keys(comments.store).map(Number)
+      if (commentIds.length === 0) return
+      const recent = commentIds.sort((a, b) => b - a).slice(0, 30)
+      await app.service('reactions').create({
+        commentId: recent[rand(0, recent.length - 1)],
+        userId: userIds[rand(0, userIds.length - 1)],
+        emoji: EMOJIS[rand(0, EMOJIS.length - 1)],
+      })
+    } else if (roll < 0.85) {
+      // Nudge an open issue's priority.
+      if (openIssues.length === 0) return
+      const issue = openIssues[rand(0, openIssues.length - 1)]
+      await app.service('issues').patch(issue.id, {
+        priorityScore: Math.max(1, Math.min(99, issue.priorityScore + rand(-6, 10))),
+      })
+    } else {
+      // Close an open issue, or reopen a closed one.
+      const closeable = roll < 0.93 ? openIssues : issueRows.filter(i => i.status === 'closed')
+      if (closeable.length === 0) return
+      const issue = closeable[rand(0, closeable.length - 1)]
+      await app.service('issues').patch(issue.id, {
+        status: issue.status === 'open' ? 'closed' : 'open',
+      })
+    }
+  } catch {
+    // A racing reset can invalidate ids mid-tick; skip the beat.
+  }
+}, TICK_MS)
 
 // ----- Start -----
 
@@ -692,11 +570,9 @@ const PORT = Number(process.env.PORT) || 3030
 app.listen(PORT).then(() => {
   console.log(`[figbird-demo] server listening on http://localhost:${PORT}`)
   console.log(
-    `[figbird-demo] per-service latency — users/teams/labels 100-300, joins/reactions 200-500, ` +
-      `issues 300-700, comments 700-1300 ms.`,
+    `[figbird-demo] latency profile "${latency}" (fast 30-80 / realistic 120-300 / slow 600-1400 ms) — switch via dev tools`,
   )
   console.log(
-    `[figbird-demo] background traffic OFF by default (toggle via dev tools). ` +
-      `When on, ticks every ${BACKGROUND_TICK_MS}ms.`,
+    `[figbird-demo] simulated teammate ON, one action every ${TICK_MS}ms — toggle via dev tools`,
   )
 })
