@@ -400,11 +400,13 @@ function ActivityPanel() {
         ts: c.id,
         node: (
           <>
-            <strong>{c.author?.name ?? 'someone'}</strong> commented on{' '}
-            <Link href={`/issues/${c.issueId}`} className='inline-link'>
-              #{c.issueId}
-            </Link>
-            <span className='activity-body'>{c.body}</span>
+            <div className='activity-line'>
+              <strong>{c.author?.name ?? 'someone'}</strong> commented on{' '}
+              <Link href={`/issues/${c.issueId}`} className='inline-link'>
+                #{c.issueId}
+              </Link>
+            </div>
+            <div className='activity-body'>{c.body}</div>
           </>
         ),
       })
@@ -414,9 +416,9 @@ function ActivityPanel() {
         key: `r-${r.id}`,
         ts: r.id,
         node: (
-          <>
+          <div className='activity-line'>
             <strong>{r.user?.name ?? 'someone'}</strong> reacted {r.emoji} on comment #{r.commentId}
-          </>
+          </div>
         ),
       })
     }
@@ -426,21 +428,23 @@ function ActivityPanel() {
         ts: Date.parse(i.updatedAt) || 0,
         node: (
           <>
-            <Link href={`/issues/${i.id}`} className='inline-link'>
-              #{i.id}
-            </Link>{' '}
-            <span className='dim'>updated</span>
-            <span className='activity-body'>{i.title}</span>
+            <div className='activity-line'>
+              <Link href={`/issues/${i.id}`} className='inline-link'>
+                #{i.id}
+              </Link>{' '}
+              <span className='dim'>updated</span>
+            </div>
+            <div className='activity-body'>{i.title}</div>
           </>
         ),
       })
     }
     out.sort((a, b) => b.ts - a.ts)
-    return out.slice(0, 10)
+    return out.slice(0, 12)
   }, [comments, reactions, issues])
 
   return (
-    <section className='aside-section grow'>
+    <section className='aside-section'>
       <header className='section-head'>
         <span className='eyebrow'>Activity</span>
         <StatusDot active={isFetching} />
@@ -922,8 +926,8 @@ function Workspace({ children }: { children?: ReactNode }) {
         </Suspense>
         <aside className='aside'>
           <TeamsPanel />
-          <ActivityPanel />
           <ConsolePanel />
+          <ActivityPanel />
         </aside>
       </div>
     </>
