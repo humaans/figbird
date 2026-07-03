@@ -1032,49 +1032,7 @@ button.primary:hover:not(:disabled) {
 
 /* ----- Activity feed ----- */
 
-.activity-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  border-top: 1px solid var(--border);
-}
-
-.activity-item {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.activity-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-}
-
-.activity-body {
-  font-size: 12.5px;
-  color: var(--text-muted);
-  margin-left: 24px;
-}
-
-.activity-item.reaction .activity-title {
-  color: var(--text-muted);
-}
-
-.comment-avatar.small {
-  font-size: 14px;
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
+/* Activity feed styles live in the sidebar section near the end of this file. */
 
 .inline-link {
   color: var(--accent);
@@ -1353,28 +1311,20 @@ button.primary:hover:not(:disabled) {
   text-overflow: ellipsis;
 }
 
-/* ----- Sidebar activity (compact) ----- */
+/* ----- Sidebar activity (compact, natural flow — the rail itself scrolls) ----- */
 
-.aside-section.grow {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.aside-section.grow .activity-list {
-  flex: 1;
-  overflow-y: auto;
+.aside .activity-list {
   margin: 0;
-  padding: 0 14px 12px;
+  padding: 0 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   list-style: none;
 }
 
 .aside .activity-item {
   font-size: 12px;
+  line-height: 1.45;
   color: var(--text-muted);
   border: 0;
   padding: 0;
