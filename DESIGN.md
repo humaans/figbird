@@ -1,4 +1,4 @@
-# Figbird And Router Design Notes
+# Figbird Design
 
 Figbird is a client-side projection engine for server-authoritative Feathers queries, with
 relational assembly and realtime-assisted reconciliation.
@@ -8,8 +8,9 @@ system like Zero. The goal is narrower: if an application can express a common r
 shape in Figbird, Figbird should maintain that projection correctly, use cache where it is safe,
 and ask the server to reconcile when correctness cannot be proven locally.
 
-This document also describes the intended integration with `react-space-router`. The two libraries
-should stay independently useful, but they need one shared story for modern React SPAs:
+This document is the high-level reference for how the library is designed and why. It also
+describes the integration story with `react-space-router` — the two libraries stay independently
+useful, but they share one story for modern React SPAs:
 
 - `react-space-router` owns navigation intent, route matching, lazy route modules, and route commit
   policy.
@@ -80,8 +81,35 @@ These are explicitly out of scope. They are not bad ideas — they are different
   aggregates, negation, and recursive traversal are out of scope unless the backend exposes them
   as explicit services.
 - **A second first-class rendering story.** See "Suspense-Native Reads" — the strategic read
-  contract suspends for cold exact keys. Tagged-union/non-Suspense hooks can exist for migration
-  and tests, but new product-facing APIs should not make `isLoading` branches the normal path.
+  contract suspends for cold exact keys. The tagged-union mode exists as `{ suspense: false }` on
+  the same hook, but new product-facing APIs should not make `isLoading` branches the normal path.
+
+## API Design Principles
+
+Rules that repeatedly decided API questions; new surface should be tested against them.
+
+- **Defaults fail toward the cheap mistake.** A non-optimistic task-add merely feels slow; an
+  optimistic policy-save that fails after the user walked away is silent data loss. Mutations
+  default non-optimistic. The same logic keeps validation optional: forced ceremony teaches
+  passthrough stubs, which look like safety and are not.
+- **Declare intent at the altitude where it is constant.** Optimism is a property of a surface (a
+  task list is always optimistic, a settings modal never is), so it is declared once per
+  `useMutation` hook, overridable per call — not restated on every call and not frozen into the
+  schema.
+- **Two contracts, two names.** `prepare()` (awaitable lease) and `prefetch()` (idempotent
+  fire-and-forget) could have been one function with a flag; then one name would mean two
+  behaviors. When callers genuinely never want each other's contract, split the verb.
+- **Admit everything legal, autocomplete everything known.** `.where()` types known item fields
+  and keeps an open index signature for dotted relational paths and server-only operators. Types
+  that reject legal queries teach casting, which is worse than looseness.
+- **Absorb traps, don't export them.** If every consumer must learn the same workaround — deferring
+  event delivery off the render path, deduping hover prefetches, delaying Suspense fallbacks — the
+  library grows the mechanism and the workaround disappears.
+- **One mental model per concern.** The non-Suspense read is an option on `useQuery`, not a second
+  hook; preparation is an earlier read, not a different kind of read.
+- **The first consumer is the proof.** The demo app is maintained as evidence: anywhere it needs
+  machinery, a cast, or an apologetic comment to use the library, that is an API bug to fix here,
+  not a recipe to document.
 
 ## Core Model
 
@@ -100,7 +128,7 @@ events may have been missed, active queries need reconciliation with the server.
 
 ## Query Classes
 
-Figbird should classify each query node by how it can be maintained.
+Figbird classifies each query node by how it can be maintained.
 
 ### Local Exact
 
@@ -370,9 +398,9 @@ Figbird cannot locally guarantee correctness when:
 These are information boundaries, not implementation bugs. Many can be handled by treating the
 query node as server-authoritative and refetching it.
 
-## Intended 80% Target
+## The 80% Target
 
-Figbird should aim to handle these cases robustly:
+Figbird handles these cases robustly:
 
 - `get(id)`.
 - Full filtered lists with local predicates.
@@ -392,7 +420,7 @@ maintenance strategy internally where possible. If Figbird cannot make a correct
 query shape, that shape should be explicit manual/server-authoritative rather than silently
 approximate.
 
-## V1 Candidate Coverage
+## Coverage
 
 Supported automatically:
 
@@ -429,9 +457,10 @@ refetches keep returning that data with `isFetching: true`. The common product p
 contain an `isLoading` branch. `<Suspense>` and `<ErrorBoundary>` own loading and first-read errors
 because that is where they compose properly with the rest of the React tree.
 
-The current library may expose tagged-union or non-Suspense modes for migration, lower-level tests,
-or interop with older code. Those modes are not the north-star API. New Figbird + router work should
-optimize for Suspense-native reads.
+The explicit tagged-union mode exists as an option on the same hook — `useQuery(query,
+{ suspense: false })` returns `{ status, data, error, isFetching, refetch }` and never suspends or
+throws. It is the right tool for components that render their own inline loading/error UI, but it is
+not the north-star: documentation and product code lead with Suspense.
 
 ### Cache Entries As Tagged Unions
 
@@ -540,22 +569,45 @@ The core API should work with plain `useQuery`, route preparation, `startTransit
 `useDeferredValue`, and keyed Suspense boundaries. Do not add a Figbird-specific deferred-query
 hook until repeated product code proves that the React primitives are too verbose.
 
-### Why We Reject A Two-Mode Story
+### Why There Is No Second Hook
 
-A non-Suspense `{ status, data, error }` mode has to coexist with the Suspense one inside the
-cache entry tagged union because migration code and tests sometimes need it. The design goal is
-that this remains a compatibility surface, not a second mental model. Documentation and examples
-should lead with Suspense. The `useFind` / `useGet` shims exist for migration only and should call
-into the same query machinery.
+A non-Suspense `{ status, data, error }` shape has to exist because some components legitimately
+own their loading/error rendering. But it must not become a second mental model — so it is an
+*option* on the one hook (`{ suspense: false }`), not a separately named hook, and both modes run
+the same query machinery underneath. The legacy `useFind` / `useGet` shims exist for older
+codebases only; they are deprecated and also call into the same machinery.
+
+## Mutations And Optimism
+
+Mutations are remote-first: every `create`/`update`/`patch`/`remove` returns a promise that settles
+on the server response, and the resulting entity flows through the same event pipeline as realtime
+events — a mutation from one component updates every query referencing the data, exactly as a
+socket event from another client would.
+
+The `optimistic` flag decides *when the UI may show the change*, and the two modes deserve their
+plain names:
+
+- **"Show it only once it's real"** (default) — the cache updates after the server acks. For
+  critical surfaces: settings, policies, anything where the user must know it saved before walking
+  away.
+- **"Show it now, roll back on failure"** (`optimistic: true`) — the cache applies a synthetic
+  event immediately; a server failure applies the inverse event, rolling the change back everywhere
+  at once (and emitting `mutate:rollback` on the observability channel).
+
+Optimistic and awaitable are not opposites — the promise settles on the ack in both modes.
+
+Optimistic creates need a client-generated id: without one there is nothing to track and roll back,
+so such a create simply applies non-optimistically. `update`/`patch`/`remove` synthesize their
+optimistic item from the cache (`patch` merges onto the cached entity; an explicit item can be
+passed for computed fields).
 
 ## Prepared Queries
 
 `useQuery` covers the in-component exact-read case. It does not let the *router* start loading data
-before any component mounts. To bridge that, Figbird exposes a small forward-looking extension:
-prepared queries.
+before any component mounts. Prepared queries bridge that.
 
 ```ts
-const issueDetail = figbird.defineQuery('issueDetail', { id: t.number }, ({ id }) =>
+const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
   figbird.q.issues
     .where({ id })
     .one()
@@ -572,11 +624,14 @@ const { data } = useQuery(issueDetail, { id: 42 })
 
 Properties:
 
-- **Stable identity.** `defineQuery(name, argsSchema, build)` registers a builder factory keyed by
-  `name`. Calling `prepare(query, args)` and later `useQuery(query, args)` with the same args
-  hits the same cache entry — no need to thread the builder instance through.
-- **Args validation.** `argsSchema` is the contract between the caller and the query. Mismatches
-  fail loudly at the call site rather than producing silent cache misses.
+- **Stable identity.** `defineQuery(name, build)` registers a builder factory. Calling
+  `prepare(query, args)` and later `useQuery(query, args)` with the same args hits the same cache
+  entry — no need to thread the builder instance through.
+- **Args validation, when args are untrusted.** Args are typed from the build function; when they
+  arrive from URLs or storage, an optional Standard Schema validator
+  (`defineQuery(name, argsSchema, build)`) runs at every call site and fails loudly rather than
+  producing silent cache misses (`{ id: "42" }` vs `{ id: 42 }`). Args from typed code need no
+  validator — a mandatory one only teaches consumers to write passthrough stubs.
 - **Earlier read, same entry.** `prepare` starts the same query that `useQuery` would read later.
   The component does not receive data from the router; it reads normally from Figbird.
 - **Awaitable by orchestration.** `prepare` returns a lightweight handle that can be awaited by a
@@ -595,8 +650,7 @@ The handle shape should be explicit enough to force lifecycle discipline:
 
 ```ts
 type PreparedQuery = {
-  key: QueryKey
-  priority: 'route' | 'defer'
+  key: string
   promise: Promise<void>
   release(): void
 }
@@ -604,81 +658,25 @@ type PreparedQuery = {
 
 `promise` resolves when the exact query key has data ready for a Suspense read, or rejects with the
 same error that `useQuery` would throw for that key. `release()` drops the temporary preparation pin;
-it must not evict data that mounted components are actively reading.
+it must not evict data that mounted components are actively reading. Router metadata — such as a
+blocking/deferred priority — is deliberately not part of the handle: figbird never reads it, so the
+route-prepare function attaches it (`{ ...figbird.prepare(def, args), priority: 'defer' }`).
 
-## Preloaded Reference Sets (`.all()`)
+### Speculative Prefetch
 
-Reference data — locations, currencies, role definitions, custom-field schemas, time-away
-policies, request types — fits awkwardly in the on-demand fetch model. Half a dozen
-components each call `useQuery(q.locations.where({...}))` and each component lights up its
-own fetch on first render. The realtime channel keeps the data fresh, but the *initial* load
-is unnecessary fan-out; the same data lives in N concurrent query entries.
-
-Figbird should expose an explicit "preload everything once" mode via an `.all()` builder verb,
-designed to be paired with `prepare()`:
+`prepare()` is an explicit lease: a promise to await, a pin to release. That contract is right for
+routers and wrong for speculation — a hover handler has no natural moment to release a pin, and
+calling `prepare()` repeatedly re-triggers revalidation. So speculation gets its own verb with its
+own contract:
 
 ```ts
-// At app shell mount:
-figbird.prepare(figbird.q.locations.all())
-figbird.prepare(figbird.q.currencies.all())
-figbird.prepare(figbird.q.roles.all().related('permissions'))
-
-// Later, anywhere in the app — no fetch, no roundtrip:
-const { data } = useQuery(figbird.q.locations.where({ countryCode: 'GB' }))
+figbird.prefetch(issueDetail, { id }, { staleTime: 30_000 })
 ```
 
-Properties:
-
-- **Explicit verb.** `.all()` is loud — distinguishable from `.limit(50)` and from a default
-  unbounded find. The schema author has to be intentional about which services get preloaded.
-  The alternative (silent unbounded fetch) encourages full-table fetches that nobody noticed
-  happened.
-- **Service marked fully materialized.** A successfully prepared `.all()` flips a per-service
-  flag inside Figbird: this service has the complete set in the local cache. Realtime events
-  maintain it. Any subsequent `useQuery(q.locations.where({...}))` against the same service
-  consults that flag — if set, the read becomes a local matcher pass over the cached set with
-  no network roundtrip.
-- **Subset queries are local.** This collapses the fan-out problem. Five components reading
-  different windows of `locations` share the same materialized cache; only the matchers
-  differ. Realtime keeps the underlying set fresh; the matchers re-run against it.
-- **Relations on `.all()` are allowed.** `q.roles.all().related('permissions')` preloads the
-  parent set *and* the related set. The relation is fully materialized too, so subset queries
-  through that relation are also local. Forbidding relations would defeat the use case —
-  reference data often travels in small joined sets ("permission types" with "permissions per
-  role", "request types" with "request type versions").
-- **Bounded payload contract.** `.all()` is for reference-table-sized data. The schema author
-  is responsible for reaching for it deliberately on services where row count is small and
-  stable. Figbird does not automatically refuse `.all()` on unbounded tables — that judgment
-  is the author's. Devtools may surface row-count or payload-size warnings for `.all()`
-  queries that exceed a threshold, especially when combined with `.related()`.
-- **Background refresh.** Per-prepare option (`refreshAfter: ms`, `refreshOnVisible`,
-  `refreshOnReconnect`) plus default policies on visibility change and online events.
-  Realtime is the primary freshness mechanism; periodic refresh is a defence against missed
-  events, laptop wake, and clock skew.
-- **Subset routing only when matchers can decide.** A query whose predicate uses an operator
-  Figbird's matcher does not implement (server-side `$search`, custom `$asOf`, etc.) still
-  goes to the server, even against a `.all()`-d service. Same constraint as today's realtime
-  merge: if the matcher cannot decide, the query is server-window. `.all()` does not change
-  this — it just means *matcher-supported* predicates run locally instead of fetching.
-- **Sort and slice are cheap locally.** `q.locations.all()` followed by
-  `q.locations.where({...}).orderBy('name', 'asc').limit(10)` should compute the top-10
-  client-side over the materialized set, not fall back to a server window. Document this so
-  consumers reach for it confidently.
-
-Open questions:
-
-- How does `.all()` interact with `defineQuery` — should preload definitions live in a
-  separate registry the app shell iterates, or should they just be prepares fired alongside
-  route prepares? Probably the latter for simplicity; the shell prepares the reference set,
-  routes prepare their detail queries.
-- What is the contract for an `.all()` whose result exceeds an internal sanity threshold (say
-  10k rows)? Hard error, soft warning, or silent? Probably a dev-mode warning with a
-  prod-mode silent log — we trust the schema author but want to catch mistakes.
-- Combining `.all()` with `.where()` — should `q.locations.all().where({ active: true })` be
-  a thing? Probably no: the point of `.all()` is "everything," and adding a `.where()`
-  contradicts that. The right way to express "all active locations" is to preload `.all()`
-  and then read `q.locations.where({ active: true })` from the materialized cache. Forbid
-  the combination at type-check time.
+`prefetch()` is idempotent and fire-and-forget: a no-op when the query was fetched within
+`staleTime`, otherwise it fetches and holds an internal pin that auto-releases after `staleTime`.
+The data stays cached either way, so a later `useQuery` is a warm synchronous read. Two use cases,
+two contracts, two names — a mode flag on `prepare()` would have made one name mean both.
 
 ## Router Integration
 
@@ -699,8 +697,9 @@ imports synchronously.
 import { issueDetail, issueActivity } from './queries'
 
 export const prepareIssueDetail = ({ figbird, params }: RoutePrepareContext) => [
-  figbird.prepare(issueDetail, { id: Number(params.id) }, { priority: 'route' }),
-  figbird.prepare(issueActivity, { id: Number(params.id) }, { priority: 'defer' }),
+  // priority is router vocabulary — the app attaches it, figbird never reads it
+  { ...figbird.prepare(issueDetail, { id: Number(params.id) }), priority: 'route' },
+  { ...figbird.prepare(issueActivity, { id: Number(params.id) }), priority: 'defer' },
 ]
 ```
 
@@ -770,7 +769,8 @@ until repetition proves otherwise.
 
 ### Priorities
 
-Each prepared query declares one of two priorities:
+Each prepared query is tagged by the route-prepare function with one of two priorities. (The tag
+lives on the router side of the line — figbird's `PreparedQuery` handle does not carry it.)
 
 - `priority: 'route'` — required for the initial reveal of this route. The route-commit policy
   (below) may wait for these.
@@ -855,24 +855,6 @@ There should not be separate hooks named `usePreparedQuery`, `useRouteQuery`, or
 `useBlockingQuery`. Preparation is an earlier read, not a different kind of read. Components read
 with `useQuery(query, args)` regardless of whether the router prepared the same query first.
 
-## MVP Contract
-
-Build the first version around the smallest contract that proves the architecture:
-
-- Exact Suspense `useQuery`.
-- Named query definitions if they are needed to make `prepare` ergonomic and stable.
-- `figbird.prepare(query, args)` returning a lifecycle-aware handle.
-- `route.prepare` in `react-space-router`.
-- `commit: 'immediate'` route commits.
-- Keyed Suspense boundaries in product code for route/detail identity resets.
-
-Defer these until repetition or product friction proves they are needed:
-
-- `commit: 'ready'` and `timeoutMs`.
-- Hover and command-palette prefetch.
-- A router `suspenseKey` helper.
-- Any Figbird-specific deferred-query hook.
-
 ## UX Timing Contract
 
 The whole point of the design is to put the right shape of UI in front of the user at the right
@@ -891,126 +873,36 @@ time. The opinion the library encodes:
   range where realtime / suspense alone are not enough.
 
 These thresholds inform fallback reveal timing and pending indicators, not anything users have to
-wire up. A consumer screen never sees a number; it sees the right spinner appearing at the right
-time because `useQuery`, route preparation, transitions, and local Suspense boundaries all land in
-the right band.
+wire up by hand. The library ships the kit that encodes them — `DelayedFallback` (fallbacks that
+only appear when loading is actually slow), `useDelayedFlag` (spinners that neither flash nor
+yo-yo), and `useDebouncedTransition` (text input committed inside a transition) — plus a "no-flash
+checklist" in the docs that maps each failure mode to its tool.
 
-## Forward-Looking Features
+## Instance Binding And Introspection
 
-These are designs that have an identified use case but are not part of the V1 contract. They are
-recorded here so the V1 architecture leaves the door open and so future work can pick up the shape
-the team has already agreed on.
+**One instance, optional provider.** `createHooks(figbird)` returns hooks *bound* to that instance
+(plus `q`, the builder proxy), so a singleton SPA needs no `FigbirdProvider` at all. Context, when
+present, overrides the bound instance — that is the injection point for per-request SSR trees and
+per-test instances — and a dev-mode error fires when a provider holds a *different* instance than
+the bound one, because that divergence used to be silent (types from one instance, runtime from
+another).
 
-### Multi-Mutation Transactions
+**Classification must be visible.** Whether a query node is local-exact, server-window, or
+server-authoritative decides its entire realtime behavior, and it flips implicitly — adding
+`.limit(30)` turns merge into refetch. Two read-only surfaces keep that legible:
 
-Real workflows often involve coordinated writes across services that should commit atomically:
+- `figbird.explain(builderOrDefinition)` — a static per-node report: classification, the structured
+  reasons that produced it (`{ code: 'server-only-operator', detail: '$regex' }`), and the
+  resulting realtime mode. Assertable in tests ("this thread query must stay local-exact"),
+  renderable in devtools, and the answer to "why did my list start refetching".
+- `figbird.inspect()` — a deliberately small, stable snapshot of every live query (classification,
+  status, item count, fetch time, subscriber count). Devtools build on this projection so the
+  internal store shapes stay free to change.
 
-- "Delete role + remove all roleMembers + revoke API tokens."
-- "Approve time-away + create the corresponding `timeAwayPeriods` rows + bump balance."
-- "Patch issue + add a comment + mark assignee as notified."
-
-Today these are individual `useMutation` calls that the caller orchestrates serially. The
-optimistic state of each step is independent; there is no "all of these succeed or none of them
-apply" client contract, and rollback on partial failure is the caller's job.
-
-A transaction primitive bundles multiple mutations into one logical commit:
-
-```ts
-await figbird.transaction(async tx => {
-  tx.mutate({ serviceName: 'roles', method: 'remove', id: roleId })
-  for (const m of members) {
-    tx.mutate({ serviceName: 'roleMembers', method: 'remove', id: m.id })
-  }
-  tx.mutate({ serviceName: 'apiTokens', method: 'remove', id: tokenId })
-})
-```
-
-Server contract:
-
-The Humaans backend already exposes `api/batch` for atomic multi-service writes — the request
-body is a list of operations and the server commits or rolls back the whole batch. The Figbird
-adapter for Humaans should map `figbird.transaction()` to a single `api/batch` call. Other
-adapters with similar primitives (a GraphQL mutation list against a transactional resolver, a
-Postgres transaction endpoint, a custom `$tx` operator) can implement the same shape. Adapters
-without a batch primitive can still expose `transaction()` as a sequential best-effort with
-client-side rollback, but the all-or-nothing guarantee is weaker; document the difference.
-
-Client semantics:
-
-- **Optimistic together, rollback together.** All staged mutations apply optimistically at the
-  same time. If the batch fails, all optimistic states roll back as one. Subscribers see the
-  all-or-nothing transition rather than a partial intermediate state.
-- **Per-mutation overrides preserved.** Individual mutations can still override `optimistic`
-  behavior — a transaction containing one non-optimistic mutation just delays its optimistic
-  siblings until the server confirms.
-- **Read-your-write within a transaction.** Inside the `async tx => { ... }` callback,
-  mutations apply to the local cache as they're staged so a follow-up read sees them. This is
-  useful for transactions whose later steps depend on results of earlier ones.
-
-Open questions:
-
-- Does `tx.mutate` return a promise resolved when the batch commits, immediately with the
-  optimistic placeholder, or both (a `.optimistic` and a `.committed` accessor)?
-- Abort semantics if a step throws inside the callback before the batch fires. Easiest answer:
-  any thrown error before commit drops the staged mutations and rolls back optimistic state.
-- Concurrent transactions on overlapping services — serialize, allow, or fail loudly? Probably
-  allow with last-write-wins on optimistic state, since the server will resolve the actual
-  conflict.
-
-### Derived Queries
-
-Some screen-level queries are genuinely compositions of multiple server queries that the
-backend cannot easily express as a single endpoint. The cases that survive even after relation
-filters and `.all()` preloading:
-
-- **Cross-service combinations with no shared join key.** "People whose Slack online-status is
-  active and whose last activity event was within 5 minutes." Slack status, activity events,
-  and people each live in different services with no shared FK.
-- **Aggregates the server doesn't expose.** "People whose unfinished task count exceeds their
-  team's median." No "team-median tasks" predicate exists server-side; it must be computed
-  client-side from people-with-tasks and teams.
-- **Conditional / branching queries based on user state.** "If I'm an admin, show all issues;
-  otherwise show issues I assigned or that mention me." Pushing the auth check into every
-  Feathers hook leaks user context into the server's query layer; keeping it client-side is
-  cleaner for some products.
-- **Stable named views worth caching by composition.** Even when expressible as a single
-  query, a named composition can be useful for sharing across components and surfacing in
-  devtools as one logical entity.
-
-A speculative API:
-
-```ts
-const myTeamCriticalIssues = figbird.deriveQuery(
-  'myTeamCriticalIssues',
-  z.object({ currentUserId: z.number() }),
-  ({ currentUserId }, { read }) => {
-    const me = read(q.people.where({ id: currentUserId }).one())
-    if (!me) return []
-    const teammates = read(q.people.where({ teamId: me.teamId, status: 'active' }))
-    const teammateIds = new Set(teammates.map(t => t.id))
-    const issues = read(q.issues.where({ severity: 'critical', state: 'open' }))
-    return issues.filter(i => teammateIds.has(i.assigneeId))
-  },
-)
-
-// Component:
-const { data } = useQuery(myTeamCriticalIssues, { currentUserId })
-```
-
-Properties:
-
-- The derivation function uses `read()` to subscribe to upstream queries. Figbird tracks the
-  dependency set and re-runs the derivation when any input's data ref changes.
-- Multiple components reading the same `useQuery(myTeamCriticalIssues, args)` share one
-  computation. Same cache-entry semantics as `defineQuery`.
-- Suspends until all upstream queries have data. Same Suspense contract as plain queries.
-- Error from any upstream propagates to the derivation's consumers.
-
-Status: **speculative**. Most of what looks like "needs derivation" turns out to be "needs
-better relation filters" once the dotted-path / `havingRelated` form ships. Derived queries
-earn their keep specifically for cross-service composition, aggregate combinations, and
-conditional branches that don't fit a single server query. Add when the relation-filter and
-`.all()` features have shipped and a real, persistent need has surfaced.
+**Observability is deferred.** `figbird.events` (fetch/realtime/mutation lifecycle facts) delivers
+on a microtask, batched and ordered, with timestamps captured at emit time — some emits happen
+synchronously inside a React render, and delivering there would force every React-bound subscriber
+to defer manually or hit "setState during render".
 
 ## Query Shape Catalogue
 
@@ -1425,7 +1317,230 @@ subtle boundary bug produces silently-wrong membership, the failure mode this ar
 built to avoid. Throttled-but-dumb reconciliation ships first; pruning is added only if measured
 numbers show a specific query shape needs it.
 
-## Open Question: Cross-Service Snapshot Skew
+## Considered And Rejected
+
+Decisions worth recording so they are not relitigated without new information:
+
+- **Softening re-suspend-on-param-change (`keepPreviousData`)** — rejected; it reintroduces the
+  exact query-identity lie the Exact Query Reads section exists to prevent. Transitions plus the
+  no-flash kit are the supported answer.
+- **Schema-level optimistic config** — rejected; optimism is surface-level intent, and the same
+  service legitimately serves both modes on different screens.
+- **Per-invocation mutation state in `useMutation`** — rejected; multi-action screens need
+  per-call pending state, which is caller-side by nature (a five-line wrapper). Documented as a
+  pattern instead.
+- **`.one()` / `.get()` unification** — rejected; null-on-miss vs error-on-miss is a real semantic
+  pair worth two spellings.
+- **A separately-named non-Suspense hook** — rejected in favor of `{ suspense: false }`; see "Why
+  There Is No Second Hook".
+- **`priority` on the core `PreparedQuery`** — rejected; router vocabulary the library never reads.
+
+## Future Ideas
+
+Unimplemented but considered worth keeping on the table. Nothing in the current design depends on
+these; each would be additive.
+
+### Client-Generated Ids And Temp-Id Swap
+
+Optimistic creates require a client-supplied id today, which pushes id-generation policy into app
+code. The designed-but-deferred mechanism: when an optimistic create has no id, figbird assigns an
+internal temp id, applies the write under it, and on the server's response swaps temp → real across
+the entity cache and query results. Scope guard: no rewriting of foreign keys recorded against an
+unresolved temp id — referencing a create's id means awaiting the create. Deferred until the rest
+of the API settles in real consumers.
+
+### Typed Relational Filter Paths
+
+Dotted relational filters (`'creator.teamId'`) are admitted but stringly-typed. Template-literal
+types over the relation graph could autocomplete and check them to a bounded depth. Real
+type-level cost for real delight; parked until the surface below it stops moving.
+
+### Multi-Mutation Transactions
+
+Real workflows often involve coordinated writes across services that should commit atomically:
+
+- "Delete role + remove all roleMembers + revoke API tokens."
+- "Approve time-away + create the corresponding `timeAwayPeriods` rows + bump balance."
+- "Patch issue + add a comment + mark assignee as notified."
+
+Today these are individual `useMutation` calls that the caller orchestrates serially. The
+optimistic state of each step is independent; there is no "all of these succeed or none of them
+apply" client contract, and rollback on partial failure is the caller's job.
+
+A transaction primitive bundles multiple mutations into one logical commit:
+
+```ts
+await figbird.transaction(async tx => {
+  tx.mutate({ serviceName: 'roles', method: 'remove', id: roleId })
+  for (const m of members) {
+    tx.mutate({ serviceName: 'roleMembers', method: 'remove', id: m.id })
+  }
+  tx.mutate({ serviceName: 'apiTokens', method: 'remove', id: tokenId })
+})
+```
+
+Server contract:
+
+The Humaans backend already exposes `api/batch` for atomic multi-service writes — the request
+body is a list of operations and the server commits or rolls back the whole batch. The Figbird
+adapter for Humaans should map `figbird.transaction()` to a single `api/batch` call. Other
+adapters with similar primitives (a GraphQL mutation list against a transactional resolver, a
+Postgres transaction endpoint, a custom `$tx` operator) can implement the same shape. Adapters
+without a batch primitive can still expose `transaction()` as a sequential best-effort with
+client-side rollback, but the all-or-nothing guarantee is weaker; document the difference.
+
+Client semantics:
+
+- **Optimistic together, rollback together.** All staged mutations apply optimistically at the
+  same time. If the batch fails, all optimistic states roll back as one. Subscribers see the
+  all-or-nothing transition rather than a partial intermediate state.
+- **Per-mutation overrides preserved.** Individual mutations can still override `optimistic`
+  behavior — a transaction containing one non-optimistic mutation just delays its optimistic
+  siblings until the server confirms.
+- **Read-your-write within a transaction.** Inside the `async tx => { ... }` callback,
+  mutations apply to the local cache as they're staged so a follow-up read sees them. This is
+  useful for transactions whose later steps depend on results of earlier ones.
+
+Open questions:
+
+- Does `tx.mutate` return a promise resolved when the batch commits, immediately with the
+  optimistic placeholder, or both (a `.optimistic` and a `.committed` accessor)?
+- Abort semantics if a step throws inside the callback before the batch fires. Easiest answer:
+  any thrown error before commit drops the staged mutations and rolls back optimistic state.
+- Concurrent transactions on overlapping services — serialize, allow, or fail loudly? Probably
+  allow with last-write-wins on optimistic state, since the server will resolve the actual
+  conflict.
+
+### Derived Queries
+
+Some screen-level queries are genuinely compositions of multiple server queries that the
+backend cannot easily express as a single endpoint. The cases that survive even after relation
+filters and `.all()` preloading:
+
+- **Cross-service combinations with no shared join key.** "People whose Slack online-status is
+  active and whose last activity event was within 5 minutes." Slack status, activity events,
+  and people each live in different services with no shared FK.
+- **Aggregates the server doesn't expose.** "People whose unfinished task count exceeds their
+  team's median." No "team-median tasks" predicate exists server-side; it must be computed
+  client-side from people-with-tasks and teams.
+- **Conditional / branching queries based on user state.** "If I'm an admin, show all issues;
+  otherwise show issues I assigned or that mention me." Pushing the auth check into every
+  Feathers hook leaks user context into the server's query layer; keeping it client-side is
+  cleaner for some products.
+- **Stable named views worth caching by composition.** Even when expressible as a single
+  query, a named composition can be useful for sharing across components and surfacing in
+  devtools as one logical entity.
+
+A speculative API:
+
+```ts
+const myTeamCriticalIssues = figbird.deriveQuery(
+  'myTeamCriticalIssues',
+  z.object({ currentUserId: z.number() }),
+  ({ currentUserId }, { read }) => {
+    const me = read(q.people.where({ id: currentUserId }).one())
+    if (!me) return []
+    const teammates = read(q.people.where({ teamId: me.teamId, status: 'active' }))
+    const teammateIds = new Set(teammates.map(t => t.id))
+    const issues = read(q.issues.where({ severity: 'critical', state: 'open' }))
+    return issues.filter(i => teammateIds.has(i.assigneeId))
+  },
+)
+
+// Component:
+const { data } = useQuery(myTeamCriticalIssues, { currentUserId })
+```
+
+Properties:
+
+- The derivation function uses `read()` to subscribe to upstream queries. Figbird tracks the
+  dependency set and re-runs the derivation when any input's data ref changes.
+- Multiple components reading the same `useQuery(myTeamCriticalIssues, args)` share one
+  computation. Same cache-entry semantics as `defineQuery`.
+- Suspends until all upstream queries have data. Same Suspense contract as plain queries.
+- Error from any upstream propagates to the derivation's consumers.
+
+Status: **speculative**. Most of what looks like "needs derivation" turns out to be "needs
+better relation filters" once the dotted-path / `havingRelated` form ships. Derived queries
+earn their keep specifically for cross-service composition, aggregate combinations, and
+conditional branches that don't fit a single server query. Add when the relation-filter and
+`.all()` features have shipped and a real, persistent need has surfaced.
+
+### Preloaded Reference Sets (`.all()`)
+
+Reference data — locations, currencies, role definitions, custom-field schemas, time-away
+policies, request types — fits awkwardly in the on-demand fetch model. Half a dozen
+components each call `useQuery(q.locations.where({...}))` and each component lights up its
+own fetch on first render. The realtime channel keeps the data fresh, but the *initial* load
+is unnecessary fan-out; the same data lives in N concurrent query entries.
+
+Figbird should expose an explicit "preload everything once" mode via an `.all()` builder verb,
+designed to be paired with `prepare()`:
+
+```ts
+// At app shell mount:
+figbird.prepare(figbird.q.locations.all())
+figbird.prepare(figbird.q.currencies.all())
+figbird.prepare(figbird.q.roles.all().related('permissions'))
+
+// Later, anywhere in the app — no fetch, no roundtrip:
+const { data } = useQuery(figbird.q.locations.where({ countryCode: 'GB' }))
+```
+
+Properties:
+
+- **Explicit verb.** `.all()` is loud — distinguishable from `.limit(50)` and from a default
+  unbounded find. The schema author has to be intentional about which services get preloaded.
+  The alternative (silent unbounded fetch) encourages full-table fetches that nobody noticed
+  happened.
+- **Service marked fully materialized.** A successfully prepared `.all()` flips a per-service
+  flag inside Figbird: this service has the complete set in the local cache. Realtime events
+  maintain it. Any subsequent `useQuery(q.locations.where({...}))` against the same service
+  consults that flag — if set, the read becomes a local matcher pass over the cached set with
+  no network roundtrip.
+- **Subset queries are local.** This collapses the fan-out problem. Five components reading
+  different windows of `locations` share the same materialized cache; only the matchers
+  differ. Realtime keeps the underlying set fresh; the matchers re-run against it.
+- **Relations on `.all()` are allowed.** `q.roles.all().related('permissions')` preloads the
+  parent set *and* the related set. The relation is fully materialized too, so subset queries
+  through that relation are also local. Forbidding relations would defeat the use case —
+  reference data often travels in small joined sets ("permission types" with "permissions per
+  role", "request types" with "request type versions").
+- **Bounded payload contract.** `.all()` is for reference-table-sized data. The schema author
+  is responsible for reaching for it deliberately on services where row count is small and
+  stable. Figbird does not automatically refuse `.all()` on unbounded tables — that judgment
+  is the author's. Devtools may surface row-count or payload-size warnings for `.all()`
+  queries that exceed a threshold, especially when combined with `.related()`.
+- **Background refresh.** Per-prepare option (`refreshAfter: ms`, `refreshOnVisible`,
+  `refreshOnReconnect`) plus default policies on visibility change and online events.
+  Realtime is the primary freshness mechanism; periodic refresh is a defence against missed
+  events, laptop wake, and clock skew.
+- **Subset routing only when matchers can decide.** A query whose predicate uses an operator
+  Figbird's matcher does not implement (server-side `$search`, custom `$asOf`, etc.) still
+  goes to the server, even against a `.all()`-d service. Same constraint as today's realtime
+  merge: if the matcher cannot decide, the query is server-window. `.all()` does not change
+  this — it just means *matcher-supported* predicates run locally instead of fetching.
+- **Sort and slice are cheap locally.** `q.locations.all()` followed by
+  `q.locations.where({...}).orderBy('name', 'asc').limit(10)` should compute the top-10
+  client-side over the materialized set, not fall back to a server window. Document this so
+  consumers reach for it confidently.
+
+Open questions:
+
+- How does `.all()` interact with `defineQuery` — should preload definitions live in a
+  separate registry the app shell iterates, or should they just be prepares fired alongside
+  route prepares? Probably the latter for simplicity; the shell prepares the reference set,
+  routes prepare their detail queries.
+- What is the contract for an `.all()` whose result exceeds an internal sanity threshold (say
+  10k rows)? Hard error, soft warning, or silent? Probably a dev-mode warning with a
+  prod-mode silent log — we trust the schema author but want to catch mistakes.
+- Combining `.all()` with `.where()` — should `q.locations.all().where({ active: true })` be
+  a thing? Probably no: the point of `.all()` is "everything," and adding a `.where()`
+  contradicts that. The right way to express "all active locations" is to preload `.all()`
+  and then read `q.locations.where({ active: true })` from the materialized cache. Forbid
+  the combination at type-check time.
+
+### Cross-Service Snapshot Skew
 
 An assembled relational tree joins query results that were fetched at slightly different times.
 There is no transactional read across services: the root may reflect the database at T0 and a
@@ -1459,7 +1574,7 @@ Near-term hardening (cheap, no protocol changes):
   render batching hides it, but intermediate snapshots are computed and non-React subscribers see
   them).
 
-### Candidate direction: version the stream, not the database
+#### Candidate direction: version the stream, not the database
 
 Because we control the backend, a future protocol revision could pin results and events to
 positions in a log without building a replica. The elegant core: **the realtime feed becomes an
@@ -1517,127 +1632,3 @@ version header on responses — protocol additions an adapter can carry without 
 architecture. Together they close missed-event detection, the stale-response membership race, and
 read-your-writes, which is most of the practical distance between a request orchestrator and a
 sync engine for a fraction of the machine. Nothing else in this document depends on this section.
-
-## API Refinement Decisions (July 2026)
-
-Decisions locked after the first real consumer (the demo app) exposed where the API forced
-workarounds. Method: everywhere the demo wrote machinery, the library owes a primitive;
-everywhere it wrote a cast, the library owes a type; everywhere it wrote a comment explaining
-behavior, the library owes either a default or an introspection surface. Each item below is
-agreed and scheduled; "deferred" items were considered and consciously parked.
-
-### Mutations
-
-- **Library default stays non-optimistic.** The failure costs are asymmetric: a non-optimistic
-  task-add merely feels slow, while an optimistic policy-save that fails after the user walked
-  away is silent data loss from their perspective. Defaults must fail toward the cheap mistake.
-- **Optimistic intent is declared at hook level** — `useMutation(service, { optimistic: true })`
-  sets the default for every call from that hook; per-call options override in both directions.
-  Rationale: optimism is a property of the interaction surface (a task list is always optimistic,
-  a settings modal never is), so the intent belongs once per surface, not on every call and not
-  in the schema (the same service legitimately serves both modes on different screens).
-- **Vocabulary:** optimistic and awaitable are not opposites — every mutation's promise settles
-  on server ack regardless. The flag only decides when the UI may show the change:
-  "show it now, roll back on failure" vs "show it only once it's real". Docs use these terms.
-- **Deferred: temp-id swap for optimistic creates.** Optimistic creates keep requiring a
-  client-supplied id for now. Revisit after the rest of this list lands.
-
-### Prepare / prefetch
-
-- **New verb: `figbird.prefetch(def, args, { staleTime = 30_000 })`.** Idempotent and
-  fire-and-forget: a no-op when the query was fetched within `staleTime` or is already being
-  prefetched; otherwise materializes the query, holds an internal pin, and auto-releases it
-  after `staleTime` (data stays cached; only the zero-subscriber lease ends). Replaces the
-  app-side dedupe-set + pin-LRU that hover prefetching otherwise forces every consumer to build.
-  Requires tracking `lastFetchedAt` per query — the seed of a general staleness story.
-- **`prepare()` is unchanged**: the router-grade primitive with an explicit lease
-  (`promise` + `release()`). Two use cases, two contracts, two names.
-- **`priority` leaves `PreparedQuery`.** It is router vocabulary figbird never reads; route
-  prepare functions attach it themselves (`{ ...figbird.prepare(...), priority: 'defer' }`).
-
-### Query definitions
-
-- **`defineQuery`'s validator becomes optional.** `defineQuery(name, build)` types args from the
-  build function's parameter; `defineQuery(name, argsSchema, build)` keeps Standard Schema
-  validation for args that arrive from URLs or other untrusted sources. A mandatory validator
-  only taught consumers to write `passthrough()` stubs — validation-shaped noise, worse than none.
-
-### Hook surface
-
-- **`useQuery(builder, { suspense: false })`** returns the tagged union
-  (`{ status, data, error, isFetching, refetch }`) and never suspends or throws — one hook, one
-  mental model, overloaded on the option literal. `useRelationalQuery` is `@deprecated` on the
-  branch and deleted before release.
-- **Legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`, `useFeathers`) stay in place**
-  with `@deprecated` JSDoc and docs restructured around the current generation. No compat entry
-  point, no import churn.
-
-### Instance and context
-
-- **Typed hooks resolve their instance as: context if a `FigbirdProvider` is present, else the
-  instance bound by `createHooks`.** The provider becomes optional for singleton SPAs; SSR and
-  tests keep provider injection. A dev-mode error fires when a provider is present and holds a
-  different instance than the bound one — the previously-silent divergence made loud.
-- **`createHooks` also returns `q`** (the builder proxy), so call sites read
-  `useQuery(q.issues.where(...))` with a single import.
-
-### Introspection
-
-- **`figbird.explain(builderOrDef)`** — static per-node classification report:
-  `{ path, service, class, reasons, realtime }` per query node, with reasons as structured codes
-  (`{ code: 'window-filter', detail: '$limit' }`), so devtools render them and tests assert them.
-  Answers "why did adding `.limit(30)` change realtime behavior" and kills the redundant
-  `.server()` superstition (`$regex` already classifies server-authoritative).
-- **`figbird.inspect()`** — stable, deliberately small read-only snapshot of active queries
-  (`queryId, serviceName, method, query, classification, status, isFetching, itemCount,
-  subscriberCount`). The contract devtools build on, so internals stay free to change. No
-  subscription API for now (poll or piggyback `subscribeToStateChanges`).
-
-### Typing calibration
-
-- **`.where()` admits everything legal and autocompletes everything known**: known item fields
-  are typed (values + operators), and an open index signature admits dotted relational paths,
-  `$regex`, and dynamic filter objects without casts. `.orderBy()` autocompletes
-  `keyof TItem` via the `(string & {})` pattern without rejecting computed fields.
-- **Honest `skip` typing**: `useQuery(q, { skip })` returns `data: T | undefined`; the
-  "typed as T, promise not to read it" lie is removed.
-- **Relationship shorthand**: `sourceField`/`destField` accept `string | string[]`, `destField`
-  defaults to `['id']`. Full form remains for compound keys.
-
-### Events and UX timing
-
-- **`figbird.events` emission is deferred to a microtask** (batched, order-preserving,
-  timestamps captured at emit time). Subscribing from React components no longer requires the
-  `queueMicrotask` workaround; matches the store's own deferred listener notifications.
-- **The no-flash kit ships in main exports** alongside `useDelayedFlag`:
-  `useDebouncedTransition(value, delay)` (debounced value committed inside a transition — the
-  search-input pattern) and `<DelayedFallback delay={250}>` (Suspense fallback that only appears
-  when loading is actually slow). Plus a "no-flash checklist" docs page covering the three
-  failure modes (param-change flash → `startTransition`; typing storm → `useDebouncedTransition`;
-  fast-load flicker → `DelayedFallback`), linked from `useQuery`'s JSDoc.
-
-### Considered and rejected (for the record)
-
-- Softening re-suspend-on-param-change (`keepPreviousData`): rejected — reintroduces the exact
-  query-identity lie the Exact Query Reads section exists to prevent. Transitions + the no-flash
-  kit are the supported answer.
-- Schema-level optimistic config: rejected — encodes surface-level intent at the wrong altitude.
-- Per-invocation mutation state in `useMutation`: rejected — multi-action screens need per-call
-  state, which is caller-side by nature (five lines); documented as a pattern instead.
-- `.one()` vs `.get()` unification: rejected — null-on-miss vs error-on-miss is a real semantic
-  pair; addressed with documentation.
-- Fully-typed dotted filter paths (template-literal types over the relation graph): parked, not
-  rejected — the typing calibration above removes the pain; this would add delight at real cost.
-
-### Sequencing
-
-1. **Calibration** (small, independent): optional validator; deferred emits; typing batch
-   (where/orderBy, skip, relationship shorthand); `priority` removal; hook-level optimistic;
-   demo cleanups (drop redundant `.server()`).
-2. **Lifecycle**: `prefetch()` + `lastFetchedAt`; `{ suspense: false }` fold-in +
-   `useRelationalQuery` deprecation; no-flash kit + docs page.
-3. **Coherence**: instance resolution + exported `q`; `explain()`/`inspect()` + devtools
-   de-cast; legacy deprecation markers + docs restructure.
-
-Each step lands with tests and a matching demo update — the demo remains the living proof that
-the API needs no workarounds.
