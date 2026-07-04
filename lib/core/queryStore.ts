@@ -119,13 +119,26 @@ export class QueryStore<
    * Subscribe to a query state by id. Triggers fetches if needed.
    * Returns an unsubscribe function.
    */
-  subscribe<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
+  subscribe<T>(
+    queryId: string,
+    fn: (state: QueryState<T, TMeta>) => void,
+    options: { staleTime?: number | undefined } = {},
+  ): () => void {
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
 
+    // `staleTime` is the subscriber's freshness tolerance, not part of query identity —
+    // two readers with different tolerances share one entry, and the most demanding one
+    // naturally keeps it freshest. Default 0 revalidates on every (re)subscribe.
+    const staleTime = options.staleTime ?? 0
+    const isFresh =
+      staleTime > 0 && q.fetchedAt !== undefined && Date.now() - q.fetchedAt < staleTime
     if (
       q.pending ||
-      (q.state.status === 'success' && q.config.fetchPolicy === 'swr' && !q.state.isFetching) ||
+      (q.state.status === 'success' &&
+        q.config.fetchPolicy === 'swr' &&
+        !q.state.isFetching &&
+        !isFresh) ||
       (q.state.status === 'error' && !q.state.isFetching)
     ) {
       this.#queue(queryId)

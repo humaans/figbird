@@ -288,14 +288,19 @@ export class Figbird<
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     B extends QueryBuilder<S, any, any, any, any, any>,
-  >(query: QueryDefinition<Args, B>, args: Args): PreparedQuery {
+  >(
+    query: QueryDefinition<Args, B>,
+    args: Args,
+    options: { staleTime?: number } = {},
+  ): PreparedQuery {
     const validatedArgs = query.validate(args)
     const builder = query.build(validatedArgs)
     const ref = this.relationalQuery(builder)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
-    const unsub = ref.subscribe(() => {})
+    // A staleTime skips the SWR revalidation when the data is already fresh enough.
+    const unsub = ref.subscribe(() => {}, options)
     return {
       key: ref.hash(),
       promise: ref.suspensePromise(),
@@ -347,7 +352,9 @@ export class Figbird<
       this.#prefetches.delete(hash)
     }
 
-    const release = ref.subscribe(() => {})
+    // The pin also carries the staleTime so a warm-in-store read within the window
+    // skips the SWR revalidation instead of re-fetching.
+    const release = ref.subscribe(() => {}, { staleTime })
     const timer = setTimeout(() => {
       this.#prefetches.delete(hash)
       release()

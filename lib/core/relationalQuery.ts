@@ -163,6 +163,10 @@ export class RelationalQueryRef<
   #listeners: Set<(state: RelationalQueryState<T>) => void> = new Set()
   #processedEventUnsub: (() => void) | null = null
   #relationalFilterRefetchQueued = false
+  // Freshness tolerance captured from the subscriber that triggers setup — applied to
+  // every internal store subscription so warm-in-store reads within the window skip
+  // the SWR revalidation. 0 (default) revalidates as always.
+  #staleTime = 0
   // A teardown is parked on the microtask queue (see #scheduleCleanup).
   #cleanupScheduled = false
 
@@ -237,10 +241,14 @@ export class RelationalQueryRef<
    *
    * Note: Does NOT call fn synchronously - useSyncExternalStore expects this.
    */
-  subscribe(fn: (state: RelationalQueryState<T>) => void): () => void {
+  subscribe(
+    fn: (state: RelationalQueryState<T>) => void,
+    options?: { staleTime?: number | undefined },
+  ): () => void {
     this.#listeners.add(fn)
 
     if (!this.#root) {
+      this.#staleTime = options?.staleTime ?? 0
       this.#setupRoot()
     }
 
@@ -553,6 +561,7 @@ export class RelationalQueryRef<
       this.#pagedRoot = new PagedQueryRoot({
         pageSize,
         returnTotal: Boolean(this.#ast.returnTotal),
+        staleTime: this.#staleTime,
         makePageRef: pageIndex =>
           this.#query(
             {
@@ -594,6 +603,7 @@ export class RelationalQueryRef<
       isGet: this.#ast.kind === 'get',
       onRows,
       onChange,
+      staleTime: this.#staleTime,
     })
   }
 
@@ -694,6 +704,7 @@ export class RelationalQueryRef<
           }
         },
         () => this.#notifyListeners(),
+        this.#staleTime,
       )
 
       this.#relationSubs.set(key, { kind: 'fanIn', sourceKey: newSourceKey, queryRef, unsub })
@@ -753,12 +764,15 @@ export class RelationalQueryRef<
         relAST,
         sourceValue,
       )
-      const unsub = queryRef.subscribe(state => {
-        if (state.status === 'success') {
-          this.#syncNestedWindowedRelationIfReady(entry, relAST, key)
-        }
-        this.#notifyListeners()
-      })
+      const unsub = queryRef.subscribe(
+        state => {
+          if (state.status === 'success') {
+            this.#syncNestedWindowedRelationIfReady(entry, relAST, key)
+          }
+          this.#notifyListeners()
+        },
+        { staleTime: this.#staleTime },
+      )
 
       entry.children.set(sourceValueKey(sourceValue), { queryRef, unsub, sourceValue })
     }
@@ -875,6 +889,7 @@ export class RelationalQueryRef<
           }
         },
         () => this.#notifyListeners(),
+        this.#staleTime,
       )
 
       cur.dest = { queryRef: destRef, unsub: destUnsub, sourceKey: destSourceKey }
@@ -887,7 +902,12 @@ export class RelationalQueryRef<
       dest: null,
     }
     this.#relationSubs.set(key, entry)
-    entry.junction.unsub = subscribeAndSeed(junctionRef, refreshDest, () => this.#notifyListeners())
+    entry.junction.unsub = subscribeAndSeed(
+      junctionRef,
+      refreshDest,
+      () => this.#notifyListeners(),
+      this.#staleTime,
+    )
   }
 
   /**
@@ -1192,11 +1212,15 @@ function subscribeAndSeed<S extends Schema, TParams, TMeta extends Record<string
   queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
   onSuccess: (data: unknown[]) => void,
   onChange: () => void,
+  staleTime = 0,
 ): () => void {
-  const unsub = queryRef.subscribe(state => {
-    if (state.status === 'success') onSuccess(state.data as unknown[])
-    onChange()
-  })
+  const unsub = queryRef.subscribe(
+    state => {
+      if (state.status === 'success') onSuccess(state.data as unknown[])
+      onChange()
+    },
+    { staleTime },
+  )
   const initial = queryRef.getSnapshot()
   if (initial?.status === 'success') onSuccess(initial.data as unknown[])
   return unsub
@@ -1224,15 +1248,22 @@ class SingleQueryRoot<
     isGet,
     onRows,
     onChange,
+    staleTime = 0,
   }: {
     queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
     isGet: boolean
     onRows: (rows: unknown[]) => void
     onChange: () => void
+    staleTime?: number
   }) {
     this.#queryRef = queryRef
     this.#isGet = isGet
-    this.#unsub = subscribeAndSeed(queryRef, data => onRows(this.#asRows(data)), onChange)
+    this.#unsub = subscribeAndSeed(
+      queryRef,
+      data => onRows(this.#asRows(data)),
+      onChange,
+      staleTime,
+    )
   }
 
   #asRows(data: unknown): unknown[] {
@@ -1280,6 +1311,7 @@ class PagedQueryRoot<
 
   #pageRefs: Array<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>> = []
   #pageUnsubs: Array<() => void> = []
+  #staleTime = 0
   #isLoadingMore = false
   #loadMoreError: Error | null = null
   // Sticky `hasMore`: only flips to false when we've observed a partial page. Stays true
@@ -1298,18 +1330,21 @@ class PagedQueryRoot<
     makePageRef,
     onRows,
     onChange,
+    staleTime = 0,
   }: {
     pageSize: number
     returnTotal: boolean
     makePageRef: (pageIndex: number) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
     onRows: (rows: unknown[]) => void
     onChange: () => void
+    staleTime?: number
   }) {
     this.#pageSize = pageSize
     this.#returnTotal = returnTotal
     this.#makePageRef = makePageRef
     this.#onRows = onRows
     this.#onChange = onChange
+    this.#staleTime = staleTime
     this.#setupPage(0)
   }
 
@@ -1329,6 +1364,7 @@ class PagedQueryRoot<
         this.#onRows(this.#allPagesData())
       },
       this.#onChange,
+      this.#staleTime,
     )
     this.#pageUnsubs.push(unsub)
   }

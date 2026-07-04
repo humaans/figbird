@@ -179,6 +179,7 @@ type PrepareForSchema<S extends Schema> = <
 >(
   query: QueryDefinition<Args, B>,
   args: Args,
+  options?: { staleTime?: number },
 ) => PreparedQuery
 
 type PrefetchForSchema<S extends Schema> = <
@@ -393,7 +394,8 @@ export function createHooks<F extends Figbird<any, any>>(
     // from one place, and typed so builders must come from this schema.
     defineQuery: baseDefineQuery as DefineQueryForSchema<S>,
     // Instance-bound conveniences: same primitives as figbird.prepare/prefetch.
-    prepare: ((query, args) => figbird.prepare(query, args)) as PrepareForSchema<S>,
+    prepare: ((query, args, options) =>
+      figbird.prepare(query, args, options)) as PrepareForSchema<S>,
     prefetch: ((query, args, options) =>
       figbird.prefetch(query, args, options)) as PrefetchForSchema<S>,
   }

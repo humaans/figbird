@@ -2772,6 +2772,33 @@ test('createHooks: bound hooks and q work without a FigbirdProvider', async t =>
   unmount()
 })
 
+test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t => {
+  const { figbird, feathers } = createApp()
+  const builder = figbird.q.issues.related('creator')
+
+  // Cold read — fetches.
+  const unsub1 = figbird.relationalQuery(builder).subscribe(() => {}, { staleTime: 60_000 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.find, 1)
+  unsub1()
+  await new Promise(resolve => setTimeout(resolve, 10)) // let deferred teardown run
+
+  // Resubscribe within the tolerance — warm store data, no revalidation.
+  const ref2 = figbird.relationalQuery(builder)
+  const unsub2 = ref2.subscribe(() => {}, { staleTime: 60_000 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.find, 1, 'fresh data must not refetch')
+  t.is(ref2.getSnapshot().status, 'success')
+  unsub2()
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  // Default tolerance (0) revalidates on resubscribe.
+  const unsub3 = figbird.relationalQuery(builder).subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.find, 2, 'default revalidates on resubscribe')
+  unsub3()
+})
+
 test('prefetch: idempotent within staleTime and warms the cache for a later read', async t => {
   const { figbird, feathers } = createApp()
   const issueDetail = defineQuery('issueDetailPrefetch', ({ id }: { id: number }) =>
