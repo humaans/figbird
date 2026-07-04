@@ -186,3 +186,19 @@ if (import.meta.env.DEV) {
 // Typed hooks + builder proxy bound to this schema — these are what components
 // reach for; no provider required.
 export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = createHooks(figbird)
+
+// Reference data: preload the complete sets once — realtime maintains them, and every
+// later read against these services (filters, sorts, windows, relation fetches) is
+// answered locally from the materialized cache with no roundtrip.
+prepare(
+  defineQuery('allUsers', () => q.users.all()),
+  undefined,
+)
+prepare(
+  defineQuery('allTeams', () => q.teams.all()),
+  undefined,
+)
+prepare(
+  defineQuery('allLabels', () => q.labels.all()),
+  undefined,
+)

@@ -123,6 +123,12 @@ export interface ServiceState<TMeta = Record<string, unknown>> {
   entities: Map<string | number, unknown>
   queries: Map<string, Query<unknown, TMeta, unknown>>
   itemQueryIndex: Map<string | number, Set<string>>
+  /**
+   * Set when a full, unfiltered allPages fetch (`.all()`) succeeded: the complete row
+   * set is in the entity cache, realtime maintains it, and matcher-decidable finds are
+   * answered locally without a roundtrip.
+   */
+  materialized?: { queryId: string; fetchedAt: number }
 }
 
 /**

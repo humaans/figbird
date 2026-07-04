@@ -2,7 +2,7 @@ import type { Adapter, QueryResponse } from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { FigbirdEventEmitter, type MutationMethod } from './events.js'
-import { isServerMaintainedFindQuery } from './queryClassification.js'
+import { classifyQueryNode, isServerMaintainedFindQuery } from './queryClassification.js'
 import type {
   ElementType,
   Event,
@@ -355,11 +355,53 @@ export class QueryStore<
     if (desc.method === 'get') {
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
+      const local = this.#tryLocalFind(query)
+      if (local) return Promise.resolve(local)
       const findConfig = config as FindQueryConfig<unknown, unknown>
       return findConfig.allPages
         ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
         : this.#adapter.find(desc.serviceName, desc.params as TParams)
     }
+  }
+
+  /**
+   * Answer a find locally when the service is fully materialized (an `.all()` query
+   * succeeded): filter the entity cache with the adapter matcher, then sort and slice
+   * any window client-side. Windowed queries against a materialized service classify
+   * server-window, so realtime events refetch them — and the "refetch" lands here,
+   * recomputing from the local set with no network.
+   *
+   * Returns null (fall through to the network) for: non-materialized services, the
+   * materialization root itself, `.server()` queries, and predicates the local matcher
+   * cannot decide ($select, $regex, custom operators).
+   */
+  #tryLocalFind(
+    query: Query<unknown, TMeta, unknown>,
+  ): QueryResponse<unknown, TMeta | undefined> | null {
+    const service = this.#state.get(query.desc.serviceName)
+    if (!service?.materialized) return null
+    if (service.materialized.queryId === query.queryId) return null
+
+    const config = query.config as FindQueryConfig<unknown, unknown>
+    if (config.server) return null
+    const q = (query.desc.params as { query?: Record<string, unknown> } | undefined)?.query
+    // allPages: true neutralizes window filters in classification — windows are
+    // computed locally below; anything else non-local still goes to the server.
+    if (classifyQueryNode(q, { allPages: true }) !== 'local-exact') return null
+
+    const { filters, sort, limit, skip } = splitWindow(q)
+    const match = config.matcher
+      ? (config.matcher(filters) as (item: unknown) => boolean)
+      : (this.#adapter.matcher(filters as TQuery | undefined) as (item: unknown) => boolean)
+    let rows = [...service.entities.values()].filter(match)
+    if (sort) rows = sortRowsLocally(rows, sort)
+    const total = rows.length
+    const data = rows.slice(skip, limit !== undefined ? skip + limit : undefined)
+    // Synthesized find envelope, mirroring the common { total, limit, skip } shape.
+    return {
+      data,
+      meta: { total, limit: limit ?? total, skip },
+    } as unknown as QueryResponse<unknown, TMeta>
   }
 
   #fetching({ queryId }: { queryId: string }): void {
@@ -462,6 +504,18 @@ export class QueryStore<
       }
 
       shouldRefetch = query.dirty
+
+      // A successful full, unfiltered allPages fetch means the complete row set is now
+      // local: mark the service materialized so matcher-decidable finds are answered
+      // from the cache (see #tryLocalFind).
+      const findConfig = query.config as FindQueryConfig<unknown, unknown>
+      if (
+        query.desc.method === 'find' &&
+        findConfig.allPages &&
+        isEmptyFindQuery(query.desc.params)
+      ) {
+        service.materialized = { queryId, fetchedAt: Date.now() }
+      }
 
       service.queries.set(queryId, {
         ...query,
@@ -702,7 +756,13 @@ export class QueryStore<
 
   #refetchActiveQueries(): void {
     for (const service of this.getState().values()) {
+      // Materialization roots reconcile even with no subscribers — every local read
+      // depends on their completeness, and events may have been missed while offline.
+      if (service.materialized) {
+        this.refetch(service.materialized.queryId)
+      }
       for (const query of service.queries.values()) {
+        if (query.queryId === service.materialized?.queryId) continue
         if (
           !query.config.skip &&
           query.config.realtime !== 'disabled' &&
@@ -929,6 +989,9 @@ export class QueryStore<
           }
           service.queries.delete(queryId)
           this.#serviceNamesByQueryId.delete(queryId)
+          if (service.materialized?.queryId === queryId) {
+            delete service.materialized
+          }
         }
       },
       { silent: true },
@@ -1080,6 +1143,50 @@ function createItemRemovedError(itemId: ItemId): Error {
   const error = new Error(`Item ${String(itemId)} has been removed`)
   error.name = 'ItemRemoved'
   return error
+}
+
+function isEmptyFindQuery(params: unknown): boolean {
+  const q = (params as { query?: Record<string, unknown> } | undefined)?.query
+  return !q || Object.keys(q).length === 0
+}
+
+/** Split window operators off a query so the rest can feed the local matcher. */
+function splitWindow(q: Record<string, unknown> | undefined): {
+  filters: Record<string, unknown> | undefined
+  sort: Record<string, number> | undefined
+  limit: number | undefined
+  skip: number
+} {
+  if (!q) return { filters: undefined, sort: undefined, limit: undefined, skip: 0 }
+  const { $sort, $limit, $skip, ...filters } = q
+  return {
+    filters: Object.keys(filters).length > 0 ? filters : undefined,
+    sort: $sort as Record<string, number> | undefined,
+    limit: $limit as number | undefined,
+    skip: ($skip as number | undefined) ?? 0,
+  }
+}
+
+function compareValues(a: unknown, b: unknown): number {
+  if (a === b) return 0
+  if (a === undefined || a === null) return -1
+  if (b === undefined || b === null) return 1
+  if (typeof a === 'number' && typeof b === 'number') return a - b
+  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0
+}
+
+function sortRowsLocally(rows: unknown[], sort: Record<string, number>): unknown[] {
+  const entries = Object.entries(sort)
+  return [...rows].sort((a, b) => {
+    for (const [field, direction] of entries) {
+      const cmp = compareValues(
+        (a as Record<string, unknown>)[field],
+        (b as Record<string, unknown>)[field],
+      )
+      if (cmp !== 0) return direction === -1 ? -cmp : cmp
+    }
+    return 0
+  })
 }
 
 function groupQueuedEvents(events: QueuedEvent[]): Record<string, QueuedEvent[]> {

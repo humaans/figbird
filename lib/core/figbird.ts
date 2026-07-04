@@ -639,7 +639,7 @@ export interface ExplainNode {
   /** `'(root)'` or the dotted relation path (`'comments.reactions'`). */
   path: string
   service: string
-  kind: 'find' | 'get' | 'paginate'
+  kind: 'find' | 'get' | 'paginate' | 'all'
   class: QueryNodeClass
   reasons: ClassificationReason[]
   /** How realtime events on this node's service are handled. */

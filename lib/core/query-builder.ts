@@ -65,7 +65,7 @@ export type WhereClause<TItem> = {
  */
 export interface QueryAST {
   service: string
-  kind: 'find' | 'get' | 'paginate'
+  kind: 'find' | 'get' | 'paginate' | 'all'
   resourceId?: string | number
   query: FeathersQuery
   cardinality: 'one' | 'many'
@@ -111,7 +111,7 @@ function deepMerge(target: FeathersQuery, source: FeathersQuery): FeathersQuery 
  */
 interface QueryBuilderState {
   service: string
-  kind: 'find' | 'get' | 'paginate'
+  kind: 'find' | 'get' | 'paginate' | 'all'
   resourceId?: string | number
   query: FeathersQuery
   cardinality: 'one' | 'many'
@@ -145,7 +145,7 @@ export class QueryBuilder<
   // field from `TItem` because `Record<string, never>`'s `keyof` is `string`.
   TRelated extends object = {},
   TCardinality extends 'one' | 'many' = 'many',
-  TKind extends 'find' | 'get' | 'paginate' = 'find',
+  TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find',
 > {
   readonly #state: QueryBuilderState
   readonly #schema: S
@@ -389,6 +389,41 @@ export class QueryBuilder<
   }
 
   /**
+   * Preload the service's complete row set — the explicit verb for reference data
+   * (locations, currencies, roles, policies). All pages are fetched, the query
+   * classifies local-exact (realtime maintains the full set), and on success the
+   * service is marked *fully materialized*: any later matcher-decidable find against
+   * it — including sorted/limited windows — is answered locally from the cache with
+   * no network roundtrip.
+   *
+   * Deliberately loud and constrained: it cannot be combined with `.where()` or
+   * windowing ("all" means all), and the schema author is responsible for reaching
+   * for it only on services with bounded, reference-table-sized row counts.
+   * `.related()` may be chained to preload joined reference sets.
+   *
+   * Typically paired with preparation at the app shell:
+   * ```ts
+   * prepare(defineQuery('allLocations', () => q.locations.all()), undefined)
+   * ```
+   */
+  all(
+    this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
+  ): QueryBuilder<S, TService, TItem, TRelated, 'many', 'all'> {
+    if (Object.keys(this.#state.query).length > 0) {
+      throw new Error(
+        'all(): cannot be combined with filters or windowing — "all" means the complete set. ' +
+          'Preload with .all(), then read subsets with separate .where() queries; they are ' +
+          'answered locally from the materialized cache.',
+      )
+    }
+    return new QueryBuilder(this.#schema, this.#state.service, {
+      ...this.#state,
+      kind: 'all',
+      cardinality: 'many',
+    }) as QueryBuilder<S, TService, TItem, TRelated, 'many', 'all'>
+  }
+
+  /**
    * Include a related entity/entities. The relation must exist on the schema — the
    * autocomplete suggests only names defined for this service, and the resulting item
    * type (including cardinality) is inferred automatically.
@@ -542,7 +577,7 @@ export type QueryBuilderResult<B> =
     infer TItem,
     infer TRelated,
     infer TCard,
-    'find' | 'get' | 'paginate'
+    'find' | 'get' | 'paginate' | 'all'
   >
     ? TCard extends 'one'
       ? MergeRelated<TItem, TRelated> | null
@@ -550,7 +585,7 @@ export type QueryBuilderResult<B> =
     : never
 
 /**
- * Type-level: extract the `kind` discriminator (`'find' | 'get' | 'paginate'`) of a
+ * Type-level: extract the `kind` discriminator (`'find' | 'get' | 'paginate' | 'all'`) of a
  * QueryBuilder. Used by hooks to widen their return shape for paginated queries.
  */
 export type QueryBuilderKind<B> =

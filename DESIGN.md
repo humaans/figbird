@@ -35,7 +35,7 @@ Figbird sits between two well-known shapes of client data layer.
 
 Figbird is a request orchestrator with a sync-engine-style read model overlaid on top. The server
 remains authoritative for any query whose membership, ordering, or values cannot be proven from
-local state. But for the queries the client *can* prove (local-exact filters, complete relations,
+local state. But for the queries the client _can_ prove (local-exact filters, complete relations,
 fixed-key lookups) Figbird treats realtime events as enough to maintain the projection without a
 roundtrip — and it does the relational assembly itself, so screens read one denormalized tree
 rather than five `useFind` calls and a `useMemo` join.
@@ -58,7 +58,7 @@ deliberately someone else's job.
   cache entry, a relational projection, and a stream of updates. Identical builders share one
   cache entry; correctness lives in the query classification (local-exact / server-window /
   server-authoritative).
-- **React (reveal).** React's Suspense + transitions decide *when* the user sees the new state.
+- **React (reveal).** React's Suspense + transitions decide _when_ the user sees the new state.
   Figbird throws promises at cold reads and returns sync data at warm reads; React handles the
   reveal.
 - **Product code (criticality).** The screen author decides which route queries are required for
@@ -239,12 +239,8 @@ Without first-class support, this is three `useQuery`s and a client-side combine
 
 ```ts
 const me = useCurrentUser()
-const { data: teammates } = useQuery(
-  q.people.where({ teamId: me.teamId, status: 'active' }),
-)
-const { data: issues } = useQuery(
-  q.issues.where({ severity: 'critical', state: 'open' }),
-)
+const { data: teammates } = useQuery(q.people.where({ teamId: me.teamId, status: 'active' }))
+const { data: issues } = useQuery(q.issues.where({ severity: 'critical', state: 'open' }))
 const teammateIds = new Set(teammates.map(t => t.id))
 const filtered = issues.filter(i => teammateIds.has(i.assigneeId))
 ```
@@ -313,7 +309,7 @@ classes of event affect the result:
    cache and the matcher can re-run against the updated entity.
 3. **Related service event on a non-referenced entity.** A person with `teamId === X` and
    `status === 'active'` is created. No issues currently assigned to that person exist, so
-   this event has no effect on *current* membership. A *future* issue create/patch that
+   this event has no effect on _current_ membership. A _future_ issue create/patch that
    sets `assigneeId` to this new person is handled by case 1 when it arrives — at which
    point the assignee is fetched and the predicate is evaluated.
 
@@ -333,7 +329,7 @@ Open questions:
   issue.assignee.role === 'owner'"). The server can express this; the client matcher needs
   the same expressivity. v1 can restrict to AND-of-predicates and grow later.
 - Cross-relation filters that span sibling relations (`'assignee.teamId': X AND
-  'reviewer.role': 'admin'`). Should work by extension of the same matcher rules; document
+'reviewer.role': 'admin'`). Should work by extension of the same matcher rules; document
   explicitly when implemented.
 
 ## Ordering And Completeness
@@ -484,7 +480,7 @@ React semantics:
   unmount the screen because a refetch failed; the UI shows a toast or inline banner.
 
 This composition (`useSyncExternalStore` + `throw promise`) does work — `useSyncExternalStore`
-opts the *subscription* out of concurrent rendering, but the *render* still throws when the
+opts the _subscription_ out of concurrent rendering, but the _render_ still throws when the
 selector returns a pending entry. The throw goes through React's normal Suspense plumbing
 unchanged. The constraint we accept is that Figbird-driven cache updates are committed
 synchronously rather than via transitions. Transitions matter when the router or product code
@@ -573,7 +569,7 @@ hook until repeated product code proves that the React primitives are too verbos
 
 A non-Suspense `{ status, data, error }` shape has to exist because some components legitimately
 own their loading/error rendering. But it must not become a second mental model — so it is an
-*option* on the one hook (`{ suspense: false }`), not a separately named hook, and both modes run
+_option_ on the one hook (`{ suspense: false }`), not a separately named hook, and both modes run
 the same query machinery underneath. The legacy `useFind` / `useGet` shims exist for older
 codebases only; they are deprecated and also call into the same machinery.
 
@@ -584,7 +580,7 @@ on the server response, and the resulting entity flows through the same event pi
 events — a mutation from one component updates every query referencing the data, exactly as a
 socket event from another client would.
 
-The `optimistic` flag decides *when the UI may show the change*, and the two modes deserve their
+The `optimistic` flag decides _when the UI may show the change_, and the two modes deserve their
 plain names:
 
 - **"Show it only once it's real"** (default) — the cache updates after the server acks. For
@@ -603,7 +599,7 @@ passed for computed fields).
 
 ## Prepared Queries
 
-`useQuery` covers the in-component exact-read case. It does not let the *router* start loading data
+`useQuery` covers the in-component exact-read case. It does not let the _router_ start loading data
 before any component mounts. Prepared queries bridge that.
 
 ```ts
@@ -680,6 +676,37 @@ figbird.prefetch(issueDetail, { id }, { staleTime: 30_000 })
 `staleTime`, otherwise it fetches and holds an internal pin that auto-releases after `staleTime`.
 The data stays cached either way, so a later `useQuery` is a warm synchronous read. Two use cases,
 two contracts, two names — a mode flag on `prepare()` would have made one name mean both.
+
+## Read Policies And Reference Data
+
+Three read policies complete the maintenance picture, each placed by one rule: **identity on the
+builder** (it changes what the data means), **tolerance at the read site** (it changes only when
+we double-check).
+
+- **`staleTime`** (read-site option on `useQuery`/`prepare`/`prefetch`) — the reader's freshness
+  tolerance: data younger than it skips the SWR revalidation on mount. `0` (default) revalidates
+  always; `Infinity` is cache-first; the useful middle is now expressible. Not part of query
+  identity: readers with different tolerances share one entry and the most demanding keeps it
+  fresh.
+- **`.snapshot()`** (builder verb) — a point-in-time result: fetched once, frozen against
+  realtime for the whole tree, moved only by `refetch()`. Part of identity — frozen and live
+  reads of the same filters must not share an entry. `explain()` reports `realtime: 'manual'`.
+- **`.all()`** (builder verb) — preload a service's complete row set. On success the service is
+  fully materialized: matcher-decidable finds — including sorted/limited windows — are answered
+  locally by a small local executor (matcher filter + `$sort` comparator + slice), realtime
+  events maintain the set (windowed subsets recompute locally, no network), and the
+  materialization root reconciles on reconnect even with no subscribers. Refuses filters at the
+  verb level; server-only predicates still go to the server. This is the one deliberate step
+  toward a local database, scoped to services the author explicitly opted in.
+
+The recipe table:
+
+| Data                                          | Recipe                                         |
+| --------------------------------------------- | ---------------------------------------------- |
+| Reference data (locations, currencies, roles) | `.all()` at the shell — subset reads free      |
+| Ordinary live data                            | default: swr + classification                  |
+| Expensive-but-tolerant data                   | `staleTime` — bounded revalidation, still live |
+| Point-in-time data                            | `.snapshot()` — frozen until `refetch()`       |
 
 ## Router Integration
 
@@ -795,7 +822,7 @@ the current route?
   destination chrome update immediately. Best for most B2B screens because it acknowledges the
   user's intent and lets the destination show a local, destination-shaped pending state.
 - `commit: 'ready'` — an optional later policy. Wait for all `priority: 'route'` queries to
-  resolve, *then* commit the navigation. The user stays on the previous route during the wait, with
+  resolve, _then_ commit the navigation. The user stays on the previous route during the wait, with
   the link/button/top bar visibly pending. Optional `timeoutMs` caps the wait; on timeout, the
   router falls back to immediate-commit semantics.
 
@@ -867,7 +894,7 @@ time. The opinion the library encodes:
   appear instant. (`commit: 'immediate'` + Suspense fallback that renders nothing for the first
   ~100 ms is the typical wiring.)
 - **100 – 500 ms** — show a pending affordance: a route-level progress bar, a desaturated/disabled
-  state of the link the user clicked, `isFetching: true` on the screen. *Don't* show a skeleton
+  state of the link the user clicked, `isFetching: true` on the screen. _Don't_ show a skeleton
   yet; the data usually arrives before the skeleton would have been a net positive.
 - **500 ms – 2 s** — show a skeleton for the section that is still loading. By now the user knows
   something is happening and the skeleton is informative, not noise.
@@ -883,12 +910,12 @@ checklist" in the docs that maps each failure mode to its tool.
 
 ## Instance Binding And Introspection
 
-**One instance, optional provider.** `createHooks(figbird)` returns the daily-use kit *bound* to
+**One instance, optional provider.** `createHooks(figbird)` returns the daily-use kit _bound_ to
 that instance — the hooks, `q` (the builder proxy), schema-typed `defineQuery`, and bound
 `prepare`/`prefetch` — so a singleton SPA needs no `FigbirdProvider` at all and imports everything
 from one module. Context, when
 present, overrides the bound instance — that is the injection point for per-request SSR trees and
-per-test instances — and a dev-mode error fires when a provider holds a *different* instance than
+per-test instances — and a dev-mode error fires when a provider holds a _different_ instance than
 the bound one, because that divergence used to be silent (types from one instance, runtime from
 another).
 
@@ -1254,9 +1281,9 @@ Expected behavior:
 ## Reconciliation Scheduling
 
 Server-window and server-authoritative queries stay correct by refetching when realtime events
-indicate their result may have changed. It is worth naming what that refetch *is*: a
+indicate their result may have changed. It is worth naming what that refetch _is_: a
 **reconciliation**, not a freshness requirement. Correctness demands that a query reconciles with
-the server *eventually* after the last relevant event — nothing requires it to happen within
+the server _eventually_ after the last relevant event — nothing requires it to happen within
 milliseconds of each one. This reframing is what makes the refetch model safe to run on a busy
 screen without turning into a refetch storm.
 
@@ -1264,7 +1291,7 @@ Two structural facts keep the steady state quiet:
 
 - Reconciliation is event-driven, never polled. When nothing changes on the backend, there is
   zero background traffic.
-- The refetch multiplier is the number of *subscribed server-window queries*, not the number of
+- The refetch multiplier is the number of _subscribed server-window queries_, not the number of
   queries. Most of a typical screen — reference data, small local-exact sets, `.all()`-materialized
   services, embed-backed relations — merges realtime events locally and never refetches. Features
   that convert queries into the local-exact class (`.all()`, embed) attack the multiplier directly.
@@ -1276,7 +1303,7 @@ synchronized waves.
 
 ### The engine owns the cadence, not the query
 
-Writing queries must stay seamless. The query expresses *shape*; the engine owns *when* to
+Writing queries must stay seamless. The query expresses _shape_; the engine owns _when_ to
 reconcile. There is no per-query throttle option, no `staleTime`, no reconciliation config on the
 builder. All of the following are built-in default behaviors of a single global reconciliation
 scheduler inside Figbird:
@@ -1471,80 +1498,6 @@ earn their keep specifically for cross-service composition, aggregate combinatio
 conditional branches that don't fit a single server query. Add when the relation-filter and
 `.all()` features have shipped and a real, persistent need has surfaced.
 
-### Preloaded Reference Sets (`.all()`)
-
-Reference data — locations, currencies, role definitions, custom-field schemas, time-away
-policies, request types — fits awkwardly in the on-demand fetch model. Half a dozen
-components each call `useQuery(q.locations.where({...}))` and each component lights up its
-own fetch on first render. The realtime channel keeps the data fresh, but the *initial* load
-is unnecessary fan-out; the same data lives in N concurrent query entries.
-
-Figbird should expose an explicit "preload everything once" mode via an `.all()` builder verb,
-designed to be paired with `prepare()`:
-
-```ts
-// At app shell mount:
-figbird.prepare(figbird.q.locations.all())
-figbird.prepare(figbird.q.currencies.all())
-figbird.prepare(figbird.q.roles.all().related('permissions'))
-
-// Later, anywhere in the app — no fetch, no roundtrip:
-const { data } = useQuery(figbird.q.locations.where({ countryCode: 'GB' }))
-```
-
-Properties:
-
-- **Explicit verb.** `.all()` is loud — distinguishable from `.limit(50)` and from a default
-  unbounded find. The schema author has to be intentional about which services get preloaded.
-  The alternative (silent unbounded fetch) encourages full-table fetches that nobody noticed
-  happened.
-- **Service marked fully materialized.** A successfully prepared `.all()` flips a per-service
-  flag inside Figbird: this service has the complete set in the local cache. Realtime events
-  maintain it. Any subsequent `useQuery(q.locations.where({...}))` against the same service
-  consults that flag — if set, the read becomes a local matcher pass over the cached set with
-  no network roundtrip.
-- **Subset queries are local.** This collapses the fan-out problem. Five components reading
-  different windows of `locations` share the same materialized cache; only the matchers
-  differ. Realtime keeps the underlying set fresh; the matchers re-run against it.
-- **Relations on `.all()` are allowed.** `q.roles.all().related('permissions')` preloads the
-  parent set *and* the related set. The relation is fully materialized too, so subset queries
-  through that relation are also local. Forbidding relations would defeat the use case —
-  reference data often travels in small joined sets ("permission types" with "permissions per
-  role", "request types" with "request type versions").
-- **Bounded payload contract.** `.all()` is for reference-table-sized data. The schema author
-  is responsible for reaching for it deliberately on services where row count is small and
-  stable. Figbird does not automatically refuse `.all()` on unbounded tables — that judgment
-  is the author's. Devtools may surface row-count or payload-size warnings for `.all()`
-  queries that exceed a threshold, especially when combined with `.related()`.
-- **Background refresh.** Per-prepare option (`refreshAfter: ms`, `refreshOnVisible`,
-  `refreshOnReconnect`) plus default policies on visibility change and online events.
-  Realtime is the primary freshness mechanism; periodic refresh is a defence against missed
-  events, laptop wake, and clock skew.
-- **Subset routing only when matchers can decide.** A query whose predicate uses an operator
-  Figbird's matcher does not implement (server-side `$search`, custom `$asOf`, etc.) still
-  goes to the server, even against a `.all()`-d service. Same constraint as today's realtime
-  merge: if the matcher cannot decide, the query is server-window. `.all()` does not change
-  this — it just means *matcher-supported* predicates run locally instead of fetching.
-- **Sort and slice are cheap locally.** `q.locations.all()` followed by
-  `q.locations.where({...}).orderBy('name', 'asc').limit(10)` should compute the top-10
-  client-side over the materialized set, not fall back to a server window. Document this so
-  consumers reach for it confidently.
-
-Open questions:
-
-- How does `.all()` interact with `defineQuery` — should preload definitions live in a
-  separate registry the app shell iterates, or should they just be prepares fired alongside
-  route prepares? Probably the latter for simplicity; the shell prepares the reference set,
-  routes prepare their detail queries.
-- What is the contract for an `.all()` whose result exceeds an internal sanity threshold (say
-  10k rows)? Hard error, soft warning, or silent? Probably a dev-mode warning with a
-  prod-mode silent log — we trust the schema author but want to catch mistakes.
-- Combining `.all()` with `.where()` — should `q.locations.all().where({ active: true })` be
-  a thing? Probably no: the point of `.all()` is "everything," and adding a `.where()`
-  contradicts that. The right way to express "all active locations" is to preload `.all()`
-  and then read `q.locations.where({ active: true })` from the materialized cache. Forbid
-  the combination at type-check time.
-
 ### Cross-Service Snapshot Skew
 
 An assembled relational tree joins query results that were fetched at slightly different times.
@@ -1609,7 +1562,7 @@ Why rung 1 pays for itself regardless of the rest: gap detection closes the "rea
 were missed and there is no replay/sequence protocol" entry in Fundamental Limits — the weakest
 correctness point of the current design — and requires no read-path changes at all. Why rung 2
 matters beyond tearing: it fixes a latent race the per-item `updatedAt` guard cannot — a refetch
-response that lost a race with a newer realtime event can resurrect *membership* (e.g. re-insert
+response that lost a race with a newer realtime event can resurrect _membership_ (e.g. re-insert
 a row an event already removed); value staleness is guarded today, membership staleness is not.
 
 Design notes for whoever picks this up:

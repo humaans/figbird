@@ -164,6 +164,8 @@ q.issues.orderBy('updatedAt', 'desc').limit(30) // windowed
 q.issues.where({ id }).one() // single item — null when no match
 q.issues.get(id) // by primary key — error when missing
 q.issues.related('comments') // with relations
+q.issues.where({ id }).snapshot() // point-in-time: frozen until refetch()
+q.locations.all() // preload the complete set (reference data)
 ```
 
 Builders are immutable — every method returns a new builder — and identified by a stable hash of their contents, so you can build them inline in render with no dependency arrays:
@@ -231,7 +233,7 @@ relationships: ({ one, many, embed }) => ({
 
 `destField` defaults to `'id'`; fields accept arrays for compound keys. Relations stay live: a realtime event on any involved service — a new comment, a renamed user, a new junction row — flows into the assembled result.
 
-Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** — `.related('recent', i => i.orderBy(...).limit(5))` needs one query *per parent* because per-parent windows can't be expressed as a single find; figbird warns past 10 parents and points at `embed` as the batched alternative.
+Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** — `.related('recent', i => i.orderBy(...).limit(5))` needs one query _per parent_ because per-parent windows can't be expressed as a single find; figbird warns past 10 parents and points at `embed` as the batched alternative.
 
 Relational filters work too — filter parents by a field on a related entity with a dotted path:
 
@@ -263,7 +265,7 @@ The contract, precisely:
 1. **First mount, cold cache** → suspends. The only time it suspends.
 2. **First mount, warm cache** → returns cached data synchronously, revalidates in the background (`isFetching: true`).
 3. **Refetch with data present** (background revalidation, realtime-triggered, manual) → never suspends; current data stays up with `isFetching: true`.
-4. **Params change** → that's a *different query* with a cold cache entry, so it suspends — the hook never shows old data labeled with new params. Keeping the previous UI on screen during the switch is one `startTransition` away; see [the no-flash checklist](#no-flash-checklist).
+4. **Params change** → that's a _different query_ with a cold cache entry, so it suspends — the hook never shows old data labeled with new params. Keeping the previous UI on screen during the switch is one `startTransition` away; see [the no-flash checklist](#no-flash-checklist).
 
 **Errors after success don't unmount the screen.** If a refetch fails while data is showing, the hook keeps returning the last good `data` with `error` set — show a toast or a banner; the next successful fetch clears it. Only a cold read with no data ever produced throws to the error boundary.
 
@@ -391,7 +393,7 @@ prepare: ({ params }) => [
 ]
 ```
 
-Preparation is an *earlier read*, not a different one — the component still calls `useQuery(issueDetail, { id })`.
+Preparation is an _earlier read_, not a different one — the component still calls `useQuery(issueDetail, { id })`.
 
 ### prefetch
 
@@ -407,7 +409,7 @@ Safe to call at any frequency: if the query was prefetched within `staleTime` (d
 prefetch(issueDetail, { id }, { staleTime: 60_000 })
 ```
 
-Rule of thumb: `prepare()` when you need to *await* readiness or control the lease; `prefetch()` when you just want things warm.
+Rule of thumb: `prepare()` when you need to _await_ readiness or control the lease; `prefetch()` when you just want things warm.
 
 ## Realtime
 
@@ -420,7 +422,12 @@ Figbird subscribes to realtime events per service (at most once per service) the
 Classification is automatic and per query node — the root and each relation classify independently. Adding `.limit(30)` to a query flips it from merge to refetch; that's by design, and `figbird.explain()` will tell you exactly that:
 
 ```ts
-figbird.explain(q.issues.where({ title: { $regex: term } }).limit(30).related('comments'))
+figbird.explain(
+  q.issues
+    .where({ title: { $regex: term } })
+    .limit(30)
+    .related('comments'),
+)
 // {
 //   nodes: [
 //     { path: '(root)', service: 'issues', class: 'server-authoritative',
@@ -433,13 +440,56 @@ figbird.explain(q.issues.where({ title: { $regex: term } }).limit(30).related('c
 // }
 ```
 
-Use `.server()` on a builder when a query *looks* locally provable but isn't — server-computed virtual fields, permission-dependent membership, search ranking:
+Use `.server()` on a builder when a query _looks_ locally provable but isn't — server-computed virtual fields, permission-dependent membership, search ranking:
 
 ```ts
 q.documents.where({ visibleTo: userId }).server()
 ```
 
 A practical consequence worth knowing: an **unwindowed** relation like `.related('comments')` is local-exact, so a teammate's new comment merges straight from the socket event with no refetch. If you don't need a window, don't add one.
+
+### Freshness tolerance: staleTime
+
+By default every mount revalidates cached data in the background (SWR). `staleTime` is the
+reader's tolerance: data younger than it skips the revalidation.
+
+```ts
+useQuery(q.currencies, { staleTime: 60_000 }) // revalidate at most once a minute
+useQuery(q.currencies, { staleTime: Infinity }) // cache-first
+```
+
+It is a read-site option, not query identity — readers with different tolerances share one cache
+entry, and the most demanding one keeps it freshest. `prepare()` and `prefetch()` accept it too.
+
+### Freezing a query: .snapshot()
+
+`.snapshot()` fetches once and then ignores realtime entirely — no merges, no event-triggered
+refetches — for the root and every relation under it. `refetch()` is the only way it moves.
+Frozen and live reads of the same filters don't share a cache entry (snapshot-ness changes what
+the data means). Use for audit views, diff screens, "results as of when you searched".
+
+### Reference data: .all()
+
+`.all()` preloads a service's complete row set — the explicit verb for reference tables
+(locations, currencies, roles). On success the service is **fully materialized**: every later
+matcher-decidable find against it — including sorted/limited windows — is answered locally from
+the cache with **no network roundtrip**, and realtime events maintain the set (windowed reads
+recompute locally). Typically paired with preparation at the app shell:
+
+```ts
+prepare(
+  defineQuery('allLocations', () => q.locations.all()),
+  undefined,
+)
+
+// later, anywhere — no fetch:
+useQuery(q.locations.where({ countryCode: 'GB' }).orderBy('name').limit(10))
+```
+
+`.all()` refuses filters ("all" means all — read subsets separately), may chain `.related()` to
+preload joined reference sets, reconciles on reconnect even with no subscribers, and stays the
+schema author's judgment call: reach for it only where row counts are bounded. Server-only
+predicates (`$regex`, `$select`, `.server()`) still go to the server.
 
 # Guides
 
@@ -488,7 +538,7 @@ One more pattern from the same family: when navigating between details of the sa
 
 ## Instant navigation
 
-Combining `prepare`, `prefetch`, and lazy route chunks: the pattern that makes navigations feel instant is starting everything the destination needs — data *and* code — before the screen renders, in parallel:
+Combining `prepare`, `prefetch`, and lazy route chunks: the pattern that makes navigations feel instant is starting everything the destination needs — data _and_ code — before the screen renders, in parallel:
 
 ```ts
 // 1. Named queries live in an eagerly-loaded module
@@ -615,18 +665,18 @@ The core instance holding the adapter, schema, and shared query state.
 const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 ```
 
-| Member | Description |
-| --- | --- |
-| `q` | The builder proxy — `q.issues.where(...)`. Requires a schema. |
-| `prepare(definition, args)` | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
-| `prefetch(definition, args, opts?)` | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch). |
-| `explain(...)` | Static classification report — see [figbird.explain](#figbirdexplain). |
-| `inspect()` | Live-query snapshot — see [figbird.inspect](#figbirdinspect). |
-| `events` | Observability channel — see [figbird.events](#figbirdevents). |
-| `query(desc, config?)` | Low-level descriptor query (see [Using outside React](#using-outside-react)). |
-| `relationalQuery(builder)` | Low-level relational query ref for non-React use. |
-| `mutate(desc)` | Low-level mutation. |
-| `getState()` / `subscribeToStateChanges(fn)` | Raw internal state — debugging only; prefer `inspect()`. |
+| Member                                       | Description                                                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `q`                                          | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                       |
+| `prepare(definition, args)`                  | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
+| `prefetch(definition, args, opts?)`          | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).  |
+| `explain(...)`                               | Static classification report — see [figbird.explain](#figbirdexplain).                                              |
+| `inspect()`                                  | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                       |
+| `events`                                     | Observability channel — see [figbird.events](#figbirdevents).                                                       |
+| `query(desc, config?)`                       | Low-level descriptor query (see [Using outside React](#using-outside-react)).                                       |
+| `relationalQuery(builder)`                   | Low-level relational query ref for non-React use.                                                                   |
+| `mutate(desc)`                               | Low-level mutation.                                                                                                 |
+| `getState()` / `subscribeToStateChanges(fn)` | Raw internal state — debugging only; prefer `inspect()`.                                                            |
 
 ## defineQuery
 
@@ -643,7 +693,7 @@ Available schema-typed from your `createHooks` kit, or as a standalone export fr
 ## figbird.prepare
 
 ```ts
-const { key, promise, release } = figbird.prepare(definition, args)
+const { key, promise, release } = figbird.prepare(definition, args, { staleTime? })
 ```
 
 Starts a query and returns an awaitable lease — the router-grade primitive. See
@@ -712,7 +762,7 @@ codebases.
 
 Instance resolution: hooks use the bound instance directly, so no provider is required. If a
 `FigbirdProvider` is present in the tree, **it wins** — that's the injection point for
-per-request SSR instances and tests. A dev-mode error fires if a provider holds a *different*
+per-request SSR instances and tests. A dev-mode error fires if a provider holds a _different_
 instance than the bound one.
 
 ## useQuery
@@ -735,7 +785,7 @@ const result = useQuery(builder, { suspense: false })
 const { data } = useQuery(builder, { skip: id == null }) // data: T | undefined
 ```
 
-Options: `skip?: boolean`, `suspense?: boolean` (must be static per call site).
+Options: `skip?: boolean`, `suspense?: boolean` (must be static per call site), `staleTime?: number` (freshness tolerance — see [Realtime](#realtime)).
 
 Result fields (suspense form): `data` (guaranteed for the exact query passed), `error`
 (non-null when a refetch failed while data is showing — cold errors throw instead),

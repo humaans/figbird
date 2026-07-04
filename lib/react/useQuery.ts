@@ -152,7 +152,7 @@ function useQueryRef<
  */
 export type SuspenseQueryResult<
   T,
-  TKind extends 'find' | 'get' | 'paginate' = 'find',
+  TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find',
 > = TKind extends 'paginate'
   ? {
       data: T
