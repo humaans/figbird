@@ -28,12 +28,12 @@ function IssueDetail({ id }: { id: number }) {
 
 ## Why Figbird
 
-- **Relational queries** — declare relations in your schema once, then `.related()` assembles entity graphs from per-service caches
-- **Live queries** — results update as records are created, modified, or removed, locally or via realtime events
-- **Suspense-native** — cold reads suspend, warm reads render synchronously; loading states live in boundaries, not branches
+- **Relational queries** — declare relations once, `.related()` assembles entity graphs
+- **Live queries** — results update as records change, locally or via realtime events
+- **Suspense-native** — cold reads suspend, warm reads render synchronously
 - **Optimistic mutations** — declared once per surface, rolled back on failure everywhere at once
 - **Query preparation** — routers and hover handlers warm the exact queries screens will read
-- **Full TypeScript** — define a schema once, get inference through builders, relations, and mutations
+- **Full TypeScript** — one schema, inference across builders, relations, and mutations
 - **Framework-agnostic core** — works outside React for SSR, testing, or background sync
 
 ## Installation
@@ -100,9 +100,14 @@ function OpenIssues() {
   const { data: issues } = useQuery(
     q.issues.where({ status: 'open' }).orderBy('id', 'desc').related('creator'),
   )
+  const mutations = useMutation('issues')
+
   return issues.map(issue => (
     <div key={issue.id}>
       {issue.title} — {issue.creator?.name}
+      <button onClick={() => mutations.patch(issue.id, { status: 'closed' })}>
+        Close
+      </button>
     </div>
   ))
 }
@@ -115,7 +120,7 @@ No `FigbirdProvider` is needed — the hooks are bound to the instance they were
 ## Schema
 
 The schema is the first thing you write: it declares your services, their types, and the
-relationships between them — and it is where all of figbird's TypeScript inference comes from,
+relationships between them — and it is where all of Figbird's TypeScript inference comes from,
 with no code generation.
 
 Each service declares an `item` shape, and optionally `query`, `create`, `update`, `patch` payloads and custom `methods`:
@@ -134,7 +139,7 @@ interface TaskService {
 const schema = createSchema({
   services: {
     tasks: service<TaskService>(),
-    'api/people': service<PersonService>({ path: 'api/people' }),
+    people: service<PersonService>({ path: 'api/people' }),
   },
   relationships: ({ one, many, embed }) => ({
     /* ... */
@@ -224,7 +229,7 @@ relationships: ({ one, many, embed }) => ({
     ),
   },
   teams: {
-    // embed: the parent carries a server-maintained list of ids; figbird fans
+    // embed: the parent carries a server-maintained list of ids; Figbird fans
     // every parent's list into ONE batched IN(...) fetch, preserving order
     spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' }),
   },
@@ -233,7 +238,7 @@ relationships: ({ one, many, embed }) => ({
 
 `destField` defaults to `'id'`; fields accept arrays for compound keys. Relations stay live: a realtime event on any involved service — a new comment, a renamed user, a new junction row — flows into the assembled result.
 
-Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** — `.related('recent', i => i.orderBy(...).limit(5))` needs one query _per parent_ because per-parent windows can't be expressed as a single find; figbird warns past 10 parents and points at `embed` as the batched alternative.
+Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** — `.related('recent', i => i.orderBy(...).limit(5))` needs one query _per parent_ because per-parent windows can't be expressed as a single find; Figbird warns past 10 parents and points at `embed` as the batched alternative.
 
 Relational filters work too — filter parents by a field on a related entity with a dotted path:
 
@@ -241,7 +246,7 @@ Relational filters work too — filter parents by a field on a related entity wi
 q.issues.where({ 'creator.teamId': 5 })
 ```
 
-The server resolves the join; on the client, figbird's matcher evaluates the path against the entity cache so realtime events keep the result fresh.
+The server resolves the join; on the client, Figbird's matcher evaluates the path against the entity cache so realtime events keep the result fresh.
 
 ## Suspense
 
@@ -369,7 +374,7 @@ non-React code, and `prepare`/`prefetch` exist as instance methods).
 A named query is an args-keyed query factory. The same definition read from a component, prepared by a router, or prefetched on hover resolves to the **same cache entry**:
 
 ```ts
-export const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
+export const issueDetail = defineQuery(({ id }: { id: number }) =>
   q.issues.get(id).related('creator').related('comments'),
 )
 
@@ -381,7 +386,6 @@ Args are typed from the build function. When args arrive from an untrusted sourc
 
 ```ts
 export const issueDetail = defineQuery(
-  'issueDetail',
   z.object({ id: z.coerce.number().int().positive() }),
   ({ id }) => q.issues.get(id).related('comments'),
 )
@@ -391,10 +395,11 @@ prepare(issueDetail, { id: '42' }) // coerces "42" → 42 before building
 
 ### prepare
 
-`prepare()` is the router's primitive: it starts a query and returns an explicit a `promise` that resolves when the data is ready, and `release()` to drop the pin keeping it alive. Routers await route-critical data before committing a navigation; the destination screen then reads the same cache entry synchronously:
+`prepare()` is the router's primitive: it starts a query and returns an explicit lease — a `promise` that resolves when the data is ready, and `release()` to drop the pin keeping it alive. Routers await route-critical data before committing a navigation; the destination screen then reads the same cache entry synchronously:
 
 ```ts
-// route definition — router metadata like a priority is attached by the app
+// route definition — the `prepare:` key is the router's convention; the calls inside
+// are Figbird's prepare(). Metadata like `priority` belongs to the router, not Figbird.
 prepare: ({ params }) => [
   { ...prepare(issueDetail, { id: Number(params.id) }), priority: 'route' },
   { ...prepare(issueComments, { id: Number(params.id) }), priority: 'defer' },
@@ -438,12 +443,13 @@ figbird.explain(
 )
 // {
 //   nodes: [
-//     { path: '(root)', service: 'issues', class: 'server-authoritative',
+//     { path: '(root)', service: 'issues', kind: 'find',
+//       class: 'server-authoritative',
 //       reasons: [{ code: 'server-only-operator', detail: '$regex' },
 //                 { code: 'window-filter', detail: '$limit' }],
 //       realtime: 'refetch' },
-//     { path: 'comments', service: 'comments', class: 'local-exact',
-//       reasons: [], realtime: 'merge' },
+//     { path: 'comments', service: 'comments', kind: 'find',
+//       class: 'local-exact', reasons: [], realtime: 'merge' },
 //   ]
 // }
 ```
@@ -480,24 +486,29 @@ the data means). Use for audit views, diff screens, "results as of when you sear
 
 `.all()` preloads a service's complete row set — the explicit verb for reference tables
 (locations, currencies, roles). On success the service is **fully materialized**: every later
-matcher-decidable find against it — including sorted/limited windows — is answered locally from
+find the client can evaluate — including sorted/limited windows — is answered locally from
 the cache with **no network roundtrip**, and realtime events maintain the set (windowed reads
 recompute locally). Typically paired with preparation at the app shell:
 
 ```ts
-prepare(
-  defineQuery('allLocations', () => q.locations.all()),
-  undefined,
-)
+export const allLocations = defineQuery('allLocations', () => q.locations.all())
+
+// at the app shell — args omitted: the definition takes none
+prepare(allLocations)
 
 // later, anywhere — no fetch:
 useQuery(q.locations.where({ countryCode: 'GB' }).orderBy('name').limit(10))
 ```
 
-`.all()` refuses filters ("all" means all — read subsets separately), may chain `.related()` to
-preload joined reference sets, reconciles on reconnect even with no subscribers, and stays the
-schema author's judgment call: reach for it only where row counts are bounded. Server-only
-predicates (`$regex`, `$select`, `.server()`) still go to the server.
+A few properties worth knowing:
+
+- `.all()` refuses filters — "all" means all; read subsets separately
+- it may chain `.related()` to preload joined reference sets
+- it reconciles on reconnect, even with no subscribers
+- server-only predicates (`$regex`, `$select`, `.server()`) still go to the server
+
+Whether a service warrants `.all()` is the schema author's judgment call — reach for it only
+where row counts are bounded.
 
 # Guides
 
@@ -506,7 +517,8 @@ predicates (`$regex`, `$select`, `.server()`) still go to the server.
 `useQuery` never lies about identity: when a query's params change, that is a _different_
 query with a cold cache entry, and the hook suspends rather than showing old data labeled
 with new params. Honoring that contract without loading flashes takes three moves — one
-per failure mode:
+per failure mode. The helpers below — `useDebouncedTransition`, `DelayedFallback`,
+`useDelayedFlag` — all ship with Figbird.
 
 **1. Param changes (filters, tabs, sort) — wrap the state update in a transition.**
 Without it, clicking a filter unwinds to the Suspense fallback while the new query loads.
@@ -550,7 +562,7 @@ Combining `prepare`, `prefetch`, and lazy route chunks: the pattern that makes n
 
 ```ts
 // 1. Named queries live in an eagerly-loaded module
-export const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
+export const issueDetail = defineQuery(({ id }: { id: number }) =>
   q.issues.get(id).related('creator').related('labels'),
 )
 
@@ -608,7 +620,7 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
 3. For realtime, emit `created`, `patched`, `updated`, `removed` events after mutations
 4. Optionally implement `subscribeToReconnect` so active queries refetch after connectivity gaps
 
-For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See `lib/adapters/feathers.ts` for the reference implementation of the `Adapter` interface.
+For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 
 # API Reference
 
@@ -661,7 +673,7 @@ Array relation, single-hop or two-hop through a junction service.
 spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' })
 ```
 
-The parent carries a server-maintained list of destination ids; figbird fans every parent's
+The parent carries a server-maintained list of destination ids; Figbird fans every parent's
 list into one batched `IN (...)` fetch and assembles per-parent slices preserving the server's
 order.
 
@@ -689,14 +701,16 @@ const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 ## defineQuery
 
 ```ts
-defineQuery(name, build)
-defineQuery(name, argsSchema, build) // Standard Schema-validated args
+defineQuery(build)
+defineQuery(argsSchema, build) // Standard Schema-validated args
+defineQuery(name, build) // optional name — labels errors and devtools, never identity
+defineQuery(name, argsSchema, build)
 ```
 
-Named, args-keyed query factory — a pure value, not tied to an instance; `prepare`,
+Args-keyed query factory — a pure value, not tied to an instance; `prepare`,
 `prefetch`, and `useQuery` against the same definition and args share one cache entry.
-Available schema-typed from your `createHooks` kit, or as a standalone export from
-`'figbird'`. See [Preparation](#preparation).
+The `createHooks` kit returns a schema-typed version; the standalone export from
+`'figbird'` serves non-React code. See [Preparation](#preparation).
 
 ## figbird.prepare
 
@@ -704,8 +718,8 @@ Available schema-typed from your `createHooks` kit, or as a standalone export fr
 const { key, promise, release } = figbird.prepare(definition, args, { staleTime? })
 ```
 
-Starts a query and returns an awaitable lease — the router-grade primitive. See
-[prepare](#prepare).
+Starts a query and returns an awaitable lease — the router-grade primitive. `args` may be
+omitted when the definition's build function takes none. See [prepare](#prepare).
 
 ## figbird.prefetch
 
