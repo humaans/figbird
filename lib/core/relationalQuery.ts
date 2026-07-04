@@ -167,6 +167,11 @@ export class RelationalQueryRef<
   // every internal store subscription so warm-in-store reads within the window skip
   // the SWR revalidation. 0 (default) revalidates as always.
   #staleTime = 0
+  // Snapshot mode: the whole tree is fetched once and frozen — every internal query
+  // subscribes with realtime disabled, and relational-filter invalidation is skipped.
+  get #realtimeMode(): 'merge' | 'disabled' {
+    return this.#ast.snapshot ? 'disabled' : 'merge'
+  }
   // A teardown is parked on the microtask queue (see #scheduleCleanup).
   #cleanupScheduled = false
 
@@ -576,7 +581,7 @@ export class RelationalQueryRef<
               },
             },
             {
-              realtime: 'merge',
+              realtime: this.#realtimeMode,
               fetchPolicy: 'swr',
               ...matcherConfig,
             },
@@ -595,7 +600,7 @@ export class RelationalQueryRef<
 
     this.#root = new SingleQueryRoot({
       queryRef: this.#query(rootDesc, {
-        realtime: 'merge',
+        realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
         ...(this.#ast.kind === 'find' ? matcherConfig : {}),
         ...(this.#ast.server ? { server: true } : {}),
@@ -855,7 +860,7 @@ export class RelationalQueryRef<
         },
       },
       {
-        realtime: 'merge',
+        realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
         allPages: true,
       },
@@ -943,7 +948,7 @@ export class RelationalQueryRef<
         params: { query },
       },
       {
-        realtime: 'merge',
+        realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
         ...(hasWindowing ? {} : { allPages: true }),
         ...(relAST.server ? { server: true } : {}),
@@ -970,7 +975,7 @@ export class RelationalQueryRef<
         params: { query },
       },
       {
-        realtime: 'merge',
+        realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
         ...(relAST.server ? { server: true } : {}),
       },
@@ -1009,6 +1014,7 @@ export class RelationalQueryRef<
   }
 
   #subscribeToRelationalFilterInvalidations(): void {
+    if (this.#ast.snapshot) return
     if (this.#processedEventUnsub) return
     const dependencies = collectRelationalFilterDependencies(this.#schema, this.#ast)
     if (dependencies.length === 0) return
