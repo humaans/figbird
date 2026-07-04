@@ -59,16 +59,6 @@ export type RelationalQueryResult<T> =
       refetch: () => void
     }
 
-/**
- * Options for the relational query hook
- */
-export interface UseRelationalQueryOptions {
-  /**
-   * Skip the query (don't fetch data)
-   */
-  skip?: boolean
-}
-
 // Loosely-typed builder for the untyped overload-dispatch path — the public overloads
 // carry the real types.
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -104,7 +94,7 @@ const idleState: RelationalQueryState<null> = {
  * here. (If the ref was evicted between renders, this picks up the freshly interned
  * instance instead of pinning the stale one.)
  */
-function useRelationalQueryRef<
+function useQueryRef<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
 >(figbird: FigbirdLike, query: B, skip: boolean) {
@@ -127,20 +117,6 @@ function useRelationalQueryRef<
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   return { qRef, state }
-}
-
-/**
- * @deprecated Use `useQuery(query, { suspense: false })` instead — the same tagged-union
- * result from the one query hook. This alias will be removed before release.
- */
-export function useRelationalQuery<
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<any, any, any, any, any, any>,
->(query: B, options: UseRelationalQueryOptions = {}): RelationalQueryResult<QueryBuilderResult<B>> {
-  return useQueryForBuilder(useFigbird() as FigbirdLike, query, {
-    ...options,
-    suspense: false,
-  }) as RelationalQueryResult<QueryBuilderResult<B>>
 }
 
 /**
@@ -216,7 +192,7 @@ export interface UseQueryOptions {
  * `data` widens to `T | undefined` when the options could skip the query; without a
  * (possibly-true) `skip`, `data` stays `T`.
  */
-type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false }]
+export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false }]
   ? T
   : O extends { skip: boolean }
     ? T | undefined
@@ -319,7 +295,7 @@ function useQueryForBuilder<
 >(figbird: FigbirdLike, query: B, options: UseQueryOptions): unknown {
   type T = QueryBuilderResult<B>
   const { skip = false, suspense = true } = options
-  const { qRef, state } = useRelationalQueryRef(figbird, query, skip)
+  const { qRef, state } = useQueryRef(figbird, query, skip)
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
   const loadMore = useCallback(() => qRef?.loadMore(), [qRef])
 

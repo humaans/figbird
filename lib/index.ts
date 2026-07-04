@@ -96,10 +96,9 @@ export { useFeathers } from './react/useFeathers.js'
 export { useMethod } from './react/useMethod.js'
 export { useFind, useGet } from './react/useQueryByDesc.js'
 export { useService } from './react/useService.js'
-// useQuery is the unified, Suspense-by-default builder hook. useRelationalQuery stays
-// exported as the classic tagged-union variant for back-compat and for code that prefers
-// explicit status handling.
-export { useQuery, useRelationalQuery } from './react/useRelationalQuery.js'
+// useQuery is the unified, Suspense-by-default builder hook; pass { suspense: false }
+// for the explicit tagged-union variant.
+export { useQuery } from './react/useQuery.js'
 export { useDelayedFlag } from './react/useDelayedFlag.js'
 // The rest of the no-flash kit (see the "no-flash checklist" docs section):
 export { useDebouncedTransition } from './react/useDebouncedTransition.js'
@@ -108,8 +107,7 @@ export type {
   RelationalQueryResult,
   SuspenseQueryResult,
   UseQueryOptions,
-  UseRelationalQueryOptions,
-} from './react/useRelationalQuery.js'
+} from './react/useQuery.js'
 
 // Query-related types for advanced usage
 export type {

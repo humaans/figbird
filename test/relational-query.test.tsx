@@ -12,10 +12,18 @@ import {
   many,
   useFind,
   useQuery,
-  useRelationalQuery,
+  type QueryBuilder,
   type StandardSchemaV1,
 } from '../lib'
 import { createTestApp, dom, installQueryAwareFind, mockFeathers } from './helpers'
+
+// Tagged-union variant of useQuery — the shape the deleted useRelationalQuery had.
+function useStatusQuery<
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  B extends QueryBuilder<any, any, any, any, any, any>,
+>(query: B, options: { skip?: boolean } = {}) {
+  return useQuery(query, { ...options, suspense: false })
+}
 
 // Passthrough Standard Schema validator — used by `defineQuery` tests below to satisfy
 // the `argsSchema` parameter without exercising actual validation logic.
@@ -1005,7 +1013,7 @@ test('useRelationalQuery: basic fetch', async t => {
   const { App, figbird } = createApp()
 
   function IssueList() {
-    const issues = useRelationalQuery(figbird.q.issues)
+    const issues = useStatusQuery(figbird.q.issues)
 
     if (issues.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1046,7 +1054,7 @@ test('useRelationalQuery: with relations', async t => {
   const { App, figbird } = createApp()
 
   function IssueWithCreator() {
-    const issue = useRelationalQuery(figbird.q.issues.where({ id: 1 }).one().related('creator'))
+    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('creator'))
 
     if (issue.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1088,7 +1096,7 @@ test('useRelationalQuery: with many relation', async t => {
   const { App, figbird } = createApp()
 
   function IssueWithComments() {
-    const issue = useRelationalQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
+    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
 
     if (issue.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1142,7 +1150,7 @@ test('useRelationalQuery: query changes trigger refetch', async t => {
     const [currentStatus, setCurrentStatus] = React.useState(status)
     setStatus = setCurrentStatus
 
-    const issues = useRelationalQuery(figbird.q.issues.where({ status: currentStatus }))
+    const issues = useStatusQuery(figbird.q.issues.where({ status: currentStatus }))
 
     if (issues.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1198,7 +1206,7 @@ test('useRelationalQuery: skip option prevents fetch', async t => {
   }
 
   function SkippedQuery() {
-    const issues = useRelationalQuery(figbird.q.issues, { skip: true })
+    const issues = useStatusQuery(figbird.q.issues, { skip: true })
 
     return <div className='status'>{issues.status}</div>
   }
@@ -1232,7 +1240,7 @@ test('useRelationalQuery: refetch function works', async t => {
   let triggerRefetch: () => void
 
   function RefetchTest() {
-    const issues = useRelationalQuery(figbird.q.issues)
+    const issues = useStatusQuery(figbird.q.issues)
     triggerRefetch = issues.refetch
 
     if (issues.status === 'loading') {
@@ -1337,7 +1345,7 @@ test('useRelationalQuery: two components share cached data', async t => {
   }
 
   function IssueListA() {
-    const issues = useRelationalQuery(figbird.q.issues)
+    const issues = useStatusQuery(figbird.q.issues)
 
     if (issues.status === 'loading') {
       return <div className='loading-a'>Loading A...</div>
@@ -1347,7 +1355,7 @@ test('useRelationalQuery: two components share cached data', async t => {
   }
 
   function IssueListB() {
-    const issues = useRelationalQuery(figbird.q.issues)
+    const issues = useStatusQuery(figbird.q.issues)
 
     if (issues.status === 'loading') {
       return <div className='loading-b'>Loading B...</div>
@@ -1383,18 +1391,18 @@ test('useRelationalQuery: two components share cached data', async t => {
 // createHooks Tests
 // ============================================================================
 
-test('createHooks: useRelationalQuery is exported and works', async t => {
+test('createHooks: useQuery with suspense:false is exported and works', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
   // Create typed hooks from figbird instance
-  const { useRelationalQuery: useTypedRelationalQuery } = createHooks(figbird)
+  const { useQuery: useTypedQuery, q } = createHooks(figbird)
 
   function IssueWithCreator() {
     // Use the typed hook - the query builder should be properly typed
-    const issue = useTypedRelationalQuery(
-      figbird.q.issues.where({ id: 1 }).one().related('creator'),
-    )
+    const issue = useTypedQuery(q.issues.where({ id: 1 }).one().related('creator'), {
+      suspense: false,
+    })
 
     if (issue.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1440,7 +1448,7 @@ test('realtime: creating a child entity appears in the active relation view', as
   const { App, figbird, feathers } = createApp()
 
   function IssueWithComments() {
-    const issue = useRelationalQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
+    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
     if (issue.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issue.data as Issue & { comments: Comment[] }
     return (
@@ -1490,7 +1498,7 @@ test('realtime: patching a related entity updates the assembled view', async t =
   const { App, figbird, feathers } = createApp()
 
   function IssueWithCreator() {
-    const issue = useRelationalQuery(figbird.q.issues.where({ id: 1 }).one().related('creator'))
+    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('creator'))
     if (issue.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issue.data as Issue & { creator: User | null }
     return <div className='creator'>{data.creator?.name ?? 'Unknown'}</div>
@@ -1518,7 +1526,7 @@ test('realtime: removing a related entity removes it from the assembled view', a
   const { App, figbird, feathers } = createApp()
 
   function IssueWithComments() {
-    const issue = useRelationalQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
+    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
     if (issue.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issue.data as Issue & { comments: Comment[] }
     return <div className='comment-count'>{data.comments.length}</div>
@@ -1555,7 +1563,7 @@ test('realtime: a new root entity gets its relations fetched (Gap B)', async t =
   })
 
   function IssueList() {
-    const issues = useRelationalQuery(figbird.q.issues.related('comments'))
+    const issues = useStatusQuery(figbird.q.issues.related('comments'))
     if (issues.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issues.data as unknown as Array<Issue & { comments: Comment[] }>
     return (
@@ -1650,8 +1658,8 @@ test('realtime: relation-path filters match root events through cached relations
   const { render, unmount, flush, $all } = dom()
 
   function Documents() {
-    const people = useRelationalQuery(figbird.q.people.related('orgUnit'))
-    const documents = useRelationalQuery(
+    const people = useStatusQuery(figbird.q.people.related('orgUnit'))
+    const documents = useStatusQuery(
       figbird.q.documents
         .where({ 'person.orgUnit.label': 'Engineering' })
         .related('person', person => person.related('orgUnit')),
@@ -1730,7 +1738,7 @@ test('realtime: child entity arrival on nested relation updates the assembled vi
   const { App, figbird, feathers } = createApp()
 
   function IssueWithCommentReactions() {
-    const issue = useRelationalQuery(
+    const issue = useStatusQuery(
       figbird.q.issues
         .where({ id: 1 })
         .one()
@@ -2161,7 +2169,7 @@ test('empty top-level relation does not hang loading', async t => {
   feathers.service('issues').find = async () => ({ total: 0, limit: 100, skip: 0, data: [] }) as any
 
   function IssueList() {
-    const issues = useRelationalQuery(figbird.q.issues.related('comments'))
+    const issues = useStatusQuery(figbird.q.issues.related('comments'))
     if (issues.status === 'loading') return <div className='loading'>Loading...</div>
     if (issues.status === 'error') return <div className='error'>{issues.error.message}</div>
     const data = issues.data as unknown as Issue[]
