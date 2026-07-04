@@ -7,8 +7,8 @@ import { useFigbird } from './react.js'
  * For schema-aware service types, prefer `createHooks(figbird).useService`.
  */
 /**
- * @deprecated Feathers-specific escape hatch from the descriptor era; it stays
- * functional but is not part of the current API surface.
+ * @deprecated Use `useFeathers().service(name)` instead — same capability, one
+ * escape hatch. This stays functional but is not part of the current API surface.
  */
 export function useService(serviceName: string): FeathersService {
   const figbird = useFigbird()

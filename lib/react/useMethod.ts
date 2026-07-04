@@ -39,12 +39,11 @@ const initialMethodState = {
 } satisfies MethodState<unknown>
 
 /**
- * Calls an arbitrary service method and tracks local UI lifecycle state.
- * This does not apply CRUD cache updates. For typed custom methods, prefer
- * the `useMethod` returned by `createHooks(figbird)`.
- *
- * @deprecated Feathers-specific escape hatch from the descriptor era; it stays
- * functional but is not part of the current API surface.
+ * Calls a custom service method and tracks local UI lifecycle state — the mutation
+ * path for everything beyond CRUD (`useMutation` covers create/update/patch/remove;
+ * this covers `archive`, `sendReminder`, `recalculate`, ...). Does not apply CRUD
+ * cache updates. Methods declared in the schema are fully typed via the `useMethod`
+ * returned by `createHooks(figbird)`.
  */
 export function useMethod<TArgs extends unknown[] = unknown[], TResult = unknown>(
   serviceName: string,
