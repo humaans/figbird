@@ -43,6 +43,9 @@ export class QueryStore<
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number | undefined = 100
   #processingEventQueue = false
+  // Query ids whose listener notification has been deferred to the next microtask
+  // (see #scheduleDeferredNotify). Null when nothing is scheduled.
+  #deferredNotifyQueryIds: Set<string> | null = null
 
   constructor({
     adapter,
@@ -342,33 +345,43 @@ export class QueryStore<
   }
 
   #fetching({ queryId }: { queryId: string }): void {
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
+    // This is the only listener-notifying transition reachable synchronously from
+    // a React render (useQuery → suspensePromise → root/relation setup → subscribe
+    // → #queue → here); everything past `await #fetch` is already async. Deferring
+    // the notification (not the state write — the fetch still starts synchronously
+    // and warm reads are unaffected) keeps other subscribed components from being
+    // updated mid-render.
+    this.#transactOverService(
+      queryId,
+      (service, query) => {
+        if (!query) return
 
-      service.queries.set(queryId, {
-        ...query,
-        pending: false,
-        dirty: false,
-        state:
-          query.state.status === 'error'
-            ? {
-                status: 'loading' as const,
-                data: null,
-                meta: query.state.meta,
-                isFetching: true,
-                error: null,
-              }
-            : query.state.status === 'success'
-              ? { ...query.state, isFetching: true }
-              : {
-                  status: query.state.status,
+        service.queries.set(queryId, {
+          ...query,
+          pending: false,
+          dirty: false,
+          state:
+            query.state.status === 'error'
+              ? {
+                  status: 'loading' as const,
                   data: null,
                   meta: query.state.meta,
                   isFetching: true,
                   error: null,
-                },
-      })
-    })
+                }
+              : query.state.status === 'success'
+                ? { ...query.state, isFetching: true }
+                : {
+                    status: query.state.status,
+                    data: null,
+                    meta: query.state.meta,
+                    isFetching: true,
+                    error: null,
+                  },
+        })
+      },
+      { defer: true },
+    )
   }
 
   #fetched({
@@ -789,7 +802,7 @@ export class QueryStore<
 
   #updateState(
     mutate: (state: Map<string, ServiceState<TMeta>>, touch: (queryId: string) => void) => void,
-    { silent = false } = {},
+    { silent = false, defer = false } = {},
   ): Set<string> {
     const modifiedQueries = new Set<string>()
 
@@ -799,13 +812,46 @@ export class QueryStore<
     mutate(this.#state, touch)
 
     if (!silent && modifiedQueries.size > 0) {
-      for (const queryId of modifiedQueries) {
-        this.#invokeListeners(queryId)
+      if (defer) {
+        this.#scheduleDeferredNotify(modifiedQueries)
+      } else {
+        for (const queryId of modifiedQueries) {
+          this.#invokeListeners(queryId)
+        }
+        this.#invokeGlobalListeners()
       }
-      this.#invokeGlobalListeners()
     }
 
     return modifiedQueries
+  }
+
+  /**
+   * Invoke listeners on the next microtask instead of synchronously, coalescing
+   * repeated schedules. Used for transitions that can happen while React is
+   * rendering: subscribing to a query can start a fetch synchronously (including
+   * from `suspensePromise()` during render), and the resulting isFetching
+   * transition must not fire other components' `onStoreChange` mid-render —
+   * React warns with "Cannot update a component while rendering a different
+   * component". Listeners read the *current* state when invoked, so deferring
+   * never delivers a stale snapshot.
+   */
+  #scheduleDeferredNotify(queryIds: Set<string>): void {
+    if (this.#deferredNotifyQueryIds) {
+      for (const queryId of queryIds) {
+        this.#deferredNotifyQueryIds.add(queryId)
+      }
+      return
+    }
+    this.#deferredNotifyQueryIds = new Set(queryIds)
+    queueMicrotask(() => {
+      const ids = this.#deferredNotifyQueryIds
+      this.#deferredNotifyQueryIds = null
+      if (!ids || ids.size === 0) return
+      for (const queryId of ids) {
+        this.#invokeListeners(queryId)
+      }
+      this.#invokeGlobalListeners()
+    })
   }
 
   #transactOverService(
@@ -815,7 +861,7 @@ export class QueryStore<
       query?: Query<unknown, TMeta, unknown>,
       touch?: (queryId: string) => void,
     ) => void,
-    options?: { silent?: boolean },
+    options?: { silent?: boolean; defer?: boolean },
   ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (!serviceName) return
@@ -833,7 +879,7 @@ export class QueryStore<
   #transactOverServiceByName(
     serviceName: string,
     fn: (service: ServiceState<TMeta>, touch: (queryId: string) => void) => void,
-    { silent = false } = {},
+    { silent = false, defer = false } = {},
   ): Set<string> {
     if (!serviceName) return new Set()
 
@@ -849,7 +895,7 @@ export class QueryStore<
           fn(service, touch)
         }
       },
-      { silent },
+      { silent, defer },
     )
   }
 
