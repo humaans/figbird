@@ -112,6 +112,8 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   dirty: boolean
   filterItem: (item: ElementType<T>) => boolean
   state: QueryState<T, TMeta>
+  /** Epoch ms of the last successful fetch — the seed of staleness decisions. */
+  fetchedAt?: number
 }
 
 /**

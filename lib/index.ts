@@ -94,6 +94,9 @@ export { useService } from './react/useService.js'
 // explicit status handling.
 export { useQuery, useRelationalQuery } from './react/useRelationalQuery.js'
 export { useDelayedFlag } from './react/useDelayedFlag.js'
+// The rest of the no-flash kit (see the "no-flash checklist" docs section):
+export { useDebouncedTransition } from './react/useDebouncedTransition.js'
+export { DelayedFallback } from './react/DelayedFallback.js'
 export type {
   RelationalQueryResult,
   SuspenseQueryResult,

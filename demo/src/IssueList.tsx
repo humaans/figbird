@@ -3,8 +3,9 @@
  * paginated issue list, including the hover-prefetch machinery for issue rows.
  */
 
-import { Suspense, startTransition, useEffect, useRef, useState, useTransition } from 'react'
+import { Suspense, useRef, useState, useTransition } from 'react'
 import { Link, useRoute } from 'react-space-router'
+import { useDebouncedTransition } from 'figbird'
 import { figbird, useQuery, type Issue, type Label, type Team, type User } from './figbird'
 import { Explain } from './Explain'
 import { issueCommentsQuery, issueDetailQuery } from './pages/IssueDetail/queries'
@@ -18,49 +19,15 @@ function useSelectedIssueId(): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-/**
- * Debounced value that commits inside a transition — when the downstream query
- * suspends (new search term = cold cache entry), React keeps the previous
- * committed UI on screen instead of flashing a fallback.
- */
-function useDebouncedTransition<T>(value: T, delay = 250): T {
-  const [debounced, setDebounced] = useState(value)
-  useEffect(() => {
-    const t = setTimeout(() => startTransition(() => setDebounced(value)), delay)
-    return () => clearTimeout(t)
-  }, [value, delay])
-  return debounced
-}
-
 // ----- Hover prefetch -----
 
-// Prefetch an issue's detail + comments on hover intent — figbird.prepare() is an
-// earlier read of the exact queries the detail screen will ask for, so by click
-// time the navigation is usually a warm, synchronous read.
-//
-// Each issue is prepared AT MOST ONCE per session: after the first prefetch the
-// data lives in the QueryStore, where realtime events keep merge-class queries
-// fresh even with no subscribers, and an actual navigation performs one SWR
-// revalidation. Re-preparing on every hover would resubscribe and re-trigger SWR
-// — hammering the server with redundant revalidations as the mouse sweeps the
-// list. A small LRU of release() handles bounds how many hover pins stay live;
-// released entries keep their warm data in the QueryStore either way.
-const HOVER_PIN_LIMIT = 12
-const preparedIssues = new Set<number>()
-const hoverPins = new Map<number, Array<{ release: () => void }>>()
-
+// Warm an issue's detail + comments on hover intent — the exact queries the detail
+// screen will read, so by click time the navigation is usually a warm, synchronous
+// read. figbird.prefetch() is idempotent (fresh queries no-op) and manages its own
+// pin lifetime, so calling it on every hover costs nothing.
 function prefetchIssue(id: number): void {
-  if (preparedIssues.has(id)) return
-  preparedIssues.add(id)
-  hoverPins.set(id, [
-    figbird.prepare(issueDetailQuery, { id }),
-    figbird.prepare(issueCommentsQuery, { id }),
-  ])
-  if (hoverPins.size > HOVER_PIN_LIMIT) {
-    const [oldest] = hoverPins.keys()
-    for (const handle of hoverPins.get(oldest!) ?? []) handle.release()
-    hoverPins.delete(oldest!)
-  }
+  figbird.prefetch(issueDetailQuery, { id })
+  figbird.prefetch(issueCommentsQuery, { id })
 }
 
 // Only prefetch after the pointer has rested on a row briefly — sweeping the
@@ -217,8 +184,8 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
           can change membership invisibly (a row you can't see may now belong), so figbird refetches
           the affected pages instead of guessing. Comment counts come from{' '}
           <code>issue.commentIds</code>, a server-maintained id list — no comments are fetched here
-          at all. Hovering a row prefetches its detail via <code>figbird.prepare()</code>, so
-          clicking is usually a warm read.
+          at all. Hovering a row warms its detail via <code>figbird.prefetch()</code> — idempotent
+          and self-releasing, so hover-spam costs nothing — and clicking is usually a warm read.
         </Explain>
       </header>
       <ul className='issue-rows'>
