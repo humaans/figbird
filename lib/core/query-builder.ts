@@ -287,7 +287,10 @@ export class QueryBuilder<
   get(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
     resourceId: string | number,
-  ): QueryBuilder<S, TService, TItem, Record<string, never>, 'one', 'get'> {
+    // The reset TRelated must be `{}`, not `Record<string, never>` — the latter's
+    // `keyof` is `string`, so a later `.related()` would `Omit` every field from
+    // TItem (see the TRelated type-parameter comment on the class).
+  ): QueryBuilder<S, TService, TItem, {}, 'one', 'get'> {
     return new QueryBuilder(this.#schema, this.#state.service, {
       kind: 'get',
       resourceId,
@@ -295,7 +298,7 @@ export class QueryBuilder<
       cardinality: 'one',
       related: {},
       server: false,
-    }) as QueryBuilder<S, TService, TItem, Record<string, never>, 'one', 'get'>
+    }) as QueryBuilder<S, TService, TItem, {}, 'one', 'get'>
   }
 
   /**

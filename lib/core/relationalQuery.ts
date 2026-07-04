@@ -46,7 +46,13 @@ export interface RelationalQueryHost<TMeta extends Record<string, unknown>, TQue
 }
 
 /**
- * State for relational queries
+ * State for relational queries.
+ *
+ * The success arm carries `error` so that a failed *refetch* doesn't tear down a
+ * screen that already has data: the query keeps serving the last successful
+ * snapshot with the failure attached, and clears it on the next successful fetch.
+ * The `error` status is reserved for cold failures — no successful data was ever
+ * produced for this query.
  */
 export type RelationalQueryState<T> =
   | {
@@ -59,7 +65,7 @@ export type RelationalQueryState<T> =
   | {
       status: 'success'
       data: T
-      error: null
+      error: Error | null
       isFetching: boolean
       pagination?: RelationalPaginationState
     }
@@ -157,6 +163,8 @@ export class RelationalQueryRef<
   #listeners: Set<(state: RelationalQueryState<T>) => void> = new Set()
   #processedEventUnsub: (() => void) | null = null
   #relationalFilterRefetchQueued = false
+  // A teardown is parked on the microtask queue (see #scheduleCleanup).
+  #cleanupScheduled = false
 
   // Snapshot identity caching — useSyncExternalStore requires getSnapshot() to return
   // ref-equal values when nothing has changed, otherwise React detects a tear and
@@ -241,11 +249,26 @@ export class RelationalQueryRef<
     return () => {
       this.#listeners.delete(fn)
 
-      // Clean up if no more listeners
+      // Clean up if no more listeners — but not synchronously. React StrictMode
+      // unsubscribes and immediately resubscribes every mount; tearing down on the
+      // spot would evict this ref and reset its state, so the resubscribed hook
+      // would find a cold replacement on its next render and re-suspend, forever.
+      // Deferring by a microtask lets a back-to-back resubscribe cancel the teardown.
       if (this.#listeners.size === 0) {
-        this.#cleanup()
+        this.#scheduleCleanup()
       }
     }
+  }
+
+  #scheduleCleanup(): void {
+    if (this.#cleanupScheduled) return
+    this.#cleanupScheduled = true
+    queueMicrotask(() => {
+      this.#cleanupScheduled = false
+      if (this.#listeners.size === 0 && this.#root) {
+        this.#cleanup()
+      }
+    })
   }
 
   /** Returns the latest snapshot of the relational query state. */
@@ -282,9 +305,13 @@ export class RelationalQueryRef<
       }
     }
 
+    // Reaching this point means the root and every relation are healthy, so a snapshot
+    // still carrying a refetch error must be rebuilt (clearing it) even when the data
+    // itself is unchanged.
     if (
       !inputsChanged &&
       this.#lastSnapshot?.status === 'success' &&
+      this.#lastSnapshot.error === null &&
       this.#lastSnapshot.isFetching === root.isFetching
     ) {
       return this.#wrap(this.#lastSnapshot)
@@ -334,7 +361,21 @@ export class RelationalQueryRef<
     return this.#wrap(this.#lastSnapshot)
   }
 
+  /**
+   * A failure with a previous successful snapshot keeps that snapshot on screen and
+   * attaches the error — a background refetch failing must not unmount a working view
+   * (the hook only throws on `status: 'error'`, which this path never produces). The
+   * error stays attached across retries (#fetchingSnapshot preserves it, so an error
+   * banner doesn't flicker off while a retry is in flight) and clears when the next
+   * successful assembly in getSnapshot() writes `error: null`.
+   */
   #errorSnapshot(error: Error): RelationalQueryState<T> {
+    if (this.#lastSnapshot?.status === 'success') {
+      if (this.#lastSnapshot.error !== error || this.#lastSnapshot.isFetching) {
+        this.#lastSnapshot = { ...this.#lastSnapshot, error, isFetching: false }
+      }
+      return this.#wrap(this.#lastSnapshot)
+    }
     if (
       !this.#lastSnapshot ||
       this.#lastSnapshot.status !== 'error' ||

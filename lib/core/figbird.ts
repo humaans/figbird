@@ -240,7 +240,16 @@ export class Figbird<
       this,
       ast,
       this.schema,
-      () => this.#relationalQueryCache.delete(hash),
+      // Evict only if the cache still points at THIS instance. An already-replaced
+      // instance (evicted earlier, e.g. by StrictMode's unsubscribe/resubscribe cycle)
+      // cleaning up must not delete its successor's entry — that would force every
+      // render to intern a fresh ref whose subscription tears down the previous one,
+      // evicting the current one in turn: an unsubscribe/re-intern loop.
+      () => {
+        if (this.#relationalQueryCache.get(hash) === ref) {
+          this.#relationalQueryCache.delete(hash)
+        }
+      },
     )
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
