@@ -104,6 +104,18 @@ function IssueListPane() {
   const setStatusFilter = (next: StatusFilter) => filterTransition(() => setStatus(next))
   const setTeamFilter = (next: number | null) => filterTransition(() => setTeamId(next))
 
+  // The Explain snippet mirrors the chips you actually have active.
+  const whereLines = [
+    ...(status !== 'all' ? [`  status: '${status}',`] : []),
+    ...(teamId != null
+      ? [`  'assignee.teamId': ${teamId}, // ${teams.find(t => t.id === teamId)?.name}`]
+      : []),
+  ]
+  const filterSnippet =
+    whereLines.length > 0
+      ? `q.issues.where({\n${whereLines.join('\n')}\n})`
+      : `// no filters active — toggle some chips and\n// reopen this popover; it reflects live state\nq.issues.where({})`
+
   return (
     <aside className='list'>
       <div className='list-controls'>
@@ -160,13 +172,7 @@ function IssueListPane() {
               {team.name}
             </button>
           ))}
-          <Explain
-            label='Relational filter'
-            query={`q.issues.where({
-  status: 'open',
-  'assignee.teamId': team.id,
-})`}
-          >
+          <Explain label='Relational filter' query={filterSnippet}>
             The team chips filter by <code>'assignee.teamId'</code> — a field on the{' '}
             <em>related</em> user, not on the issue. The dotted path resolves to a join on the
             server; on the client, figbird's matcher evaluates it against the entity cache to keep
