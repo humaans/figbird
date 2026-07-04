@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import type { MutationOptions } from '../core/figbird.js'
 import { useFigbird } from './react.js'
 
+// Public untyped mutation hook intentionally returns `any` for backwards compatibility.
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+type UntypedData = any
+
 interface MutationState<T> {
   status: 'idle' | 'loading' | 'success' | 'error'
   data: T | null
@@ -57,12 +61,12 @@ export interface UseMutationResult<
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  */
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-export function useMutation(serviceName: string): UseMutationResult<any, any, any, any> {
+export function useMutation(
+  serviceName: string,
+): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
   const figbird = useFigbird()
 
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  const [state, dispatch] = useReducer(mutationReducer<any>, {
+  const [state, dispatch] = useReducer(mutationReducer<UntypedData>, {
     status: 'idle',
     data: null,
     error: null,
@@ -77,8 +81,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
   }, [])
 
   const executeMutation = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    async (promise: Promise<any>): Promise<any> => {
+    async (promise: Promise<UntypedData>): Promise<UntypedData> => {
       dispatch({ type: 'mutating' })
       try {
         const item = await promise
@@ -98,8 +101,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
   )
 
   const create = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    (data: any, options?: MutationCallOptions) =>
+    (data: UntypedData, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
           serviceName,
@@ -112,8 +114,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
     [executeMutation, figbird, serviceName],
   )
   const update = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    (id: string | number, data: any, options?: MutationCallOptions) =>
+    (id: string | number, data: UntypedData, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
           serviceName,
@@ -127,8 +128,7 @@ export function useMutation(serviceName: string): UseMutationResult<any, any, an
     [executeMutation, figbird, serviceName],
   )
   const patch = useCallback(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    (id: string | number, data: any, options?: MutationCallOptions) =>
+    (id: string | number, data: UntypedData, options?: MutationCallOptions) =>
       executeMutation(
         figbird.mutate({
           serviceName,

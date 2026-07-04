@@ -525,7 +525,8 @@ export class QueryStore<
     }
   }
 
-  #processEvent(serviceName: string, event: Event): void {
+  /** Push an event onto the queue and emit the observability signal for its items. */
+  #enqueueEvent(serviceName: string, event: Event): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
       serviceName,
@@ -533,18 +534,17 @@ export class QueryStore<
       items,
     })
     this.#emitRealtimeForItems(serviceName, event.type, items)
+  }
 
+  /** Apply an event immediately — used for mutation results and optimistic writes. */
+  #processEvent(serviceName: string, event: Event): void {
+    this.#enqueueEvent(serviceName, event)
     this.#processQueuedEvents()
   }
 
+  /** Queue a realtime event for batched processing. */
   #queueEvent(serviceName: string, event: Event): void {
-    const items = Array.isArray(event.item) ? event.item : [event.item]
-    this.#eventQueue.push({
-      serviceName,
-      type: event.type,
-      items,
-    })
-    this.#emitRealtimeForItems(serviceName, event.type, items)
+    this.#enqueueEvent(serviceName, event)
 
     if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later

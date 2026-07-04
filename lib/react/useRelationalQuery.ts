@@ -70,6 +70,11 @@ export interface UseRelationalQueryOptions {
   skip?: boolean
 }
 
+// Loosely-typed builder for the untyped overload-dispatch path — the public overloads
+// carry the real types.
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyQueryBuilder = QueryBuilder<any, any, any, any, any, any>
+
 // Default idle state for skipped queries
 const idleState: RelationalQueryState<null> = {
   status: 'idle',
@@ -275,20 +280,10 @@ export function useQuery(
     const rawArgs = argsOrOptions
     const options = maybeOptions ?? {}
     const validatedArgs = definition.validate(rawArgs)
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    const builder = definition.build(validatedArgs as any) as QueryBuilder<
-      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-      any,
-      any,
-      any,
-      any,
-      any,
-      any
-    >
+    const builder = definition.build(validatedArgs) as AnyQueryBuilder
     return useQueryForBuilder(builder, options)
   }
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  const builder = queryOrDefinition as QueryBuilder<any, any, any, any, any, any>
+  const builder = queryOrDefinition as AnyQueryBuilder
   const options = (argsOrOptions as UseQueryOptions | undefined) ?? {}
   return useQueryForBuilder(builder, options)
 }

@@ -445,6 +445,9 @@ export function createTestApp<S extends Schema>(
   // Pin the provider's generics — createElement can't infer them from the figbird prop.
   const Provider = FigbirdProvider<S, typeof adapter>
   function App({ children }: { children?: ReactNode }) {
+    // No JSX in this .ts file, and the provider's props type requires children,
+    // so it must travel via the props object.
+    // oxlint-disable-next-line react/no-children-prop
     return createElement(StrictMode, null, createElement(Provider, { figbird, children }))
   }
 
