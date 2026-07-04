@@ -23,6 +23,7 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { QueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
   isQueryDefinition,
+  type ArgsAndOptions,
   type QueryDefinition,
   type RelationalPaginationState,
   type RelationalQueryState,
@@ -249,7 +250,7 @@ export function useQuery<
   query: B,
   options?: O,
 ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-// Overload: definition + args
+// Overload: definition — args omittable when the definition takes none
 export function useQuery<
   Args,
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -257,8 +258,7 @@ export function useQuery<
   O extends UseQueryOptions = Record<string, never>,
 >(
   definition: QueryDefinition<Args, B>,
-  args: Args,
-  options?: O,
+  ...rest: ArgsAndOptions<Args, O>
 ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
 // Implementation
 export function useQuery(

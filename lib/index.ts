@@ -12,6 +12,7 @@ export {
 } from './core/figbird.js'
 
 export type {
+  ArgsAndOptions,
   EventType,
   FigbirdEvent,
   FigbirdEvents,

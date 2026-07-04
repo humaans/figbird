@@ -6,7 +6,12 @@ import {
   type QueryBuilderProxy,
   type QueryBuilderResult,
 } from './queryBuilder.js'
-import { isQueryDefinition, type PreparedQuery, type QueryDefinition } from './queryDefinition.js'
+import {
+  isQueryDefinition,
+  type ArgsAndOptions,
+  type PreparedQuery,
+  type QueryDefinition,
+} from './queryDefinition.js'
 import {
   classifyQueryNode,
   explainQueryNode,
@@ -57,7 +62,12 @@ export {
   QueryArgsError,
   validateQueryArgs,
 } from './queryDefinition.js'
-export type { PreparedQuery, QueryDefinition, StandardSchemaV1 } from './queryDefinition.js'
+export type {
+  ArgsAndOptions,
+  PreparedQuery,
+  QueryDefinition,
+  StandardSchemaV1,
+} from './queryDefinition.js'
 export { RelationalQueryRef } from './relationalQuery.js'
 export type { RelationalPaginationState, RelationalQueryState } from './relationalQuery.js'
 
@@ -290,7 +300,12 @@ export class Figbird<
     B extends QueryBuilder<S, any, any, any, any, any>,
   >(
     query: QueryDefinition<Args, B>,
-    args: Args,
+    ...rest: ArgsAndOptions<Args, { staleTime?: number }>
+  ): PreparedQuery
+  prepare(
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    query: QueryDefinition<unknown, QueryBuilder<S, any, any, any, any, any>>,
+    args?: unknown,
     options: { staleTime?: number } = {},
   ): PreparedQuery {
     const validatedArgs = query.validate(args)
@@ -336,7 +351,13 @@ export class Figbird<
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     B extends QueryBuilder<S, any, any, any, any, any>,
-  >(query: QueryDefinition<Args, B>, args: Args, options: { staleTime?: number } = {}): void {
+  >(query: QueryDefinition<Args, B>, ...rest: ArgsAndOptions<Args, { staleTime?: number }>): void
+  prefetch(
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    query: QueryDefinition<unknown, QueryBuilder<S, any, any, any, any, any>>,
+    args?: unknown,
+    options: { staleTime?: number } = {},
+  ): void {
     const staleTime = options.staleTime ?? 30_000
     const validatedArgs = query.validate(args)
     const builder = query.build(validatedArgs)
