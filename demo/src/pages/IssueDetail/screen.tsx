@@ -145,7 +145,7 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
           <StatusDot active={isFetching || busy} />
           <Explain
             label='Route-prepared issue graph'
-            query={`defineQuery('issueDetail', ({ id }: { id: number }) =>
+            query={`defineQuery(({ id }: { id: number }) =>
   q.issues
     .where({ id })
     .one()

@@ -603,7 +603,7 @@ passed for computed fields).
 before any component mounts. Prepared queries bridge that.
 
 ```ts
-const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
+const issueDetail = defineQuery(({ id }: { id: number }) =>
   q.issues
     .where({ id })
     .one()
@@ -620,9 +620,12 @@ const { data } = useQuery(issueDetail, { id: 42 })
 
 Properties:
 
-- **Pure declarations.** `defineQuery(name, build)` returns an inert value — no cache state, no
+- **Pure declarations.** `defineQuery(build)` returns an inert value — no cache state, no
   instance dependency — so definitions live in the same layer as the schema. App code gets a
   schema-typed `defineQuery` from its `createHooks` kit; a standalone export serves non-React code.
+  The name is optional metadata (a label for `QueryArgsError` and devtools), never identity —
+  identity is the built AST's hash, so a required name would be pure ceremony duplicating the
+  variable name.
 - **Stable identity.** Calling
   `prepare(query, args)` and later `useQuery(query, args)` with the same args hits the same cache
   entry — no need to thread the builder instance through.

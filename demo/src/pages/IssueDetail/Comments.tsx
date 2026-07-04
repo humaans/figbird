@@ -55,7 +55,7 @@ export function CommentsPanel({ issueId }: { issueId: number }) {
         <StatusDot active={isFetching} />
         <Explain
           label='Prepared, live thread'
-          query={`defineQuery('issueComments', ({ id }: { id: number }) =>
+          query={`defineQuery(({ id }: { id: number }) =>
   q.comments
     .where({ issueId: id })
     .related('author')

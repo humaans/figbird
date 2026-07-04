@@ -2944,14 +2944,13 @@ test('useQuery suspense:false returns the tagged union and never suspends', asyn
   unmount()
 })
 
-test('defineQuery: typed-args form (no validator) builds and prepares', t => {
+test('defineQuery: typed-args form (no validator, no name) builds and prepares', t => {
   const { figbird } = createApp()
 
-  // No Standard Schema — args are typed from the build function's parameter and
-  // pass through unvalidated.
-  const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
-    figbird.q.issues.where({ id }).one(),
-  )
+  // No Standard Schema, no name — args are typed from the build function's parameter,
+  // and identity is the built AST's hash (the name is optional label metadata).
+  const issueDetail = defineQuery(({ id }: { id: number }) => figbird.q.issues.where({ id }).one())
+  t.is(issueDetail.name, '')
 
   const a = figbird.prepare(issueDetail, { id: 1 })
   const b = figbird.prepare(issueDetail, { id: 1 })
