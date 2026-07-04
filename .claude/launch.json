@@ -18,6 +18,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "docs:watch"],
       "port": 1313
+    },
+    {
+      "name": "docs:preview",
+      "runtimeExecutable": "hugo",
+      "runtimeArgs": ["server", "-s", "docs", "--port", "1414"],
+      "port": 1414
     }
   ]
 }

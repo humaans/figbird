@@ -67,7 +67,10 @@ type AnyQueryBuilder = QueryBuilder<any, any, any, any, any, any>
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
   relationalQuery(builder: AnyQueryBuilder): {
-    subscribe(fn: (state: unknown) => void): () => void
+    subscribe(
+      fn: (state: unknown) => void,
+      options?: { staleTime?: number | undefined },
+    ): () => void
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     getSnapshot(): any
     refetch(): void
@@ -97,16 +100,16 @@ const idleState: RelationalQueryState<null> = {
 function useQueryRef<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
->(figbird: FigbirdLike, query: B, skip: boolean) {
+>(figbird: FigbirdLike, query: B, skip: boolean, staleTime?: number) {
   type T = QueryBuilderResult<B>
   const qRef = skip ? null : figbird.relationalQuery(query)
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       if (!qRef) return () => {}
-      return qRef.subscribe(onStoreChange)
+      return qRef.subscribe(onStoreChange, { staleTime })
     },
-    [qRef],
+    [qRef, staleTime],
   )
 
   const getSnapshot = useCallback((): RelationalQueryState<T> => {
@@ -186,6 +189,13 @@ export interface UseQueryOptions {
    * call site. Defaults to `true`.
    */
   suspense?: boolean
+  /**
+   * Freshness tolerance in ms: if the query's data is younger than this on mount, the
+   * background SWR revalidation is skipped. `0` (default) revalidates on every mount;
+   * `Infinity` is cache-first. Not part of query identity — readers with different
+   * tolerances share the cache entry, and the most demanding one keeps it freshest.
+   */
+  staleTime?: number
 }
 
 /**
@@ -294,8 +304,8 @@ function useQueryForBuilder<
   B extends QueryBuilder<any, any, any, any, any, any>,
 >(figbird: FigbirdLike, query: B, options: UseQueryOptions): unknown {
   type T = QueryBuilderResult<B>
-  const { skip = false, suspense = true } = options
-  const { qRef, state } = useQueryRef(figbird, query, skip)
+  const { skip = false, suspense = true, staleTime } = options
+  const { qRef, state } = useQueryRef(figbird, query, skip, staleTime)
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
   const loadMore = useCallback(() => qRef?.loadMore(), [qRef])
 
