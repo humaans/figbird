@@ -156,6 +156,28 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
           <span className='dim'>·</span>
           <span className='dim'>priority {issue.priorityScore}</span>
           <StatusDot active={isFetching || busy} />
+          <Explain
+            label='Route-prepared issue graph'
+            query={`defineQuery('issueDetail', schema, ({ id }) =>
+  q.issues
+    .where({ id })
+    .one()
+    .related('creator')
+    .related('assignee')
+    .related('team')
+    .related('labels')) // two-hop via issueLabels
+
+// fired by the router, in parallel with
+// this screen's lazy chunk (and by rows
+// on hover, before you even click):
+figbird.prepare(issueDetailQuery, { id })`}
+          >
+            One <code>.one()</code> query assembles the whole graph — issue, people, team, labels —
+            from per-service caches. The route (and row hover) prepared this exact query, so warm
+            visits render synchronously inside the issue-keyed Suspense boundary. The relation
+            leaves stay live: Reassign patches the foreign key and figbird fetches and swaps in the
+            new assignee; a teammate's edits merge from socket events.
+          </Explain>
         </div>
         <EditableTitle issueId={issue.id} title={issue.title} />
         <div className='detail-meta'>
