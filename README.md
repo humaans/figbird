@@ -1,8 +1,8 @@
 # Figbird
 
-A data fetching library for React + Feathers applications. Used in production at [Humaans](https://humaans.io/).
+A realtime, relational data layer for React + Feathers applications. Used in production at [Humaans](https://humaans.io/).
 
-Figbird gives you React hooks that fetch data and keep it updated. When a record changes - from this component, another component, or a realtime event from the server - every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.
+Figbird gives you one query hook that fetches an entity graph — a record together with its relations — and keeps it updated. When a record changes, from this component, another component, or a realtime event from the server, every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.
 
 ## Install
 
@@ -12,42 +12,50 @@ pnpm add figbird
 
 ## Usage
 
-```ts
-import { Figbird, FeathersAdapter, FigbirdProvider, createHooks } from 'figbird'
+```tsx
+import { Figbird, FeathersAdapter, createSchema, service, createHooks } from 'figbird'
+
+const schema = createSchema({
+  services: {
+    notes: service<{ item: Note }>(),
+    users: service<{ item: User }>(),
+  },
+  relationships: ({ one }) => ({
+    notes: {
+      author: one({ sourceField: 'authorId', destService: 'users' }),
+    },
+  }),
+})
 
 const figbird = new Figbird({
   adapter: new FeathersAdapter(feathersClient),
+  schema,
 })
 
-export const { useFind, useGet, useMutation } = createHooks(figbird)
-
-function App() {
-  return (
-    <FigbirdProvider figbird={figbird}>
-      <Notes />
-    </FigbirdProvider>
-  )
-}
+export const { useQuery, useMutation, q } = createHooks(figbird)
 
 function Notes() {
-  const { data } = useFind('notes')
-  const { patch } = useMutation('notes')
+  const { data: notes } = useQuery(q.notes.where({ read: false }).related('author'))
+  const mutation = useMutation('notes', { optimistic: true })
 
-  return data?.map(note => (
-    <div key={note.id} onClick={() => patch(note.id, { read: true })}>
-      {note.content}
+  return notes.map(note => (
+    <div key={note.id} onClick={() => mutation.patch(note.id, { read: true })}>
+      {note.content} — {note.author?.name}
     </div>
   ))
 }
 ```
 
+No provider needed — the hooks are bound to the instance. Cold reads suspend into your `<Suspense>` boundary; warm reads render synchronously.
+
 ## Features
 
-- **Live queries** - results update as records are created, modified, or removed
-- **Shared cache** - same data across components, always consistent
-- **Realtime built-in** - Feathers websocket events update your UI automatically
-- **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
-- **Full TypeScript** - define a schema once, get inference everywhere
+- **Relational queries** — declare relations once, `.related()` assembles live entity graphs
+- **Live queries** — results update as records are created, modified, or removed
+- **Suspense-native** — loading states live in boundaries, not branches
+- **Optimistic mutations** — declared once per surface, rolled back on failure everywhere
+- **Prepare & prefetch** — routers and hover handlers warm the exact queries screens will read
+- **Full TypeScript** — define a schema once, get inference through builders, relations, and mutations
 
 ## Documentation
 
