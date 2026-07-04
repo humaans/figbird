@@ -1,7 +1,7 @@
 import test from 'ava'
-import React, { StrictMode } from 'react'
-import { createSchema, FeathersAdapter, Figbird, FigbirdProvider, service, useQuery } from '../lib'
-import { dom, mockFeathers } from './helpers'
+import React from 'react'
+import { createSchema, service, useQuery } from '../lib'
+import { createTestApp, dom } from './helpers'
 
 // ============================================================================
 // Test types & schema
@@ -76,65 +76,19 @@ interface PaginateAppOptions {
 
 function createPaginateApp(opts: PaginateAppOptions = {}) {
   const totalIssues = opts.totalIssues ?? 10
-  const feathers = mockFeathers({
-    ...(opts.skipTotal ? { skipTotal: true } : {}),
-    issues: { data: makeIssues(totalIssues) },
-    comments: {
-      data: makeComments(Array.from({ length: totalIssues }, (_, i) => i + 1)),
+  const { App, figbird, feathers } = createTestApp(
+    paginateSchema,
+    {
+      ...(opts.skipTotal ? { skipTotal: true } : {}),
+      issues: { data: makeIssues(totalIssues) },
+      comments: {
+        data: makeComments(Array.from({ length: totalIssues }, (_, i) => i + 1)),
+      },
     },
-  })
+    { queryAwareFind: true },
+  )
 
-  // Replace `find` with one that honors $limit, $skip, $sort, and basic equality filters.
-  const issuesService = feathers.service('issues')
-  issuesService.find = async (params: { query?: Record<string, unknown> } = {}) => {
-    issuesService.counts.find++
-    const query = params.query ?? {}
-    const limit = (query.$limit as number | undefined) ?? 100
-    const skip = (query.$skip as number | undefined) ?? 0
-    const sort = query.$sort as Record<string, number> | undefined
-    let rows = Object.values(issuesService.data).filter((item): item is Issue => !!item)
-    for (const [key, value] of Object.entries(query)) {
-      if (key.startsWith('$')) continue
-      rows = rows.filter(r => (r as unknown as Record<string, unknown>)[key] === value)
-    }
-    if (sort) {
-      const entries = Object.entries(sort)
-      rows = [...rows].sort((a, b) => {
-        for (const [field, direction] of entries) {
-          const av = (a as unknown as Record<string, unknown>)[field]
-          const bv = (b as unknown as Record<string, unknown>)[field]
-          if (av === bv) continue
-          if (typeof av === 'number' && typeof bv === 'number') {
-            return direction === -1 ? bv - av : av - bv
-          }
-          return direction === -1
-            ? String(bv).localeCompare(String(av))
-            : String(av).localeCompare(String(bv))
-        }
-        return 0
-      })
-    }
-    const total = rows.length
-    const data = rows.slice(skip, skip + limit)
-    return opts.skipTotal ? { limit, skip, data } : { total, limit, skip, data }
-  }
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: paginateSchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
-  }
-
-  return { App, figbird, feathers, issuesService }
+  return { App, figbird, feathers, issuesService: feathers.service('issues') }
 }
 
 // ============================================================================
