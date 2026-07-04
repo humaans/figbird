@@ -9,8 +9,8 @@
 
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, type Comment, type Reaction, type User } from '../../figbird'
-import { Explain } from '../../Explain'
-import { StatusDot } from '../../ui'
+import { Explain } from '../../components/Explain'
+import { StatusDot } from '../../components/ui'
 import { issueCommentsQuery } from './queries'
 
 // The demo has no auth — everything you do, you do as Alice.

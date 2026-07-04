@@ -6,7 +6,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-space-router'
-import { q, useMutation, useQuery } from './figbird'
+import { q, useMutation, useQuery } from '../figbird'
 import { Explain } from './Explain'
 
 export function NewIssueModal({ onClose }: { onClose: () => void }) {

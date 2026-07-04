@@ -36,7 +36,7 @@ If you're here to learn figbird, read in this order — each file teaches one id
 2. **`src/App.tsx`** — layout and routing: keyed Suspense boundaries per issue,
    `DelayedFallback`, and the route that fires data preparation in parallel with its lazy
    chunk.
-3. **`src/IssueList.tsx`** — the paginated live list (`.paginate()`), server-authoritative
+3. **`src/components/IssueList.tsx`** — the paginated live list (`.paginate()`), server-authoritative
    search (`$regex`), relational filter chips (`'assignee.teamId'`), transitions via
    `useDebouncedTransition`, and one-line hover prefetch.
 4. **`src/pages/IssueDetail/`** — the route-prepared screen, one lesson per file:
@@ -47,15 +47,16 @@ If you're here to learn figbird, read in this order — each file teaches one id
    - `Comments.tsx` — the local-exact realtime thread (unwindowed on purpose)
 5. **`src/pages/Teams/screen.tsx`** — windowed relations vs `embed()`, side by side on
    one card.
-6. **`src/ActivityPanel.tsx`** — three independent realtime queries merged in the
+6. **`src/components/ActivityPanel.tsx`** — three independent realtime queries merged in the
    component.
-7. **`src/NewIssueModal.tsx`** — optimistic create with a client-generated id.
-8. **`src/DevTools.tsx`** — built entirely on public observability: `figbird.events` for
+7. **`src/components/NewIssueModal.tsx`** — optimistic create with a client-generated id.
+8. **`src/components/DevTools.tsx`** — built entirely on public observability: `figbird.events` for
    the log, `figbird.inspect()` for the query table.
 
-Structure rule: routed screens live in `src/pages/`; panes and chrome the workspace shell
-composes live at `src/`. `src/demoControl.ts` and `server.mjs` are demo plumbing, not
-figbird usage — skip them unless you're curious how the simulation works.
+Structure rule: `src/` root is wiring (`main`, `figbird`, `demoControl`, `App`);
+`src/components/` is the shell UI the workspace composes; `src/pages/` is routed screens.
+`src/demoControl.ts` and `server.mjs` are demo plumbing, not figbird usage — skip them
+unless you're curious how the simulation works.
 
 ## The dev-tools drawer
 

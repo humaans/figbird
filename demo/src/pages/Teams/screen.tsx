@@ -5,8 +5,8 @@
 
 import { Link } from 'react-space-router'
 import { q, useQuery } from '../../figbird'
-import { Explain } from '../../Explain'
-import { StatusDot } from '../../ui'
+import { Explain } from '../../components/Explain'
+import { StatusDot } from '../../components/ui'
 
 export function TeamsPage() {
   const { data: teams, isFetching } = useQuery(

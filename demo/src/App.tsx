@@ -6,13 +6,13 @@
 import { Suspense, useState, type ReactNode } from 'react'
 import { DelayedFallback } from 'figbird'
 import { Link, Router, Routes, useRoute } from 'react-space-router'
-import { ActivityPanel } from './ActivityPanel'
-import { DevToolsPanel } from './DevTools'
-import { IssueListPane } from './IssueList'
-import { NewIssueModal } from './NewIssueModal'
+import { ActivityPanel } from './components/ActivityPanel'
+import { DevToolsPanel } from './components/DevTools'
+import { IssueListPane } from './components/IssueList'
+import { NewIssueModal } from './components/NewIssueModal'
 import { prepareIssueDetail } from './pages/IssueDetail/prepare'
 import { TeamsPage } from './pages/Teams/screen'
-import { DetailSkeleton, SkeletonRows } from './ui'
+import { DetailSkeleton, SkeletonRows } from './components/ui'
 
 function EmptyDetail() {
   return (
@@ -99,12 +99,16 @@ const routes = [
     component: Workspace,
     routes: [
       { path: '/', component: EmptyDetail },
+      // Lazy route: the screen chunk downloads in parallel with its data preparation,
+      // so navigation latency is max(chunk, data) instead of chunk + data.
       {
         path: '/issues/:id',
         resolver: () => import('./pages/IssueDetail/screen'),
         prepare: prepareIssueDetail,
         navigation: { commit: 'immediate' as const },
       },
+      // Eager route, on purpose — a small screen with no route-critical data doesn't
+      // earn a chunk split. The demo shows both styles.
       { path: '/teams', component: TeamsPage },
     ],
   },

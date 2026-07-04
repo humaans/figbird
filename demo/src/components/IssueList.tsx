@@ -6,9 +6,9 @@
 import { Suspense, useRef, useState, useTransition } from 'react'
 import { Link, useRoute } from 'react-space-router'
 import { useDebouncedTransition } from 'figbird'
-import { prefetch, q, useQuery, type Issue, type Label, type Team, type User } from './figbird'
+import { prefetch, q, useQuery, type Issue, type Label, type Team, type User } from '../figbird'
 import { Explain } from './Explain'
-import { issueCommentsQuery, issueDetailQuery } from './pages/IssueDetail/queries'
+import { issueCommentsQuery, issueDetailQuery } from '../pages/IssueDetail/queries'
 import { StatusDot, SkeletonRows, escapeRegExp } from './ui'
 
 function useSelectedIssueId(): number | null {
