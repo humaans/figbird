@@ -6,7 +6,7 @@
 import { Suspense, useRef, useState, useTransition } from 'react'
 import { Link, useRoute } from 'react-space-router'
 import { useDebouncedTransition } from 'figbird'
-import { figbird, useQuery, type Issue, type Label, type Team, type User } from './figbird'
+import { figbird, q, useQuery, type Issue, type Label, type Team, type User } from './figbird'
 import { Explain } from './Explain'
 import { issueCommentsQuery, issueDetailQuery } from './pages/IssueDetail/queries'
 import { StatusDot, SkeletonRows, escapeRegExp } from './ui'
@@ -45,7 +45,7 @@ export function IssueListPane() {
   const [teamId, setTeamId] = useState<number | null>(null)
   const [isPending, filterTransition] = useTransition()
 
-  const { data: teams } = useQuery(figbird.q.teams)
+  const { data: teams } = useQuery(q.teams)
 
   const setStatusFilter = (next: StatusFilter) => filterTransition(() => setStatus(next))
   const setTeamFilter = (next: number | null) => filterTransition(() => setTeamId(next))
@@ -128,7 +128,7 @@ export function IssueListPane() {
       <div className={`list-body${isPending ? ' pending' : ''}`}>
         <Suspense fallback={<ListSkeleton />}>
           {search !== '' ? (
-            <SearchResults q={search} typing={search !== searchInput.trim()} />
+            <SearchResults term={search} typing={search !== searchInput.trim()} />
           ) : (
             <PaginatedIssueRows status={status} teamId={teamId} />
           )}
@@ -151,7 +151,7 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
     isLoadingMore,
     totalCount,
   } = useQuery(
-    figbird.q.issues
+    q.issues
       .where(where)
       .orderBy('updatedAt', 'desc')
       .paginate({ pageSize: 25, returnTotal: true })
@@ -204,12 +204,12 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
   )
 }
 
-function SearchResults({ q, typing }: { q: string; typing: boolean }) {
-  const escaped = escapeRegExp(q)
+function SearchResults({ term, typing }: { term: string; typing: boolean }) {
+  const escaped = escapeRegExp(term)
   // No `.server()` needed: `$regex` is an operator figbird's local matcher can't
   // evaluate, so the query classifies server-authoritative automatically.
   const { data: issues, isFetching } = useQuery(
-    figbird.q.issues
+    q.issues
       .where({ title: { $regex: escaped, $options: 'i' } })
       .orderBy('updatedAt', 'desc')
       .limit(30)
@@ -231,7 +231,7 @@ function SearchResults({ q, typing }: { q: string; typing: boolean }) {
       ) : (
         <ul className='issue-rows'>
           {issues.map(issue => (
-            <IssueRow key={issue.id} issue={issue} highlight={q} />
+            <IssueRow key={issue.id} issue={issue} highlight={term} />
           ))}
         </ul>
       )}

@@ -4,13 +4,13 @@
  */
 
 import { Link } from 'react-space-router'
-import { figbird, useQuery } from '../../figbird'
+import { q, useQuery } from '../../figbird'
 import { Explain } from '../../Explain'
 import { StatusDot } from '../../ui'
 
 export function TeamsPage() {
   const { data: teams, isFetching } = useQuery(
-    figbird.q.teams
+    q.teams
       .related('members')
       .related('spotlight')
       .related('recentIssues', issue => issue.orderBy('updatedAt', 'desc').limit(5)),

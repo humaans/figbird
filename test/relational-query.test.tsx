@@ -1,6 +1,6 @@
 import EventEmitter from 'events'
 import test from 'ava'
-import React from 'react'
+import React, { StrictMode } from 'react'
 import {
   createSchema,
   createHooks,
@@ -2688,6 +2688,79 @@ test('defineQuery + prepare: prepare key is stable for identical args', t => {
   a.release()
   b.release()
   c.release()
+})
+
+test('explain: classifies nodes with structured reasons', t => {
+  const { figbird } = createApp()
+
+  const report = figbird.explain(
+    figbird.q.issues
+      .where({ title: { $regex: 'foo' } })
+      .orderBy('id', 'desc')
+      .limit(30)
+      .related('comments')
+      .related('creator'),
+  )
+
+  const root = report.nodes.find(n => n.path === '(root)')!
+  t.is(root.class, 'server-authoritative')
+  t.is(root.realtime, 'refetch')
+  t.true(root.reasons.some(r => r.code === 'server-only-operator' && r.detail === '$regex'))
+  t.true(root.reasons.some(r => r.code === 'window-filter' && r.detail === '$limit'))
+
+  // Unwindowed relations stay local-exact — realtime events merge locally.
+  const comments = report.nodes.find(n => n.path === 'comments')!
+  t.is(comments.service, 'comments')
+  t.is(comments.class, 'local-exact')
+  t.is(comments.realtime, 'merge')
+
+  // A paginated root is a window even without explicit $limit in the builder query.
+  const paginated = figbird.explain(figbird.q.issues.paginate({ pageSize: 10 }))
+  t.is(paginated.nodes[0]!.class, 'server-window')
+})
+
+test('inspect: stable read-only projection of live queries', async t => {
+  const { figbird } = createApp()
+
+  const ref = figbird.relationalQuery(figbird.q.issues.related('comments'))
+  const unsub = ref.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const rows = figbird.inspect()
+  const issuesRow = rows.find(r => r.serviceName === 'issues')!
+  t.is(issuesRow.method, 'find')
+  t.is(issuesRow.classification, 'local-exact')
+  t.is(issuesRow.status, 'success')
+  t.is(issuesRow.itemCount, 3)
+  t.true(typeof issuesRow.fetchedAt === 'number')
+  t.true(issuesRow.subscriberCount > 0)
+
+  unsub()
+})
+
+test('createHooks: bound hooks and q work without a FigbirdProvider', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { figbird } = createApp()
+  const { useQuery: useBoundQuery, q } = createHooks(figbird)
+
+  function IssueList() {
+    const { data } = useBoundQuery(q.issues.related('creator'))
+    return <div className='count'>{data.length}</div>
+  }
+
+  // No FigbirdProvider anywhere in the tree — hooks resolve the bound instance.
+  render(
+    <StrictMode>
+      <React.Suspense fallback={<div className='fallback'>Loading…</div>}>
+        <IssueList />
+      </React.Suspense>
+    </StrictMode>,
+  )
+  await flush()
+
+  t.is($('.count')!.innerHTML, '3')
+
+  unmount()
 })
 
 test('prefetch: idempotent within staleTime and warms the cache for a later read', async t => {

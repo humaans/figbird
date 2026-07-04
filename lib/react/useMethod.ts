@@ -42,12 +42,27 @@ const initialMethodState = {
  * Calls an arbitrary service method and tracks local UI lifecycle state.
  * This does not apply CRUD cache updates. For typed custom methods, prefer
  * the `useMethod` returned by `createHooks(figbird)`.
+ *
+ * @deprecated Feathers-specific escape hatch from the descriptor era; it stays
+ * functional but is not part of the current API surface.
  */
 export function useMethod<TArgs extends unknown[] = unknown[], TResult = unknown>(
   serviceName: string,
   methodName: string,
 ): UseMethodResult<TArgs, TResult> {
-  const figbird = useFigbird()
+  return useMethodImpl(useFigbird(), serviceName, methodName)
+}
+
+/**
+ * Instance-taking implementation shared by the context-bound `useMethod` and the
+ * bound-instance hooks that `createHooks` produces. @internal
+ */
+export function useMethodImpl<TArgs extends unknown[] = unknown[], TResult = unknown>(
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  figbird: any,
+  serviceName: string,
+  methodName: string,
+): UseMethodResult<TArgs, TResult> {
   const servicePath = resolveServicePath(figbird.schema, serviceName)
 
   const [state, dispatch] = useReducer(methodReducer<TResult>, initialMethodState)

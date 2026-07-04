@@ -9,14 +9,7 @@
 
 import { useMemo, useState } from 'react'
 import { useNavigate, useRoute } from 'react-space-router'
-import {
-  figbird,
-  useMutation,
-  useQuery,
-  type Comment,
-  type Reaction,
-  type User,
-} from '../../figbird'
+import { q, useMutation, useQuery, type Comment, type Reaction, type User } from '../../figbird'
 import { Explain } from '../../Explain'
 import { StatusDot } from '../../ui'
 import { issueCommentsQuery, issueDetailQuery } from './queries'
@@ -62,9 +55,9 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
 
   // Cycled through by the toolbar actions — queried rather than mirrored from the
   // server seed, so they can't silently drift when the seed changes.
-  const { data: users } = useQuery(figbird.q.users)
-  const { data: teams } = useQuery(figbird.q.teams)
-  const { data: labels } = useQuery(figbird.q.labels)
+  const { data: users } = useQuery(q.users)
+  const { data: teams } = useQuery(q.teams)
+  const { data: labels } = useQuery(q.labels)
 
   // The whole detail surface is optimistic — declared once at the hook.
   const issueMutation = useMutation('issues', { optimistic: true })

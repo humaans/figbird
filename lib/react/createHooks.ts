@@ -18,17 +18,11 @@ import type {
   ServiceUpdate,
 } from '../core/schema.js'
 import { resolveServicePath } from '../core/schema.js'
-import { useMethod as useBaseMethod, type UseMethodResult } from './useMethod.js'
-import {
-  useMutation as useBaseMutation,
-  type UseMutationOptions,
-  type UseMutationResult,
-} from './useMutation.js'
-import { useQueryByDesc, type QueryResult } from './useQueryByDesc.js'
-import {
-  useQuery as useBaseQuery,
-  useRelationalQuery as useBaseRelationalQuery,
-} from './useRelationalQuery.js'
+import { useFigbirdMaybe } from './react.js'
+import { useMethodImpl, type UseMethodResult } from './useMethod.js'
+import { useMutationImpl, type UseMutationOptions, type UseMutationResult } from './useMutation.js'
+import { useQueryByDescImpl, type QueryResult } from './useQueryByDesc.js'
+import { useQueryImpl, type FigbirdLike } from './useRelationalQuery.js'
 import type {
   RelationalQueryResult,
   SuspenseQueryResult,
@@ -36,7 +30,7 @@ import type {
   UseRelationalQueryOptions,
 } from './useRelationalQuery.js'
 import type { QueryDefinition } from '../core/figbird.js'
-import type { QueryBuilderResult } from '../core/query-builder.js'
+import type { QueryBuilderProxy, QueryBuilderResult } from '../core/query-builder.js'
 
 /**
  * Strongly-typed call signatures per service name.
@@ -176,6 +170,7 @@ export function createHooks<F extends Figbird<any, any>>(
   useFeathers: UseFeathersForSchema<InferSchema<F>>
   useRelationalQuery: UseRelationalQueryForSchema<InferSchema<F>>
   useQuery: UseQueryForSchema<InferSchema<F>>
+  q: QueryBuilderProxy<InferSchema<F>>
 } {
   type S = InferSchema<F>
   type TParams = InferParams<F>
@@ -184,6 +179,29 @@ export function createHooks<F extends Figbird<any, any>>(
   // The internal implementations are weakly typed with `string` for serviceName.
   // The strong typing is enforced by the return type signature,
   // which correctly narrows the types based on the literal service name provided.
+
+  /**
+   * Resolve the instance these hooks operate on: a FigbirdProvider, when present,
+   * overrides the bound instance (per-request SSR trees and tests inject through it);
+   * otherwise the instance passed to createHooks is used directly — no provider needed.
+   */
+  function useBoundFigbird(): F {
+    const fromContext = useFigbirdMaybe()
+    if (
+      fromContext &&
+      (fromContext as unknown) !== (figbird as unknown) &&
+      typeof process !== 'undefined' &&
+      process.env?.NODE_ENV !== 'production'
+    ) {
+      console.error(
+        'figbird: these hooks were created by createHooks() with one Figbird instance, ' +
+          'but a <FigbirdProvider> higher in the tree holds a different one. The provider ' +
+          'instance wins — if that is not intentional, remove the provider or pass the ' +
+          'same instance to both.',
+      )
+    }
+    return (fromContext ?? figbird) as F
+  }
 
   function useTypedGet<N extends ServiceNames<S>>(
     serviceName: N,
@@ -198,7 +216,8 @@ export function createHooks<F extends Figbird<any, any>>(
     )
     const { desc, config } = splitConfig<ServiceItem<S, N>, ServiceQuery<S, N>>(combinedConfig)
     // Publicly expose get without meta by default
-    return useQueryByDesc<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
+    return useQueryByDescImpl<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
+      useBoundFigbird(),
       desc,
       config,
     ) as unknown as QueryResult<ServiceItem<S, N>>
@@ -215,14 +234,18 @@ export function createHooks<F extends Figbird<any, any>>(
       params || {},
     )
     const { desc, config } = splitConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>(combinedConfig)
-    return useQueryByDesc<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(desc, config)
+    return useQueryByDescImpl<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(
+      useBoundFigbird(),
+      desc,
+      config,
+    )
   }
 
   function useTypedMutation<N extends ServiceNames<S>>(
     serviceName: N,
     options?: UseMutationOptions,
   ) {
-    return useBaseMutation(serviceName, options) as UseMutationResult<
+    return useMutationImpl(useBoundFigbird(), serviceName, options) as UseMutationResult<
       ServiceItem<S, N>,
       ServiceCreate<S, N>,
       ServiceUpdate<S, N>,
@@ -245,7 +268,8 @@ export function createHooks<F extends Figbird<any, any>>(
     serviceName: N,
     methodName: M,
   ) {
-    return useBaseMethod<MethodArgs<ServiceMethods<S, N>[M]>, MethodData<ServiceMethods<S, N>[M]>>(
+    return useMethodImpl<MethodArgs<ServiceMethods<S, N>[M]>, MethodData<ServiceMethods<S, N>[M]>>(
+      useBoundFigbird(),
       serviceName,
       methodName,
     )
@@ -277,6 +301,27 @@ export function createHooks<F extends Figbird<any, any>>(
     )
   }
 
+  function useTypedQuery(
+    queryOrDefinition: unknown,
+    argsOrOptions?: unknown,
+    maybeOptions?: UseQueryOptions,
+  ) {
+    return useQueryImpl(
+      useBoundFigbird() as unknown as FigbirdLike,
+      queryOrDefinition,
+      argsOrOptions,
+      maybeOptions,
+    )
+  }
+
+  /** @deprecated Use `useQuery(query, { suspense: false })` instead. */
+  function useTypedRelationalQuery(query: unknown, options: UseRelationalQueryOptions = {}) {
+    return useQueryImpl(useBoundFigbird() as unknown as FigbirdLike, query, {
+      ...options,
+      suspense: false,
+    })
+  }
+
   return {
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
@@ -284,9 +329,13 @@ export function createHooks<F extends Figbird<any, any>>(
     useService: useTypedService as UseServiceForSchema<S>,
     useMethod: useTypedMethod as UseMethodForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
-    // useRelationalQuery and useQuery delegate directly to the base hooks — the typed
-    // schema binding is already enforced via QueryBuilder<S, T> on the call signatures.
-    useRelationalQuery: useBaseRelationalQuery as UseRelationalQueryForSchema<S>,
-    useQuery: useBaseQuery as unknown as UseQueryForSchema<S>,
+    // The typed schema binding is enforced via QueryBuilder<S, T> on the call signatures.
+    useRelationalQuery: useTypedRelationalQuery as UseRelationalQueryForSchema<S>,
+    useQuery: useTypedQuery as unknown as UseQueryForSchema<S>,
+    // The builder proxy off the bound instance — `useQuery(q.issues.where(...))` with a
+    // single import. Lazy so schemaless instances only throw if actually accessed.
+    get q(): QueryBuilderProxy<S> {
+      return figbird.q as QueryBuilderProxy<S>
+    },
   }
 }

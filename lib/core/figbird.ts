@@ -7,12 +7,21 @@ import {
   type QueryBuilderResult,
 } from './query-builder.js'
 import {
+  isQueryDefinition,
   QUERY_DEFINITION_BRAND,
   validateQueryArgs,
   type PreparedQuery,
   type QueryDefinition,
   type StandardSchemaV1,
 } from './queryDefinition.js'
+import {
+  classifyQueryNode,
+  explainQueryNode,
+  hasWindowFilters,
+  type ClassificationReason,
+  type QueryNodeClass,
+} from './queryClassification.js'
+import type { QueryAST } from './query-builder.js'
 import { QueryRef } from './queryRef.js'
 import { QueryStore } from './queryStore.js'
 import {
@@ -169,6 +178,8 @@ export class Figbird<
    * const result = useQuery(issues)
    * ```
    */
+  #qProxy: QueryBuilderProxy<S> | null = null
+
   get q(): QueryBuilderProxy<S> {
     if (!this.schema) {
       throw new Error(
@@ -176,7 +187,8 @@ export class Figbird<
           'Pass schema to Figbird constructor: new Figbird({ schema, adapter })',
       )
     }
-    return createQueryBuilderProxy(this.schema)
+    this.#qProxy ??= createQueryBuilderProxy(this.schema)
+    return this.#qProxy
   }
 
   /**
@@ -544,10 +556,175 @@ export class Figbird<
     })
   }
 
+  /**
+   * Static analysis of a query: one entry per node (root + each relation, dotted
+   * paths for nesting) with figbird's classification of how that node is maintained
+   * and the structured reasons why. No fetching happens — callable anywhere.
+   *
+   * Use it to answer "why did adding `.limit(30)` change realtime behavior", to
+   * assert a query's class in tests, or to power devtools.
+   */
+  explain(
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    builderOrDefinition: QueryBuilder<S, any, any, any, any, any> | QueryDefinition<any, any>,
+    args?: unknown,
+  ): ExplainReport {
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    type AnyBuilder = QueryBuilder<S, any, any, any, any, any>
+    const builder: AnyBuilder = isQueryDefinition(builderOrDefinition)
+      ? (builderOrDefinition.build(builderOrDefinition.validate(args)) as AnyBuilder)
+      : (builderOrDefinition as AnyBuilder)
+    const ast = builder.toAST()
+    const nodes: ExplainNode[] = []
+    this.#explainAst(ast, '(root)', true, nodes)
+    return { nodes }
+  }
+
+  #explainAst(ast: QueryAST, path: string, isRoot: boolean, nodes: ExplainNode[]): void {
+    const explained = explainQueryNode(ast.query, { server: ast.server })
+    if (isRoot && ast.kind === 'paginate' && explained.class === 'local-exact') {
+      explained.class = 'server-window'
+      explained.reasons = [
+        ...explained.reasons,
+        { code: 'window-filter', detail: 'paginate() — each page is a $limit/$skip window' },
+      ]
+    }
+
+    nodes.push({
+      path,
+      service: ast.service,
+      kind: ast.kind,
+      class: explained.class,
+      reasons: explained.reasons,
+      realtime: explained.class === 'local-exact' ? 'merge' : 'refetch',
+    })
+
+    const relationships = this.schema?.relationships?.[ast.service] ?? {}
+    for (const [relName, relAST] of Object.entries(ast.related)) {
+      const relDef = relationships[relName]
+      const relPath = path === '(root)' ? relName : `${path}.${relName}`
+      // Mirrors the runtime: relations without explicit windowing fetch allPages, so
+      // window filters only count when the consumer asked for a window (which the
+      // engine resolves per-parent).
+      const windowed = hasWindowFilters(relAST.query)
+      const relExplained = explainQueryNode(relAST.query, {
+        server: relAST.server,
+        allPages: !windowed,
+      })
+      if (windowed && relDef?.cardinality === 'many' && !relDef.via) {
+        relExplained.reasons = [
+          ...relExplained.reasons,
+          { code: 'window-filter', detail: 'per-parent window — one query per parent' },
+        ]
+      }
+      nodes.push({
+        path: relPath,
+        service: relDef?.destService ?? relName,
+        kind: 'find',
+        class: relExplained.class,
+        reasons: relExplained.reasons,
+        realtime: relExplained.class === 'local-exact' ? 'merge' : 'refetch',
+        ...(relDef?.via ? { via: relDef.via.destService } : {}),
+      })
+      if (Object.keys(relAST.related).length > 0) {
+        this.#explainRelated(relAST, relPath, nodes)
+      }
+    }
+  }
+
+  #explainRelated(ast: QueryAST, path: string, nodes: ExplainNode[]): void {
+    // Nested relations reuse the same walk minus the root handling.
+    const relationships = this.schema?.relationships?.[ast.service] ?? {}
+    for (const [relName, relAST] of Object.entries(ast.related)) {
+      const relDef = relationships[relName]
+      const relPath = `${path}.${relName}`
+      const windowed = hasWindowFilters(relAST.query)
+      const relExplained = explainQueryNode(relAST.query, {
+        server: relAST.server,
+        allPages: !windowed,
+      })
+      nodes.push({
+        path: relPath,
+        service: relDef?.destService ?? relName,
+        kind: 'find',
+        class: relExplained.class,
+        reasons: relExplained.reasons,
+        realtime: relExplained.class === 'local-exact' ? 'merge' : 'refetch',
+        ...(relDef?.via ? { via: relDef.via.destService } : {}),
+      })
+      if (Object.keys(relAST.related).length > 0) {
+        this.#explainRelated(relAST, relPath, nodes)
+      }
+    }
+  }
+
+  /**
+   * Read-only snapshot of every query currently in the store — the stable projection
+   * devtools should build on (internal store shapes stay free to change).
+   */
+  inspect(): InspectedQuery[] {
+    const rows: InspectedQuery[] = []
+    for (const [serviceName, service] of this.queryStore.getState()) {
+      for (const query of service.queries.values()) {
+        const q = (query.desc.params as { query?: Record<string, unknown> } | undefined)?.query
+        const config = query.config as { server?: boolean; allPages?: boolean }
+        rows.push({
+          queryId: query.queryId,
+          serviceName,
+          method: query.desc.method,
+          query: q,
+          classification: query.desc.method === 'get' ? 'get' : classifyQueryNode(q, config),
+          status: query.state.status,
+          isFetching: query.state.isFetching,
+          itemCount: Array.isArray(query.state.data)
+            ? query.state.data.length
+            : query.state.data
+              ? 1
+              : 0,
+          fetchedAt: query.fetchedAt,
+          subscriberCount: this.queryStore.getSubscriberCount(query.queryId),
+        })
+      }
+    }
+    return rows
+  }
+
   /** Subscribe to any state changes within Figbird (across all queries/services). */
   subscribeToStateChanges(
     fn: (state: Map<string, ServiceState<AdapterFindMeta<A>>>) => void,
   ): () => void {
     return this.queryStore.subscribeToStateChanges(fn)
   }
+}
+
+/** One node of a `figbird.explain()` report. */
+export interface ExplainNode {
+  /** `'(root)'` or the dotted relation path (`'comments.reactions'`). */
+  path: string
+  service: string
+  kind: 'find' | 'get' | 'paginate'
+  class: QueryNodeClass
+  reasons: ClassificationReason[]
+  /** How realtime events on this node's service are handled. */
+  realtime: 'merge' | 'refetch'
+  /** Junction service name for transparent two-hop relations. */
+  via?: string
+}
+
+export interface ExplainReport {
+  nodes: ExplainNode[]
+}
+
+/** One row of `figbird.inspect()` — a stable, read-only view of a live query. */
+export interface InspectedQuery {
+  queryId: string
+  serviceName: string
+  method: 'find' | 'get'
+  query: Record<string, unknown> | undefined
+  classification: QueryNodeClass | 'get'
+  status: 'loading' | 'success' | 'error'
+  isFetching: boolean
+  itemCount: number
+  fetchedAt: number | undefined
+  subscriberCount: number
 }

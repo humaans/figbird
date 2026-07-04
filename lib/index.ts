@@ -61,8 +61,13 @@ export type {
 } from './core/query-builder.js'
 
 // query classification (how a query node is maintained — useful for devtools)
-export { classifyQueryNode, hasWindowFilters } from './core/queryClassification.js'
-export type { QueryNodeClass } from './core/queryClassification.js'
+export {
+  classifyQueryNode,
+  explainQueryNode,
+  hasWindowFilters,
+} from './core/queryClassification.js'
+export type { ClassificationReason, QueryNodeClass } from './core/queryClassification.js'
+export type { ExplainNode, ExplainReport, InspectedQuery } from './core/figbird.js'
 
 // relational query
 export { RelationalQueryRef } from './core/figbird.js'
@@ -83,10 +88,12 @@ export type {
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
-export { FigbirdProvider, useFigbird } from './react/react.js'
+export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/react.js'
+export { useMutation } from './react/useMutation.js'
+// Legacy generation (deprecated): descriptor-based reads and Feathers-specific escape
+// hatches. Fully functional, but new code should use useQuery/useMutation + builders.
 export { useFeathers } from './react/useFeathers.js'
 export { useMethod } from './react/useMethod.js'
-export { useMutation } from './react/useMutation.js'
 export { useFind, useGet } from './react/useQueryByDesc.js'
 export { useService } from './react/useService.js'
 // useQuery is the unified, Suspense-by-default builder hook. useRelationalQuery stays
