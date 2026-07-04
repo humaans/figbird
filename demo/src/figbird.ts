@@ -139,49 +139,12 @@ export const socket = io(demoServerUrl, {
   reconnectionDelay: 500,
 })
 
-const feathersClient = feathers()
+export const feathersClient = feathers()
 feathersClient.configure(socketio(socket))
 
 const adapter = new FeathersAdapter(feathersClient as never)
 
 export const figbird = new Figbird({ schema, adapter })
-
-/**
- * Off-schema control surface to talk to the demo server's `_demo` service.
- * Lets the dev-tools panel switch the latency profile, toggle the simulated
- * teammate, and reset the seed.
- */
-export type LatencyProfile = 'fast' | 'realistic' | 'slow'
-
-export interface DemoState {
-  backgroundEnabled: boolean
-  latency: LatencyProfile
-  /** One-shot chaos switch: the next (non-internal) mutation on the server fails. */
-  chaosArmed: boolean
-}
-
-export interface DemoControl {
-  getState(): Promise<DemoState>
-  set(patch: Partial<DemoState>): Promise<DemoState>
-  reset(): Promise<{ ok: boolean }>
-}
-
-const demoService = feathersClient.service('_demo') as unknown as {
-  find(): Promise<DemoState>
-  patch(id: null, data: Partial<DemoState>): Promise<DemoState>
-  create(data: { action: 'reset' }): Promise<{ ok: boolean }>
-}
-
-export const demoControl: DemoControl = {
-  getState: () => demoService.find(),
-  set: patch => demoService.patch(null, patch),
-  reset: () => demoService.create({ action: 'reset' }),
-}
-
-// Dev-only: expose on window so we can poke from the console.
-if (import.meta.env.DEV) {
-  ;(window as unknown as { figbird: typeof figbird }).figbird = figbird
-}
 
 // Typed hooks + builder proxy bound to this schema — these are what components
 // reach for; no provider required.
