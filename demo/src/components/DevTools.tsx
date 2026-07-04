@@ -6,8 +6,8 @@
 
 import { useEffect, useReducer, useRef, useState } from 'react'
 import type { FigbirdEvent } from 'figbird'
-import { figbird, socket } from './figbird'
-import { demoControl, type DemoState, type LatencyProfile } from './demoControl'
+import { figbird, socket } from '../figbird'
+import { demoControl, type DemoState, type LatencyProfile } from '../demoControl'
 
 interface LogEntry {
   id: number

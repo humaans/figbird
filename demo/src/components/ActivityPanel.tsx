@@ -5,7 +5,7 @@
 
 import { useMemo, type ReactNode } from 'react'
 import { Link } from 'react-space-router'
-import { q, useQuery } from './figbird'
+import { q, useQuery } from '../figbird'
 import { Explain } from './Explain'
 import { StatusDot } from './ui'
 
