@@ -227,6 +227,17 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   const destState = state.get(resolveServicePath(schema, relDef.destService))
   if (!destState) return null
 
+  // Fast path: the entity cache is keyed by adapter id, and destField is nearly always
+  // that id field — a direct map hit avoids scanning the whole service. This runs
+  // inside the matcher (per item, per relation path), so on a busy service the scan
+  // below would make merge decisions O(items × entities). The candidate is verified
+  // against destField before returning, since the map key and destField are not
+  // guaranteed to be the same field.
+  const direct = destState.entities.get(sourceValue)
+  if (direct !== undefined && getComparableFieldValue(direct, relDef.destField) === sourceValue) {
+    return direct
+  }
+
   for (const candidate of destState.entities.values()) {
     if (getComparableFieldValue(candidate, relDef.destField) === sourceValue) {
       return candidate
