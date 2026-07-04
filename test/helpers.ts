@@ -1,9 +1,10 @@
 import EventEmitter from 'events'
 import { JSDOM } from 'jsdom'
-import type { ReactElement } from 'react'
-import { act } from 'react'
+import type { ReactElement, ReactNode } from 'react'
+import { act, createElement, StrictMode } from 'react'
 import type { Root } from 'react-dom/client'
 import { createRoot } from 'react-dom/client'
+import { FeathersAdapter, Figbird, FigbirdProvider, type Schema } from '../lib/index.js'
 import type { FeathersClient } from '../lib/index.js'
 
 // Local test type for Feathers items
@@ -344,4 +345,108 @@ export function mockFeathers(services: MockFeathersServices): MockFeathers {
   }
 
   return feathers
+}
+
+/** True when `item` satisfies the query's non-$ filters (`$in` and strict equality). */
+export function matchesQuery(
+  item: Record<string, unknown>,
+  query: Record<string, unknown> = {},
+): boolean {
+  return Object.entries(query).every(([key, value]) => {
+    if (key.startsWith('$')) return true
+    const actual = item[key]
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const op = value as { $in?: unknown[] }
+      if (Array.isArray(op.$in)) {
+        return op.$in.includes(actual)
+      }
+    }
+    return actual === value
+  })
+}
+
+function compareSortableValues(a: unknown, b: unknown): number {
+  if (a === b) return 0
+  if (a === undefined || a === null) return -1
+  if (b === undefined || b === null) return 1
+  if (typeof a === 'number' && typeof b === 'number') return a - b
+  return String(a).localeCompare(String(b))
+}
+
+export function sortRows(
+  rows: Record<string, unknown>[],
+  sort: Record<string, unknown> | undefined,
+): Record<string, unknown>[] {
+  if (!sort) return rows
+  const sortEntries = Object.entries(sort)
+  return [...rows].sort((a, b) => {
+    for (const [field, direction] of sortEntries) {
+      const comparison = compareSortableValues(a[field], b[field])
+      if (comparison !== 0) {
+        return direction === -1 ? -comparison : comparison
+      }
+    }
+    return 0
+  })
+}
+
+/**
+ * Replace each named service's `find` with one that honors `$limit`, `$skip`,
+ * `$sort`, `$in`, and equality filters — the base mock's `find` ignores filters
+ * entirely. Respects the service's `skipTotal` option.
+ */
+export function installQueryAwareFind(
+  feathers: ReturnType<typeof mockFeathers>,
+  serviceNames: readonly string[],
+): void {
+  for (const serviceName of serviceNames) {
+    const service = feathers.service(serviceName)
+    service.find = async (params?: { query?: Record<string, unknown> }) => {
+      service.counts.find++
+      const query = params?.query ?? {}
+      const limit = (query.$limit as number | undefined) ?? 100
+      const skip = (query.$skip as number | undefined) ?? 0
+      const rows = Object.values(service.data)
+        .filter((item): item is Record<string, unknown> => item !== undefined)
+        .filter(item => matchesQuery(item, query))
+      const sortedRows = sortRows(rows, query.$sort as Record<string, unknown> | undefined)
+      const data = sortedRows.slice(skip, skip + limit)
+      return service.options.skipTotal
+        ? { limit, skip, data }
+        : { total: sortedRows.length, limit, skip, data }
+    }
+  }
+}
+
+/**
+ * Standard app factory for hook tests: a mock Feathers client behind a
+ * FeathersAdapter + Figbird (realtime batching disabled so events apply
+ * immediately), wrapped in StrictMode + FigbirdProvider.
+ *
+ * Pass `queryAwareFind: true` to install the filter-honoring `find` on every
+ * service in the mock.
+ */
+export function createTestApp<S extends Schema>(
+  schema: S,
+  services: MockFeathersServices,
+  { queryAwareFind = false }: { queryAwareFind?: boolean } = {},
+) {
+  const serviceNames = Object.keys(services).filter(name => name !== 'skipTotal')
+  const feathers = mockFeathers(services)
+  if (queryAwareFind) installQueryAwareFind(feathers, serviceNames)
+
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    eventBatchProcessingInterval: 0,
+  })
+
+  // Pin the provider's generics — createElement can't infer them from the figbird prop.
+  const Provider = FigbirdProvider<S, typeof adapter>
+  function App({ children }: { children?: ReactNode }) {
+    return createElement(StrictMode, null, createElement(Provider, { figbird, children }))
+  }
+
+  return { App, figbird, feathers, adapter }
 }

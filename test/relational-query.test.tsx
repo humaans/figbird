@@ -1,13 +1,12 @@
 import EventEmitter from 'events'
 import test from 'ava'
-import React, { StrictMode } from 'react'
+import React from 'react'
 import {
   createSchema,
   createHooks,
   embed,
   FeathersAdapter,
   Figbird,
-  FigbirdProvider,
   service,
   one,
   many,
@@ -16,7 +15,7 @@ import {
   useRelationalQuery,
   type StandardSchemaV1,
 } from '../lib'
-import { dom, mockFeathers } from './helpers'
+import { createTestApp, dom, installQueryAwareFind, mockFeathers } from './helpers'
 
 // Passthrough Standard Schema validator — used by `defineQuery` tests below to satisfy
 // the `argsSchema` parameter without exercising actual validation logic.
@@ -215,8 +214,8 @@ const schema = createSchema({
 // Mock Feathers with Multiple Services
 // ============================================================================
 
-function createRelationalFeathers() {
-  return mockFeathers({
+function createApp() {
+  return createTestApp(schema, {
     issues: {
       data: {
         1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
@@ -250,90 +249,6 @@ function createRelationalFeathers() {
       },
     },
   })
-}
-
-function createApp() {
-  const feathers = createRelationalFeathers()
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
-  }
-
-  return { App, figbird, feathers, adapter }
-}
-
-function matchesQuery(item: Record<string, unknown>, query: Record<string, unknown> = {}): boolean {
-  return Object.entries(query).every(([key, value]) => {
-    if (key.startsWith('$')) return true
-    const actual = item[key]
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const op = value as { $in?: unknown[] }
-      if (Array.isArray(op.$in)) {
-        return op.$in.includes(actual)
-      }
-    }
-    return actual === value
-  })
-}
-
-function compareSortableValues(a: unknown, b: unknown): number {
-  if (a === b) return 0
-  if (a === undefined || a === null) return -1
-  if (b === undefined || b === null) return 1
-  if (typeof a === 'number' && typeof b === 'number') return a - b
-  return String(a).localeCompare(String(b))
-}
-
-function sortRows(
-  rows: Record<string, unknown>[],
-  sort: Record<string, unknown> | undefined,
-): Record<string, unknown>[] {
-  if (!sort) return rows
-  const sortEntries = Object.entries(sort)
-  return [...rows].sort((a, b) => {
-    for (const [field, direction] of sortEntries) {
-      const comparison = compareSortableValues(a[field], b[field])
-      if (comparison !== 0) {
-        return direction === -1 ? -comparison : comparison
-      }
-    }
-    return 0
-  })
-}
-
-function installQueryAwareFind(
-  feathers: ReturnType<typeof mockFeathers>,
-  serviceNames: readonly string[],
-): void {
-  for (const serviceName of serviceNames) {
-    const service = feathers.service(serviceName)
-    service.find = async (params?: { query?: Record<string, unknown> }) => {
-      service.counts.find++
-      const query = params?.query ?? {}
-      const limit = (query.$limit as number | undefined) ?? 100
-      const skip = (query.$skip as number | undefined) ?? 0
-      const rows = Object.values(service.data)
-        .filter((item): item is Record<string, unknown> => item !== undefined)
-        .filter(item => matchesQuery(item, query))
-      const sortedRows = sortRows(rows, query.$sort as Record<string, unknown> | undefined)
-      return {
-        total: sortedRows.length,
-        limit,
-        skip,
-        data: sortedRows.slice(skip, skip + limit),
-      }
-    }
-  }
 }
 
 const exactQuerySchema = createSchema({
@@ -423,7 +338,7 @@ const membershipQuerySchema = createSchema({
 })
 
 function createExactQueryApp() {
-  const feathers = mockFeathers({
+  const services = {
     companies: {
       data: {
         1: { id: 1, name: 'Acme' },
@@ -458,30 +373,12 @@ function createExactQueryApp() {
         },
       },
     },
-  })
-
-  installQueryAwareFind(feathers, ['companies', 'departments', 'people', 'employments'])
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: exactQuerySchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
   }
-
-  return { App, figbird, feathers }
+  return createTestApp(exactQuerySchema, services, { queryAwareFind: true })
 }
 
 function createWindowQueryApp() {
-  const feathers = mockFeathers({
+  const services = {
     companies: {
       data: {
         1: { id: 1, name: 'Acme' },
@@ -562,30 +459,12 @@ function createWindowQueryApp() {
         6: { id: 6, personId: 6, effectiveAt: '2025-04-23', title: 'Gia role' },
       },
     },
-  })
-
-  installQueryAwareFind(feathers, ['companies', 'departments', 'people', 'employments'])
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: exactQuerySchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
   }
-
-  return { App, figbird, feathers }
+  return createTestApp(exactQuerySchema, services, { queryAwareFind: true })
 }
 
 function createProfileQueryApp() {
-  const feathers = mockFeathers({
+  const services = {
     people: {
       data: {
         1: {
@@ -651,59 +530,23 @@ function createProfileQueryApp() {
         11: { id: 11, personId: 11, effectiveAt: '2025-04-24', title: 'COO' },
       },
     },
-  })
-
-  installQueryAwareFind(feathers, ['people', 'employments'])
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: profileQuerySchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
   }
-
-  return { App, figbird, feathers }
+  return createTestApp(profileQuerySchema, services, { queryAwareFind: true })
 }
 
 function createServerProjectionQueryApp() {
-  const feathers = mockFeathers({
+  const services = {
     timeAwayPeriods: {
       data: {
         1: { id: 1, personId: 1, balance: 10 },
       },
     },
-  })
-
-  installQueryAwareFind(feathers, ['timeAwayPeriods'])
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: serverProjectionQuerySchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
   }
-
-  return { App, figbird, feathers }
+  return createTestApp(serverProjectionQuerySchema, services, { queryAwareFind: true })
 }
 
 function createMembershipQueryApp() {
-  const feathers = mockFeathers({
+  const services = {
     people: {
       data: {
         1: { id: 1, name: 'Alice', status: 'active' },
@@ -720,26 +563,8 @@ function createMembershipQueryApp() {
         2: { id: 2, name: 'Operations' },
       },
     },
-  })
-
-  installQueryAwareFind(feathers, ['people', 'memberships', 'teams'])
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: membershipQuerySchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
   }
-
-  return { App, figbird, feathers }
+  return createTestApp(membershipQuerySchema, services, { queryAwareFind: true })
 }
 
 // ============================================================================
@@ -1807,7 +1632,7 @@ test('realtime: relation-path filters match root events through cached relations
     }),
   })
 
-  const feathers = mockFeathers({
+  const { App, figbird, feathers } = createTestApp(filterSchema, {
     documents: { data: {} },
     people: {
       data: {
@@ -1822,17 +1647,7 @@ test('realtime: relation-path filters match root events through cached relations
       },
     },
   })
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema: filterSchema, adapter, eventBatchProcessingInterval: 0 })
   const { render, unmount, flush, $all } = dom()
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
-  }
 
   function Documents() {
     const people = useRelationalQuery(figbird.q.people.related('orgUnit'))
@@ -2937,7 +2752,7 @@ const embedSchema = createSchema({
 })
 
 function createEmbedApp() {
-  const feathers = mockFeathers({
+  const services = {
     roles: {
       data: {
         1: { id: 1, name: 'Admin', membersPreview: [3, 1, 4] }, // Cara, Alice, Dan
@@ -2954,26 +2769,8 @@ function createEmbedApp() {
         5: { id: 5, name: 'Erin' },
       },
     },
-  })
-
-  installQueryAwareFind(feathers, ['roles', 'people'])
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: embedSchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
   }
-
-  return { App, figbird, feathers }
+  return createTestApp(embedSchema, services, { queryAwareFind: true })
 }
 
 test('embed: helper returns cardinality "embedded"', t => {
@@ -3139,7 +2936,7 @@ const junctionSchema = createSchema({
 })
 
 function createJunctionApp() {
-  const feathers = mockFeathers({
+  const services = {
     roles2: {
       data: {
         1: { id: 1, name: 'Admin' },
@@ -3164,26 +2961,8 @@ function createJunctionApp() {
         4: { id: 4, name: 'Dan' },
       },
     },
-  })
-
-  installQueryAwareFind(feathers, ['roles2', 'roleMembers', 'users2'])
-
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({
-    schema: junctionSchema,
-    adapter,
-    eventBatchProcessingInterval: 0,
-  })
-
-  function App({ children }: { children?: React.ReactNode }) {
-    return (
-      <StrictMode>
-        <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-      </StrictMode>
-    )
   }
-
-  return { App, figbird, feathers }
+  return createTestApp(junctionSchema, services, { queryAwareFind: true })
 }
 
 test('many variadic: helper records via hop and stores the dest hop at the top level', t => {
