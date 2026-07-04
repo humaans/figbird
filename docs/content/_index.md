@@ -6,9 +6,35 @@ toc: true
 
 # Figbird
 
-A data fetching library for [React](https://reactjs.org/) + [Feathers](https://feathersjs.com/) applications. Used in production at [Humaans](https://humaans.io/).
+A realtime, relational data layer for [React](https://reactjs.org/) + [Feathers](https://feathersjs.com/) applications. Used in production at [Humaans](https://humaans.io/).
 
-Figbird gives you React hooks that fetch data and keep it updated. When a record changes - from this component, another component, or a realtime event from the server - every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.
+Figbird gives you one query hook that fetches an entity graph — a record together with its relations — and keeps it updated. When a record changes, from this component, another component, or a realtime event from the server, every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.
+
+```tsx
+function IssueDetail({ id }: { id: number }) {
+  const { data: issue } = useQuery(
+    q.issues.get(id).related('creator').related('comments').related('labels'),
+  )
+
+  return (
+    <article>
+      <h1>{issue.title}</h1>
+      <p>by {issue.creator?.name}</p>
+      <Comments comments={issue.comments} />
+    </article>
+  )
+}
+```
+
+## Why Figbird
+
+- **Relational queries** — declare relations in your schema once, then `.related()` assembles entity graphs from per-service caches
+- **Live queries** — results update as records are created, modified, or removed, locally or via realtime events
+- **Suspense-native** — cold reads suspend, warm reads render synchronously; loading states live in boundaries, not branches
+- **Optimistic mutations** — declared once per surface, rolled back on failure everywhere at once
+- **Query preparation** — routers and hover handlers warm the exact queries screens will read
+- **Full TypeScript** — define a schema once, get inference through builders, relations, and mutations
+- **Framework-agnostic core** — works outside React for SSR, testing, or background sync
 
 ## Installation
 
@@ -16,517 +42,401 @@ Figbird gives you React hooks that fetch data and keep it updated. When a record
 pnpm add figbird
 ```
 
-## How It Works
+## Quick Start
 
 ```ts
-function Notes() {
-  const { data } = useFind('notes')
-  const { patch } = useMutation('notes')
+// figbird.ts — one module wires everything
+import { Figbird, FeathersAdapter, createSchema, service, createHooks } from 'figbird'
+import { feathersClient } from './feathers'
 
-  // Updates propagate to all components showing this note
-  const markDone = (id) => patch(id, { done: true })
+interface Issue {
+  id: number
+  title: string
+  status: 'open' | 'closed'
+  creatorId: number
+}
+interface User {
+  id: number
+  name: string
+}
+interface Comment {
+  id: number
+  issueId: number
+  authorId: number
+  body: string
+}
 
-  return data?.map(note => (
-    <Note key={note.id} note={note} onDone={markDone} />
+export const schema = createSchema({
+  services: {
+    issues: service<{ item: Issue }>(),
+    users: service<{ item: User }>(),
+    comments: service<{ item: Comment }>(),
+  },
+  relationships: ({ one, many }) => ({
+    issues: {
+      creator: one({ sourceField: 'creatorId', destService: 'users' }),
+      comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' }),
+    },
+    comments: {
+      author: one({ sourceField: 'authorId', destService: 'users' }),
+    },
+  }),
+})
+
+export const figbird = new Figbird({
+  adapter: new FeathersAdapter(feathersClient),
+  schema,
+})
+
+// Typed hooks + the builder proxy, bound to this instance.
+export const { useQuery, useMutation, q } = createHooks(figbird)
+```
+
+```tsx
+// components — one import, no provider required
+import { useQuery, useMutation, q } from './figbird'
+
+function OpenIssues() {
+  const { data: issues } = useQuery(
+    q.issues.where({ status: 'open' }).orderBy('id', 'desc').related('creator'),
+  )
+  return issues.map(issue => (
+    <div key={issue.id}>
+      {issue.title} — {issue.creator?.name}
+    </div>
   ))
 }
 ```
 
-Queries are live - if a record is created that matches your query, it appears. If it's modified to no longer match, it disappears. This works for local mutations and realtime events from the server.
+No `FigbirdProvider` is needed — the hooks are bound to the instance they were created with. (A provider, when present, overrides the bound instance; see [FigbirdProvider](#figbirdprovider).)
 
-## Why Figbird
+# Queries
 
-- **Live queries** - results update as records are created, modified, or removed
-- **Shared cache** - same data across components, always consistent
-- **Realtime built-in** - Feathers websocket events update your UI automatically
-- **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
-- **Full TypeScript** - define a schema once, get inference everywhere
-- **Framework-agnostic core** - works outside React for SSR, testing, or background sync
+## The query builder
 
-## Quick Start
+Every query starts from `q.<service>` and reads like the request it makes:
 
 ```ts
-import {
-  Figbird,
-  FeathersAdapter,
-  FigbirdProvider,
-  createSchema,
-  service,
-  createHooks
-} from 'figbird'
-import { feathersClient } from './feathers'
+q.issues // all issues
+q.issues.where({ status: 'open' }) // filtered
+q.issues.where({ priority: { $gte: 50 } }) // comparison operators
+q.issues.orderBy('updatedAt', 'desc').limit(30) // windowed
+q.issues.where({ id }).one() // single item — null when no match
+q.issues.get(id) // by primary key — error when missing
+q.issues.related('comments') // with relations
+```
 
-// Define your schema for type inference
-interface Note {
-  id: string
-  content: string
-}
+Builders are immutable — every method returns a new builder — and identified by a stable hash of their contents, so you can build them inline in render with no dependency arrays:
 
-const schema = createSchema({
-  services: {
-    notes: service<{ item: Note }>(),
-  },
-})
-
-// Create figbird instance
-const figbird = new Figbird({
-  adapter: new FeathersAdapter(feathersClient),
-  schema
-})
-
-// Create typed hooks
-export const { useFind, useGet, useMutation } = createHooks(figbird)
-
-// Wrap your app
-const App = () => (
-  <FigbirdProvider figbird={figbird}>
-    <Notes />
-  </FigbirdProvider>
-)
-
-// Use the hooks
-function Notes() {
-  const { data, status } = useFind('notes')
-
-  if (status === 'loading') return <>Loading...</>
-
-  return <>{data?.map(note =>
-    <div key={note.id}>{note.content}</div>
-  )}</>
+```tsx
+function IssueList({ status }: { status: string }) {
+  const { data } = useQuery(q.issues.where({ status }))
+  // a new builder every render, but the same query identity while `status` is stable
 }
 ```
+
+`.where()` autocompletes and type-checks the fields of the service's item type, and also admits everything it can't statically know: dotted relational paths (`'creator.teamId'`), server-only operators (`$regex`), and dynamically-built filter objects.
+
+### `.one()` vs `.get()`
+
+Both return a single item, with a deliberate semantic difference:
+
+- `.where({ id }).one()` resolves to **`null`** when nothing matches — "find me the one matching row, if any".
+- `.get(id)` is a primary-key lookup that enters the **error** state when the row doesn't exist — "this row must exist" (mirroring `service.get(id)` and NotFound semantics).
+
+## Relations
+
+Relations are declared once in the schema, then attached per query with `.related()`:
+
+```ts
+const { data: issue } = useQuery(
+  q.issues
+    .get(id)
+    .related('creator') // one — Issue.creator: User | null
+    .related('comments', c =>
+      c
+        .orderBy('id', 'desc') // refine the related query
+        .related('author'),
+    ), // nest further — comments[].author: User | null
+)
+```
+
+Relation names autocomplete from the schema and the result type is assembled automatically — including nesting and cardinality (`one` → `T | null`, `many`/`embed` → `T[]`).
+
+Three relationship kinds cover the shapes you'll meet:
+
+```ts
+relationships: ({ one, many, embed }) => ({
+  issues: {
+    // one: FK on the parent → single item
+    creator: one({ sourceField: 'creatorId', destService: 'users' }),
+
+    // many: FK on the child → array
+    comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' }),
+
+    // many, two-hop: junction table, traversed transparently —
+    // consumers say .related('labels') and get Label[] directly
+    labels: many(
+      { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
+      { sourceField: 'labelId', destService: 'labels' },
+    ),
+  },
+  teams: {
+    // embed: the parent carries a server-maintained list of ids; figbird fans
+    // every parent's list into ONE batched IN(...) fetch, preserving order
+    spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' }),
+  },
+})
+```
+
+`destField` defaults to `'id'`; fields accept arrays for compound keys. Relations stay live: a realtime event on any involved service — a new comment, a renamed user, a new junction row — flows into the assembled result.
+
+Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** — `.related('recent', i => i.orderBy(...).limit(5))` needs one query *per parent* because per-parent windows can't be expressed as a single find; figbird warns past 10 parents and points at `embed` as the batched alternative.
+
+Relational filters work too — filter parents by a field on a related entity with a dotted path:
+
+```ts
+q.issues.where({ 'creator.teamId': 5 })
+```
+
+The server resolves the join; on the client, figbird's matcher evaluates the path against the entity cache so realtime events keep the result fresh.
+
+## Suspense
+
+`useQuery` is Suspense-native: a **cold** read (no cached data) throws a promise to the nearest `<Suspense>` boundary, and a cold **error** throws to the nearest error boundary. Warm reads render synchronously. In component code there is no loading branch:
+
+```tsx
+<Suspense fallback={<Skeleton />}>
+  <IssueDetail id={id} />
+</Suspense>
+```
+
+```tsx
+function IssueDetail({ id }: { id: number }) {
+  const { data, isFetching, refetch, error } = useQuery(q.issues.get(id).related('comments'))
+  // data is guaranteed here — no null checks, no status branches
+}
+```
+
+The contract, precisely:
+
+1. **First mount, cold cache** → suspends. The only time it suspends.
+2. **First mount, warm cache** → returns cached data synchronously, revalidates in the background (`isFetching: true`).
+3. **Refetch with data present** (background revalidation, realtime-triggered, manual) → never suspends; current data stays up with `isFetching: true`.
+4. **Params change** → that's a *different query* with a cold cache entry, so it suspends — the hook never shows old data labeled with new params. Keeping the previous UI on screen during the switch is one `startTransition` away; see [the no-flash checklist](#the-no-flash-checklist).
+
+**Errors after success don't unmount the screen.** If a refetch fails while data is showing, the hook keeps returning the last good `data` with `error` set — show a toast or a banner; the next successful fetch clears it. Only a cold read with no data ever produced throws to the error boundary.
+
+### Opting out of Suspense
+
+Pass `{ suspense: false }` to get an explicit tagged union that never suspends or throws:
+
+```tsx
+const issues = useQuery(q.issues.related('creator'), { suspense: false })
+
+if (issues.status === 'error') return <ErrorNote error={issues.error} />
+if (issues.status !== 'success') return <Spinner /> // 'idle' | 'loading'
+return <List items={issues.data} />
+```
+
+### Skipping
+
+```ts
+const { data } = useQuery(q.issues.get(id), { skip: id == null })
+// data: Issue | undefined — the type reflects that a skipped query has no data
+```
+
+## Pagination
+
+`.paginate()` turns a query into an infinite-scroll accumulator — each loaded page is its own window on the server, and `data` is the concatenation of all loaded pages:
+
+```tsx
+const { data, loadMore, hasMore, isLoadingMore, loadMoreError, totalCount } = useQuery(
+  q.issues
+    .where({ status: 'open' })
+    .orderBy('updatedAt', 'desc')
+    .paginate({ pageSize: 25, returnTotal: true })
+    .related('creator'),
+)
+```
+
+- `loadMore()` appends the next page (no-op while one is in flight or when done)
+- `hasMore` is sticky during loads so the button doesn't flicker
+- `loadMoreError` reports a failed page load; calling `loadMore()` again retries the same page
+- `totalCount` comes from the first page's meta when `returnTotal: true`
+- `refetch()` re-fetches page 0 in place and drops follow-up pages (the dataset may have shifted)
+
+Realtime events on a paginated query refetch the affected pages rather than merging locally — an inserted row may displace a page boundary invisibly, so the server stays the source of truth.
+
+# Mutations
+
+`useMutation` exposes the four CRUD methods. Every mutation returns a promise that settles on the **server response**, and the cache updates flow to every query referencing the data:
+
+```ts
+const issues = useMutation('issues')
+
+await issues.create({ title: 'Ship it' })
+await issues.patch(id, { status: 'closed' })
+await issues.update(id, fullItem)
+await issues.remove(id)
+```
+
+## Optimistic mutations
+
+The `optimistic` flag decides **when the UI may show the change**:
+
+- **off (default)** — "show it only once it's real": the cache updates after the server acks. Right for critical surfaces — settings, policies, anything where the user must know it saved.
+- **on** — "show it now, roll back on failure": the cache updates immediately (and everywhere), and a server error rolls the change back everywhere at once. Right for collaborative, high-frequency surfaces — task lists, drag-reorder, inline edits.
+
+Optimism is usually a property of a whole surface, so declare it once at the hook and let every call inherit it:
+
+```ts
+// A task board — everything on this surface is optimistic
+const tasks = useMutation('tasks', { optimistic: true })
+tasks.create({ id: crypto.randomUUID(), title })
+tasks.patch(id, { done: true })
+
+// A settings modal — the safe default, UI waits for the ack
+const policies = useMutation('policies')
+await policies.create(policy)
+```
+
+Per-call options override in both directions: `tasks.remove(id, { optimistic: false })`. You can also pass an explicit synthesized item as the optimistic value: `{ optimistic: { ...item, computedField } }`.
+
+**Optimistic creates need a client-generated id** — without one there is nothing to track and roll back, so the create simply applies non-optimistically. `update`/`patch`/`remove` need nothing extra.
+
+Per-call adapter params ride along in the same options object: `create(data, { params: { query: { ... } } })`.
+
+# Named queries, preparation, prefetching
+
+## defineQuery
+
+A named query is an args-keyed query factory. The same definition read from a component, prepared by a router, or prefetched on hover resolves to the **same cache entry**:
+
+```ts
+export const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+  q.issues.get(id).related('creator').related('comments'),
+)
+
+// component
+const { data } = useQuery(issueDetail, { id: 42 })
+```
+
+Args are typed from the build function. When args arrive from an untrusted source — URL params, storage — pass a [Standard Schema](https://github.com/standard-schema/standard-schema) validator (zod, valibot, arktype…) as the middle argument; it runs at every call site and throws `QueryArgsError` on bad input, turning silent cache-splits (`{ id: "42" }` vs `{ id: 42 }`) into loud failures:
+
+```ts
+export const issueDetail = figbird.defineQuery(
+  'issueDetail',
+  z.object({ id: z.coerce.number().int().positive() }),
+  ({ id }) => q.issues.get(id).related('comments'),
+)
+
+figbird.prepare(issueDetail, { id: '42' }) // coerces "42" → 42 before building
+```
+
+## prepare — the router's primitive
+
+`prepare()` starts a query and returns an explicit lease: a `promise` that resolves when the data is ready, and `release()` to drop the pin keeping it alive. Routers await route-critical data before committing a navigation; the destination screen then reads the same cache entry synchronously:
+
+```ts
+// route definition — router metadata like a priority is attached by the app
+prepare: ({ params }) => [
+  { ...figbird.prepare(issueDetail, { id: Number(params.id) }), priority: 'route' },
+  { ...figbird.prepare(issueComments, { id: Number(params.id) }), priority: 'defer' },
+]
+```
+
+Preparation is an *earlier read*, not a different one — the component still calls `useQuery(issueDetail, { id })`.
+
+## prefetch — speculative warming
+
+`prefetch()` is the idempotent, fire-and-forget sibling of `prepare()`, built for "the user will probably need this" moments — hover, viewport entry, likely-next-page:
+
+```tsx
+<Row onMouseEnter={() => figbird.prefetch(issueDetail, { id: issue.id })} />
+```
+
+Safe to call at any frequency: if the query was prefetched within `staleTime` (default 30s) it's a no-op. Otherwise it fetches and holds an internal pin that auto-releases after `staleTime` — the data stays cached either way, so a later `useQuery` gets a warm, synchronous read (no Suspense fallback). If the user clicks through, the component's own subscription takes over seamlessly.
+
+```ts
+figbird.prefetch(issueDetail, { id }, { staleTime: 60_000 })
+```
+
+Rule of thumb: `prepare()` when you need to *await* readiness or control the lease; `prefetch()` when you just want things warm.
+
+# Realtime and query classification
+
+Figbird subscribes to realtime events per service (at most once per service) the moment a query against it is active. What happens when an event arrives is decided by the query's **classification** — the library's central idea:
+
+- **local-exact** — membership, order, and values are provable from local state. Events merge directly into the cached result: a created record that matches appears, a patched record updates in place, a removed one disappears. No network.
+- **server-window** — the query is windowed (`$limit` / `$skip` / `$sort`, or `.paginate()`). Visible rows are known, but an event may change membership invisibly — a row you can't see may now belong — so events trigger a **refetch** of the window instead of a guess.
+- **server-authoritative** — membership or values depend on logic only the server can evaluate: `$regex` and other non-local operators, `$select` projections, or an explicit `.server()`. Events always trigger a refetch.
+
+Classification is automatic and per query node — the root and each relation classify independently. Adding `.limit(30)` to a query flips it from merge to refetch; that's by design, and `figbird.explain()` will tell you exactly that:
+
+```ts
+figbird.explain(q.issues.where({ title: { $regex: term } }).limit(30).related('comments'))
+// {
+//   nodes: [
+//     { path: '(root)', service: 'issues', class: 'server-authoritative',
+//       reasons: [{ code: 'server-only-operator', detail: '$regex' },
+//                 { code: 'window-filter', detail: '$limit' }],
+//       realtime: 'refetch' },
+//     { path: 'comments', service: 'comments', class: 'local-exact',
+//       reasons: [], realtime: 'merge' },
+//   ]
+// }
+```
+
+Use `.server()` on a builder when a query *looks* locally provable but isn't — server-computed virtual fields, permission-dependent membership, search ranking:
+
+```ts
+q.documents.where({ visibleTo: userId }).server()
+```
+
+A practical consequence worth knowing: an **unwindowed** relation like `.related('comments')` is local-exact, so a teammate's new comment merges straight from the socket event with no refetch. If you don't need a window, don't add one.
 
 # TypeScript
 
-Figbird provides full TypeScript inference through a lightweight schema DSL. Define your services once, and get type safety across all hooks, mutations, and queries - no code generation required.
+Figbird provides full inference through a lightweight schema DSL — no code generation.
 
-## Defining a Schema
+## Defining a schema
 
-A schema declares your services and their types. Each service specifies an `item` shape, and optionally custom types for queries and mutation payloads.
-
-```ts
-import { createSchema, service } from 'figbird'
-
-interface Task {
-  id: string
-  title: string
-  completed: boolean
-}
-
-interface TaskQuery {
-  completed?: boolean
-}
-
-interface TaskService {
-  item: Task
-  query?: TaskQuery
-}
-
-const schema = createSchema({
-  services: {
-    tasks: service<TaskService>(),
-  },
-})
-```
-
-Service keys are preserved as literal types - so `'api/people'` and `'tasks'` remain distinct, and all APIs narrow correctly based on the service name you pass.
-
-## Type-Safe Hooks
-
-Once you have a schema, pass it to Figbird and create your hooks. Every hook call is fully typed based on the service name.
-
-```ts
-import { Figbird, FeathersAdapter, createHooks } from 'figbird'
-
-const figbird = new Figbird({
-  adapter: new FeathersAdapter(feathers),
-  schema,
-})
-
-const { useFind, useGet, useMutation } = createHooks(figbird)
-
-// Types flow automatically
-const tasks = useFind('tasks') // QueryResult<Task[], FindMeta>
-const task = useGet('tasks', '123') // QueryResult<Task>
-```
-
-## Query Parameters
-
-Query parameters combine your domain filters with adapter controls. You define the business-level filters in your schema, and Figbird's adapter adds transport controls like `$limit`, `$sort`, and `$skip`.
-
-```ts
-useFind('tasks', {
-  query: {
-    completed: true, // domain filter (from TaskQuery)
-    $limit: 10, // adapter control (from Feathers)
-    $sort: { title: 1 },
-  },
-})
-```
-
-This separation keeps your schema focused on domain logic while preserving full access to adapter features.
-
-## Typed Mutations
-
-Mutations infer their parameter and return types from your schema. You can optionally define custom payload types for `create`, `update`, and `patch` operations.
+Each service declares an `item` shape, and optionally `query`, `create`, `update`, `patch` payloads and custom `methods`:
 
 ```ts
 interface TaskService {
   item: Task
-  query?: TaskQuery
+  query?: { completed?: boolean }
   create?: { title: string; completed?: boolean }
   patch?: { title?: string; completed?: boolean }
-}
-```
-
-If you omit payload types, Figbird uses sensible defaults: `Partial<item>` for create and patch, and `item` for update (full replacement).
-
-```ts
-const { create, patch, remove } = useMutation('tasks')
-
-const newTask = await create({ title: 'Ship it' }) // typed payload, returns Task
-await patch('id-1', { completed: true }) // typed patch payload
-await remove('id-1') // returns removed Task
-```
-
-## Custom Service Methods
-
-Feathers services often expose custom methods beyond CRUD. Define them in your schema to get full type safety when calling them through the Feathers client.
-
-```ts
-interface NotesService {
-  item: Note
-  methods: {
+  methods?: {
     archive: (ids: string[]) => Promise<{ count: number }>
-    search: (term: string, limit?: number) => Promise<Note[]>
   }
 }
 
 const schema = createSchema({
   services: {
-    notes: service<NotesService>(),
+    tasks: service<TaskService>(),
+    'api/people': service<PersonService>({ path: 'api/people' }),
   },
+  relationships: ({ one, many, embed }) => ({
+    /* ... */
+  }),
 })
 ```
 
-Access custom methods through the typed Feathers client returned by `useFeathers`:
+Omitted payload types default sensibly: `Partial<item>` for create and patch, `item` for update. Service keys are preserved as literal types, so every API narrows on the service name. The `path` option separates ergonomic schema keys from transport-level service paths.
 
-```ts
-const { useFeathers } = createHooks(figbird)
-const feathers = useFeathers()
+## What flows where
 
-await feathers.service('notes').archive(['1', '2']) // { count: number }
-await feathers.service('notes').search('hello') // Note[]
-```
+- `q.tasks.where({ completed: true })` — field names and value types check against `item` (with an open index signature for dotted paths and server operators)
+- `.orderBy('title')` — autocompletes item fields without rejecting computed ones
+- `.related('author')` — relation names come from the schema; the result type assembles automatically, nesting included
+- `useMutation('tasks').create(...)` — payloads and return types from the service definition
+- `useQuery(definition, args)` — args typed from the definition's build function (or validated by its Standard Schema)
 
-# API Reference
-
-## useGet
-
-Fetches a single resource by ID. The result stays in sync with realtime events and is shared across components using the same query.
-
-```ts
-// Untyped usage
-const { data, status, isFetching, error, refetch } = useGet(serviceName, id, params)
-
-// Typed usage with createHooks(figbird)
-const { useGet } = createHooks(figbird)
-const note = useGet('notes', '1') // note: QueryResult<Note>
-```
-
-#### Arguments
-
-- `serviceName` - the name of Feathers service
-- `id` - the id of the resource
-- `params` - any params you'd pass to a Feathers service call, plus any Figbird params
-
-#### Figbird params
-
-- `skip` - setting to true will not fetch the data
-- `realtime` - one of `merge` (default), `refetch` or `disabled`
-- `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
-
-#### Returns
-
-- `data` - starts as `null` and is set to the fetch result (single item)
-- `status` - one of `loading`, `success` or `error`
-- `isFetching` - `true` if fetching data for the first time or in the background
-- `error` - error object if request failed
-- `refetch` - function to refetch data
-
-Note: By default, `useGet` does not expose `meta`. Adapters may return meta for get operations, but the built-in FeathersAdapter returns only the item.
-
-## Current vs legacy API
-
-The current API is the builder-based `useQuery` (Suspense-native, relational, typed via
-`createHooks`) together with `useMutation`, `defineQuery`, `prepare`, and `prefetch`. The
-hooks documented below this point — `useFind`, `useGet`, `useMethod`, `useService`,
-`useFeathers` — are the legacy descriptor generation: fully functional and safe to keep
-using, but deprecated; new code should not adopt them.
-
-## useFind
-
-Fetches a list of resources matching a query. Results update automatically when records are created, modified, or removed - either locally or via realtime events.
-
-```ts
-// Untyped usage
-const { data, meta, status, isFetching, error, refetch } = useFind(serviceName, params)
-
-// Typed usage with createHooks(figbird)
-const { useFind } = createHooks(figbird)
-const notes = useFind('notes') // QueryResult<Note[], FindMeta>
-```
-
-#### Arguments
-
-- `serviceName` - the name of Feathers service
-- `params` - any params you'd pass to Feathers, plus any Figbird params
-
-#### Figbird params
-
-- `skip` - setting true will not fetch the data
-- `realtime` - one of `merge` (default), `refetch` or `disabled`
-- `fetchPolicy` - one of `swr` (default), `cache-first` or `network-only`
-- `allPages` - fetch all pages
-- `parallel` - when used in combination with `allPages` will fetch all pages in parallel
-- `parallelLimit` - when used in combination with `parallel` limits how many parallel requests to make at once (default: 4)
-- `matcher` - custom matcher function of signature `(query) => (item) => bool`, used when merging realtime events into local query cache
-
-#### Returns
-
-- `data` - starts as `null` and is set to the fetch result (array)
-- `meta` - adapter-specific metadata from the `find` envelope, e.g. `{ total, limit, skip }` (type: `FindMeta` with FeathersAdapter)
-- `status` - one of `loading`, `success` or `error`
-- `isFetching` - `true` if fetching data for the first time or in the background
-- `error` - error object if request failed
-- `refetch` - function to refetch data
-
-## useMutation
-
-Provides methods to create, update, patch, and remove resources. Mutations automatically update the cache, so all components using related queries re-render with fresh data.
-
-```ts
-const { data, status, error, create, update, patch, remove } = useMutation(serviceName, params)
-```
-
-#### Arguments
-
-- `serviceName` - the name of Feathers service
-
-#### Returns
-
-- `create(data, params)` - create
-- `update(id, data, params)` - update
-- `patch(id, data, params)` - patch
-- `remove(id, params)` - remove
-- `status` - one of `idle`, `loading`, `success` or `error`
-- `data` - starts off as `null` and is set to the latest mutation result
-- `error` - error object of the last failed mutation
-
-## useFeathers
-
-Returns the underlying Feathers client for direct service access. Useful for one-off operations, custom methods, or when you need the client outside of Figbird's caching layer.
-
-```ts
-const { useFeathers } = createHooks(figbird)
-const feathers = useFeathers()
-
-const note = await feathers.service('notes').get('1')
-await feathers.service('notes').create({ title: 'Hi' })
-await feathers.service('notes').patch('1', { content: 'Updated' })
-```
-
-When created via `createHooks`, returns a `TypedFeathersClient` with full type safety for all service methods based on your schema.
-
-## Figbird
-
-The core class that manages query state, caching, and realtime event processing. Create one instance and share it across your app via the Provider.
-
-```ts
-const figbird = new Figbird({ adapter, schema })
-```
-
-#### Arguments
-
-- `adapter` - an instance of a data fetching adapter
-- `schema` - optional schema to enable full TypeScript inference
-
-## FeathersAdapter
-
-Connects Figbird to a Feathers.js backend. Handles data fetching, realtime subscriptions, and translates between Figbird's query format and Feathers conventions.
-
-```ts
-const adapter = new FeathersAdapter(feathers, options)
-```
-
-#### Arguments
-
-- `feathers` - feathers client
-- `options`
-  - `idField` - string or function, defaults to `item => item.id || item._id`
-  - `updatedAtField` - string or function, defaults to `item => item.updatedAt || item.updated_at`, used to avoid overwriting newer data in cache with older data when `get` or realtime `patched` requests are racing
-  - `defaultPageSize` - a default page size in `query.$limit` to use when fetching, unset by default so that the server gets to decide
-  - `defaultPageSizeWhenFetchingAll` - a default page size to use in `query.$limit` when fetching using `allPages: true`, unset by default so that the server gets to decide
-
-Meta behavior:
-
-- `find` returns `{ data, meta }` where `meta` is of type `FindMeta`
-- `get` returns only `{ data }` by default (no meta)
-
-## Provider
-
-React context provider that makes the Figbird instance available to all hooks in your component tree. Wrap your app once at the root.
-
-```tsx
-<FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-```
-
-#### Props
-
-- `figbird` - figbird instance
-
-## createHooks
-
-`createHooks(figbird)` binds a Figbird instance (with its schema and adapter) to typed React hooks. It returns `{ useFind, useGet, useMutation, useFeathers }` with full service- and adapter-aware TypeScript types.
-
-```ts
-import { Figbird, FeathersAdapter, createHooks } from 'figbird'
-
-const adapter = new FeathersAdapter(feathers)
-const figbird = new Figbird({ adapter, schema })
-export const { useFind, useGet, useMutation, useFeathers } = createHooks(figbird)
-
-// Later in components
-function People() {
-  // serviceName literal narrows types
-  const res = useFind('api/people', { query: { name: 'Ada', $limit: 10 } })
-  //          ^ QueryResult<Person[], FindMeta>
-  return <div>{res.data?.length ?? 0}</div>
-}
-
-function TaskView({ id }: { id: string }) {
-  const res = useGet('tasks', id)
-  //          ^ QueryResult<Task> (no meta by default)
-  return <div>{res.data?.title}</div>
-}
-```
-
-#### Arguments
-
-- `figbird` - figbird instance
-
-# Advanced Usage
-
-## Realtime
-
-Figbird is compatible with the Feathers realtime model out of the box. The moment you mount a component with a `useFind` or `useGet` hook, Figbird will start listening to realtime events for the services in use. It will only at most subscribe once per service. All realtime events will get processed in the following manner:
-
-- `created` - check if the created object matches any of the cached `find` queries, if so, push it at the end of the array, discard otherwise
-- `updated` and `patched` - check if this object is in cache, if so, update
-- `removed` - remove this object from cache and any `find` queries referencing it
-
-This behaviour can be configured on a per hook basis by passing a `realtime` param with one of the following values.
-
-### merge
-
-This is the default mode that merges all realtime events into cached queries as described above.
-
-### refetch
-
-Sometimes, the client does not have the full information to make a decision about how to merge an individual realtime event into the local query result set. For example, if you have a server side query that picks the latest record of each kind and some record is removed - the client might not want to remove it from the query set, but instead show the correct record in its place. In these cases, setting `realtime` param to `refetch` might be useful.
-
-In `refetch` mode, the `useGet` and `useFind` results are not shared with other components that are in realtime mode, instead the objects are cached locally to those queries and those components. And once a realtime event is received, instead of merging that event as described above, the `find` or `get` is refetched in full. That is, the server told us that something in this service changed, and we use that as a signal to update our local result set.
-
-### disabled
-
-Setting `realtime` to `disabled` will not share them with components that are in `realtime` or `refetch` mode. This way, the results will stay as they are even as realtime events are received. You can still manually trigger a refetch using the `refetch` function which is returned by the `useGet` and `useFind` hooks.
-
-## Fetch policies
-
-Fetch policy controls when Figbird uses data from cache or network and can be configured by passing the `fetchPolicy` param to `useGet` and `useFind` hooks.
-
-### swr
-
-This is the default and stands for `stale-while-revalidate`. With this policy, Figbird will show cached data if possible upon mounting the component and will refetch it in the background.
-
-### cache-first
-
-With this policy, Figbird will show cached data if possible upon mounting the component and will only fetch data from the server if data was not found in cache.
-
-### network-only
-
-With this policy, Figbird will never show cached data on mount and will always fetch on component mount.
-
-## Inspect cache contents
-
-If you want to have a look at the cache contents for debugging reasons, you can do so as shown below.
-
-```jsx
-import createFeathersClient from '@feathersjs/feathers'
-import { Figbird, FeathersAdapter, FigbirdProvider } from 'figbird'
-
-const feathers = createFeathersClient()
-const adapter = new FeathersAdapter(feathers)
-const figbird = new Figbird({ adapter })
-
-export function App({ children }) {
-  return <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
-}
-
-// inspect the state of all of the queries in figbird
-console.log(figbird.getState())
-
-// subscribe to figbird state changes
-figbird.subscribeToStateChanges(state => {})
-```
-
-## Using outside React
-
-Figbird's core is framework-agnostic. You can create and subscribe to queries directly without React, which is useful for background sync, testing, or non-React parts of your app.
-
-```ts
-const figbird = new Figbird({ adapter, schema })
-
-const query = figbird.query({
-  serviceName: 'tasks',
-  method: 'find',
-  params: { query: { completed: true } },
-})
-
-// Subscribe to get data and updates
-const unsub = query.subscribe(state => {
-  console.log(state.data) // Task[] | null
-  console.log(state.status) // 'loading' | 'success' | 'error'
-})
-
-// { data, meta, status, isFetching, error }
-query.getSnapshot()
-
-// Manually refetch
-query.refetch()
-
-// Clean up
-unsub()
-```
-
-## Custom API adapters
-
-In principle, you could use Figbird with any REST / Websocket / RPC API as long as you wrap your API into a Figbird compatible adapter.
-
-1. Structure your API around services or resources
-2. Where the services support operations: `find`, `get`, `create`, `update`, `patch`, `remove`
-3. For realtime events, the server should emit a event after each mutation `created`, `patched`, `updated`, `removed`.
-
-For example, if you have a `comments` resource in your application, you would have some or all of the following endpoints:
-
-- `GET /comments`
-- `GET /comments/:id`
-- `POST /comments`
-- `PUT /comments/:id`
-- `PATCH /comments/:id`
-- `DELETE /comments/:id`
-
-The result of the `find` operation or `GET /comments` would be an object of shape `{ data, total, limit, skip }` or similar. You can customise how all this gets mapped to your API by implementing a custom Adapter. See `adapters/feathers.js` for an example.
+# Guides
 
 ## The no-flash checklist
 
@@ -562,3 +472,265 @@ renders nothing briefly, then the skeleton — fast loads never flash:
 
 For `isFetching` spinners (background revalidation), the same principle is
 `useDelayedFlag(isFetching, 300, 800)` — show only if slow, and once shown, don't yo-yo.
+
+One more pattern from the same family: when navigating between details of the same shape (issue 1 → issue 2), key the Suspense boundary by the id — each destination gets its own cold boundary and skeleton instead of briefly showing the previous item's data:
+
+```tsx
+<Suspense key={issueId} fallback={<DetailSkeleton />}>
+  {children}
+</Suspense>
+```
+
+## Instant navigation: prepare + prefetch + lazy chunks
+
+The pattern that makes navigations feel instant is starting everything the destination needs — data *and* code — before the screen renders, in parallel:
+
+```ts
+// 1. Named queries live in an eagerly-loaded module
+export const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+  q.issues.get(id).related('creator').related('labels'),
+)
+
+// 2. The route fires data preparation and the lazy chunk import in parallel —
+//    navigation latency becomes max(chunk, data) instead of chunk + data
+{
+  path: '/issues/:id',
+  resolver: () => import('./pages/IssueDetail/screen'),
+  prepare: ({ params }) => [figbird.prepare(issueDetail, { id: Number(params.id) })],
+}
+
+// 3. Hover starts the same queries even earlier — clicking is then a warm read
+<Row onMouseEnter={() => figbird.prefetch(issueDetail, { id })} />
+
+// 4. The screen just reads — warm visits render synchronously, no fallback
+const { data } = useQuery(issueDetail, { id })
+```
+
+Because all three paths resolve to the same cache entry (the definition + args hash), there is no coordination to do — preparation is simply an earlier read.
+
+# API Reference
+
+## createSchema / service / one / many / embed
+
+```ts
+const schema = createSchema({
+  services: { notes: service<{ item: Note }>() },
+  relationships: ({ one, many, embed }) => ({ ... }),
+})
+```
+
+- `service<Def>(options?)` — declares a service; `options.path` maps a schema key to a transport path
+- `one({ sourceField, destService, destField? })` — single related item (`destField` defaults to `'id'`; fields accept `string | string[]`)
+- `many(hop)` — one-to-many; `many(parentToJunction, junctionToDest)` — transparent two-hop many-to-many
+- `embed({ sourceField, destService })` — parent carries a server-maintained list of dest ids; resolved as one batched fetch preserving order
+
+## Figbird
+
+The core instance holding the adapter, schema, and shared query state.
+
+```ts
+const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
+```
+
+| Member | Description |
+| --- | --- |
+| `q` | The builder proxy — `q.issues.where(...)`. Requires a schema. |
+| `defineQuery(name, build)` / `defineQuery(name, argsSchema, build)` | Named, args-keyed query factory. |
+| `prepare(definition, args)` | Start a query, get `{ key, promise, release }` — the router-grade lease. |
+| `prefetch(definition, args, { staleTime? })` | Idempotent speculative warming; self-releasing. |
+| `explain(builderOrDefinition, args?)` | Static per-node classification report with structured reasons. |
+| `inspect()` | Read-only snapshot of live queries: `{ queryId, serviceName, method, query, classification, status, isFetching, itemCount, fetchedAt, subscriberCount }[]`. The stable surface to build devtools on. |
+| `events` | Observability channel — see [Observability](#observability). |
+| `query(desc, config?)` | Low-level descriptor query (see [Using outside React](#using-outside-react)). |
+| `relationalQuery(builder)` | Low-level relational query ref for non-React use. |
+| `mutate(desc)` | Low-level mutation. |
+| `getState()` / `subscribeToStateChanges(fn)` | Raw internal state — debugging only; prefer `inspect()`. |
+
+## createHooks
+
+Binds a Figbird instance to typed React hooks:
+
+```ts
+export const { useQuery, useMutation, q } = createHooks(figbird)
+```
+
+Returns the current generation — `useQuery`, `useMutation`, and `q` (the builder proxy) — plus the deprecated legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`, `useFeathers`) for older codebases.
+
+Instance resolution: hooks use the bound instance directly, so no provider is required. If a `FigbirdProvider` is present in the tree, **it wins** — that's the injection point for per-request SSR instances and tests. A dev-mode error fires if a provider holds a *different* instance than the bound one.
+
+## useQuery
+
+```ts
+// Suspense (default)
+const { data, error, isFetching, refetch } = useQuery(builder)
+const { data } = useQuery(definition, args)
+
+// Paginated builders widen the result
+const { data, loadMore, hasMore, isLoadingMore, loadMoreError, totalCount } = useQuery(
+  q.issues.paginate({ pageSize: 25, returnTotal: true }),
+)
+
+// Tagged union, never suspends or throws
+const result = useQuery(builder, { suspense: false })
+// result: { status: 'idle' | 'loading' | 'success' | 'error', data, error, isFetching, refetch }
+
+// Conditional fetching
+const { data } = useQuery(builder, { skip: id == null }) // data: T | undefined
+```
+
+Options: `skip?: boolean`, `suspense?: boolean` (must be static per call site).
+
+Result fields (suspense form): `data` (guaranteed for the exact query passed), `error` (non-null when a refetch failed while data is showing — cold errors throw instead), `isFetching` (background fetch in flight on the current query), `refetch()`.
+
+## useMutation
+
+```ts
+const m = useMutation(serviceName, { optimistic?: boolean })
+
+m.create(data, options?)   // Promise<Item>; arrays create in batch
+m.update(id, data, options?)
+m.patch(id, data, options?)
+m.remove(id, options?)
+m.status  // 'idle' | 'loading' | 'success' | 'error' — last call from this hook
+m.data    // last mutation result
+m.error   // last mutation error
+```
+
+Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }` — overrides the hook default in both directions.
+
+## No-flash kit
+
+| Export | Use |
+| --- | --- |
+| `useDebouncedTransition(value, delay?)` | Debounced value committed inside a transition — search inputs. |
+| `<DelayedFallback delay?>` | Suspense fallback that only appears when loading is actually slow. |
+| `useDelayedFlag(flag, delay?, minVisible?)` | Spinner flag that shows only if slow and doesn't yo-yo. |
+
+See [the no-flash checklist](#the-no-flash-checklist).
+
+## FeathersAdapter
+
+Connects Figbird to a Feathers.js backend: data fetching, realtime subscriptions, reconnect handling (all active queries refetch on the socket's `reconnect`), and translation between Figbird's query format and Feathers conventions.
+
+```ts
+const adapter = new FeathersAdapter(feathers, options)
+```
+
+- `feathers` — feathers client
+- `options`
+  - `idField` — string or function, defaults to `item => item.id || item._id`
+  - `updatedAtField` — string or function, defaults to `item => item.updatedAt || item.updated_at`; used to avoid overwriting newer cached data with older data when requests race
+  - `defaultPageSize` — default `query.$limit` when fetching, unset by default so the server decides
+  - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
+
+Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
+
+## FigbirdProvider
+
+Optional. Hooks from `createHooks` work without any provider; use one to inject a different instance into a subtree — per-request instances in SSR, or a fresh instance per test:
+
+```tsx
+<FigbirdProvider figbird={testFigbird}>{ui}</FigbirdProvider>
+```
+
+`useFigbird()` reads the context instance (throws without a provider); `useFigbirdMaybe()` returns `undefined` instead.
+
+## Observability
+
+`figbird.events` emits lifecycle facts — fetches, realtime events, mutations (including optimistic rollbacks). Delivery is batched on a microtask and never happens mid-render, so subscribing from React components is safe:
+
+```ts
+const unsub = figbird.events.subscribe(event => {
+  // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
+  //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+})
+```
+
+Events carry ids, durations, and item counts — lightweight enough to subscribe in production. For inspecting the *current* state rather than the event stream, use `figbird.inspect()`; for understanding a query's classification, `figbird.explain()`.
+
+## Legacy hooks (deprecated)
+
+The descriptor-based generation predates the query builder. All of these remain fully functional but are deprecated — new code should use `useQuery`/`useMutation` with builders.
+
+### useFind
+
+```ts
+const { data, meta, status, isFetching, error, refetch } = useFind(serviceName, params)
+```
+
+`params` combines Feathers params with Figbird options:
+
+- `skip` — don't fetch
+- `realtime` — `merge` (default), `refetch`, or `disabled` (see [Realtime modes](#realtime-modes))
+- `fetchPolicy` — `swr` (default), `cache-first`, or `network-only` (see [Fetch policies](#fetch-policies))
+- `allPages` — fetch all pages; `parallel` + `parallelLimit` control concurrency
+- `matcher` — custom `(query) => (item) => boolean` for realtime merging
+
+### useGet
+
+```ts
+const { data, status, isFetching, error, refetch } = useGet(serviceName, id, params)
+```
+
+Same Figbird params as `useFind` (minus pagination). No `meta` by default.
+
+### useMethod / useService / useFeathers
+
+Feathers-specific escape hatches: `useMethod(service, method)` calls a custom service method with local lifecycle state; `useService(name)` and `useFeathers()` return the typed raw service/client for operations outside Figbird's caching layer (custom methods declared in the schema are fully typed).
+
+# Advanced
+
+## Realtime modes
+
+The builder API manages realtime automatically via [classification](#realtime-and-query-classification). The legacy hooks expose the mode directly via the `realtime` param:
+
+- **merge** (default) — realtime events merge into cached queries: matching created records append, patched records update in place, removed records disappear.
+- **refetch** — every realtime event on the service triggers a full refetch of the query. Results are cached per-query rather than shared. Useful when the client can't locally decide how an event affects the result (server-side windowing, computed membership).
+- **disabled** — events don't touch this query; refresh manually via `refetch()`.
+
+## Fetch policies
+
+Fetch policy controls when data comes from cache vs network (legacy hooks accept it as a param; builder queries use `swr`):
+
+- **swr** (default) — show cached data on mount, revalidate in the background.
+- **cache-first** — show cached data on mount; only fetch when nothing is cached.
+- **network-only** — always fetch on mount, never show cached data first; results are scoped to the hook instance.
+
+## Using outside React
+
+The core is framework-agnostic — useful for background sync, tests, and non-React code.
+
+```ts
+const figbird = new Figbird({ adapter, schema })
+
+// Relational queries — same builders as the hooks
+const ref = figbird.relationalQuery(q.issues.where({ status: 'open' }).related('creator'))
+const unsub = ref.subscribe(state => {
+  // { status, data, error, isFetching }
+})
+ref.getSnapshot()
+ref.refetch()
+unsub()
+
+// Descriptor queries — the low-level primitive
+const query = figbird.query({
+  serviceName: 'tasks',
+  method: 'find',
+  params: { query: { completed: true } },
+})
+query.subscribe(state => {})
+
+// Mutations
+await figbird.mutate({ serviceName: 'tasks', method: 'patch', id, data: { done: true } })
+```
+
+## Custom API adapters
+
+Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatible adapter:
+
+1. Structure your API around services or resources
+2. Support the operations `find`, `get`, `create`, `update`, `patch`, `remove`
+3. For realtime, emit `created`, `patched`, `updated`, `removed` events after mutations
+4. Optionally implement `subscribeToReconnect` so active queries refetch after connectivity gaps
+
+For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See `lib/adapters/feathers.ts` for the reference implementation of the `Adapter` interface.
