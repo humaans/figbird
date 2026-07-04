@@ -185,4 +185,4 @@ if (import.meta.env.DEV) {
 
 // Typed hooks + builder proxy bound to this schema — these are what components
 // reach for; no provider required.
-export const { useQuery, useMutation, q } = createHooks(figbird)
+export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = createHooks(figbird)

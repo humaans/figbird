@@ -607,8 +607,8 @@ passed for computed fields).
 before any component mounts. Prepared queries bridge that.
 
 ```ts
-const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
-  figbird.q.issues
+const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
+  q.issues
     .where({ id })
     .one()
     .related('comments', c => c.orderBy('createdAt', 'desc').limit(50))
@@ -616,7 +616,7 @@ const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) 
 )
 
 // Anywhere — typically a router loader or a parent component:
-const prepared = figbird.prepare(issueDetail, { id: 42 })
+const prepared = prepare(issueDetail, { id: 42 })
 
 // Inside the component:
 const { data } = useQuery(issueDetail, { id: 42 })
@@ -624,7 +624,10 @@ const { data } = useQuery(issueDetail, { id: 42 })
 
 Properties:
 
-- **Stable identity.** `defineQuery(name, build)` registers a builder factory. Calling
+- **Pure declarations.** `defineQuery(name, build)` returns an inert value — no cache state, no
+  instance dependency — so definitions live in the same layer as the schema. App code gets a
+  schema-typed `defineQuery` from its `createHooks` kit; a standalone export serves non-React code.
+- **Stable identity.** Calling
   `prepare(query, args)` and later `useQuery(query, args)` with the same args hits the same cache
   entry — no need to thread the builder instance through.
 - **Args validation, when args are untrusted.** Args are typed from the build function; when they
@@ -880,8 +883,10 @@ checklist" in the docs that maps each failure mode to its tool.
 
 ## Instance Binding And Introspection
 
-**One instance, optional provider.** `createHooks(figbird)` returns hooks *bound* to that instance
-(plus `q`, the builder proxy), so a singleton SPA needs no `FigbirdProvider` at all. Context, when
+**One instance, optional provider.** `createHooks(figbird)` returns the daily-use kit *bound* to
+that instance — the hooks, `q` (the builder proxy), schema-typed `defineQuery`, and bound
+`prepare`/`prefetch` — so a singleton SPA needs no `FigbirdProvider` at all and imports everything
+from one module. Context, when
 present, overrides the bound instance — that is the injection point for per-request SSR trees and
 per-test instances — and a dev-mode error fires when a provider holds a *different* instance than
 the bound one, because that divergence used to be silent (types from one instance, runtime from

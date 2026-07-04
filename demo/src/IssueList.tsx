@@ -6,7 +6,7 @@
 import { Suspense, useRef, useState, useTransition } from 'react'
 import { Link, useRoute } from 'react-space-router'
 import { useDebouncedTransition } from 'figbird'
-import { figbird, q, useQuery, type Issue, type Label, type Team, type User } from './figbird'
+import { prefetch, q, useQuery, type Issue, type Label, type Team, type User } from './figbird'
 import { Explain } from './Explain'
 import { issueCommentsQuery, issueDetailQuery } from './pages/IssueDetail/queries'
 import { StatusDot, SkeletonRows, escapeRegExp } from './ui'
@@ -23,11 +23,11 @@ function useSelectedIssueId(): number | null {
 
 // Warm an issue's detail + comments on hover intent — the exact queries the detail
 // screen will read, so by click time the navigation is usually a warm, synchronous
-// read. figbird.prefetch() is idempotent (fresh queries no-op) and manages its own
+// read. prefetch() is idempotent (fresh queries no-op) and manages its own
 // pin lifetime, so calling it on every hover costs nothing.
 function prefetchIssue(id: number): void {
-  figbird.prefetch(issueDetailQuery, { id })
-  figbird.prefetch(issueCommentsQuery, { id })
+  prefetch(issueDetailQuery, { id })
+  prefetch(issueCommentsQuery, { id })
 }
 
 // Only prefetch after the pointer has rested on a row briefly — sweeping the
@@ -184,8 +184,8 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
           can change membership invisibly (a row you can't see may now belong), so figbird refetches
           the affected pages instead of guessing. Comment counts come from{' '}
           <code>issue.commentIds</code>, a server-maintained id list — no comments are fetched here
-          at all. Hovering a row warms its detail via <code>figbird.prefetch()</code> — idempotent
-          and self-releasing, so hover-spam costs nothing — and clicking is usually a warm read.
+          at all. Hovering a row warms its detail via <code>prefetch()</code> — idempotent and
+          self-releasing, so hover-spam costs nothing — and clicking is usually a warm read.
         </Explain>
       </header>
       <ul className='issue-rows'>

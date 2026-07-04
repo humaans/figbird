@@ -1,6 +1,6 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
-import { Figbird, QueryArgsError, type StandardSchemaV1 } from '../lib/core/figbird'
+import { defineQuery, Figbird, QueryArgsError, type StandardSchemaV1 } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
 import { mockFeathers } from './helpers'
 
@@ -76,10 +76,8 @@ const positiveInt = (raw: unknown, key: string): number => {
 
 test('defineQuery attaches a validate function', t => {
   const figbird = makeFigbird()
-  const issueDetail = figbird.defineQuery(
-    'issueDetail',
-    objectSchema({ id: positiveInt }),
-    ({ id }) => figbird.q.issues.where({ id }).one(),
+  const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
+    figbird.q.issues.where({ id }).one(),
   )
   t.is(issueDetail.name, 'issueDetail')
   t.is(typeof issueDetail.build, 'function')
@@ -89,10 +87,8 @@ test('defineQuery attaches a validate function', t => {
 
 test('schema validation throws QueryArgsError on invalid args', t => {
   const figbird = makeFigbird()
-  const issueDetail = figbird.defineQuery(
-    'issueDetail',
-    objectSchema({ id: positiveInt }),
-    ({ id }) => figbird.q.issues.where({ id }).one(),
+  const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
+    figbird.q.issues.where({ id }).one(),
   )
   const err = t.throws(() => issueDetail.validate({ id: 'abc' }), { instanceOf: QueryArgsError })
   t.is(err.queryName, 'issueDetail')
@@ -103,10 +99,8 @@ test('schema validation throws QueryArgsError on invalid args', t => {
 
 test('schema validation normalizes args before build', t => {
   const figbird = makeFigbird()
-  const issueDetail = figbird.defineQuery(
-    'issueDetail',
-    objectSchema({ id: positiveInt }),
-    ({ id }) => figbird.q.issues.where({ id }).one(),
+  const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
+    figbird.q.issues.where({ id }).one(),
   )
   // Normalized: '7' string coerces to 7. Both produce the same builder hash.
   const fromString = issueDetail.build(issueDetail.validate({ id: '7' }))
@@ -116,10 +110,8 @@ test('schema validation normalizes args before build', t => {
 
 test('figbird.prepare runs schema validation and throws on invalid args', t => {
   const figbird = makeFigbird()
-  const issueDetail = figbird.defineQuery(
-    'issueDetail',
-    objectSchema({ id: positiveInt }),
-    ({ id }) => figbird.q.issues.where({ id }).one(),
+  const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
+    figbird.q.issues.where({ id }).one(),
   )
   const err = t.throws(() => figbird.prepare(issueDetail, { id: -1 } as never), {
     instanceOf: QueryArgsError,
@@ -129,10 +121,8 @@ test('figbird.prepare runs schema validation and throws on invalid args', t => {
 
 test('figbird.prepare uses normalized args so prepared and direct calls share the cache key', t => {
   const figbird = makeFigbird()
-  const issueDetail = figbird.defineQuery(
-    'issueDetail',
-    objectSchema({ id: positiveInt }),
-    ({ id }) => figbird.q.issues.where({ id }).one(),
+  const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
+    figbird.q.issues.where({ id }).one(),
   )
   const prepared = figbird.prepare(issueDetail, { id: '1' } as never)
   // The same cache entry is hit when args normalize to the same value.
@@ -151,7 +141,7 @@ test('async-returning schema is rejected synchronously with QueryArgsError', t =
     },
   }
   const figbird = makeFigbird()
-  const def = figbird.defineQuery('asyncQuery', asyncSchema, ({ id }) =>
+  const def = defineQuery('asyncQuery', asyncSchema, ({ id }) =>
     figbird.q.issues.where({ id }).one(),
   )
   const err = t.throws(() => def.validate({ id: 1 }), { instanceOf: QueryArgsError })
@@ -161,7 +151,7 @@ test('async-returning schema is rejected synchronously with QueryArgsError', t =
 
 test('QueryArgsError carries the validator-reported issues', t => {
   const figbird = makeFigbird()
-  const def = figbird.defineQuery(
+  const def = defineQuery(
     'multi',
     objectSchema({
       id: positiveInt,

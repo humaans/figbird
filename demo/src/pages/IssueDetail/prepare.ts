@@ -7,7 +7,7 @@
  */
 
 import type { RoutePrepareContext } from 'react-space-router'
-import { figbird } from '../../figbird'
+import { prepare } from '../../figbird'
 import { issueCommentsQuery, issueDetailQuery } from './queries'
 
 export function prepareIssueDetail({ params }: RoutePrepareContext) {
@@ -15,7 +15,7 @@ export function prepareIssueDetail({ params }: RoutePrepareContext) {
   if (!Number.isFinite(id)) return []
   // `priority` is the router's vocabulary, not figbird's — attach it here.
   return [
-    { ...figbird.prepare(issueDetailQuery, { id }), priority: 'route' as const },
-    { ...figbird.prepare(issueCommentsQuery, { id }), priority: 'defer' as const },
+    { ...prepare(issueDetailQuery, { id }), priority: 'route' as const },
+    { ...prepare(issueCommentsQuery, { id }), priority: 'defer' as const },
   ]
 }

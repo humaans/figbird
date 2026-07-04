@@ -6,14 +6,7 @@ import {
   type QueryBuilderProxy,
   type QueryBuilderResult,
 } from './query-builder.js'
-import {
-  isQueryDefinition,
-  QUERY_DEFINITION_BRAND,
-  validateQueryArgs,
-  type PreparedQuery,
-  type QueryDefinition,
-  type StandardSchemaV1,
-} from './queryDefinition.js'
+import { isQueryDefinition, type PreparedQuery, type QueryDefinition } from './queryDefinition.js'
 import {
   classifyQueryNode,
   explainQueryNode,
@@ -58,6 +51,7 @@ export type {
 } from './queryTypes.js'
 export type { FigbirdEvent, FigbirdEvents, MutationMethod } from './events.js'
 export {
+  defineQuery,
   isQueryDefinition,
   QUERY_DEFINITION_BRAND,
   QueryArgsError,
@@ -266,74 +260,6 @@ export class Figbird<
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
     return ref
-  }
-
-  /**
-   * Register a named query factory. Returns a typed `QueryDefinition` that can be passed to
-   * `figbird.prepare(query, args)` and `useQuery(query, args)`. Identical `name + args`
-   * resolves to the same builder hash and the same cache entry — so a query the router
-   * prepared and a query the component reads share state.
-   *
-   * Args are typed from the build function's parameter. When args arrive from an
-   * untrusted source (URL params, storage), pass a
-   * [Standard Schema](https://github.com/standard-schema/standard-schema) validator
-   * (zod, valibot, arktype, etc.) as the middle argument — it runs at every
-   * `prepare()`/`useQuery()` call site and throws `QueryArgsError` on failure, turning
-   * silent cache-misses (e.g. `{ id: "42" }` vs `{ id: 42 }`) into loud, fast failures.
-   * The (possibly normalized) value returned by the schema feeds into `build`, so the
-   * cache key reflects the normalized args. Args from typed code don't need one.
-   *
-   * @example
-   * ```ts
-   * // Typed args, no runtime validation — the common case
-   * const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
-   *   figbird.q.issues.where({ id }).one().related('comments'),
-   * )
-   *
-   * // Validated args — for URL-driven call sites
-   * import { z } from 'zod'
-   * const issueDetail = figbird.defineQuery(
-   *   'issueDetail',
-   *   z.object({ id: z.coerce.number().int().positive() }),
-   *   ({ id }) => figbird.q.issues.where({ id }).one().related('comments'),
-   * )
-   *
-   * figbird.prepare(issueDetail, { id: '42' })  // coerces "42" → 42 before build
-   * useQuery(issueDetail, { id: 42 })           // component reads the same cache entry
-   * ```
-   */
-  // Overload: typed args only, no runtime validation.
-  defineQuery<
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(name: string, build: (args: Args) => B): QueryDefinition<Args, B>
-  // Overload: Standard Schema-validated args.
-  defineQuery<
-    TSchema extends StandardSchemaV1,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
-    name: string,
-    argsSchema: TSchema,
-    build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
-  // Implementation
-  defineQuery(
-    name: string,
-    argsSchemaOrBuild: StandardSchemaV1 | ((args: unknown) => unknown),
-    maybeBuild?: (args: unknown) => unknown,
-  ): QueryDefinition<unknown, unknown> {
-    const argsSchema = maybeBuild ? (argsSchemaOrBuild as StandardSchemaV1) : null
-    const build = maybeBuild ?? (argsSchemaOrBuild as (args: unknown) => unknown)
-    return {
-      [QUERY_DEFINITION_BRAND]: true,
-      name,
-      build,
-      validate: argsSchema
-        ? (args: unknown) => validateQueryArgs(name, argsSchema, args)
-        : (args: unknown) => args,
-    }
   }
 
   /**

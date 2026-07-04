@@ -140,6 +140,43 @@ export function validateQueryArgs<T>(
 }
 
 /**
+ * Create a named, args-keyed query factory. Definitions are inert, pure values — they
+ * hold no cache state and are not tied to a Figbird instance; identity comes from the
+ * built builder's AST hash. Prefer the schema-typed `defineQuery` returned by
+ * `createHooks(figbird)` in app code; this standalone export serves core-only and
+ * non-React consumers.
+ *
+ * Args are typed from the build function. Pass a Standard Schema validator as the
+ * middle argument when args arrive from untrusted sources (URL params, storage) —
+ * it runs at every `prepare()`/`useQuery()` call site and throws `QueryArgsError`.
+ */
+export function defineQuery<Args, B>(
+  name: string,
+  build: (args: Args) => B,
+): QueryDefinition<Args, B>
+export function defineQuery<TSchema extends StandardSchemaV1, B>(
+  name: string,
+  argsSchema: TSchema,
+  build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
+): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+export function defineQuery(
+  name: string,
+  argsSchemaOrBuild: StandardSchemaV1 | ((args: unknown) => unknown),
+  maybeBuild?: (args: unknown) => unknown,
+): QueryDefinition<unknown, unknown> {
+  const argsSchema = maybeBuild ? (argsSchemaOrBuild as StandardSchemaV1) : null
+  const build = maybeBuild ?? (argsSchemaOrBuild as (args: unknown) => unknown)
+  return {
+    [QUERY_DEFINITION_BRAND]: true,
+    name,
+    build,
+    validate: argsSchema
+      ? (args: unknown) => validateQueryArgs(name, argsSchema, args)
+      : (args: unknown) => args,
+  }
+}
+
+/**
  * Handle returned by `figbird.prepare(definition, args)` — an explicit lease on a
  * query. `promise` resolves when the data is ready (rejects with what a Suspense read
  * would throw); `release()` drops the pin that keeps the underlying ref alive — when

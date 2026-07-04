@@ -4,6 +4,7 @@ import React, { StrictMode } from 'react'
 import {
   createSchema,
   createHooks,
+  defineQuery,
   embed,
   FeathersAdapter,
   Figbird,
@@ -2635,7 +2636,7 @@ test('defineQuery + prepare: prepare and useQuery share the same cache entry', a
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, $ } = dom()
 
-  const issueDetail = figbird.defineQuery('issueDetail', passthrough<{ id: number }>(), ({ id }) =>
+  const issueDetail = defineQuery('issueDetail', passthrough<{ id: number }>(), ({ id }) =>
     figbird.q.issues.where({ id }).one().related('comments'),
   )
 
@@ -2682,7 +2683,7 @@ test('defineQuery + prepare: prepare and useQuery share the same cache entry', a
 test('defineQuery + prepare: prepare key is stable for identical args', t => {
   const { figbird } = createApp()
 
-  const issueDetail = figbird.defineQuery('issueDetail', passthrough<{ id: number }>(), ({ id }) =>
+  const issueDetail = defineQuery('issueDetail', passthrough<{ id: number }>(), ({ id }) =>
     figbird.q.issues.where({ id }).one(),
   )
 
@@ -2773,7 +2774,7 @@ test('createHooks: bound hooks and q work without a FigbirdProvider', async t =>
 
 test('prefetch: idempotent within staleTime and warms the cache for a later read', async t => {
   const { figbird, feathers } = createApp()
-  const issueDetail = figbird.defineQuery('issueDetailPrefetch', ({ id }: { id: number }) =>
+  const issueDetail = defineQuery('issueDetailPrefetch', ({ id }: { id: number }) =>
     figbird.q.issues.where({ id }).one().related('creator'),
   )
 
@@ -2820,7 +2821,7 @@ test('defineQuery: typed-args form (no validator) builds and prepares', t => {
 
   // No Standard Schema — args are typed from the build function's parameter and
   // pass through unvalidated.
-  const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+  const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
     figbird.q.issues.where({ id }).one(),
   )
 

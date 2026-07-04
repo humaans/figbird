@@ -88,8 +88,8 @@ export const figbird = new Figbird({
   schema,
 })
 
-// Typed hooks + the builder proxy, bound to this instance.
-export const { useQuery, useMutation, q } = createHooks(figbird)
+// The daily-use kit, bound to this instance.
+export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = createHooks(figbird)
 ```
 
 ```tsx
@@ -350,14 +350,16 @@ Per-call adapter params ride along in the same options object: `create(data, { p
 ## Preparation
 
 Three pieces make preparation work: `defineQuery` gives a query a stable, args-keyed identity;
-`prepare` starts it early with an explicit lease; `prefetch` warms it speculatively.
+`prepare` starts it early with an explicit lease; `prefetch` warms it speculatively. All three come
+from your `createHooks` kit (a standalone `defineQuery` is also exported from `'figbird'` for
+non-React code, and `prepare`/`prefetch` exist as instance methods).
 
 ### defineQuery
 
 A named query is an args-keyed query factory. The same definition read from a component, prepared by a router, or prefetched on hover resolves to the **same cache entry**:
 
 ```ts
-export const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+export const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
   q.issues.get(id).related('creator').related('comments'),
 )
 
@@ -368,13 +370,13 @@ const { data } = useQuery(issueDetail, { id: 42 })
 Args are typed from the build function. When args arrive from an untrusted source — URL params, storage — pass a [Standard Schema](https://github.com/standard-schema/standard-schema) validator (zod, valibot, arktype…) as the middle argument; it runs at every call site and throws `QueryArgsError` on bad input, turning silent cache-splits (`{ id: "42" }` vs `{ id: 42 }`) into loud failures:
 
 ```ts
-export const issueDetail = figbird.defineQuery(
+export const issueDetail = defineQuery(
   'issueDetail',
   z.object({ id: z.coerce.number().int().positive() }),
   ({ id }) => q.issues.get(id).related('comments'),
 )
 
-figbird.prepare(issueDetail, { id: '42' }) // coerces "42" → 42 before building
+prepare(issueDetail, { id: '42' }) // coerces "42" → 42 before building
 ```
 
 ### prepare
@@ -384,8 +386,8 @@ figbird.prepare(issueDetail, { id: '42' }) // coerces "42" → 42 before buildin
 ```ts
 // route definition — router metadata like a priority is attached by the app
 prepare: ({ params }) => [
-  { ...figbird.prepare(issueDetail, { id: Number(params.id) }), priority: 'route' },
-  { ...figbird.prepare(issueComments, { id: Number(params.id) }), priority: 'defer' },
+  { ...prepare(issueDetail, { id: Number(params.id) }), priority: 'route' },
+  { ...prepare(issueComments, { id: Number(params.id) }), priority: 'defer' },
 ]
 ```
 
@@ -396,13 +398,13 @@ Preparation is an *earlier read*, not a different one — the component still ca
 `prefetch()` is for speculative warming — the idempotent, fire-and-forget sibling of `prepare()`, built for "the user will probably need this" moments — hover, viewport entry, likely-next-page:
 
 ```tsx
-<Row onMouseEnter={() => figbird.prefetch(issueDetail, { id: issue.id })} />
+<Row onMouseEnter={() => prefetch(issueDetail, { id: issue.id })} />
 ```
 
 Safe to call at any frequency: if the query was prefetched within `staleTime` (default 30s) it's a no-op. Otherwise it fetches and holds an internal pin that auto-releases after `staleTime` — the data stays cached either way, so a later `useQuery` gets a warm, synchronous read (no Suspense fallback). If the user clicks through, the component's own subscription takes over seamlessly.
 
 ```ts
-figbird.prefetch(issueDetail, { id }, { staleTime: 60_000 })
+prefetch(issueDetail, { id }, { staleTime: 60_000 })
 ```
 
 Rule of thumb: `prepare()` when you need to *await* readiness or control the lease; `prefetch()` when you just want things warm.
@@ -490,7 +492,7 @@ Combining `prepare`, `prefetch`, and lazy route chunks: the pattern that makes n
 
 ```ts
 // 1. Named queries live in an eagerly-loaded module
-export const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+export const issueDetail = defineQuery('issueDetail', ({ id }: { id: number }) =>
   q.issues.get(id).related('creator').related('labels'),
 )
 
@@ -499,11 +501,11 @@ export const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: num
 {
   path: '/issues/:id',
   resolver: () => import('./pages/IssueDetail/screen'),
-  prepare: ({ params }) => [figbird.prepare(issueDetail, { id: Number(params.id) })],
+  prepare: ({ params }) => [prepare(issueDetail, { id: Number(params.id) })],
 }
 
 // 3. Hover starts the same queries even earlier — clicking is then a warm read
-<Row onMouseEnter={() => figbird.prefetch(issueDetail, { id })} />
+<Row onMouseEnter={() => prefetch(issueDetail, { id })} />
 
 // 4. The screen just reads — warm visits render synchronously, no fallback
 const { data } = useQuery(issueDetail, { id })
@@ -616,9 +618,8 @@ const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 | Member | Description |
 | --- | --- |
 | `q` | The builder proxy — `q.issues.where(...)`. Requires a schema. |
-| `defineQuery(...)` | Named, args-keyed query factory — see [figbird.defineQuery](#figbirddefinequery). |
-| `prepare(definition, args)` | Awaitable query lease for routers — see [figbird.prepare](#figbirdprepare). |
-| `prefetch(definition, args, opts?)` | Idempotent speculative warming — see [figbird.prefetch](#figbirdprefetch). |
+| `prepare(definition, args)` | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
+| `prefetch(definition, args, opts?)` | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch). |
 | `explain(...)` | Static classification report — see [figbird.explain](#figbirdexplain). |
 | `inspect()` | Live-query snapshot — see [figbird.inspect](#figbirdinspect). |
 | `events` | Observability channel — see [figbird.events](#figbirdevents). |
@@ -627,15 +628,17 @@ const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 | `mutate(desc)` | Low-level mutation. |
 | `getState()` / `subscribeToStateChanges(fn)` | Raw internal state — debugging only; prefer `inspect()`. |
 
-## figbird.defineQuery
+## defineQuery
 
 ```ts
-figbird.defineQuery(name, build)
-figbird.defineQuery(name, argsSchema, build) // Standard Schema-validated args
+defineQuery(name, build)
+defineQuery(name, argsSchema, build) // Standard Schema-validated args
 ```
 
-Named, args-keyed query factory — `prepare`, `prefetch`, and `useQuery` against the same
-definition and args share one cache entry. See [defineQuery](#definequery).
+Named, args-keyed query factory — a pure value, not tied to an instance; `prepare`,
+`prefetch`, and `useQuery` against the same definition and args share one cache entry.
+Available schema-typed from your `createHooks` kit, or as a standalone export from
+`'figbird'`. See [Preparation](#preparation).
 
 ## figbird.prepare
 
@@ -699,12 +702,13 @@ Events carry ids, durations, and item counts — lightweight enough to subscribe
 Binds a Figbird instance to typed React hooks:
 
 ```ts
-export const { useQuery, useMutation, q } = createHooks(figbird)
+export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = createHooks(figbird)
 ```
 
-Returns the current generation — `useQuery`, `useMutation`, and `q` (the builder proxy) —
-plus the deprecated legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`,
-`useFeathers`) for older codebases.
+Returns the daily-use kit — `useQuery`, `useMutation`, `q` (the builder proxy),
+schema-typed `defineQuery`, and instance-bound `prepare`/`prefetch` — plus the deprecated
+legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`, `useFeathers`) for older
+codebases.
 
 Instance resolution: hooks use the bound instance directly, so no provider is required. If a
 `FigbirdProvider` is present in the tree, **it wins** — that's the injection point for
