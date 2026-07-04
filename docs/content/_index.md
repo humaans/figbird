@@ -112,7 +112,7 @@ No `FigbirdProvider` is needed — the hooks are bound to the instance they were
 
 # Queries
 
-## The query builder
+## Query builder
 
 Every query starts from `q.<service>` and reads like the request it makes:
 
@@ -223,7 +223,7 @@ The contract, precisely:
 1. **First mount, cold cache** → suspends. The only time it suspends.
 2. **First mount, warm cache** → returns cached data synchronously, revalidates in the background (`isFetching: true`).
 3. **Refetch with data present** (background revalidation, realtime-triggered, manual) → never suspends; current data stays up with `isFetching: true`.
-4. **Params change** → that's a *different query* with a cold cache entry, so it suspends — the hook never shows old data labeled with new params. Keeping the previous UI on screen during the switch is one `startTransition` away; see [the no-flash checklist](#the-no-flash-checklist).
+4. **Params change** → that's a *different query* with a cold cache entry, so it suspends — the hook never shows old data labeled with new params. Keeping the previous UI on screen during the switch is one `startTransition` away; see [the no-flash checklist](#no-flash-checklist).
 
 **Errors after success don't unmount the screen.** If a refetch fails while data is showing, the hook keeps returning the last good `data` with `error` set — show a toast or a banner; the next successful fetch clears it. Only a cold read with no data ever produced throws to the error boundary.
 
@@ -307,7 +307,7 @@ Per-call options override in both directions: `tasks.remove(id, { optimistic: fa
 
 Per-call adapter params ride along in the same options object: `create(data, { params: { query: { ... } } })`.
 
-# Named queries, preparation, prefetching
+# Preparation
 
 ## defineQuery
 
@@ -334,9 +334,9 @@ export const issueDetail = figbird.defineQuery(
 figbird.prepare(issueDetail, { id: '42' }) // coerces "42" → 42 before building
 ```
 
-## prepare — the router's primitive
+## prepare
 
-`prepare()` starts a query and returns an explicit lease: a `promise` that resolves when the data is ready, and `release()` to drop the pin keeping it alive. Routers await route-critical data before committing a navigation; the destination screen then reads the same cache entry synchronously:
+`prepare()` is the router's primitive: it starts a query and returns an explicit a `promise` that resolves when the data is ready, and `release()` to drop the pin keeping it alive. Routers await route-critical data before committing a navigation; the destination screen then reads the same cache entry synchronously:
 
 ```ts
 // route definition — router metadata like a priority is attached by the app
@@ -348,9 +348,9 @@ prepare: ({ params }) => [
 
 Preparation is an *earlier read*, not a different one — the component still calls `useQuery(issueDetail, { id })`.
 
-## prefetch — speculative warming
+## prefetch
 
-`prefetch()` is the idempotent, fire-and-forget sibling of `prepare()`, built for "the user will probably need this" moments — hover, viewport entry, likely-next-page:
+`prefetch()` is for speculative warming — the idempotent, fire-and-forget sibling of `prepare()`, built for "the user will probably need this" moments — hover, viewport entry, likely-next-page:
 
 ```tsx
 <Row onMouseEnter={() => figbird.prefetch(issueDetail, { id: issue.id })} />
@@ -364,7 +364,7 @@ figbird.prefetch(issueDetail, { id }, { staleTime: 60_000 })
 
 Rule of thumb: `prepare()` when you need to *await* readiness or control the lease; `prefetch()` when you just want things warm.
 
-# Realtime and query classification
+# Realtime
 
 Figbird subscribes to realtime events per service (at most once per service) the moment a query against it is active. What happens when an event arrives is decided by the query's **classification** — the library's central idea:
 
@@ -438,7 +438,7 @@ Omitted payload types default sensibly: `Partial<item>` for create and patch, `i
 
 # Guides
 
-## The no-flash checklist
+## No-flash checklist
 
 `useQuery` never lies about identity: when a query's params change, that is a _different_
 query with a cold cache entry, and the hook suspends rather than showing old data labeled
@@ -481,9 +481,9 @@ One more pattern from the same family: when navigating between details of the sa
 </Suspense>
 ```
 
-## Instant navigation: prepare + prefetch + lazy chunks
+## Instant navigation
 
-The pattern that makes navigations feel instant is starting everything the destination needs — data *and* code — before the screen renders, in parallel:
+Combining `prepare`, `prefetch`, and lazy route chunks: the pattern that makes navigations feel instant is starting everything the destination needs — data *and* code — before the screen renders, in parallel:
 
 ```ts
 // 1. Named queries live in an eagerly-loaded module
@@ -510,7 +510,9 @@ Because all three paths resolve to the same cache entry (the definition + args h
 
 # API Reference
 
-## createSchema / service / one / many / embed
+## Schema helpers
+
+`createSchema`, `service`, and the relationship helpers `one` / `many` / `embed`:
 
 ```ts
 const schema = createSchema({
@@ -606,7 +608,7 @@ Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }` �
 | `<DelayedFallback delay?>` | Suspense fallback that only appears when loading is actually slow. |
 | `useDelayedFlag(flag, delay?, minVisible?)` | Spinner flag that shows only if slow and doesn't yo-yo. |
 
-See [the no-flash checklist](#the-no-flash-checklist).
+See [the no-flash checklist](#no-flash-checklist).
 
 ## FeathersAdapter
 
@@ -648,9 +650,9 @@ const unsub = figbird.events.subscribe(event => {
 
 Events carry ids, durations, and item counts — lightweight enough to subscribe in production. For inspecting the *current* state rather than the event stream, use `figbird.inspect()`; for understanding a query's classification, `figbird.explain()`.
 
-## Legacy hooks (deprecated)
+## Legacy hooks
 
-The descriptor-based generation predates the query builder. All of these remain fully functional but are deprecated — new code should use `useQuery`/`useMutation` with builders.
+**Deprecated.** The descriptor-based generation predates the query builder. All of these remain fully functional but are deprecated — new code should use `useQuery`/`useMutation` with builders.
 
 ### useFind
 
@@ -682,7 +684,7 @@ Feathers-specific escape hatches: `useMethod(service, method)` calls a custom se
 
 ## Realtime modes
 
-The builder API manages realtime automatically via [classification](#realtime-and-query-classification). The legacy hooks expose the mode directly via the `realtime` param:
+The builder API manages realtime automatically via [classification](#realtime). The legacy hooks expose the mode directly via the `realtime` param:
 
 - **merge** (default) — realtime events merge into cached queries: matching created records append, patched records update in place, removed records disappear.
 - **refetch** — every realtime event on the service triggers a full refetch of the query. Results are cached per-query rather than shared. Useful when the client can't locally decide how an event affects the result (server-side windowing, computed membership).
@@ -724,7 +726,7 @@ query.subscribe(state => {})
 await figbird.mutate({ serviceName: 'tasks', method: 'patch', id, data: { done: true } })
 ```
 
-## Custom API adapters
+## Custom adapters
 
 Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatible adapter:
 
