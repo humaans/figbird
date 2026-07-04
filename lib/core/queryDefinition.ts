@@ -24,6 +24,7 @@ export const QUERY_DEFINITION_BRAND: unique symbol = Symbol.for('figbird.queryDe
  */
 export interface QueryDefinition<Args, B> {
   readonly [QUERY_DEFINITION_BRAND]: true
+  /** Optional label for errors/devtools — empty string when unnamed. Never identity. */
   readonly name: string
   build(args: Args): B
   validate(args: unknown): Args
@@ -146,10 +147,18 @@ export function validateQueryArgs<T>(
  * `createHooks(figbird)` in app code; this standalone export serves core-only and
  * non-React consumers.
  *
- * Args are typed from the build function. Pass a Standard Schema validator as the
- * middle argument when args arrive from untrusted sources (URL params, storage) —
- * it runs at every `prepare()`/`useQuery()` call site and throws `QueryArgsError`.
+ * Args are typed from the build function. Pass a Standard Schema validator before the
+ * build function when args arrive from untrusted sources (URL params, storage) — it
+ * runs at every `prepare()`/`useQuery()` call site and throws `QueryArgsError`.
+ *
+ * The name is optional metadata, never identity (identity is the AST hash): it labels
+ * `QueryArgsError` messages and devtools. Skip it unless you want those labels.
  */
+export function defineQuery<Args, B>(build: (args: Args) => B): QueryDefinition<Args, B>
+export function defineQuery<TSchema extends StandardSchemaV1, B>(
+  argsSchema: TSchema,
+  build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
+): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
 export function defineQuery<Args, B>(
   name: string,
   build: (args: Args) => B,
@@ -160,18 +169,20 @@ export function defineQuery<TSchema extends StandardSchemaV1, B>(
   build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
 ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
 export function defineQuery(
-  name: string,
-  argsSchemaOrBuild: StandardSchemaV1 | ((args: unknown) => unknown),
-  maybeBuild?: (args: unknown) => unknown,
+  a: string | StandardSchemaV1 | ((args: unknown) => unknown),
+  b?: StandardSchemaV1 | ((args: unknown) => unknown),
+  c?: (args: unknown) => unknown,
 ): QueryDefinition<unknown, unknown> {
-  const argsSchema = maybeBuild ? (argsSchemaOrBuild as StandardSchemaV1) : null
-  const build = maybeBuild ?? (argsSchemaOrBuild as (args: unknown) => unknown)
+  const name = typeof a === 'string' ? a : ''
+  const [x, y] = typeof a === 'string' ? [b, c] : [a, b]
+  const argsSchema = y ? (x as StandardSchemaV1) : null
+  const build = (y ?? x) as (args: unknown) => unknown
   return {
     [QUERY_DEFINITION_BRAND]: true,
     name,
     build,
     validate: argsSchema
-      ? (args: unknown) => validateQueryArgs(name, argsSchema, args)
+      ? (args: unknown) => validateQueryArgs(name || '(anonymous)', argsSchema, args)
       : (args: unknown) => args,
   }
 }

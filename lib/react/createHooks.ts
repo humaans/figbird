@@ -147,8 +147,23 @@ interface UseQueryForSchema<S extends Schema> {
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
 }
 
-/** Schema-typed defineQuery: builders must come from this schema. */
+/** Schema-typed defineQuery: builders must come from this schema. Name optional. */
 interface DefineQueryForSchema<S extends Schema> {
+  <
+    Args,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    build: (args: Args) => B,
+  ): QueryDefinition<Args, B>
+  <
+    TSchema extends StandardSchemaV1,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    argsSchema: TSchema,
+    build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
+  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
   <
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
