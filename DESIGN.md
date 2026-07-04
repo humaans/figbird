@@ -1517,3 +1517,127 @@ version header on responses — protocol additions an adapter can carry without 
 architecture. Together they close missed-event detection, the stale-response membership race, and
 read-your-writes, which is most of the practical distance between a request orchestrator and a
 sync engine for a fraction of the machine. Nothing else in this document depends on this section.
+
+## API Refinement Decisions (July 2026)
+
+Decisions locked after the first real consumer (the demo app) exposed where the API forced
+workarounds. Method: everywhere the demo wrote machinery, the library owes a primitive;
+everywhere it wrote a cast, the library owes a type; everywhere it wrote a comment explaining
+behavior, the library owes either a default or an introspection surface. Each item below is
+agreed and scheduled; "deferred" items were considered and consciously parked.
+
+### Mutations
+
+- **Library default stays non-optimistic.** The failure costs are asymmetric: a non-optimistic
+  task-add merely feels slow, while an optimistic policy-save that fails after the user walked
+  away is silent data loss from their perspective. Defaults must fail toward the cheap mistake.
+- **Optimistic intent is declared at hook level** — `useMutation(service, { optimistic: true })`
+  sets the default for every call from that hook; per-call options override in both directions.
+  Rationale: optimism is a property of the interaction surface (a task list is always optimistic,
+  a settings modal never is), so the intent belongs once per surface, not on every call and not
+  in the schema (the same service legitimately serves both modes on different screens).
+- **Vocabulary:** optimistic and awaitable are not opposites — every mutation's promise settles
+  on server ack regardless. The flag only decides when the UI may show the change:
+  "show it now, roll back on failure" vs "show it only once it's real". Docs use these terms.
+- **Deferred: temp-id swap for optimistic creates.** Optimistic creates keep requiring a
+  client-supplied id for now. Revisit after the rest of this list lands.
+
+### Prepare / prefetch
+
+- **New verb: `figbird.prefetch(def, args, { staleTime = 30_000 })`.** Idempotent and
+  fire-and-forget: a no-op when the query was fetched within `staleTime` or is already being
+  prefetched; otherwise materializes the query, holds an internal pin, and auto-releases it
+  after `staleTime` (data stays cached; only the zero-subscriber lease ends). Replaces the
+  app-side dedupe-set + pin-LRU that hover prefetching otherwise forces every consumer to build.
+  Requires tracking `lastFetchedAt` per query — the seed of a general staleness story.
+- **`prepare()` is unchanged**: the router-grade primitive with an explicit lease
+  (`promise` + `release()`). Two use cases, two contracts, two names.
+- **`priority` leaves `PreparedQuery`.** It is router vocabulary figbird never reads; route
+  prepare functions attach it themselves (`{ ...figbird.prepare(...), priority: 'defer' }`).
+
+### Query definitions
+
+- **`defineQuery`'s validator becomes optional.** `defineQuery(name, build)` types args from the
+  build function's parameter; `defineQuery(name, argsSchema, build)` keeps Standard Schema
+  validation for args that arrive from URLs or other untrusted sources. A mandatory validator
+  only taught consumers to write `passthrough()` stubs — validation-shaped noise, worse than none.
+
+### Hook surface
+
+- **`useQuery(builder, { suspense: false })`** returns the tagged union
+  (`{ status, data, error, isFetching, refetch }`) and never suspends or throws — one hook, one
+  mental model, overloaded on the option literal. `useRelationalQuery` is `@deprecated` on the
+  branch and deleted before release.
+- **Legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`, `useFeathers`) stay in place**
+  with `@deprecated` JSDoc and docs restructured around the current generation. No compat entry
+  point, no import churn.
+
+### Instance and context
+
+- **Typed hooks resolve their instance as: context if a `FigbirdProvider` is present, else the
+  instance bound by `createHooks`.** The provider becomes optional for singleton SPAs; SSR and
+  tests keep provider injection. A dev-mode error fires when a provider is present and holds a
+  different instance than the bound one — the previously-silent divergence made loud.
+- **`createHooks` also returns `q`** (the builder proxy), so call sites read
+  `useQuery(q.issues.where(...))` with a single import.
+
+### Introspection
+
+- **`figbird.explain(builderOrDef)`** — static per-node classification report:
+  `{ path, service, class, reasons, realtime }` per query node, with reasons as structured codes
+  (`{ code: 'window-filter', detail: '$limit' }`), so devtools render them and tests assert them.
+  Answers "why did adding `.limit(30)` change realtime behavior" and kills the redundant
+  `.server()` superstition (`$regex` already classifies server-authoritative).
+- **`figbird.inspect()`** — stable, deliberately small read-only snapshot of active queries
+  (`queryId, serviceName, method, query, classification, status, isFetching, itemCount,
+  subscriberCount`). The contract devtools build on, so internals stay free to change. No
+  subscription API for now (poll or piggyback `subscribeToStateChanges`).
+
+### Typing calibration
+
+- **`.where()` admits everything legal and autocompletes everything known**: known item fields
+  are typed (values + operators), and an open index signature admits dotted relational paths,
+  `$regex`, and dynamic filter objects without casts. `.orderBy()` autocompletes
+  `keyof TItem` via the `(string & {})` pattern without rejecting computed fields.
+- **Honest `skip` typing**: `useQuery(q, { skip })` returns `data: T | undefined`; the
+  "typed as T, promise not to read it" lie is removed.
+- **Relationship shorthand**: `sourceField`/`destField` accept `string | string[]`, `destField`
+  defaults to `['id']`. Full form remains for compound keys.
+
+### Events and UX timing
+
+- **`figbird.events` emission is deferred to a microtask** (batched, order-preserving,
+  timestamps captured at emit time). Subscribing from React components no longer requires the
+  `queueMicrotask` workaround; matches the store's own deferred listener notifications.
+- **The no-flash kit ships in main exports** alongside `useDelayedFlag`:
+  `useDebouncedTransition(value, delay)` (debounced value committed inside a transition — the
+  search-input pattern) and `<DelayedFallback delay={250}>` (Suspense fallback that only appears
+  when loading is actually slow). Plus a "no-flash checklist" docs page covering the three
+  failure modes (param-change flash → `startTransition`; typing storm → `useDebouncedTransition`;
+  fast-load flicker → `DelayedFallback`), linked from `useQuery`'s JSDoc.
+
+### Considered and rejected (for the record)
+
+- Softening re-suspend-on-param-change (`keepPreviousData`): rejected — reintroduces the exact
+  query-identity lie the Exact Query Reads section exists to prevent. Transitions + the no-flash
+  kit are the supported answer.
+- Schema-level optimistic config: rejected — encodes surface-level intent at the wrong altitude.
+- Per-invocation mutation state in `useMutation`: rejected — multi-action screens need per-call
+  state, which is caller-side by nature (five lines); documented as a pattern instead.
+- `.one()` vs `.get()` unification: rejected — null-on-miss vs error-on-miss is a real semantic
+  pair; addressed with documentation.
+- Fully-typed dotted filter paths (template-literal types over the relation graph): parked, not
+  rejected — the typing calibration above removes the pain; this would add delight at real cost.
+
+### Sequencing
+
+1. **Calibration** (small, independent): optional validator; deferred emits; typing batch
+   (where/orderBy, skip, relationship shorthand); `priority` removal; hook-level optimistic;
+   demo cleanups (drop redundant `.server()`).
+2. **Lifecycle**: `prefetch()` + `lastFetchedAt`; `{ suspense: false }` fold-in +
+   `useRelationalQuery` deprecation; no-flash kit + docs page.
+3. **Coherence**: instance resolution + exported `q`; `explain()`/`inspect()` + devtools
+   de-cast; legacy deprecation markers + docs restructure.
+
+Each step lands with tests and a matching demo update — the demo remains the living proof that
+the API needs no workarounds.
