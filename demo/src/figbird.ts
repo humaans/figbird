@@ -23,6 +23,7 @@ export interface Team {
 export interface Issue {
   id: number
   title: string
+  description: string
   status: 'open' | 'closed'
   creatorId: number
   assigneeId: number
@@ -40,6 +41,8 @@ export interface Comment {
   id: number
   issueId: number
   authorId: number
+  /** Single-level threading: replies point at a root comment, never at a reply. */
+  parentId: number | null
   body: string
 }
 export interface Label {
@@ -84,6 +87,7 @@ export const schema = createSchema({
       }),
     },
     teams: {
+      members: many({ sourceField: ['id'], destService: 'users', destField: ['teamId'] }),
       // Used with a per-team window (`.orderBy().limit()`), which fans out one
       // query per team — fine at 4 teams, and exactly the shape the fan-out
       // warning + embed pattern exist for at larger scales.

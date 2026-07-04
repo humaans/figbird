@@ -8,7 +8,6 @@
 
 import type { RoutePrepareContext } from 'react-space-router'
 import { figbird } from '../../figbird'
-import { COMMENTS_PAGE_SIZE } from './constants'
 import { issueCommentsQuery, issueDetailQuery } from './queries'
 
 export function prepareIssueDetail({ params }: RoutePrepareContext) {
@@ -16,6 +15,6 @@ export function prepareIssueDetail({ params }: RoutePrepareContext) {
   if (!Number.isFinite(id)) return []
   return [
     figbird.prepare(issueDetailQuery, { id }, { priority: 'route' }),
-    figbird.prepare(issueCommentsQuery, { id, limit: COMMENTS_PAGE_SIZE }, { priority: 'defer' }),
+    figbird.prepare(issueCommentsQuery, { id }, { priority: 'defer' }),
   ]
 }

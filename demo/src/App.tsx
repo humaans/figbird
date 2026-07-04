@@ -9,6 +9,7 @@ import {
   useTransition,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, Router, Routes, useNavigate, useRoute } from 'react-space-router'
 import { classifyQueryNode, useDelayedFlag, type FigbirdEvent } from 'figbird'
 import {
@@ -63,25 +64,52 @@ function useDebouncedTransition<T>(value: T, delay = 250): T {
 /**
  * Little ⓘ popover explaining what figbird is doing behind a piece of UI.
  * The didactic layer of the demo, without the tabs-full-of-prose.
+ * Rendered into a portal with fixed positioning so panes' overflow can't clip it.
  */
 function Explain({ label, children }: { label: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null)
+  const open = pos !== null
+
+  const toggle = () => {
+    if (open) {
+      setPos(null)
+      return
+    }
+    const rect = btnRef.current!.getBoundingClientRect()
+    const width = 300
+    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 12))
+    // Flip above the button when it sits near the bottom of the viewport.
+    if (rect.bottom > window.innerHeight - 260) {
+      setPos({ bottom: window.innerHeight - rect.top + 8, left })
+    } else {
+      setPos({ top: rect.bottom + 8, left })
+    }
+  }
+
   return (
     <span className='explain'>
       <button
+        ref={btnRef}
         type='button'
         className={`explain-btn${open ? ' open' : ''}`}
-        onClick={() => setOpen(o => !o)}
+        onClick={toggle}
         aria-label={`How this works: ${label}`}
       >
         i
       </button>
-      {open ? (
-        <span className='explain-pop'>
-          <span className='explain-title'>{label}</span>
-          {children}
-        </span>
-      ) : null}
+      {open
+        ? createPortal(
+            <>
+              <div className='explain-backdrop' onClick={() => setPos(null)} />
+              <div className='explain-pop' style={pos}>
+                <span className='explain-title'>{label}</span>
+                {children}
+              </div>
+            </>,
+            document.body,
+          )
+        : null}
     </span>
   )
 }
@@ -332,31 +360,50 @@ function ListSkeleton() {
   )
 }
 
-// ----- Right sidebar -----
+// ----- Teams page -----
 
-function TeamsPanel() {
+function TeamsPage() {
   const { data: teams, isFetching } = useQuery(
-    figbird.q.teams.related('recentIssues', issue => issue.orderBy('updatedAt', 'desc').limit(3)),
+    figbird.q.teams
+      .related('members')
+      .related('recentIssues', issue => issue.orderBy('updatedAt', 'desc').limit(5)),
   )
 
   return (
-    <section className='aside-section'>
-      <header className='section-head'>
-        <span className='eyebrow'>Teams</span>
-        <StatusDot active={isFetching} />
-        <Explain label='Windowed relations'>
-          "3 most recent issues per team" is{' '}
-          <code>.related('recentIssues', i =&gt; i.orderBy(…).limit(3))</code>. A per-parent window
-          can't be one flat query, so figbird runs one small query per team — fine at 4 teams; past
-          ~10 it warns and points at the server-maintained-id-list (embed) pattern instead.
-        </Explain>
+    <main className='detail teams-page'>
+      <header className='detail-head'>
+        <div className='detail-meta-line'>
+          <span className='eyebrow'>Teams</span>
+          <StatusDot active={isFetching} />
+          <Explain label='Windowed relations'>
+            Each card is one relational query: <code>members</code> resolves with a single fan-in
+            IN(...) fetch, while "5 most recent issues per team" is{' '}
+            <code>.related('recentIssues', i =&gt; i.orderBy(…).limit(5))</code> — a per-parent
+            window that runs one small query per team. Fine at 4 teams; past ~10 figbird warns and
+            points at the server-maintained-id-list (embed) pattern instead.
+          </Explain>
+        </div>
+        <h1 className='detail-title'>Teams</h1>
+        <div className='detail-meta'>
+          Live team rosters and their most recently touched issues — the teammate simulator keeps
+          these moving.
+        </div>
       </header>
-      <ul className='team-list'>
+      <div className='team-grid'>
         {teams.map(team => (
-          <li key={team.id} className='team-block'>
-            <div className='team-name'>
+          <section key={team.id} className='team-card'>
+            <header className='team-name'>
               <span className='team-accent' style={{ background: team.accent }} />
               {team.name}
+              <span className='count'>{team.members.length} members</span>
+            </header>
+            <div className='team-members'>
+              {team.members.map(member => (
+                <span key={member.id} className='member'>
+                  <span className='member-avatar'>{member.avatar}</span>
+                  {member.name}
+                </span>
+              ))}
             </div>
             <ul className='team-issues'>
               {team.recentIssues.map(issue => (
@@ -364,16 +411,19 @@ function TeamsPanel() {
                   <Link href={`/issues/${issue.id}`} className='team-issue'>
                     <span className={`status-dot ${issue.status}`} />
                     <span className='team-issue-title'>{issue.title}</span>
+                    <span className='dim team-issue-id'>#{issue.id}</span>
                   </Link>
                 </li>
               ))}
             </ul>
-          </li>
+          </section>
         ))}
-      </ul>
-    </section>
+      </div>
+    </main>
   )
 }
+
+// ----- Right sidebar -----
 
 interface ActivityEntry {
   key: string
@@ -465,61 +515,127 @@ function ActivityPanel() {
   )
 }
 
-function ConsolePanel() {
-  const selectedId = useSelectedIssueId()
-  const navigate = useNavigate()
-  const issueMutation = useMutation('issues')
+// ----- New issue modal (Linear-style compact) -----
 
-  const createIssue = async () => {
+function NewIssueModal({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return createPortal(
+    <div className='modal-backdrop' onClick={onClose}>
+      <div className='modal' onClick={e => e.stopPropagation()}>
+        <Suspense fallback={<div className='modal-loading'>Loading…</div>}>
+          <NewIssueForm onClose={onClose} />
+        </Suspense>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function NewIssueForm({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate()
+  const { data: teams } = useQuery(figbird.q.teams)
+  const { data: users } = useQuery(figbird.q.users)
+  const issueMutation = useMutation('issues')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [teamId, setTeamId] = useState(teams[0]?.id ?? 1)
+  const [assigneeId, setAssigneeId] = useState(users[0]?.id ?? 1)
+
+  const submit = async () => {
+    const trimmed = title.trim()
+    if (trimmed.length === 0) return
     const id = Date.now()
     const create = issueMutation.create(
       {
         id,
-        title: `Drafted from the console (${String(id).slice(-4)})`,
+        title: trimmed,
+        description: description.trim(),
         status: 'open',
         creatorId: 1,
-        assigneeId: 1 + (id % 8),
-        teamId: 1 + (id % 4),
+        assigneeId,
+        teamId,
         priorityScore: 50,
         updatedAt: new Date().toISOString(),
         commentIds: [],
       },
       { optimistic: true },
     )
-    // The optimistic item is already in the cache — navigate immediately.
+    // The optimistic item is already in the cache — close and navigate immediately.
+    onClose()
     navigate(`/issues/${id}`)
     await create
   }
 
-  const removeSelected = async () => {
-    if (selectedId == null) return
-    await issueMutation.remove(selectedId, { optimistic: true })
-    navigate('/')
-  }
-
   return (
-    <section className='aside-section'>
-      <header className='section-head'>
-        <span className='eyebrow'>Console</span>
-        <StatusDot active={issueMutation.status === 'loading'} />
-        <Explain label='Optimistic mutations'>
-          Create and remove pass <code>{'{ optimistic: true }'}</code>: the cache updates before the
-          server responds, every query showing the item updates in the same frame, and a failure
-          rolls the whole thing back. Watch the mutate → realtime sequence in dev tools.
+    <form
+      className='modal-form'
+      onSubmit={e => {
+        e.preventDefault()
+        void submit()
+      }}
+    >
+      <header className='modal-head'>
+        <span className='eyebrow'>New issue</span>
+        <Explain label='Optimistic create'>
+          Create passes <code>{'{ optimistic: true }'}</code> with a client-generated id: the issue
+          is in the cache — list, activity, detail — before the server responds, and a failure rolls
+          it back everywhere at once. Watch the mutate → realtime sequence in dev tools.
         </Explain>
-      </header>
-      <div className='aside-actions stacked'>
-        <button className='link' onClick={createIssue}>
-          + New issue
+        <span className='spacer' />
+        <button type='button' className='link' onClick={onClose}>
+          Close
         </button>
-        <button className='link danger' onClick={removeSelected} disabled={selectedId == null}>
-          Remove selected
+      </header>
+      <input
+        autoFocus
+        className='modal-title-input'
+        placeholder='Issue title'
+        value={title}
+        onChange={e => setTitle(e.target.value)}
+      />
+      <textarea
+        className='modal-desc-input'
+        rows={4}
+        placeholder='Add a description…'
+        value={description}
+        onChange={e => setDescription(e.target.value)}
+      />
+      <div className='modal-row'>
+        <select
+          className='modal-select'
+          value={teamId}
+          onChange={e => setTeamId(Number(e.target.value))}
+        >
+          {teams.map(team => (
+            <option key={team.id} value={team.id}>
+              {team.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className='modal-select'
+          value={assigneeId}
+          onChange={e => setAssigneeId(Number(e.target.value))}
+        >
+          {users.map(user => (
+            <option key={user.id} value={user.id}>
+              {user.avatar} {user.name}
+            </option>
+          ))}
+        </select>
+        <span className='spacer' />
+        <button type='submit' className='btn-primary' disabled={title.trim().length === 0}>
+          Create issue
         </button>
       </div>
-      <p className='note'>
-        Tip: open this page in two windows side by side — every change here appears there, live.
-      </p>
-    </section>
+    </form>
   )
 }
 
@@ -892,44 +1008,65 @@ function WorkspaceSkeleton() {
   )
 }
 
+function NavTab({ href, label }: { href: string; label: string }) {
+  const route = useRoute()
+  const path = route?.pathname ?? '/'
+  const isActive =
+    href === '/' ? path === '/' || path.startsWith('/issues/') : path.startsWith(href)
+  return (
+    <Link href={href} className={`nav-link${isActive ? ' active' : ''}`}>
+      {label}
+    </Link>
+  )
+}
+
 function Workspace({ children }: { children?: ReactNode }) {
   const route = useRoute()
   const path = route?.pathname ?? '/'
+  const isFull = path.startsWith('/teams')
   // Keyed Suspense boundary for issue detail: each id starts cold so the destination
   // shows its own skeleton instead of leaking the previous issue's data while the
   // new one loads.
   const issueId = path.startsWith('/issues/') ? (route?.params?.id ?? null) : null
+  const [showNewIssue, setShowNewIssue] = useState(false)
 
   return (
     <>
       <nav className='nav'>
         <span className='brand'>figbird</span>
-        <span className='tagline'>a realtime issue tracker — every panel is a live query</span>
+        <NavTab href='/' label='Issues' />
+        <NavTab href='/teams' label='Teams' />
+        <button className='link new-issue-btn' onClick={() => setShowNewIssue(true)}>
+          + New issue
+        </button>
         <span className='spacer' />
         <span className='nav-hint'>tip: open two windows side by side</span>
       </nav>
-      <div className='grid grid-fade'>
-        <IssueListPane />
-        <Suspense
-          key={issueId ?? 'empty'}
-          fallback={
-            <main className='detail'>
-              <div className='skeleton-detail'>
-                <div className='skeleton-bar w-30' />
-                <div className='skeleton-bar w-80 lg' />
-                <div className='skeleton-bar w-50' />
-              </div>
-            </main>
-          }
-        >
-          {children}
-        </Suspense>
-        <aside className='aside'>
-          <TeamsPanel />
-          <ConsolePanel />
-          <ActivityPanel />
-        </aside>
-      </div>
+      {isFull ? (
+        <div className='full grid-fade'>{children}</div>
+      ) : (
+        <div className='grid grid-fade'>
+          <IssueListPane />
+          <Suspense
+            key={issueId ?? 'empty'}
+            fallback={
+              <main className='detail'>
+                <div className='skeleton-detail'>
+                  <div className='skeleton-bar w-30' />
+                  <div className='skeleton-bar w-80 lg' />
+                  <div className='skeleton-bar w-50' />
+                </div>
+              </main>
+            }
+          >
+            {children}
+          </Suspense>
+          <aside className='aside'>
+            <ActivityPanel />
+          </aside>
+        </div>
+      )}
+      {showNewIssue ? <NewIssueModal onClose={() => setShowNewIssue(false)} /> : null}
     </>
   )
 }
@@ -945,6 +1082,7 @@ const routes = [
         prepare: prepareIssueDetail,
         navigation: { commit: 'immediate' as const },
       },
+      { path: '/teams', component: TeamsPage },
     ],
   },
 ]
