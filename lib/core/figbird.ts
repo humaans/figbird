@@ -8,6 +8,7 @@ import {
 } from './queryBuilder.js'
 import {
   isQueryDefinition,
+  splitDefinitionRest,
   type ArgsAndOptions,
   type PreparedQuery,
   type QueryDefinition,
@@ -60,10 +61,12 @@ export {
   isQueryDefinition,
   QUERY_DEFINITION_BRAND,
   QueryArgsError,
+  splitDefinitionRest,
   validateQueryArgs,
 } from './queryDefinition.js'
 export type {
   ArgsAndOptions,
+  ArgsAndRequiredOptions,
   PreparedQuery,
   QueryDefinition,
   StandardSchemaV1,
@@ -305,9 +308,14 @@ export class Figbird<
   prepare(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     query: QueryDefinition<unknown, QueryBuilder<S, any, any, any, any, any>>,
-    args?: unknown,
-    options: { staleTime?: number } = {},
+    argsOrOptions?: unknown,
+    maybeOptions?: { staleTime?: number },
   ): PreparedQuery {
+    const { args, options } = splitDefinitionRest<{ staleTime?: number }>(
+      query,
+      argsOrOptions,
+      maybeOptions,
+    )
     const validatedArgs = query.validate(args)
     const builder = query.build(validatedArgs)
     const ref = this.relationalQuery(builder)
@@ -315,7 +323,7 @@ export class Figbird<
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
-    const unsub = ref.subscribe(() => {}, options)
+    const unsub = ref.subscribe(() => {}, options ?? {})
     return {
       key: ref.hash(),
       promise: ref.suspensePromise(),
@@ -355,10 +363,15 @@ export class Figbird<
   prefetch(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     query: QueryDefinition<unknown, QueryBuilder<S, any, any, any, any, any>>,
-    args?: unknown,
-    options: { staleTime?: number } = {},
+    argsOrOptions?: unknown,
+    maybeOptions?: { staleTime?: number },
   ): void {
-    const staleTime = options.staleTime ?? 30_000
+    const { args, options } = splitDefinitionRest<{ staleTime?: number }>(
+      query,
+      argsOrOptions,
+      maybeOptions,
+    )
+    const staleTime = options?.staleTime ?? 30_000
     const validatedArgs = query.validate(args)
     const builder = query.build(validatedArgs)
     const ref = this.relationalQuery(builder)

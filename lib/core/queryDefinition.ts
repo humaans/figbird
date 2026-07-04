@@ -1,7 +1,7 @@
 /**
- * Named query definitions — args-keyed query factories produced by
- * `figbird.defineQuery(name, argsSchema, build)` and consumed by `figbird.prepare`
- * and `useQuery(definition, args)`.
+ * Query definitions — args-keyed query factories produced by `defineQuery(build)`
+ * (optionally with a name and/or a Standard Schema validator) and consumed by
+ * `prepare`, `prefetch`, and `useQuery`.
  */
 
 /**
@@ -12,8 +12,8 @@
 export const QUERY_DEFINITION_BRAND: unique symbol = Symbol.for('figbird.queryDefinition')
 
 /**
- * A named, args-keyed query factory. Produced by `figbird.defineQuery(name, argsSchema, build)`.
- * Definitions are inert — they hold no cache state. The cache key is derived from the
+ * An args-keyed query factory produced by `defineQuery`. Definitions are inert — they
+ * hold no cache state and no instance dependency. The cache key is derived from the
  * underlying builder's AST hash, which means `prepare(def, args)` and `useQuery(def, args)`
  * collapse to the same `RelationalQueryRef`.
  *
@@ -31,14 +31,40 @@ export interface QueryDefinition<Args, B> {
 }
 
 /**
- * Trailing parameters for definition-consuming APIs (`prepare`, `prefetch`, the
- * suspense `useQuery`): `args` is required when the definition's build function
- * declares them, and omittable entirely for zero-arg definitions
- * (`QueryDefinition<void, B>`).
+ * Trailing parameters for definition-consuming APIs (`prepare`, `prefetch`,
+ * `useQuery`): `args` is required when the definition's build function declares them;
+ * zero-arg definitions (`QueryDefinition<void, B>`) skip the args slot entirely, so
+ * options come second-positionally — `useQuery(def, { suspense: false })`, no middle
+ * `undefined`.
  */
 export type ArgsAndOptions<Args, Options> = [Args] extends [void]
-  ? [args?: Args, options?: Options]
+  ? [options?: Options]
   : [args: Args, options?: Options]
+
+/**
+ * Like `ArgsAndOptions`, but the options are required — used by overloads that
+ * discriminate on an option literal (e.g. `{ suspense: false }`).
+ */
+export type ArgsAndRequiredOptions<Args, Options> = [Args] extends [void]
+  ? [options: Options]
+  : [args: Args, options: Options]
+
+/**
+ * Runtime companion to `ArgsAndOptions`: split a definition call's trailing values
+ * into args and options. A definition whose build function declares no parameters
+ * takes options in the first slot; the legacy `(undefined, options)` spelling is
+ * tolerated. @internal
+ */
+export function splitDefinitionRest<Options>(
+  definition: QueryDefinition<unknown, unknown>,
+  first: unknown,
+  second: unknown,
+): { args: unknown; options: Options | undefined } {
+  if (definition.build.length === 0) {
+    return { args: undefined, options: (first ?? second) as Options | undefined }
+  }
+  return { args: first, options: second as Options | undefined }
+}
 
 /**
  * Type guard for `QueryDefinition`. Useful in router prepare resolvers and overloaded

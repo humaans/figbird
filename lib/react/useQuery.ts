@@ -23,7 +23,9 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { QueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
   isQueryDefinition,
+  splitDefinitionRest,
   type ArgsAndOptions,
+  type ArgsAndRequiredOptions,
   type QueryDefinition,
   type RelationalPaginationState,
   type RelationalQueryState,
@@ -231,15 +233,14 @@ export function useQuery<
   query: B,
   options: UseQueryOptions & { suspense: false },
 ): RelationalQueryResult<QueryBuilderResult<B>>
-// Overload: definition + args, non-suspense
+// Overload: definition, non-suspense — args omittable when the definition takes none
 export function useQuery<
   Args,
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
 >(
   definition: QueryDefinition<Args, B>,
-  args: Args,
-  options: UseQueryOptions & { suspense: false },
+  ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
 ): RelationalQueryResult<QueryBuilderResult<B>>
 // Overload: builder
 export function useQuery<
@@ -281,11 +282,15 @@ export function useQueryImpl(
 ): unknown {
   if (isQueryDefinition(queryOrDefinition)) {
     const definition = queryOrDefinition
-    const rawArgs = argsOrOptions
-    const options = maybeOptions ?? {}
-    const validatedArgs = definition.validate(rawArgs)
+    // Zero-arg definitions take options in the args slot (see ArgsAndOptions).
+    const { args, options } = splitDefinitionRest<UseQueryOptions>(
+      definition,
+      argsOrOptions,
+      maybeOptions,
+    )
+    const validatedArgs = definition.validate(args)
     const builder = definition.build(validatedArgs) as AnyQueryBuilder
-    return useQueryForBuilder(figbird, builder, options)
+    return useQueryForBuilder(figbird, builder, options ?? {})
   }
   const builder = queryOrDefinition as AnyQueryBuilder
   const options = (argsOrOptions as UseQueryOptions | undefined) ?? {}

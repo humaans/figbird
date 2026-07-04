@@ -631,7 +631,7 @@ Properties:
   entry — no need to thread the builder instance through.
 - **Args validation, when args are untrusted.** Args are typed from the build function; when they
   arrive from URLs or storage, an optional Standard Schema validator
-  (`defineQuery(name, argsSchema, build)`) runs at every call site and fails loudly rather than
+  (`defineQuery(argsSchema, build)`) runs at every call site and fails loudly rather than
   producing silent cache misses (`{ id: "42" }` vs `{ id: 42 }`). Args from typed code need no
   validator — a mandatory one only teaches consumers to write passthrough stubs.
 - **Earlier read, same entry.** `prepare` starts the same query that `useQuery` would read later.

@@ -403,7 +403,7 @@ export class QueryBuilder<
    *
    * Typically paired with preparation at the app shell:
    * ```ts
-   * prepare(defineQuery('allLocations', () => q.locations.all()), undefined)
+   * prepare(defineQuery(() => q.locations.all()))
    * ```
    */
   all(

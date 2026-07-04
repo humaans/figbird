@@ -2961,6 +2961,45 @@ test('defineQuery: typed-args form (no validator, no name) builds and prepares',
   b.release()
 })
 
+test('defineQuery: zero-arg definition takes options in the args slot', async t => {
+  const { App, figbird } = createApp()
+  const { render, unmount, flush, $ } = dom()
+
+  const allIssues = defineQuery(() => figbird.q.issues)
+
+  // prepare(def, options) — no middle undefined.
+  const prepared = figbird.prepare(allIssues, { staleTime: 60_000 })
+  await prepared.promise
+
+  // prefetch(def, options) — same shape.
+  figbird.prefetch(allIssues, { staleTime: 60_000 })
+
+  // useQuery(def, options) — options land straight after the definition, both modes.
+  function NonSuspense() {
+    const result = useQuery(allIssues, { suspense: false })
+    return <div className='count'>{result.status === 'success' ? result.data.length : '…'}</div>
+  }
+  render(
+    <App>
+      <NonSuspense />
+    </App>,
+  )
+  await flush()
+  t.is($('.count')!.innerHTML, '3')
+
+  // The old (undefined, options) spelling is still tolerated at runtime.
+  const legacy = (figbird.prepare as (...a: unknown[]) => { key: string; release: () => void })(
+    allIssues,
+    undefined,
+    { staleTime: 60_000 },
+  )
+  t.is(legacy.key, prepared.key, 'legacy (undefined, options) hits the same cache entry')
+  legacy.release()
+
+  prepared.release()
+  unmount()
+})
+
 // ============================================================================
 // embed() — relation through an embedded list-of-ids field
 // ============================================================================
