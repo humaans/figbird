@@ -510,21 +510,58 @@ Because all three paths resolve to the same cache entry (the definition + args h
 
 # API Reference
 
-## Schema helpers
-
-`createSchema`, `service`, and the relationship helpers `one` / `many` / `embed`:
+## createSchema
 
 ```ts
-const schema = createSchema({
-  services: { notes: service<{ item: Note }>() },
-  relationships: ({ one, many, embed }) => ({ ... }),
-})
+const schema = createSchema({ services, relationships? })
 ```
 
-- `service<Def>(options?)` — declares a service; `options.path` maps a schema key to a transport path
-- `one({ sourceField, destService, destField? })` — single related item (`destField` defaults to `'id'`; fields accept `string | string[]`)
-- `many(hop)` — one-to-many; `many(parentToJunction, junctionToDest)` — transparent two-hop many-to-many
-- `embed({ sourceField, destService })` — parent carries a server-maintained list of dest ids; resolved as one batched fetch preserving order
+Builds the typed schema. `services` keys become literal service names that every API narrows
+on; the optional `relationships` factory receives `{ one, many, embed }` helpers typed against
+your services, so `destService` autocompletes.
+
+## service
+
+```ts
+service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>(options?)
+```
+
+Declares one service's types. Only `item` is required — omitted payloads default to
+`Partial<item>` for create/patch and `item` for update. `options.path` maps an ergonomic
+schema key to the transport-level service path. `methods` types custom Feathers methods.
+
+## one
+
+```ts
+creator: one({ sourceField: 'creatorId', destService: 'users' })
+```
+
+Single related item — assembles as `T | null`. `destField` defaults to `'id'`; fields accept
+`string | string[]` for compound keys.
+
+## many
+
+```ts
+comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' })
+
+// two-hop (junction table) — traversed transparently, consumers get Label[] directly
+labels: many(
+  { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
+  { sourceField: 'labelId', destService: 'labels' },
+)
+```
+
+Array relation, single-hop or two-hop through a junction service.
+
+## embed
+
+```ts
+spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' })
+```
+
+The parent carries a server-maintained list of destination ids; figbird fans every parent's
+list into one batched `IN (...)` fetch and assembles per-parent slices preserving the server's
+order.
 
 ## Figbird
 
@@ -537,16 +574,55 @@ const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 | Member | Description |
 | --- | --- |
 | `q` | The builder proxy — `q.issues.where(...)`. Requires a schema. |
-| `defineQuery(name, build)` / `defineQuery(name, argsSchema, build)` | Named, args-keyed query factory. |
-| `prepare(definition, args)` | Start a query, get `{ key, promise, release }` — the router-grade lease. |
-| `prefetch(definition, args, { staleTime? })` | Idempotent speculative warming; self-releasing. |
-| `explain(builderOrDefinition, args?)` | Static per-node classification report with structured reasons. |
-| `inspect()` | Read-only snapshot of live queries: `{ queryId, serviceName, method, query, classification, status, isFetching, itemCount, fetchedAt, subscriberCount }[]`. The stable surface to build devtools on. |
-| `events` | Observability channel — see [Observability](#observability). |
+| `defineQuery(...)` | Named, args-keyed query factory — see [defineQuery](#definequery). |
+| `prepare(definition, args)` | Awaitable query lease for routers — see [prepare](#prepare). |
+| `prefetch(definition, args, opts?)` | Idempotent speculative warming — see [prefetch](#prefetch). |
+| `explain(...)` | Static classification report — see [figbird.explain](#figbirdexplain). |
+| `inspect()` | Live-query snapshot — see [figbird.inspect](#figbirdinspect). |
+| `events` | Observability channel — see [figbird.events](#figbirdevents). |
 | `query(desc, config?)` | Low-level descriptor query (see [Using outside React](#using-outside-react)). |
 | `relationalQuery(builder)` | Low-level relational query ref for non-React use. |
 | `mutate(desc)` | Low-level mutation. |
 | `getState()` / `subscribeToStateChanges(fn)` | Raw internal state — debugging only; prefer `inspect()`. |
+
+## figbird.explain
+
+```ts
+figbird.explain(builderOrDefinition, args?)
+// → { nodes: [{ path, service, kind, class, reasons, realtime, via? }] }
+```
+
+Static analysis of a query: one entry per node (root + each relation, dotted paths for
+nesting) with its classification, the structured reasons that produced it
+(`{ code: 'server-only-operator', detail: '$regex' }`), and the resulting realtime mode.
+No fetching happens — callable anywhere, assertable in tests. See
+[Realtime](#realtime) for a worked example.
+
+## figbird.inspect
+
+```ts
+figbird.inspect()
+// → [{ queryId, serviceName, method, query, classification,
+//      status, isFetching, itemCount, fetchedAt, subscriberCount }]
+```
+
+Read-only snapshot of every query currently in the store — the stable projection to build
+devtools on (internal store shapes stay free to change).
+
+## figbird.events
+
+Emits lifecycle facts — fetches, realtime events, mutations (including optimistic rollbacks).
+Delivery is batched on a microtask and never happens mid-render, so subscribing from React
+components is safe:
+
+```ts
+const unsub = figbird.events.subscribe(event => {
+  // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
+  //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+})
+```
+
+Events carry ids, durations, and item counts — lightweight enough to subscribe in production.
 
 ## createHooks
 
@@ -556,9 +632,14 @@ Binds a Figbird instance to typed React hooks:
 export const { useQuery, useMutation, q } = createHooks(figbird)
 ```
 
-Returns the current generation — `useQuery`, `useMutation`, and `q` (the builder proxy) — plus the deprecated legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`, `useFeathers`) for older codebases.
+Returns the current generation — `useQuery`, `useMutation`, and `q` (the builder proxy) —
+plus the deprecated legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`,
+`useFeathers`) for older codebases.
 
-Instance resolution: hooks use the bound instance directly, so no provider is required. If a `FigbirdProvider` is present in the tree, **it wins** — that's the injection point for per-request SSR instances and tests. A dev-mode error fires if a provider holds a *different* instance than the bound one.
+Instance resolution: hooks use the bound instance directly, so no provider is required. If a
+`FigbirdProvider` is present in the tree, **it wins** — that's the injection point for
+per-request SSR instances and tests. A dev-mode error fires if a provider holds a *different*
+instance than the bound one.
 
 ## useQuery
 
@@ -582,7 +663,9 @@ const { data } = useQuery(builder, { skip: id == null }) // data: T | undefined
 
 Options: `skip?: boolean`, `suspense?: boolean` (must be static per call site).
 
-Result fields (suspense form): `data` (guaranteed for the exact query passed), `error` (non-null when a refetch failed while data is showing — cold errors throw instead), `isFetching` (background fetch in flight on the current query), `refetch()`.
+Result fields (suspense form): `data` (guaranteed for the exact query passed), `error`
+(non-null when a refetch failed while data is showing — cold errors throw instead),
+`isFetching` (background fetch in flight on the current query), `refetch()`.
 
 ## useMutation
 
@@ -598,21 +681,42 @@ m.data    // last mutation result
 m.error   // last mutation error
 ```
 
-Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }` — overrides the hook default in both directions.
+Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }` — overrides the
+hook default in both directions.
 
-## No-flash kit
+## useDebouncedTransition
 
-| Export | Use |
-| --- | --- |
-| `useDebouncedTransition(value, delay?)` | Debounced value committed inside a transition — search inputs. |
-| `<DelayedFallback delay?>` | Suspense fallback that only appears when loading is actually slow. |
-| `useDelayedFlag(flag, delay?, minVisible?)` | Spinner flag that shows only if slow and doesn't yo-yo. |
+```ts
+const search = useDebouncedTransition(searchInput.trim(), 250)
+```
 
-See [the no-flash checklist](#no-flash-checklist).
+Debounced value committed inside a React transition — the search-input pattern. Debouncing
+alone still flashes when the value commits; a transition alone queries per keystroke. See
+[the no-flash checklist](#no-flash-checklist).
+
+## DelayedFallback
+
+```tsx
+<Suspense fallback={<DelayedFallback delay={250}><Skeleton /></DelayedFallback>}>
+```
+
+A Suspense fallback that only appears when loading is actually slow — fast loads never flash
+a skeleton.
+
+## useDelayedFlag
+
+```ts
+const showSpinner = useDelayedFlag(isFetching, 300, 800)
+```
+
+Spinner flag that turns on only after `delay` ms of sustained truth, and once shown stays for
+at least `minVisible` ms — no flashing, no yo-yo.
 
 ## FeathersAdapter
 
-Connects Figbird to a Feathers.js backend: data fetching, realtime subscriptions, reconnect handling (all active queries refetch on the socket's `reconnect`), and translation between Figbird's query format and Feathers conventions.
+Connects Figbird to a Feathers.js backend: data fetching, realtime subscriptions, reconnect
+handling (all active queries refetch on the socket's `reconnect`), and translation between
+Figbird's query format and Feathers conventions.
 
 ```ts
 const adapter = new FeathersAdapter(feathers, options)
@@ -629,46 +733,33 @@ Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, ski
 
 ## FigbirdProvider
 
-Optional. Hooks from `createHooks` work without any provider; use one to inject a different instance into a subtree — per-request instances in SSR, or a fresh instance per test:
+Optional. Hooks from `createHooks` work without any provider; use one to inject a different
+instance into a subtree — per-request instances in SSR, or a fresh instance per test:
 
 ```tsx
 <FigbirdProvider figbird={testFigbird}>{ui}</FigbirdProvider>
 ```
 
-`useFigbird()` reads the context instance (throws without a provider); `useFigbirdMaybe()` returns `undefined` instead.
+`useFigbird()` reads the context instance (throws without a provider); `useFigbirdMaybe()`
+returns `undefined` instead.
 
-## Observability
+## useFind
 
-`figbird.events` emits lifecycle facts — fetches, realtime events, mutations (including optimistic rollbacks). Delivery is batched on a microtask and never happens mid-render, so subscribing from React components is safe:
-
-```ts
-const unsub = figbird.events.subscribe(event => {
-  // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
-  //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
-})
-```
-
-Events carry ids, durations, and item counts — lightweight enough to subscribe in production. For inspecting the *current* state rather than the event stream, use `figbird.inspect()`; for understanding a query's classification, `figbird.explain()`.
-
-## Legacy hooks
-
-**Deprecated.** The descriptor-based generation predates the query builder. All of these remain fully functional but are deprecated — new code should use `useQuery`/`useMutation` with builders.
-
-### useFind
+**Deprecated** — prefer `useQuery(q.service.where(...))`.
 
 ```ts
 const { data, meta, status, isFetching, error, refetch } = useFind(serviceName, params)
 ```
 
-`params` combines Feathers params with Figbird options:
+`params` combines Feathers params with Figbird options: `skip`, `realtime` (`merge` |
+`refetch` | `disabled`, see [Realtime modes](#realtime-modes)), `fetchPolicy` (`swr` |
+`cache-first` | `network-only`, see [Fetch policies](#fetch-policies)), `allPages` (+
+`parallel`, `parallelLimit`), and `matcher` — a custom `(query) => (item) => boolean` for
+realtime merging.
 
-- `skip` — don't fetch
-- `realtime` — `merge` (default), `refetch`, or `disabled` (see [Realtime modes](#realtime-modes))
-- `fetchPolicy` — `swr` (default), `cache-first`, or `network-only` (see [Fetch policies](#fetch-policies))
-- `allPages` — fetch all pages; `parallel` + `parallelLimit` control concurrency
-- `matcher` — custom `(query) => (item) => boolean` for realtime merging
+## useGet
 
-### useGet
+**Deprecated** — prefer `useQuery(q.service.get(id))`.
 
 ```ts
 const { data, status, isFetching, error, refetch } = useGet(serviceName, id, params)
@@ -676,9 +767,20 @@ const { data, status, isFetching, error, refetch } = useGet(serviceName, id, par
 
 Same Figbird params as `useFind` (minus pagination). No `meta` by default.
 
-### useMethod / useService / useFeathers
+## useMethod
 
-Feathers-specific escape hatches: `useMethod(service, method)` calls a custom service method with local lifecycle state; `useService(name)` and `useFeathers()` return the typed raw service/client for operations outside Figbird's caching layer (custom methods declared in the schema are fully typed).
+**Deprecated.** Calls a custom Feathers service method with local lifecycle state:
+`const [call, { status, data, error }] = useMethod('notes', 'archive')`. Custom methods
+declared in the schema are fully typed.
+
+## useService
+
+**Deprecated.** Returns the typed raw Feathers service for operations outside Figbird's
+caching layer: `useService('notes').archive(ids)`.
+
+## useFeathers
+
+**Deprecated.** Returns the typed raw Feathers client: `useFeathers().service('notes')`.
 
 # Advanced
 
