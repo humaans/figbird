@@ -22,13 +22,13 @@ import { useFigbirdMaybe } from './react.js'
 import { useMethodImpl, type UseMethodResult } from './useMethod.js'
 import { useMutationImpl, type UseMutationOptions, type UseMutationResult } from './useMutation.js'
 import { useQueryByDescImpl, type QueryResult } from './useQueryByDesc.js'
-import { useQueryImpl, type FigbirdLike } from './useRelationalQuery.js'
+import { useQueryImpl, type FigbirdLike } from './useQuery.js'
 import type {
   RelationalQueryResult,
+  SkipAware,
   SuspenseQueryResult,
   UseQueryOptions,
-  UseRelationalQueryOptions,
-} from './useRelationalQuery.js'
+} from './useQuery.js'
 import type { QueryDefinition } from '../core/figbird.js'
 import type { QueryBuilderProxy, QueryBuilderResult } from '../core/query-builder.js'
 
@@ -103,24 +103,16 @@ type UseMethodForSchema<S extends Schema> = <
 
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
-type UseRelationalQueryForSchema<S extends Schema> = <
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<S, any, any, any, any, any>,
->(
-  query: B,
-  options?: UseRelationalQueryOptions,
-) => RelationalQueryResult<QueryBuilderResult<B>>
-
 interface UseQueryForSchema<S extends Schema> {
-  // Builder
+  // Builder, non-suspense — returns the tagged union, never throws
   <
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     B extends QueryBuilder<S, any, any, any, any, any>,
   >(
     query: B,
-    options?: UseQueryOptions,
-  ): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
-  // Definition + args
+    options: UseQueryOptions & { suspense: false },
+  ): RelationalQueryResult<QueryBuilderResult<B>>
+  // Definition + args, non-suspense
   <
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,8 +120,28 @@ interface UseQueryForSchema<S extends Schema> {
   >(
     definition: QueryDefinition<Args, B>,
     args: Args,
-    options?: UseQueryOptions,
-  ): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
+    options: UseQueryOptions & { suspense: false },
+  ): RelationalQueryResult<QueryBuilderResult<B>>
+  // Builder
+  <
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+    O extends UseQueryOptions = Record<string, never>,
+  >(
+    query: B,
+    options?: O,
+  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
+  // Definition + args
+  <
+    Args,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+    O extends UseQueryOptions = Record<string, never>,
+  >(
+    definition: QueryDefinition<Args, B>,
+    args: Args,
+    options?: O,
+  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
 }
 
 // Type helper to extract schema and adapter types from a Figbird instance
@@ -168,7 +180,6 @@ export function createHooks<F extends Figbird<any, any>>(
   useService: UseServiceForSchema<InferSchema<F>>
   useMethod: UseMethodForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
-  useRelationalQuery: UseRelationalQueryForSchema<InferSchema<F>>
   useQuery: UseQueryForSchema<InferSchema<F>>
   q: QueryBuilderProxy<InferSchema<F>>
 } {
@@ -314,14 +325,6 @@ export function createHooks<F extends Figbird<any, any>>(
     )
   }
 
-  /** @deprecated Use `useQuery(query, { suspense: false })` instead. */
-  function useTypedRelationalQuery(query: unknown, options: UseRelationalQueryOptions = {}) {
-    return useQueryImpl(useBoundFigbird() as unknown as FigbirdLike, query, {
-      ...options,
-      suspense: false,
-    })
-  }
-
   return {
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
@@ -330,7 +333,6 @@ export function createHooks<F extends Figbird<any, any>>(
     useMethod: useTypedMethod as UseMethodForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
     // The typed schema binding is enforced via QueryBuilder<S, T> on the call signatures.
-    useRelationalQuery: useTypedRelationalQuery as UseRelationalQueryForSchema<S>,
     useQuery: useTypedQuery as unknown as UseQueryForSchema<S>,
     // The builder proxy off the bound instance — `useQuery(q.issues.where(...))` with a
     // single import. Lazy so schemaless instances only throw if actually accessed.

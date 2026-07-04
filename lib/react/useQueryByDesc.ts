@@ -93,7 +93,7 @@ function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
   })
 
 */
-export function useQueryByDesc<
+function useQueryByDesc<
   T,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery = unknown,
