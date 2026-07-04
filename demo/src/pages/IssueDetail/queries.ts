@@ -6,14 +6,14 @@
  * with the same definitions and hits the same cache entries.
  */
 
-import { q, figbird } from '../../figbird'
+import { defineQuery, q } from '../../figbird'
 
 // Args here come from typed code (the route prepare coerces the URL param first),
 // so the plain typed-args form is enough. Pass a zod/valibot/arktype schema as the
 // middle argument when args arrive from untrusted sources.
 
 /** Route-priority: required to render the issue header/meta. */
-export const issueDetailQuery = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+export const issueDetailQuery = defineQuery('issueDetail', ({ id }: { id: number }) =>
   q.issues
     .where({ id })
     .one()
@@ -31,6 +31,6 @@ export const issueDetailQuery = figbird.defineQuery('issueDetail', ({ id }: { id
  * teammate's new comment or reply merges into the thread straight from the socket
  * event — no refetch. Ordering and threading are assembled in the component.
  */
-export const issueCommentsQuery = figbird.defineQuery('issueComments', ({ id }: { id: number }) =>
+export const issueCommentsQuery = defineQuery('issueComments', ({ id }: { id: number }) =>
   q.comments.where({ issueId: id }).related('author').related('reactions'),
 )

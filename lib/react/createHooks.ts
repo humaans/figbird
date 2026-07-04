@@ -5,7 +5,14 @@ import type {
   TypedFeathersClient,
   TypedFeathersService,
 } from '../adapters/feathers.js'
-import { splitConfig, type Figbird, type QueryConfig } from '../core/figbird.js'
+import {
+  defineQuery as baseDefineQuery,
+  splitConfig,
+  type Figbird,
+  type PreparedQuery,
+  type QueryConfig,
+  type StandardSchemaV1,
+} from '../core/figbird.js'
 import type { QueryBuilder, QueryBuilderKind } from '../core/query-builder.js'
 import type {
   Schema,
@@ -144,6 +151,46 @@ interface UseQueryForSchema<S extends Schema> {
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
 }
 
+/** Schema-typed defineQuery: builders must come from this schema. */
+interface DefineQueryForSchema<S extends Schema> {
+  <
+    Args,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    name: string,
+    build: (args: Args) => B,
+  ): QueryDefinition<Args, B>
+  <
+    TSchema extends StandardSchemaV1,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    name: string,
+    argsSchema: TSchema,
+    build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
+  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+}
+
+type PrepareForSchema<S extends Schema> = <
+  Args,
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  B extends QueryBuilder<S, any, any, any, any, any>,
+>(
+  query: QueryDefinition<Args, B>,
+  args: Args,
+) => PreparedQuery
+
+type PrefetchForSchema<S extends Schema> = <
+  Args,
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  B extends QueryBuilder<S, any, any, any, any, any>,
+>(
+  query: QueryDefinition<Args, B>,
+  args: Args,
+  options?: { staleTime?: number },
+) => void
+
 // Type helper to extract schema and adapter types from a Figbird instance
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type InferSchema<F> = F extends Figbird<infer S, any> ? S : never
@@ -182,6 +229,9 @@ export function createHooks<F extends Figbird<any, any>>(
   useFeathers: UseFeathersForSchema<InferSchema<F>>
   useQuery: UseQueryForSchema<InferSchema<F>>
   q: QueryBuilderProxy<InferSchema<F>>
+  defineQuery: DefineQueryForSchema<InferSchema<F>>
+  prepare: PrepareForSchema<InferSchema<F>>
+  prefetch: PrefetchForSchema<InferSchema<F>>
 } {
   type S = InferSchema<F>
   type TParams = InferParams<F>
@@ -339,5 +389,12 @@ export function createHooks<F extends Figbird<any, any>>(
     get q(): QueryBuilderProxy<S> {
       return figbird.q as QueryBuilderProxy<S>
     },
+    // defineQuery is a pure factory — included so declaration files import everything
+    // from one place, and typed so builders must come from this schema.
+    defineQuery: baseDefineQuery as DefineQueryForSchema<S>,
+    // Instance-bound conveniences: same primitives as figbird.prepare/prefetch.
+    prepare: ((query, args) => figbird.prepare(query, args)) as PrepareForSchema<S>,
+    prefetch: ((query, args, options) =>
+      figbird.prefetch(query, args, options)) as PrefetchForSchema<S>,
   }
 }

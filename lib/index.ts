@@ -1,6 +1,7 @@
 // core
 export {
   Figbird,
+  defineQuery,
   QUERY_DEFINITION_BRAND,
   QueryArgsError,
   isFetching,
