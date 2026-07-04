@@ -6,7 +6,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-space-router'
-import { figbird, useMutation, useQuery } from './figbird'
+import { q, useMutation, useQuery } from './figbird'
 import { Explain } from './Explain'
 
 export function NewIssueModal({ onClose }: { onClose: () => void }) {
@@ -32,8 +32,8 @@ export function NewIssueModal({ onClose }: { onClose: () => void }) {
 
 function NewIssueForm({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate()
-  const { data: teams } = useQuery(figbird.q.teams)
-  const { data: users } = useQuery(figbird.q.users)
+  const { data: teams } = useQuery(q.teams)
+  const { data: users } = useQuery(q.users)
   const issueMutation = useMutation('issues', { optimistic: true })
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')

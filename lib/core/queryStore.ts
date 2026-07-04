@@ -171,6 +171,11 @@ export class QueryStore<
     this.#subscribeToRealtimeService(serviceName)
   }
 
+  /** Number of active subscribers for a query — powers figbird.inspect(). */
+  getSubscriberCount(queryId: string): number {
+    return this.#listenerCount(queryId)
+  }
+
   /** Refetch a specific query by id. */
   refetch(queryId: string): void {
     const q = this.#getQuery(queryId)

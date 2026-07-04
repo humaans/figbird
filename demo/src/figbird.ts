@@ -183,5 +183,6 @@ if (import.meta.env.DEV) {
   ;(window as unknown as { figbird: typeof figbird }).figbird = figbird
 }
 
-// Typed hooks bound to this schema — these are what components reach for.
-export const { useQuery, useMutation } = createHooks(figbird)
+// Typed hooks + builder proxy bound to this schema — these are what components
+// reach for; no provider required.
+export const { useQuery, useMutation, q } = createHooks(figbird)

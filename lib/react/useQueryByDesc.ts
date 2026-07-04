@@ -26,6 +26,9 @@ export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
 /**
  * Hook for fetching a single item by ID.
  * Returns untyped data. For type-safe queries, use createHooks(figbird).
+ *
+ * @deprecated Legacy descriptor-based hook. Prefer `useQuery(q.service.get(id))` from
+ * the builder API — this stays functional but new code should not use it.
  */
 export function useGet(
   serviceName: string,
@@ -48,6 +51,9 @@ export function useGet(
 /**
  * Hook for fetching multiple items with optional query parameters.
  * Returns untyped data. For type-safe queries, use createHooks(figbird).
+ *
+ * @deprecated Legacy descriptor-based hook. Prefer `useQuery(q.service.where(...))` from
+ * the builder API — this stays functional but new code should not use it.
  */
 export function useFind(
   serviceName: string,
@@ -92,8 +98,23 @@ export function useQueryByDesc<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery = unknown,
 >(desc: QueryDescriptor, config: QueryConfig<T, TQuery>): QueryResult<T, TMeta> {
-  const figbird = useFigbird()
+  return useQueryByDescImpl(useFigbird(), desc, config)
+}
 
+/**
+ * Instance-taking implementation shared by the context-bound hooks and the
+ * bound-instance hooks that `createHooks` produces. @internal
+ */
+export function useQueryByDescImpl<
+  T,
+  TMeta extends Record<string, unknown> = Record<string, unknown>,
+  TQuery = unknown,
+>(
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  figbird: any,
+  desc: QueryDescriptor,
+  config: QueryConfig<T, TQuery>,
+): QueryResult<T, TMeta> {
   // For network-only and custom matcher queries, we need a unique ID for each hook
   // instance to ensure that queries are not shared between components.
   // useId provides a stable, unique ID for the lifetime of the component.

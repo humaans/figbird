@@ -5,7 +5,7 @@
 
 import { useMemo, type ReactNode } from 'react'
 import { Link } from 'react-space-router'
-import { figbird, useQuery } from './figbird'
+import { q, useQuery } from './figbird'
 import { Explain } from './Explain'
 import { StatusDot } from './ui'
 
@@ -16,15 +16,9 @@ interface ActivityEntry {
 }
 
 export function ActivityPanel() {
-  const { data: comments } = useQuery(
-    figbird.q.comments.orderBy('id', 'desc').limit(10).related('author'),
-  )
-  const { data: reactions } = useQuery(
-    figbird.q.reactions.orderBy('id', 'desc').limit(6).related('user'),
-  )
-  const { data: issues, isFetching } = useQuery(
-    figbird.q.issues.orderBy('updatedAt', 'desc').limit(6),
-  )
+  const { data: comments } = useQuery(q.comments.orderBy('id', 'desc').limit(10).related('author'))
+  const { data: reactions } = useQuery(q.reactions.orderBy('id', 'desc').limit(6).related('user'))
+  const { data: issues, isFetching } = useQuery(q.issues.orderBy('updatedAt', 'desc').limit(6))
 
   const entries = useMemo<ActivityEntry[]>(() => {
     const out: ActivityEntry[] = []

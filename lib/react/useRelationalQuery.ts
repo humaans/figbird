@@ -74,6 +74,19 @@ export interface UseRelationalQueryOptions {
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyQueryBuilder = QueryBuilder<any, any, any, any, any, any>
 
+/** The slice of a Figbird instance the query hooks need. @internal */
+export interface FigbirdLike {
+  relationalQuery(builder: AnyQueryBuilder): {
+    subscribe(fn: (state: unknown) => void): () => void
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    getSnapshot(): any
+    refetch(): void
+    loadMore(): void
+    suspensePromise(): Promise<void>
+    hash(): string
+  }
+}
+
 // Default idle state for skipped queries
 const idleState: RelationalQueryState<null> = {
   status: 'idle',
@@ -94,10 +107,8 @@ const idleState: RelationalQueryState<null> = {
 function useRelationalQueryRef<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
->(query: B, skip: boolean) {
+>(figbird: FigbirdLike, query: B, skip: boolean) {
   type T = QueryBuilderResult<B>
-  const figbird = useFigbird()
-
   const qRef = skip ? null : figbird.relationalQuery(query)
 
   const subscribe = useCallback(
@@ -126,9 +137,10 @@ export function useRelationalQuery<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
 >(query: B, options: UseRelationalQueryOptions = {}): RelationalQueryResult<QueryBuilderResult<B>> {
-  return useQueryForBuilder(query, { ...options, suspense: false }) as RelationalQueryResult<
-    QueryBuilderResult<B>
-  >
+  return useQueryForBuilder(useFigbird() as FigbirdLike, query, {
+    ...options,
+    suspense: false,
+  }) as RelationalQueryResult<QueryBuilderResult<B>>
 }
 
 /**
@@ -268,17 +280,30 @@ export function useQuery(
   argsOrOptions?: unknown,
   maybeOptions?: UseQueryOptions,
 ): unknown {
+  return useQueryImpl(useFigbird() as FigbirdLike, queryOrDefinition, argsOrOptions, maybeOptions)
+}
+
+/**
+ * Instance-taking dispatch shared by the context-bound `useQuery` and the
+ * bound-instance hooks that `createHooks` produces. @internal
+ */
+export function useQueryImpl(
+  figbird: FigbirdLike,
+  queryOrDefinition: unknown,
+  argsOrOptions?: unknown,
+  maybeOptions?: UseQueryOptions,
+): unknown {
   if (isQueryDefinition(queryOrDefinition)) {
     const definition = queryOrDefinition
     const rawArgs = argsOrOptions
     const options = maybeOptions ?? {}
     const validatedArgs = definition.validate(rawArgs)
     const builder = definition.build(validatedArgs) as AnyQueryBuilder
-    return useQueryForBuilder(builder, options)
+    return useQueryForBuilder(figbird, builder, options)
   }
   const builder = queryOrDefinition as AnyQueryBuilder
   const options = (argsOrOptions as UseQueryOptions | undefined) ?? {}
-  return useQueryForBuilder(builder, options)
+  return useQueryForBuilder(figbird, builder, options)
 }
 
 const idlePagination: RelationalPaginationState = {
@@ -291,10 +316,10 @@ const idlePagination: RelationalPaginationState = {
 function useQueryForBuilder<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
->(query: B, options: UseQueryOptions): unknown {
+>(figbird: FigbirdLike, query: B, options: UseQueryOptions): unknown {
   type T = QueryBuilderResult<B>
   const { skip = false, suspense = true } = options
-  const { qRef, state } = useRelationalQueryRef(query, skip)
+  const { qRef, state } = useRelationalQueryRef(figbird, query, skip)
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
   const loadMore = useCallback(() => qRef?.loadMore(), [qRef])
 

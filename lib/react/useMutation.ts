@@ -82,7 +82,23 @@ export function useMutation(
   serviceName: string,
   hookOptions: UseMutationOptions = {},
 ): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
-  const figbird = useFigbird()
+  return useMutationImpl(useFigbird(), serviceName, hookOptions)
+}
+
+/** The slice of a Figbird instance the mutation hook needs. @internal */
+interface MutatingFigbird {
+  mutate(desc: UntypedData): Promise<UntypedData>
+}
+
+/**
+ * Instance-taking implementation shared by the context-bound `useMutation` and the
+ * bound-instance hooks that `createHooks` produces. @internal
+ */
+export function useMutationImpl(
+  figbird: MutatingFigbird,
+  serviceName: string,
+  hookOptions: UseMutationOptions = {},
+): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
   const hookOptimistic = hookOptions.optimistic
 
   const [state, dispatch] = useReducer(mutationReducer<UntypedData>, {

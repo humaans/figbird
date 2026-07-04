@@ -146,8 +146,8 @@ const figbird = new Figbird({
 const { useFind, useGet, useMutation } = createHooks(figbird)
 
 // Types flow automatically
-const tasks = useFind('tasks')       // QueryResult<Task[], FindMeta>
-const task = useGet('tasks', '123')  // QueryResult<Task>
+const tasks = useFind('tasks') // QueryResult<Task[], FindMeta>
+const task = useGet('tasks', '123') // QueryResult<Task>
 ```
 
 ## Query Parameters
@@ -157,8 +157,8 @@ Query parameters combine your domain filters with adapter controls. You define t
 ```ts
 useFind('tasks', {
   query: {
-    completed: true,  // domain filter (from TaskQuery)
-    $limit: 10,       // adapter control (from Feathers)
+    completed: true, // domain filter (from TaskQuery)
+    $limit: 10, // adapter control (from Feathers)
     $sort: { title: 1 },
   },
 })
@@ -184,9 +184,9 @@ If you omit payload types, Figbird uses sensible defaults: `Partial<item>` for c
 ```ts
 const { create, patch, remove } = useMutation('tasks')
 
-const newTask = await create({ title: 'Ship it' })  // typed payload, returns Task
-await patch('id-1', { completed: true })            // typed patch payload
-await remove('id-1')                                // returns removed Task
+const newTask = await create({ title: 'Ship it' }) // typed payload, returns Task
+await patch('id-1', { completed: true }) // typed patch payload
+await remove('id-1') // returns removed Task
 ```
 
 ## Custom Service Methods
@@ -215,8 +215,8 @@ Access custom methods through the typed Feathers client returned by `useFeathers
 const { useFeathers } = createHooks(figbird)
 const feathers = useFeathers()
 
-await feathers.service('notes').archive(['1', '2'])  // { count: number }
-await feathers.service('notes').search('hello')      // Note[]
+await feathers.service('notes').archive(['1', '2']) // { count: number }
+await feathers.service('notes').search('hello') // Note[]
 ```
 
 # API Reference
@@ -255,6 +255,14 @@ const note = useGet('notes', '1') // note: QueryResult<Note>
 - `refetch` - function to refetch data
 
 Note: By default, `useGet` does not expose `meta`. Adapters may return meta for get operations, but the built-in FeathersAdapter returns only the item.
+
+## Current vs legacy API
+
+The current API is the builder-based `useQuery` (Suspense-native, relational, typed via
+`createHooks`) together with `useMutation`, `defineQuery`, `prepare`, and `prefetch`. The
+hooks documented below this point — `useFind`, `useGet`, `useMethod`, `useService`,
+`useFeathers` — are the legacy descriptor generation: fully functional and safe to keep
+using, but deprecated; new code should not adopt them.
 
 ## useFind
 
@@ -405,7 +413,7 @@ function TaskView({ id }: { id: string }) {
 
 #### Arguments
 
-* `figbird` - figbird instance
+- `figbird` - figbird instance
 
 # Advanced Usage
 
@@ -462,11 +470,7 @@ const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ adapter })
 
 export function App({ children }) {
-  return (
-    <FigbirdProvider figbird={figbird}>
-      {children}
-    </FigbirdProvider>
-  )
+  return <FigbirdProvider figbird={figbird}>{children}</FigbirdProvider>
 }
 
 // inspect the state of all of the queries in figbird
@@ -491,7 +495,7 @@ const query = figbird.query({
 
 // Subscribe to get data and updates
 const unsub = query.subscribe(state => {
-  console.log(state.data)  // Task[] | null
+  console.log(state.data) // Task[] | null
   console.log(state.status) // 'loading' | 'success' | 'error'
 })
 
@@ -526,7 +530,7 @@ The result of the `find` operation or `GET /comments` would be an object of shap
 
 ## The no-flash checklist
 
-`useQuery` never lies about identity: when a query's params change, that is a *different*
+`useQuery` never lies about identity: when a query's params change, that is a _different_
 query with a cold cache entry, and the hook suspends rather than showing old data labeled
 with new params. Honoring that contract without loading flashes takes three moves — one
 per failure mode:
@@ -540,7 +544,7 @@ const setStatusFilter = next => startTransition(() => setStatus(next))
 // isPending is your "catching up" signal — dim the list, don't unmount it
 ```
 
-**2. Text inputs (search) — debounce *into* a transition with `useDebouncedTransition`.**
+**2. Text inputs (search) — debounce _into_ a transition with `useDebouncedTransition`.**
 Debouncing alone still flashes when the value commits; a transition alone queries per
 keystroke. This helper does both:
 

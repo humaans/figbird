@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { classifyQueryNode, type FigbirdEvent } from 'figbird'
+import type { FigbirdEvent } from 'figbird'
 import { demoControl, figbird, socket, type DemoState, type LatencyProfile } from './figbird'
 
 interface LogEntry {
@@ -222,48 +222,30 @@ function QueriesView() {
     })
   }, [])
 
-  const rows: Array<{
-    id: string
-    service: string
-    method: string
-    cls: string
-    status: string
-    isFetching: boolean
-    count: number
-    query: string
-  }> = []
-  for (const [serviceName, serviceState] of figbird.getState()) {
-    for (const q of serviceState.queries.values()) {
-      const config = q.config as { server?: boolean; allPages?: boolean }
-      const query = (q.desc.params as { query?: Record<string, unknown> } | undefined)?.query
-      rows.push({
-        id: q.queryId,
-        service: serviceName,
-        method: q.desc.method,
-        cls: q.desc.method === 'get' ? 'get' : classifyQueryNode(query, config),
-        status: q.state.status,
-        isFetching: q.state.isFetching,
-        count: Array.isArray(q.state.data) ? q.state.data.length : q.state.data ? 1 : 0,
-        query: query && Object.keys(query).length > 0 ? JSON.stringify(query) : '',
-      })
-    }
-  }
+  // figbird.inspect() is the public, stable projection of the live query store —
+  // no reaching into internals.
+  const rows = figbird.inspect()
 
   return (
     <ol className='devtools-log queries'>
-      {rows.map(row => (
-        <li key={row.id} className='devtools-row'>
-          <span className={`q-badge ${row.cls}`}>{row.cls}</span>
-          <span className='devtools-text'>
-            <strong>{row.service}</strong>
-            {row.query ? <span className='q-query'> {row.query}</span> : null}
-          </span>
-          <span className='q-meta'>
-            {row.count} item{row.count === 1 ? '' : 's'} · {row.status}
-            {row.isFetching ? ' · fetching' : ''}
-          </span>
-        </li>
-      ))}
+      {rows.map(row => {
+        const query =
+          row.query && Object.keys(row.query).length > 0 ? JSON.stringify(row.query) : ''
+        return (
+          <li key={row.queryId} className='devtools-row'>
+            <span className={`q-badge ${row.classification}`}>{row.classification}</span>
+            <span className='devtools-text'>
+              <strong>{row.serviceName}</strong>
+              {query ? <span className='q-query'> {query}</span> : null}
+            </span>
+            <span className='q-meta'>
+              {row.itemCount} item{row.itemCount === 1 ? '' : 's'} · {row.status}
+              {row.isFetching ? ' · fetching' : ''}
+              {row.subscriberCount > 0 ? ` · ${row.subscriberCount} sub` : ''}
+            </span>
+          </li>
+        )
+      })}
     </ol>
   )
 }
