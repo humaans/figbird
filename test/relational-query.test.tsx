@@ -2182,6 +2182,103 @@ test('suspense: first-mount error throws to ErrorBoundary', async t => {
   unmount()
 })
 
+test('suspense: refetch failure keeps previous data, exposes error, clears on recovery', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createApp()
+
+  let refetchFn: (() => void) | null = null
+
+  function IssueDetail() {
+    const { data, error, refetch } = useQuery(
+      figbird.q.issues.where({ id: 1 }).one().related('creator'),
+    )
+    refetchFn = refetch
+    const issue = data as Issue & { creator: User | null }
+    return (
+      <div className='issue-detail' data-error={error ? error.message : ''}>
+        <div className='title'>{issue.title}</div>
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <IssueDetail />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  t.is($('.title')!.innerHTML, 'First issue')
+  t.is($('.issue-detail')!.getAttribute('data-error'), '')
+
+  // Break the service, then refetch. The screen must stay mounted with the last good
+  // data (no fallback, no ErrorBoundary) and surface the failure via `error`.
+  const originalFind = feathers.service('issues').find
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  feathers.service('issues').find = async () => {
+    throw new Error('network down')
+  }
+
+  await flush(() => {
+    refetchFn!()
+  })
+
+  t.falsy($('.fallback'))
+  t.is($('.title')!.innerHTML, 'First issue')
+  t.is($('.issue-detail')!.getAttribute('data-error'), 'network down')
+
+  // Heal the service and refetch again — the error clears on the next successful fetch.
+  feathers.service('issues').find = originalFind
+  await flush(() => {
+    refetchFn!()
+  })
+
+  t.is($('.title')!.innerHTML, 'First issue')
+  t.is($('.issue-detail')!.getAttribute('data-error'), '')
+
+  unmount()
+})
+
+test('suspense: root item removed while on screen keeps data and surfaces ItemRemoved', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createApp()
+
+  function IssueDetail() {
+    const { data, error } = useQuery(figbird.q.issues.get(1).related('creator'))
+    const issue = data as Issue & { creator: User | null }
+    return (
+      <div className='issue-detail' data-error={error ? error.name : ''}>
+        <div className='title'>{issue.title}</div>
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <IssueDetail />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  t.is($('.title')!.innerHTML, 'First issue')
+  t.is($('.issue-detail')!.getAttribute('data-error'), '')
+
+  // Remove the entity behind the get root. The screen keeps the stale item — the
+  // consumer decides what "deleted while viewing" looks like via error.name.
+  await feathers.service('issues').remove(1)
+  await flush()
+
+  t.falsy($('.fallback'))
+  t.is($('.title')!.innerHTML, 'First issue')
+  t.is($('.issue-detail')!.getAttribute('data-error'), 'ItemRemoved')
+
+  unmount()
+})
+
 test('suspense: revisiting a query with warm nested relations does not re-suspend', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()

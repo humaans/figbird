@@ -31,7 +31,11 @@ import {
 import { useFigbird } from './react.js'
 
 /**
- * State for the relational query hook
+ * State for the relational query hook.
+ *
+ * `error` on the success arm is non-null when the most recent refetch failed while
+ * previous data is still being served — show a toast/banner, keep the screen. The
+ * `error` status only occurs for cold failures (no data was ever produced).
  */
 export type RelationalQueryResult<T> =
   | {
@@ -44,7 +48,7 @@ export type RelationalQueryResult<T> =
   | {
       status: 'success'
       data: T
-      error: null
+      error: Error | null
       isFetching: boolean
       refetch: () => void
     }
@@ -75,6 +79,42 @@ const idleState: RelationalQueryState<null> = {
 }
 
 /**
+ * Shared subscription skeleton for both hook variants: resolve the interned
+ * RelationalQueryRef for a builder and read its state via useSyncExternalStore.
+ *
+ * `figbird.relationalQuery()` interns refs by AST hash, so the same builder shape
+ * yields a reference-stable qRef across renders while subscribed — no memoization
+ * here. (If the ref was evicted between renders, this picks up the freshly interned
+ * instance instead of pinning the stale one.)
+ */
+function useRelationalQueryRef<
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  B extends QueryBuilder<any, any, any, any, any, any>,
+>(query: B, skip: boolean) {
+  type T = QueryBuilderResult<B>
+  const figbird = useFigbird()
+
+  const qRef = skip ? null : figbird.relationalQuery(query)
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (!qRef) return () => {}
+      return qRef.subscribe(onStoreChange)
+    },
+    [qRef],
+  )
+
+  const getSnapshot = useCallback((): RelationalQueryState<T> => {
+    if (!qRef) return idleState as RelationalQueryState<T>
+    return qRef.getSnapshot()
+  }, [qRef])
+
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
+  return { qRef, state }
+}
+
+/**
  * Hook for executing relational queries built with the query builder.
  *
  * Uses `figbird.relationalQuery()` internally to create a `RelationalQueryRef`
@@ -96,31 +136,7 @@ export function useRelationalQuery<
 >(query: B, options: UseRelationalQueryOptions = {}): RelationalQueryResult<QueryBuilderResult<B>> {
   type T = QueryBuilderResult<B>
   const { skip = false } = options
-  const figbird = useFigbird()
-
-  // Create RelationalQueryRef on every render, but useMemo keeps the old one if hash matches
-  // This pattern avoids depending on the query object (which is new each render)
-  // while still allowing the QueryBuilder's AST to drive memoization
-  const _qRef = skip ? null : figbird.relationalQuery(query)
-  const qRef = useMemo(() => _qRef, [_qRef?.hash() ?? '', skip, figbird])
-
-  // Subscribe function for useSyncExternalStore
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      if (!qRef) return () => {}
-      return qRef.subscribe(onStoreChange)
-    },
-    [qRef],
-  )
-
-  // Get snapshot function for useSyncExternalStore
-  const getSnapshot = useCallback((): RelationalQueryState<T> => {
-    if (!qRef) return idleState as RelationalQueryState<T>
-    return qRef.getSnapshot()
-  }, [qRef])
-
-  // Use useSyncExternalStore for efficient subscription
-  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const { qRef, state } = useRelationalQueryRef(query, skip)
 
   // Build the result object with refetch function
   return useMemo((): RelationalQueryResult<T> => {
@@ -130,7 +146,7 @@ export function useRelationalQuery<
       return {
         status: 'success',
         data: state.data,
-        error: null,
+        error: state.error,
         isFetching: state.isFetching,
         refetch,
       }
@@ -157,8 +173,14 @@ export function useRelationalQuery<
 /**
  * Result shape for `useQuery`. Data is guaranteed to belong to the exact query key the
  * caller passed in: the hook suspends on cold reads (throwing a Promise for the nearest
- * Suspense boundary) and throws errors to the nearest ErrorBoundary. There is no
+ * Suspense boundary) and throws cold errors to the nearest ErrorBoundary. There is no
  * "previous data" — params changes re-suspend.
+ *
+ * `error` is non-null when a *refetch* failed while previous data is still being served
+ * (a background revalidation, realtime-triggered refetch, or manual `refetch()` that
+ * errored). The screen stays mounted with the last good `data`; show a toast or inline
+ * banner and let the next successful fetch clear it. Only a cold read with no data ever
+ * produced throws to the ErrorBoundary.
  *
  * To keep the old UI committed across a param change, wrap the state update that drives
  * the new key in `startTransition`. React will hold the previous render visible while
@@ -287,25 +309,7 @@ function useQueryForBuilder<
 ): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>> {
   type T = QueryBuilderResult<B>
   const { skip = false } = options
-  const figbird = useFigbird()
-
-  const _qRef = skip ? null : figbird.relationalQuery(query)
-  const qRef = useMemo(() => _qRef, [_qRef?.hash() ?? '', skip, figbird])
-
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      if (!qRef) return () => {}
-      return qRef.subscribe(onStoreChange)
-    },
-    [qRef],
-  )
-
-  const getSnapshot = useCallback((): RelationalQueryState<T> => {
-    if (!qRef) return idleState as RelationalQueryState<T>
-    return qRef.getSnapshot()
-  }, [qRef])
-
-  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const { qRef, state } = useRelationalQueryRef(query, skip)
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
   const loadMore = useCallback(() => qRef?.loadMore(), [qRef])
 
@@ -333,6 +337,8 @@ function useQueryForBuilder<
     } as SuspenseQueryResult<T, QueryBuilderKind<B>>
   }
 
+  // `status: 'error'` only occurs for cold failures (no data was ever produced) —
+  // a refetch failure with data present stays on the success arm with `error` set.
   if (state.status === 'error') {
     throw state.error
   }
@@ -344,7 +350,7 @@ function useQueryForBuilder<
     const pagination = state.pagination ?? idlePagination
     return {
       data: state.data,
-      error: null,
+      error: state.error,
       isFetching: state.isFetching,
       refetch,
       loadMore,
@@ -357,7 +363,7 @@ function useQueryForBuilder<
 
   return {
     data: state.data,
-    error: null,
+    error: state.error,
     isFetching: state.isFetching,
     refetch,
   } as SuspenseQueryResult<T, QueryBuilderKind<B>>
