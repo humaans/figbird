@@ -216,7 +216,7 @@ h2,
   font-size: 1.5rem;
   line-height: 1.333;
   letter-spacing: -0.015em;
-  margin-top: 2.5rem;
+  margin-top: 4.5rem;
   margin-bottom: 1rem;
 }
 
@@ -225,7 +225,7 @@ h3,
   font-size: 1.25rem;
   line-height: 1.4;
   letter-spacing: -0.01em;
-  margin-top: 1.5rem;
+  margin-top: 2rem;
   margin-bottom: 0.75rem;
 }
 
@@ -284,11 +284,11 @@ p + h1, ul + h1, ol + h1, dl + h1, blockquote + h1, hr + h1, pre + h1, table + h
 }
 
 p + h2, ul + h2, ol + h2, dl + h2, blockquote + h2, hr + h2, pre + h2, table + h2, form + h2, figure + h2 {
-  margin-top: 2.5rem;
+  margin-top: 4.5rem;
 }
 
 p + h3, ul + h3, ol + h3, dl + h3, blockquote + h3, hr + h3, pre + h3, table + h3, form + h3, figure + h3 {
-  margin-top: 1.5rem;
+  margin-top: 2rem;
 }
 
 p + h4, ul + h4, ol + h4, dl + h4, blockquote + h4, hr + h4, pre + h4, table + h4, form + h4, figure + h4,

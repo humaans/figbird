@@ -2772,6 +2772,55 @@ test('createHooks: bound hooks and q work without a FigbirdProvider', async t =>
   unmount()
 })
 
+test('.all(): materializes the service; subset and windowed reads answer locally', async t => {
+  const { figbird, feathers } = createApp()
+
+  // Preload the complete set.
+  const unsubAll = figbird.relationalQuery(figbird.q.issues.all()).subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const findsAfterAll = feathers.service('issues').counts.find
+  t.true(findsAfterAll >= 1)
+
+  // Filtered subset — answered from the materialized cache, no fetch.
+  const openRef = figbird.relationalQuery(figbird.q.issues.where({ status: 'open' }))
+  const unsubOpen = openRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(openRef.getSnapshot().status, 'success')
+  t.is((openRef.getSnapshot().data as Issue[]).length, 2)
+  t.is(feathers.service('issues').counts.find, findsAfterAll, 'subset read must not fetch')
+
+  // Windowed subset — sorted and sliced locally.
+  const winRef = figbird.relationalQuery(figbird.q.issues.orderBy('id', 'desc').limit(2))
+  const unsubWin = winRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    (winRef.getSnapshot().data as Issue[]).map(issue => issue.id),
+    [3, 2],
+  )
+  t.is(feathers.service('issues').counts.find, findsAfterAll, 'window computed locally')
+
+  // Realtime maintains the set; the windowed subset recomputes locally — still no fetch.
+  await feathers.service('issues').create({ id: 9, title: 'Newest', status: 'open', creatorId: 1 })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  t.deepEqual(
+    (winRef.getSnapshot().data as Issue[]).map(issue => issue.id),
+    [9, 3],
+  )
+  t.is(feathers.service('issues').counts.find, findsAfterAll, 'realtime maintenance stays local')
+
+  unsubOpen()
+  unsubWin()
+  unsubAll()
+})
+
+test('.all(): rejects filters, produces an all-kind AST', t => {
+  const { figbird } = createApp()
+  t.throws(() => figbird.q.issues.where({ status: 'open' }).all(), { message: /all\(\)/ })
+  const ast = figbird.q.issues.all().toAST()
+  t.is(ast.kind, 'all')
+  t.is(ast.cardinality, 'many')
+})
+
 test('snapshot: frozen queries ignore realtime; refetch still works; explain says manual', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()

@@ -602,6 +602,8 @@ export class RelationalQueryRef<
       queryRef: this.#query(rootDesc, {
         realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
+        // .all() fetches every page; success marks the service fully materialized.
+        ...(this.#ast.kind === 'all' ? { allPages: true } : {}),
         ...(this.#ast.kind === 'find' ? matcherConfig : {}),
         ...(this.#ast.server ? { server: true } : {}),
       }),
