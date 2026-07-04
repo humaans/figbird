@@ -26,7 +26,8 @@ export function Explain({
       return
     }
     const rect = btnRef.current!.getBoundingClientRect()
-    const width = 340
+    // Keep in sync with .explain-pop's width in styles.css.
+    const width = 440
     const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 12))
     // Flip above the button when it sits near the bottom of the viewport.
     if (rect.bottom > window.innerHeight - 320) {

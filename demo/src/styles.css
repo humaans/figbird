@@ -1381,7 +1381,9 @@ button.primary:hover:not(:disabled) {
 .explain-pop {
   position: fixed;
   z-index: 90;
-  width: 300px;
+  /* Keep in sync with the positioning width in Explain.tsx. */
+  width: 440px;
+  max-width: calc(100vw - 24px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1711,12 +1713,12 @@ button.primary:hover:not(:disabled) {
 
 .explain-code {
   margin: 8px 0 0;
-  padding: 8px 10px;
+  padding: 9px 11px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.55;
   color: var(--text);
   overflow-x: auto;
