@@ -36,7 +36,7 @@ import type {
   SuspenseQueryResult,
   UseQueryOptions,
 } from './useQuery.js'
-import type { QueryDefinition } from '../core/figbird.js'
+import type { ArgsAndOptions, QueryDefinition } from '../core/figbird.js'
 import type { QueryBuilderProxy, QueryBuilderResult } from '../core/queryBuilder.js'
 
 /**
@@ -134,7 +134,7 @@ interface UseQueryForSchema<S extends Schema> {
     query: B,
     options?: O,
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-  // Definition + args
+  // Definition — args omittable when the definition takes none
   <
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -142,13 +142,18 @@ interface UseQueryForSchema<S extends Schema> {
     O extends UseQueryOptions = Record<string, never>,
   >(
     definition: QueryDefinition<Args, B>,
-    args: Args,
-    options?: O,
+    ...rest: ArgsAndOptions<Args, O>
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
 }
 
 /** Schema-typed defineQuery: builders must come from this schema. Name optional. */
 interface DefineQueryForSchema<S extends Schema> {
+  <
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    build: () => B,
+  ): QueryDefinition<void, B>
   <
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -164,6 +169,13 @@ interface DefineQueryForSchema<S extends Schema> {
     argsSchema: TSchema,
     build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
   ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+  <
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    name: string,
+    build: () => B,
+  ): QueryDefinition<void, B>
   <
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -189,8 +201,7 @@ type PrepareForSchema<S extends Schema> = <
   B extends QueryBuilder<S, any, any, any, any, any>,
 >(
   query: QueryDefinition<Args, B>,
-  args: Args,
-  options?: { staleTime?: number },
+  ...rest: ArgsAndOptions<Args, { staleTime?: number }>
 ) => PreparedQuery
 
 type PrefetchForSchema<S extends Schema> = <
@@ -199,8 +210,7 @@ type PrefetchForSchema<S extends Schema> = <
   B extends QueryBuilder<S, any, any, any, any, any>,
 >(
   query: QueryDefinition<Args, B>,
-  args: Args,
-  options?: { staleTime?: number },
+  ...rest: ArgsAndOptions<Args, { staleTime?: number }>
 ) => void
 
 // Type helper to extract schema and adapter types from a Figbird instance
@@ -392,9 +402,7 @@ export function createHooks<F extends Figbird<any, any>>(
     // from one place, and typed so builders must come from this schema.
     defineQuery: baseDefineQuery as DefineQueryForSchema<S>,
     // Instance-bound conveniences: same primitives as figbird.prepare/prefetch.
-    prepare: ((query, args, options) =>
-      figbird.prepare(query, args, options)) as PrepareForSchema<S>,
-    prefetch: ((query, args, options) =>
-      figbird.prefetch(query, args, options)) as PrefetchForSchema<S>,
+    prepare: figbird.prepare.bind(figbird) as PrepareForSchema<S>,
+    prefetch: figbird.prefetch.bind(figbird) as PrefetchForSchema<S>,
   }
 }

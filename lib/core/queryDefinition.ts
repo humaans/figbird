@@ -31,6 +31,16 @@ export interface QueryDefinition<Args, B> {
 }
 
 /**
+ * Trailing parameters for definition-consuming APIs (`prepare`, `prefetch`, the
+ * suspense `useQuery`): `args` is required when the definition's build function
+ * declares them, and omittable entirely for zero-arg definitions
+ * (`QueryDefinition<void, B>`).
+ */
+export type ArgsAndOptions<Args, Options> = [Args] extends [void]
+  ? [args?: Args, options?: Options]
+  : [args: Args, options?: Options]
+
+/**
  * Type guard for `QueryDefinition`. Useful in router prepare resolvers and overloaded
  * hook signatures that accept either a definition or a builder.
  */
@@ -153,12 +163,17 @@ export function validateQueryArgs<T>(
  *
  * The name is optional metadata, never identity (identity is the AST hash): it labels
  * `QueryArgsError` messages and devtools. Skip it unless you want those labels.
+ *
+ * A zero-param build produces a `QueryDefinition<void, B>`, whose consumers
+ * (`prepare`, `prefetch`, `useQuery`) may omit the `args` argument entirely.
  */
+export function defineQuery<B>(build: () => B): QueryDefinition<void, B>
 export function defineQuery<Args, B>(build: (args: Args) => B): QueryDefinition<Args, B>
 export function defineQuery<TSchema extends StandardSchemaV1, B>(
   argsSchema: TSchema,
   build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
 ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+export function defineQuery<B>(name: string, build: () => B): QueryDefinition<void, B>
 export function defineQuery<Args, B>(
   name: string,
   build: (args: Args) => B,
