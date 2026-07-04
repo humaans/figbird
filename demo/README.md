@@ -3,7 +3,8 @@
 A small but real product — a realtime issue tracker — where every panel is a live figbird
 query. There are no feature tabs: search, relational filters, pagination, windowed
 relations, optimistic mutations, and realtime updates all appear as ordinary product
-behavior. The ⓘ buttons explain what figbird is doing behind each piece of UI.
+behavior. The ⓘ buttons explain what figbird is doing behind each piece of UI — including
+the actual query shape being used.
 
 ## Run
 
@@ -32,6 +33,11 @@ Bottom-right corner:
   warm-cache navigation and optimistic writes; drag to slow and watch keep-previous-data,
   delayed spinners, and SWR revalidation degrade gracefully instead of blocking the UI.
 - **Teammate** — toggles the background traffic (on by default).
+- **Fail next mutation** — arms a one-shot server failure: your next action (comment,
+  boost, title edit…) fails and figbird rolls the optimistic change back everywhere at
+  once, with the `mutate → rollback` sequence visible in the log.
+- **Drop socket** — kills the transport; socket.io auto-reconnects and figbird refetches
+  every active query to reconcile anything missed while offline.
 - **log** — every fetch, realtime event, and mutation flowing through figbird's
   observability events, with durations.
 - **queries** — every live query in the store with figbird's own classification of how it
@@ -56,8 +62,16 @@ Bottom-right corner:
   team.
 - **Cross-service activity** — the Activity panel merges three independent realtime
   queries (comments, reactions, issues) by timestamp in the component.
-- **Optimistic mutations** — the console's create/remove and every action in the issue
-  detail pass `optimistic: true`: cache updates in the same frame, rollback on failure.
+- **Optimistic mutations** — creating issues and every action in the issue detail pass
+  `optimistic: true`: cache updates in the same frame, rollback on failure (arm chaos in
+  dev tools to see it).
+- **Transparent junction relations** — labels resolve through
+  `many(issues → issueLabels, issueLabels → labels)`, so consumers just say
+  `.related('labels')` and get `Label[]`; creating a junction row updates the assembled
+  result via realtime.
+- **Hover prefetch** — issue rows call `figbird.prepare()` on hover, warming the exact
+  detail + comments queries the screen will read, so clicking is usually a warm,
+  synchronous render.
 - **Route-prepared Suspense detail** — `/issues/:id` fires `figbird.prepare()` in parallel
   with the lazy screen chunk; the keyed Suspense boundary gives each issue its own cold
   skeleton, and warm revisits render synchronously from cache.

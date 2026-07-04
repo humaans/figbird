@@ -85,6 +85,14 @@ export const schema = createSchema({
         destService: 'issueLabels',
         destField: ['issueId'],
       }),
+      // Transparent two-hop junction: consumers say `.related('labels')` and get
+      // Label[] directly — figbird fetches the issueLabels junction, then the
+      // labels, and hides the join. Realtime events on either service (e.g. a new
+      // issueLabels row) flow into the assembled result.
+      labels: many(
+        { sourceField: ['id'], destService: 'issueLabels', destField: ['issueId'] },
+        { sourceField: ['labelId'], destService: 'labels', destField: ['id'] },
+      ),
     },
     teams: {
       members: many({ sourceField: ['id'], destService: 'users', destField: ['teamId'] }),
@@ -113,9 +121,13 @@ export const schema = createSchema({
 
 const demoServerUrl = import.meta.env.VITE_DEMO_SERVER_URL ?? 'http://localhost:3030'
 
-const socket = io(demoServerUrl, {
+// Exported so the dev-tools drawer can simulate a dropped connection — closing the
+// underlying engine triggers socket.io's auto-reconnect, and figbird's adapter
+// refetches every active query on the Manager's 'reconnect' event.
+export const socket = io(demoServerUrl, {
   transports: ['websocket'],
   reconnection: true,
+  reconnectionDelay: 500,
 })
 
 const feathersClient = feathers()
@@ -135,6 +147,8 @@ export type LatencyProfile = 'fast' | 'realistic' | 'slow'
 export interface DemoState {
   backgroundEnabled: boolean
   latency: LatencyProfile
+  /** One-shot chaos switch: the next (non-internal) mutation on the server fails. */
+  chaosArmed: boolean
 }
 
 export interface DemoControl {

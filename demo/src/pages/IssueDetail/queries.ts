@@ -31,7 +31,9 @@ export const issueDetailQuery = figbird.defineQuery(
       .related('creator')
       .related('assignee')
       .related('team')
-      .related('issueLabels', link => link.related('label')),
+      // Transparent two-hop junction (issues → issueLabels → labels): consumers
+      // get Label[] directly, the join is hidden by the schema relationship.
+      .related('labels'),
 )
 
 /**
