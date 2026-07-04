@@ -201,6 +201,24 @@ const COMMENT_BODIES = [
 
 const EMOJIS = ['🚀', '💯', '🔥', '✨', '👏', '🎯', '👀', '🤔', '👍']
 
+const DESCRIPTION_OPENERS = [
+  'Reported by a customer on the enterprise plan.',
+  'Spotted during the release QA pass.',
+  'Came up in the support rotation twice this week.',
+  'Regression from the last design-system bump.',
+  'Flagged by the on-call engineer.',
+  'Noticed while dogfooding the new build.',
+]
+
+const DESCRIPTION_DETAILS = [
+  'Repro steps are straightforward — happens on every attempt.',
+  'Only reproduces with a slow network profile.',
+  'Seems limited to Safari so far, but needs confirmation.',
+  'Likely needs a fix in both the client and the API.',
+  'A workaround exists but it is not something we can ship.',
+  'Suspect a race between the cache and the socket events.',
+]
+
 const seed = async () => {
   const rng = mulberry32(20260630)
   const pick = arr => arr[Math.floor(rng() * arr.length)]
@@ -260,6 +278,7 @@ const seed = async () => {
       assigneeId: pick(userIds),
       teamId: pick(teamIds),
       priorityScore: Math.floor(rng() * 100),
+      description: `${pick(DESCRIPTION_OPENERS)} ${pick(DESCRIPTION_DETAILS)}`,
       updatedAt: new Date(SEED_BASE_TIME - ageMinutes * 60_000).toISOString(),
       commentIds: [],
     }
@@ -277,13 +296,18 @@ const seed = async () => {
     // Comments: recent issues are chatty (1–5), older ones sparse.
     const isRecent = i <= 30
     const commentCount = isRecent ? 1 + Math.floor(rng() * 5) : Math.floor(rng() * 2)
+    const rootCommentIds = []
     for (let n = 0; n < commentCount; n++) {
+      // Single-level threading: ~35% of follow-up comments reply to an earlier root.
+      const parentId = rootCommentIds.length > 0 && rng() < 0.35 ? pick(rootCommentIds) : null
       const comment = {
         id: commentId,
         issueId: issue.id,
         authorId: pick(userIds),
+        parentId,
         body: pick(COMMENT_BODIES),
       }
+      if (parentId === null) rootCommentIds.push(comment.id)
       comments.store[comment.id] = comment
       issue.commentIds.push(comment.id)
       // Reactions: roughly a third of comments get one or two.
@@ -436,6 +460,7 @@ app.service('issues').hooks({
         context.data = {
           ...context.data,
           id: context.data.id ?? nextIssueId++,
+          description: context.data.description ?? '',
           commentIds: context.data.commentIds ?? [],
           updatedAt: context.data.updatedAt ?? new Date().toISOString(),
         }
@@ -460,7 +485,11 @@ app.service('comments').hooks({
   before: {
     create: [
       async context => {
-        context.data = { ...context.data, id: context.data.id ?? nextCommentId++ }
+        context.data = {
+          ...context.data,
+          id: context.data.id ?? nextCommentId++,
+          parentId: context.data.parentId ?? null,
+        }
         return context
       },
     ],
@@ -525,11 +554,18 @@ setInterval(async () => {
   const roll = Math.random()
   try {
     if (roll < 0.5) {
-      // Comment on a recent issue.
-      const issue = recentIssues[rand(0, recentIssues.length - 1)]
+      // Comment on a recent issue — sometimes as a reply to a recent root comment.
+      const rootComments = Object.values(comments.store)
+        .filter(c => c.parentId == null)
+        .sort((a, b) => b.id - a.id)
+        .slice(0, 20)
+      const reply = rootComments.length > 0 && Math.random() < 0.35
+      const parent = reply ? rootComments[rand(0, rootComments.length - 1)] : null
+      const issue = parent ?? recentIssues[rand(0, recentIssues.length - 1)]
       await app.service('comments').create({
-        issueId: issue.id,
+        issueId: parent ? parent.issueId : issue.id,
         authorId: userIds[rand(0, userIds.length - 1)],
+        parentId: parent ? parent.id : null,
         body: COMMENT_BODIES[rand(0, COMMENT_BODIES.length - 1)],
       })
     } else if (roll < 0.7) {

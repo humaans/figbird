@@ -35,18 +35,13 @@ export const issueDetailQuery = figbird.defineQuery(
 )
 
 /**
- * Started by the route prepare with `priority: 'defer'` so the first page lands
- * warm. The panel parameterizes the same definition by `limit` — "Load more"
- * bumps the limit and asks for a fresh cache entry.
+ * Started by the route prepare with `priority: 'defer'` so the thread lands warm.
+ * Deliberately unwindowed (no sort/limit): the query classifies local-exact, so a
+ * teammate's new comment or reply merges into the thread straight from the socket
+ * event — no refetch. Ordering and threading are assembled in the component.
  */
 export const issueCommentsQuery = figbird.defineQuery(
   'issueComments',
-  passthrough<{ id: number; limit: number }>(),
-  ({ id, limit }) =>
-    figbird.q.comments
-      .where({ issueId: id })
-      .orderBy('id', 'desc')
-      .limit(limit)
-      .related('author')
-      .related('reactions'),
+  passthrough<{ id: number }>(),
+  ({ id }) => figbird.q.comments.where({ issueId: id }).related('author').related('reactions'),
 )

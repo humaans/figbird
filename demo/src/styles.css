@@ -1376,12 +1376,12 @@ button.primary:hover:not(:disabled) {
   border-color: var(--text-dim);
 }
 
+/* Rendered into a body portal with a computed fixed position so pane overflow
+   can never clip it. */
 .explain-pop {
-  position: absolute;
-  top: 20px;
-  right: 0;
-  z-index: 40;
-  width: 290px;
+  position: fixed;
+  z-index: 90;
+  width: 300px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1394,6 +1394,12 @@ button.primary:hover:not(:disabled) {
   letter-spacing: normal;
   font-weight: 400;
   white-space: normal;
+}
+
+.explain-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 89;
 }
 
 .explain-pop code {
@@ -1460,4 +1466,243 @@ button.primary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* ----- Nav: tabs + new issue ----- */
+
+.new-issue-btn {
+  margin-left: 4px;
+}
+
+/* ----- Issue description (inline editable) ----- */
+
+.detail-description {
+  padding: 0 40px 14px;
+  max-width: 640px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  cursor: text;
+}
+
+.detail-description.placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.description-editor {
+  padding: 0 40px 14px;
+}
+
+.description-input,
+.composer-input {
+  width: 100%;
+  max-width: 640px;
+  font: inherit;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  resize: vertical;
+  background: var(--surface);
+}
+
+.description-input:focus,
+.composer-input:focus {
+  outline: none;
+  border-color: var(--text-dim);
+}
+
+.editor-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+/* ----- Threaded comments ----- */
+
+.comment-thread {
+  padding: 10px 0 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.comment-thread:last-child {
+  border-bottom: 0;
+}
+
+.comment-replies {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 30px;
+  border-left: 2px solid var(--border);
+  margin-left: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reply-btn {
+  margin-left: 34px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.composer {
+  padding: 14px 0 0;
+}
+
+/* ----- New issue modal ----- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(17, 17, 17, 0.28);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+
+.modal {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.modal-loading {
+  padding: 24px;
+  color: var(--text-dim);
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px 14px;
+  gap: 8px;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-title-input {
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+}
+
+.modal-title-input:focus {
+  outline: none;
+}
+
+.modal-desc-input {
+  font: inherit;
+  color: var(--text);
+  border: 0;
+  padding: 0;
+  background: transparent;
+  resize: vertical;
+}
+
+.modal-desc-input:focus {
+  outline: none;
+}
+
+.modal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.modal-select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  background: var(--surface);
+}
+
+.btn-primary {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--surface);
+  background: var(--accent);
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ----- Teams page ----- */
+
+.teams-page .detail-head {
+  padding-bottom: 8px;
+}
+
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+  padding: 10px 40px 40px;
+}
+
+.team-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px 10px;
+}
+
+.team-card .team-name {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.team-card .team-name .count {
+  margin-left: auto;
+  font-weight: 400;
+}
+
+.team-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+
+.member {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.team-card .team-issue {
+  padding: 3px 0;
+}
+
+.team-issue-id {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
 }
