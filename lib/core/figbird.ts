@@ -514,7 +514,11 @@ export class Figbird<
   }
 
   #explainAst(ast: QueryAST, path: string, isRoot: boolean, nodes: ExplainNode[]): void {
+    const snapshot = Boolean(ast.snapshot)
     const explained = explainQueryNode(ast.query, { server: ast.server })
+    if (snapshot) {
+      explained.reasons = [...explained.reasons, { code: 'snapshot', detail: '.snapshot()' }]
+    }
     if (isRoot && ast.kind === 'paginate' && explained.class === 'local-exact') {
       explained.class = 'server-window'
       explained.reasons = [
@@ -529,7 +533,7 @@ export class Figbird<
       kind: ast.kind,
       class: explained.class,
       reasons: explained.reasons,
-      realtime: explained.class === 'local-exact' ? 'merge' : 'refetch',
+      realtime: snapshot ? 'manual' : explained.class === 'local-exact' ? 'merge' : 'refetch',
     })
 
     const relationships = this.schema?.relationships?.[ast.service] ?? {}
@@ -556,7 +560,7 @@ export class Figbird<
         kind: 'find',
         class: relExplained.class,
         reasons: relExplained.reasons,
-        realtime: relExplained.class === 'local-exact' ? 'merge' : 'refetch',
+        realtime: snapshot ? 'manual' : relExplained.class === 'local-exact' ? 'merge' : 'refetch',
         ...(relDef?.via ? { via: relDef.via.destService } : {}),
       })
       if (Object.keys(relAST.related).length > 0) {
@@ -639,7 +643,7 @@ export interface ExplainNode {
   class: QueryNodeClass
   reasons: ClassificationReason[]
   /** How realtime events on this node's service are handled. */
-  realtime: 'merge' | 'refetch'
+  realtime: 'merge' | 'refetch' | 'manual'
   /** Junction service name for transparent two-hop relations. */
   via?: string
 }

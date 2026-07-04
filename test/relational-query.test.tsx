@@ -2772,6 +2772,58 @@ test('createHooks: bound hooks and q work without a FigbirdProvider', async t =>
   unmount()
 })
 
+test('snapshot: frozen queries ignore realtime; refetch still works; explain says manual', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createApp()
+
+  let refetchFn: (() => void) | null = null
+
+  function FrozenIssues() {
+    const { data, refetch } = useQuery(figbird.q.issues.related('comments').snapshot())
+    refetchFn = refetch
+    return (
+      <div className='frozen' data-count={data.length}>
+        {data.map(issue => (
+          <span key={issue.id} className='row' data-comments={issue.comments.length} />
+        ))}
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading…</div>}>
+        <FrozenIssues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.is($('.frozen')!.getAttribute('data-count'), '3')
+
+  // Realtime events on both services — a frozen tree must not move.
+  await feathers.service('issues').create({ id: 99, title: 'New', status: 'open', creatorId: 1 })
+  await feathers.service('comments').create({ id: 99, issueId: 1, authorId: 1, body: 'hi' })
+  await flush()
+  t.is($('.frozen')!.getAttribute('data-count'), '3', 'snapshot must ignore realtime creates')
+
+  // refetch() is the only way it moves.
+  await flush(() => refetchFn!())
+  t.is($('.frozen')!.getAttribute('data-count'), '4')
+
+  // Identity: frozen and live reads of the same filters do not share a cache entry.
+  t.not(
+    figbird.relationalQuery(figbird.q.issues.snapshot()).hash(),
+    figbird.relationalQuery(figbird.q.issues).hash(),
+  )
+
+  // explain() reports the frozen realtime mode.
+  const report = figbird.explain(figbird.q.issues.related('comments').snapshot())
+  t.true(report.nodes.every(n => n.realtime === 'manual'))
+  t.true(report.nodes[0]!.reasons.some(r => r.code === 'snapshot'))
+
+  unmount()
+})
+
 test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t => {
   const { figbird, feathers } = createApp()
   const builder = figbird.q.issues.related('creator')

@@ -71,6 +71,8 @@ export interface QueryAST {
   cardinality: 'one' | 'many'
   related: Record<string, QueryAST>
   server?: boolean
+  /** Point-in-time result: fetched once, untouched by realtime; refetch() only. */
+  snapshot?: boolean
   pageSize?: number
   returnTotal?: boolean
 }
@@ -115,6 +117,7 @@ interface QueryBuilderState {
   cardinality: 'one' | 'many'
   related: Record<string, QueryAST>
   server: boolean
+  snapshot: boolean
   pageSize?: number
   returnTotal?: boolean
 }
@@ -158,6 +161,7 @@ export class QueryBuilder<
       cardinality: state?.cardinality ?? 'many',
       related: state?.related ?? {},
       server: state?.server ?? false,
+      snapshot: state?.snapshot ?? false,
       ...(state?.pageSize !== undefined ? { pageSize: state.pageSize } : {}),
       ...(state?.returnTotal !== undefined ? { returnTotal: state.returnTotal } : {}),
     }
@@ -190,6 +194,10 @@ export class QueryBuilder<
 
     if (this.#state.server) {
       ast.server = true
+    }
+
+    if (this.#state.snapshot) {
+      ast.snapshot = true
     }
 
     if (this.#state.pageSize !== undefined) {
@@ -291,6 +299,24 @@ export class QueryBuilder<
   }
 
   /**
+   * Freeze this query as a point-in-time result: it fetches once and then ignores
+   * realtime entirely — no merges, no event-triggered refetches — for the root and
+   * every relation under it. `refetch()` is the only way it moves. Snapshot-ness is
+   * part of the query's identity: a frozen and a live read of the same filters do
+   * not share a cache entry.
+   *
+   * Use for audit/export views, diff screens, or "results as of when you searched".
+   */
+  snapshot(
+    this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
+  ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
+    return new QueryBuilder(this.#schema, this.#state.service, {
+      ...this.#state,
+      snapshot: true,
+    })
+  }
+
+  /**
    * Set cardinality to 'one' — the hook will return a single item (or null if no match).
    */
   one(
@@ -326,6 +352,7 @@ export class QueryBuilder<
       cardinality: 'one',
       related: {},
       server: false,
+      snapshot: false,
     }) as QueryBuilder<S, TService, TItem, {}, 'one', 'get'>
   }
 

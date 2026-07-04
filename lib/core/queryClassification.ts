@@ -25,7 +25,7 @@ const SERVER_ONLY_QUERY_FILTERS = new Set(['$select'])
  * specific operator or filter that triggered it.
  */
 export interface ClassificationReason {
-  code: 'server-flag' | 'select-projection' | 'server-only-operator' | 'window-filter'
+  code: 'server-flag' | 'select-projection' | 'server-only-operator' | 'window-filter' | 'snapshot'
   detail?: string
 }
 
