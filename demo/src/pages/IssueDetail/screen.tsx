@@ -8,25 +8,23 @@
  */
 
 import { useMemo, useState } from 'react'
-import { useDelayedFlag } from 'figbird'
 import { useNavigate, useRoute } from 'react-space-router'
-import { useMutation, useQuery, type Comment, type Reaction, type User } from '../../figbird'
+import {
+  figbird,
+  useMutation,
+  useQuery,
+  type Comment,
+  type Reaction,
+  type User,
+} from '../../figbird'
 import { Explain } from '../../Explain'
+import { StatusDot } from '../../ui'
 import { issueCommentsQuery, issueDetailQuery } from './queries'
-
-const userIds = [1, 2, 3, 4, 5, 6, 7, 8] as const
-const teamIds = [1, 2, 3, 4] as const
-const labelIds = [1, 2, 3, 4, 5, 6] as const
 
 // The demo has no auth — everything you do, you do as Alice.
 const CURRENT_USER_ID = 1
 
 type DetailAction = 'reassign' | 'team' | 'priority' | 'status' | 'label' | 'delete'
-
-function StatusDot({ active }: { active: boolean }) {
-  const show = useDelayedFlag(active, 300)
-  return show ? <span className='dot' title='fetching' /> : null
-}
 
 function Sep() {
   return (
@@ -62,6 +60,12 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
   // boundary above (keyed by issueId) renders its skeleton if we're still cold.
   const { data: issue, isFetching, refetch } = useQuery(issueDetailQuery, { id: issueId })
 
+  // Cycled through by the toolbar actions — queried rather than mirrored from the
+  // server seed, so they can't silently drift when the seed changes.
+  const { data: users } = useQuery(figbird.q.users)
+  const { data: teams } = useQuery(figbird.q.teams)
+  const { data: labels } = useQuery(figbird.q.labels)
+
   const issueMutation = useMutation('issues')
   const issueLabelMutation = useMutation('issueLabels')
 
@@ -89,16 +93,18 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
     pendingAction === action ? loading : idle
 
   const reassignIssue = () => {
-    const currentIndex = userIds.indexOf(issue.assigneeId as (typeof userIds)[number])
-    const nextUserId = userIds[(currentIndex + 1) % userIds.length]!
+    const userIds = users.map(user => user.id)
+    if (userIds.length === 0) return
+    const nextUserId = userIds[(userIds.indexOf(issue.assigneeId) + 1) % userIds.length]!
     runAction('reassign', () =>
       issueMutation.patch(issue.id, { assigneeId: nextUserId }, { optimistic: true }),
     )
   }
 
   const moveTeam = () => {
-    const currentIndex = teamIds.indexOf(issue.teamId as (typeof teamIds)[number])
-    const nextTeamId = teamIds[(currentIndex + 1) % teamIds.length]!
+    const teamIds = teams.map(team => team.id)
+    if (teamIds.length === 0) return
+    const nextTeamId = teamIds[(teamIds.indexOf(issue.teamId) + 1) % teamIds.length]!
     runAction('team', () =>
       issueMutation.patch(issue.id, { teamId: nextTeamId }, { optimistic: true }),
     )
@@ -126,7 +132,7 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
 
   const addMissingLabel = () => {
     const existing = new Set(issue.labels.map(label => label.id))
-    const labelId = labelIds.find(id => !existing.has(id))
+    const labelId = labels.map(label => label.id).find(id => !existing.has(id))
     if (!labelId) return
     // Creating the junction row is enough — the realtime event on issueLabels flows
     // through the two-hop 'labels' relation and the new label appears in place.
