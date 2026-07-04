@@ -67,16 +67,24 @@ function useDebouncedTransition<T>(value: T, delay = 250): T {
 
 // ----- Hover prefetch -----
 
-// Prefetch an issue's detail + comments the moment a row is hovered or focused —
-// figbird.prepare() is an earlier read of the exact queries the detail screen will
-// ask for, so by click time the navigation is usually a warm, synchronous read.
-// A small LRU of release() handles keeps hover pins from accumulating forever;
+// Prefetch an issue's detail + comments on hover intent — figbird.prepare() is an
+// earlier read of the exact queries the detail screen will ask for, so by click
+// time the navigation is usually a warm, synchronous read.
+//
+// Each issue is prepared AT MOST ONCE per session: after the first prefetch the
+// data lives in the QueryStore, where realtime events keep merge-class queries
+// fresh even with no subscribers, and an actual navigation performs one SWR
+// revalidation. Re-preparing on every hover would resubscribe and re-trigger SWR
+// — hammering the server with redundant revalidations as the mouse sweeps the
+// list. A small LRU of release() handles bounds how many hover pins stay live;
 // released entries keep their warm data in the QueryStore either way.
 const HOVER_PIN_LIMIT = 12
+const preparedIssues = new Set<number>()
 const hoverPins = new Map<number, Array<{ release: () => void }>>()
 
 function prefetchIssue(id: number): void {
-  if (hoverPins.has(id)) return
+  if (preparedIssues.has(id)) return
+  preparedIssues.add(id)
   hoverPins.set(id, [
     figbird.prepare(issueDetailQuery, { id }),
     figbird.prepare(issueCommentsQuery, { id }, { priority: 'defer' }),
@@ -87,6 +95,10 @@ function prefetchIssue(id: number): void {
     hoverPins.delete(oldest!)
   }
 }
+
+// Only prefetch after the pointer has rested on a row briefly — sweeping the
+// mouse across the list shouldn't fire drive-by prepares for every row passed.
+const HOVER_INTENT_MS = 100
 
 // ----- Issue list pane (search + filters + infinite pagination) -----
 
@@ -302,12 +314,30 @@ type IssueRowData = Issue & {
 function IssueRow({ issue, highlight }: { issue: IssueRowData; highlight?: string }) {
   const selectedId = useSelectedIssueId()
   const commentCount = issue.commentIds?.length ?? 0
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const startPrefetch = () => {
+    if (hoverTimer.current !== null) return
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null
+      prefetchIssue(issue.id)
+    }, HOVER_INTENT_MS)
+  }
+  const cancelPrefetch = () => {
+    if (hoverTimer.current !== null) {
+      clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }
+
   return (
     <li>
       <Link
         href={`/issues/${issue.id}`}
         className={`issue-row ${issue.id === selectedId ? 'selected' : ''}`}
-        onMouseEnter={() => prefetchIssue(issue.id)}
+        onMouseEnter={startPrefetch}
+        onMouseLeave={cancelPrefetch}
+        // Keyboard focus is deliberate — prefetch immediately.
         onFocus={() => prefetchIssue(issue.id)}
       >
         <span className={`status-dot ${issue.status}`} />
