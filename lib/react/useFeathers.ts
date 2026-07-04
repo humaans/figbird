@@ -5,8 +5,9 @@ import { useFigbird } from './react.js'
  * Specific to Feathers adapter. Might remove in the future.
  */
 /**
- * @deprecated Feathers-specific escape hatch from the descriptor era; it stays
- * functional but is not part of the current API surface.
+ * Returns the underlying Feathers client — the supported escape hatch for one-off
+ * operations outside Figbird's caching layer. Typed (including custom methods
+ * declared in the schema) when obtained from `createHooks(figbird)`.
  */
 export function useFeathers(): FeathersClient {
   const figbird = useFigbird()

@@ -349,6 +349,14 @@ Per-call options override in both directions: `tasks.remove(id, { optimistic: fa
 
 Per-call adapter params ride along in the same options object: `create(data, { params: { query: { ... } } })`.
 
+### Custom methods
+
+`useMutation` covers CRUD. For everything else your services expose — `archive`,
+`sendReminder`, domain actions — declare the method in the schema's `methods` and call it
+with [useMethod](#usemethod), which types the arguments and result and tracks lifecycle
+state. Custom methods don't write to the CRUD cache; realtime events from the server keep
+affected queries fresh, as with any other server-side change.
+
 ## Preparation
 
 Three pieces make preparation work: `defineQuery` gives a query a stable, args-keyed identity;
@@ -756,8 +764,9 @@ export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = crea
 ```
 
 Returns the daily-use kit — `useQuery`, `useMutation`, `q` (the builder proxy),
-schema-typed `defineQuery`, and instance-bound `prepare`/`prefetch` — plus the deprecated
-legacy hooks (`useFind`, `useGet`, `useMethod`, `useService`, `useFeathers`) for older
+schema-typed `defineQuery`, and instance-bound `prepare`/`prefetch` — along with
+`useMethod` (custom service methods) and `useFeathers` (the raw-client escape hatch),
+plus the deprecated legacy hooks (`useFind`, `useGet`, `useService`) for older
 codebases.
 
 Instance resolution: hooks use the bound instance directly, so no provider is required. If a
@@ -807,6 +816,35 @@ m.error   // last mutation error
 
 Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }` — overrides the
 hook default in both directions.
+
+## useMethod
+
+The mutation path for custom (non-CRUD) service methods — `useMutation` covers
+create/update/patch/remove; this covers everything else your services expose:
+
+```ts
+const [archive, { status, data, error }] = useMethod('notes', 'archive')
+
+await archive(['id-1', 'id-2']) // typed from the schema's `methods` declaration
+```
+
+Tracks local lifecycle state (`idle` | `loading` | `success` | `error`) per hook. Custom
+methods don't flow through the CRUD cache — if a method changes data that queries show,
+the server should emit realtime events for the affected records (as usual).
+
+## useFeathers
+
+Returns the underlying Feathers client — the escape hatch for one-off operations outside
+Figbird's caching layer:
+
+```ts
+const feathers = useFeathers()
+await feathers.service('notes').get('1')
+await feathers.service('notes').archive(['1', '2']) // custom methods fully typed
+```
+
+When obtained from `createHooks`, the client and every service are typed from your
+schema, including custom `methods`.
 
 ## useDebouncedTransition
 
@@ -898,17 +936,6 @@ const { data, status, isFetching, error, refetch } = useGet(serviceName, id, par
 
 Same Figbird params as `useFind` (minus pagination). No `meta` by default.
 
-## useMethod
-
-**Deprecated.** Calls a custom Feathers service method with local lifecycle state:
-`const [call, { status, data, error }] = useMethod('notes', 'archive')`. Custom methods
-declared in the schema are fully typed.
-
 ## useService
 
-**Deprecated.** Returns the typed raw Feathers service for operations outside Figbird's
-caching layer: `useService('notes').archive(ids)`.
-
-## useFeathers
-
-**Deprecated.** Returns the typed raw Feathers client: `useFeathers().service('notes')`.
+**Deprecated** — prefer `useFeathers().service(name)`: same capability, one escape hatch.
