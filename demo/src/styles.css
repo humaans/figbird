@@ -1727,3 +1727,20 @@ button.primary:hover:not(:disabled) {
   color: var(--danger);
   font-weight: 600;
 }
+
+/* ----- Team card sub-sections (Spotlight / Recent) ----- */
+
+.team-sub {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 10px 0 3px;
+}
+
+.team-sub-hint {
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}

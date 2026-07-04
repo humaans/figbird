@@ -327,11 +327,57 @@ const seed = async () => {
     }
   }
 
+  // Server-maintained spotlights: each team's top open issues by priority.
+  for (const team of Object.values(teams.store)) {
+    team.spotlightIssueIds = computeSpotlight(team.id)
+  }
+
   nextIssueId = issueCount + 1
   nextCommentId = commentId
   nextIssueLabelId = issueLabelId
   nextReactionId = reactionId
 }
+
+// ----- Server-maintained team spotlights (the embed pattern) -----
+
+// Each team carries `spotlightIssueIds` — its top open issues by priority —
+// recomputed whenever issues change and re-emitted as a patch on the team.
+// Clients resolve the list with an `embed()` relation: membership and order are
+// owned by the server; figbird fetches every team's spotlight in one batched
+// IN(...) query and keeps it fresh from the team's own realtime events.
+const SPOTLIGHT_SIZE = 3
+
+const computeSpotlight = teamId =>
+  Object.values(issues.store)
+    .filter(issue => issue.teamId === teamId && issue.status === 'open')
+    .sort((a, b) => b.priorityScore - a.priorityScore || a.id - b.id)
+    .slice(0, SPOTLIGHT_SIZE)
+    .map(issue => issue.id)
+
+const sameIds = (a = [], b = []) => a.length === b.length && a.every((v, i) => v === b[i])
+
+const refreshSpotlights = async () => {
+  for (const team of Object.values(teams.store)) {
+    const next = computeSpotlight(team.id)
+    if (!sameIds(team.spotlightIssueIds, next)) {
+      await app.service('teams').patch(team.id, { spotlightIssueIds: next }, { internal: true })
+    }
+  }
+}
+
+// Fire-and-forget after any issue change; a no-op recompute emits nothing.
+const spotlightHook = context => {
+  void refreshSpotlights().catch(() => {})
+  return context
+}
+
+app.service('issues').hooks({
+  after: {
+    create: [spotlightHook],
+    patch: [spotlightHook],
+    remove: [spotlightHook],
+  },
+})
 
 let nextIssueId = 1
 let nextCommentId = 1
