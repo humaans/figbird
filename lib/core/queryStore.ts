@@ -447,6 +447,7 @@ export class QueryStore<
 
       service.queries.set(queryId, {
         ...query,
+        fetchedAt: Date.now(),
         state: {
           status: 'success' as const,
           data: freshData,

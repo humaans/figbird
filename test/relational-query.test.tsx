@@ -2690,6 +2690,50 @@ test('defineQuery + prepare: prepare key is stable for identical args', t => {
   c.release()
 })
 
+test('prefetch: idempotent within staleTime and warms the cache for a later read', async t => {
+  const { figbird, feathers } = createApp()
+  const issueDetail = figbird.defineQuery('issueDetailPrefetch', ({ id }: { id: number }) =>
+    figbird.q.issues.where({ id }).one().related('creator'),
+  )
+
+  // Hover-spam: repeated calls within staleTime must not re-trigger fetches.
+  figbird.prefetch(issueDetail, { id: 1 })
+  figbird.prefetch(issueDetail, { id: 1 })
+  figbird.prefetch(issueDetail, { id: 1 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(feathers.service('issues').counts.find, 1, 'three prefetch calls, one fetch')
+
+  // The data is warm — the interned ref reads success synchronously.
+  const ref = figbird.relationalQuery(issueDetail.build({ id: 1 }))
+  t.is(ref.getSnapshot().status, 'success')
+})
+
+test('useQuery suspense:false returns the tagged union and never suspends', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird } = createApp()
+
+  function IssueView() {
+    const issues = useQuery(figbird.q.issues.related('creator'), { suspense: false })
+    if (issues.status === 'error') return <div className='error'>{issues.error.message}</div>
+    if (issues.status !== 'success') return <div className='loading'>loading</div>
+    return <div className='count'>{issues.data.length}</div>
+  }
+
+  // No Suspense boundary anywhere — the loading branch renders instead of throwing.
+  render(
+    <App>
+      <IssueView />
+    </App>,
+  )
+  t.truthy($('.loading'))
+
+  await flush()
+  t.is($('.count')!.innerHTML, '3')
+
+  unmount()
+})
+
 test('defineQuery: typed-args form (no validator) builds and prepares', t => {
   const { figbird } = createApp()
 

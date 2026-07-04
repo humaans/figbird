@@ -3,7 +3,8 @@
  * IssueList, ActivityPanel, NewIssueModal, DevTools, and pages/.
  */
 
-import { Suspense, useEffect, useState, type ReactNode } from 'react'
+import { Suspense, useState, type ReactNode } from 'react'
+import { DelayedFallback } from 'figbird'
 import { Link, Router, Routes, useRoute } from 'react-space-router'
 import { ActivityPanel } from './ActivityPanel'
 import { DevToolsPanel } from './DevTools'
@@ -12,15 +13,6 @@ import { NewIssueModal } from './NewIssueModal'
 import { prepareIssueDetail } from './pages/IssueDetail/prepare'
 import { TeamsPage } from './pages/Teams/screen'
 import { DetailSkeleton, SkeletonRows } from './ui'
-
-function DelayedFallback({ delay = 250, children }: { delay?: number; children: ReactNode }) {
-  const [visible, setVisible] = useState(false)
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(true), delay)
-    return () => clearTimeout(t)
-  }, [delay])
-  return visible ? <>{children}</> : null
-}
 
 function EmptyDetail() {
   return (

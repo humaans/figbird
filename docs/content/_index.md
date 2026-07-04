@@ -523,3 +523,38 @@ For example, if you have a `comments` resource in your application, you would ha
 - `DELETE /comments/:id`
 
 The result of the `find` operation or `GET /comments` would be an object of shape `{ data, total, limit, skip }` or similar. You can customise how all this gets mapped to your API by implementing a custom Adapter. See `adapters/feathers.js` for an example.
+
+## The no-flash checklist
+
+`useQuery` never lies about identity: when a query's params change, that is a *different*
+query with a cold cache entry, and the hook suspends rather than showing old data labeled
+with new params. Honoring that contract without loading flashes takes three moves — one
+per failure mode:
+
+**1. Param changes (filters, tabs, sort) — wrap the state update in a transition.**
+Without it, clicking a filter unwinds to the Suspense fallback while the new query loads.
+
+```tsx
+const [isPending, startTransition] = useTransition()
+const setStatusFilter = next => startTransition(() => setStatus(next))
+// isPending is your "catching up" signal — dim the list, don't unmount it
+```
+
+**2. Text inputs (search) — debounce *into* a transition with `useDebouncedTransition`.**
+Debouncing alone still flashes when the value commits; a transition alone queries per
+keystroke. This helper does both:
+
+```tsx
+const search = useDebouncedTransition(searchInput.trim(), 250)
+```
+
+**3. Wanted suspensions (first mount, navigation) — delay the fallback.**
+If data arrives in 120ms, a 120ms skeleton is worse than nothing. `DelayedFallback`
+renders nothing briefly, then the skeleton — fast loads never flash:
+
+```tsx
+<Suspense fallback={<DelayedFallback delay={250}><Skeleton /></DelayedFallback>}>
+```
+
+For `isFetching` spinners (background revalidation), the same principle is
+`useDelayedFlag(isFetching, 300, 800)` — show only if slow, and once shown, don't yo-yo.

@@ -1,20 +1,19 @@
 /**
- * Hook for executing relational queries with the query builder
+ * useQuery — the query hook for relational builders and definitions.
+ *
+ * Suspense-native by default; pass `{ suspense: false }` for an explicit
+ * tagged-union result:
  *
  * @example
  * ```tsx
  * function IssueView({ issueId }: { issueId: number }) {
- *   const issue = useRelationalQuery(
- *     figbird.q.issues
- *       .where({ id: issueId })
- *       .one()
- *       .related('comments')
- *       .related('creator')
+ *   const issue = useQuery(
+ *     figbird.q.issues.where({ id: issueId }).one().related('comments'),
+ *     { suspense: false },
  *   )
  *
  *   if (issue.status === 'loading') return <Loading />
  *   if (issue.status === 'error') return <Error error={issue.error} />
- *
  *   return <IssueDetails issue={issue.data} />
  * }
  * ```
@@ -120,59 +119,16 @@ function useRelationalQueryRef<
 }
 
 /**
- * Hook for executing relational queries built with the query builder.
- *
- * Uses `figbird.relationalQuery()` internally to create a `RelationalQueryRef`
- * that manages sub-queries and caches entities in the QueryStore.
- *
- * The query is recreated each render, but the hook uses AST hash for change detection.
- * This enables inline queries without a deps array:
- *
- * ```tsx
- * useRelationalQuery(figbird.q.issues.where({ projectId }))
- * ```
- *
- * @param query - A QueryBuilder instance created via figbird.q
- * @param options - Optional configuration
+ * @deprecated Use `useQuery(query, { suspense: false })` instead — the same tagged-union
+ * result from the one query hook. This alias will be removed before release.
  */
 export function useRelationalQuery<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
 >(query: B, options: UseRelationalQueryOptions = {}): RelationalQueryResult<QueryBuilderResult<B>> {
-  type T = QueryBuilderResult<B>
-  const { skip = false } = options
-  const { qRef, state } = useRelationalQueryRef(query, skip)
-
-  // Build the result object with refetch function
-  return useMemo((): RelationalQueryResult<T> => {
-    const refetch = () => qRef?.refetch()
-
-    if (state.status === 'success') {
-      return {
-        status: 'success',
-        data: state.data,
-        error: state.error,
-        isFetching: state.isFetching,
-        refetch,
-      }
-    } else if (state.status === 'error') {
-      return {
-        status: 'error',
-        data: null,
-        error: state.error,
-        isFetching: state.isFetching,
-        refetch,
-      }
-    } else {
-      return {
-        status: state.status,
-        data: null,
-        error: null,
-        isFetching: state.isFetching,
-        refetch,
-      }
-    }
-  }, [state, qRef])
+  return useQueryForBuilder(query, { ...options, suspense: false }) as RelationalQueryResult<
+    QueryBuilderResult<B>
+  >
 }
 
 /**
@@ -235,6 +191,13 @@ export interface UseQueryOptions {
    * consuming code is gated behind the same condition.
    */
   skip?: boolean
+  /**
+   * `suspense: false` opts this call site out of Suspense: the hook never suspends or
+   * throws, returning the tagged union `{ status, data, error, isFetching, refetch }`
+   * instead — branch on `status` yourself. Must be static for the lifetime of the
+   * call site. Defaults to `true`.
+   */
+  suspense?: boolean
 }
 
 /**
@@ -261,6 +224,24 @@ type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false }]
  * across a param change, wrap the param state update in `startTransition` — React keeps
  * the previous render committed while the new data resolves.
  */
+// Overload: builder, non-suspense — returns the tagged union, never throws
+export function useQuery<
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  B extends QueryBuilder<any, any, any, any, any, any>,
+>(
+  query: B,
+  options: UseQueryOptions & { suspense: false },
+): RelationalQueryResult<QueryBuilderResult<B>>
+// Overload: definition + args, non-suspense
+export function useQuery<
+  Args,
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  B extends QueryBuilder<any, any, any, any, any, any>,
+>(
+  definition: QueryDefinition<Args, B>,
+  args: Args,
+  options: UseQueryOptions & { suspense: false },
+): RelationalQueryResult<QueryBuilderResult<B>>
 // Overload: builder
 export function useQuery<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -310,15 +291,43 @@ const idlePagination: RelationalPaginationState = {
 function useQueryForBuilder<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
->(
-  query: B,
-  options: UseQueryOptions,
-): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>> {
+>(query: B, options: UseQueryOptions): unknown {
   type T = QueryBuilderResult<B>
-  const { skip = false } = options
+  const { skip = false, suspense = true } = options
   const { qRef, state } = useRelationalQueryRef(query, skip)
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
   const loadMore = useCallback(() => qRef?.loadMore(), [qRef])
+
+  // The tagged-union projection is memoized unconditionally so the hook order is
+  // identical in both suspense modes (the option must still be static per call site).
+  const taggedResult = useMemo((): RelationalQueryResult<T> => {
+    if (state.status === 'success') {
+      return {
+        status: 'success',
+        data: state.data,
+        error: state.error,
+        isFetching: state.isFetching,
+        refetch,
+      }
+    } else if (state.status === 'error') {
+      return {
+        status: 'error',
+        data: null,
+        error: state.error,
+        isFetching: state.isFetching,
+        refetch,
+      }
+    }
+    return {
+      status: state.status,
+      data: null,
+      error: null,
+      isFetching: state.isFetching,
+      refetch,
+    }
+  }, [state, refetch])
+
+  if (!suspense) return taggedResult
 
   const isPaginated = query.toAST().kind === 'paginate'
 

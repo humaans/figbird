@@ -365,6 +365,60 @@ export class Figbird<
     }
   }
 
+  // Active speculative pins, keyed by query hash (see prefetch()).
+  #prefetches: Map<
+    string,
+    { at: number; release: () => void; timer: ReturnType<typeof setTimeout> }
+  > = new Map()
+
+  /**
+   * Speculatively warm a query — the idempotent, fire-and-forget sibling of `prepare()`.
+   *
+   * Safe to call at any frequency (hover, viewport entry, likely-next): if the same
+   * query was prefetched within `staleTime`, the call is a no-op. Otherwise the query
+   * is materialized and held alive by an internal pin that auto-releases after
+   * `staleTime` — the fetched data stays in the QueryStore either way, so a later
+   * `useQuery` gets a warm synchronous read. If a component subscribes in the
+   * meantime, its own subscription keeps the query alive past the pin.
+   *
+   * Use `prepare()` instead when you need to await readiness or control the lease
+   * explicitly (router navigation).
+   *
+   * @example
+   * ```ts
+   * <Row onMouseEnter={() => figbird.prefetch(issueDetail, { id: issue.id })} />
+   * ```
+   */
+  prefetch<
+    Args,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(query: QueryDefinition<Args, B>, args: Args, options: { staleTime?: number } = {}): void {
+    const staleTime = options.staleTime ?? 30_000
+    const validatedArgs = query.validate(args)
+    const builder = query.build(validatedArgs)
+    const ref = this.relationalQuery(builder)
+    const hash = ref.hash()
+
+    const now = Date.now()
+    const existing = this.#prefetches.get(hash)
+    if (existing && now - existing.at < staleTime) return
+    if (existing) {
+      clearTimeout(existing.timer)
+      existing.release()
+      this.#prefetches.delete(hash)
+    }
+
+    const release = ref.subscribe(() => {})
+    const timer = setTimeout(() => {
+      this.#prefetches.delete(hash)
+      release()
+    }, staleTime)
+    // Never keep a Node process alive for a speculative pin (browsers ignore this).
+    ;(timer as { unref?: () => void }).unref?.()
+    this.#prefetches.set(hash, { at: now, release, timer })
+  }
+
   // Strongly-typed overloads for inference from serviceName and method
   /** Create a typed `find` query reference. */
   query<N extends ServiceNames<S>>(

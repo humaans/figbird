@@ -1979,12 +1979,13 @@ test('subscribeToStateChanges', async t => {
         )
       }
     }
-    // Remove updatedAt fields from all query data
+    // Remove updatedAt fields and fetch timestamps from all query data
     if (state?.notes && typeof state.notes === 'object' && state.notes !== null) {
       const notesState = state.notes as Record<string, unknown>
       if (notesState?.queries && typeof notesState.queries === 'object') {
         Object.values(notesState.queries as Record<string, Record<string, unknown>>).forEach(
           query => {
+            delete query.fetchedAt
             const data =
               query?.state && typeof query.state === 'object'
                 ? (query.state as Record<string, unknown>).data
