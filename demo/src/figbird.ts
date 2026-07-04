@@ -80,55 +80,48 @@ export const schema = createSchema({
     issueLabels: service<{ item: IssueLabel }>(),
     reactions: service<{ item: Reaction }>(),
   },
+  // destField defaults to 'id'; string fields cover the common single-key case.
   relationships: ({ one, many, embed }) => ({
     issues: {
-      creator: one({ sourceField: ['creatorId'], destService: 'users', destField: ['id'] }),
-      assignee: one({ sourceField: ['assigneeId'], destService: 'users', destField: ['id'] }),
-      team: one({ sourceField: ['teamId'], destService: 'teams', destField: ['id'] }),
-      comments: many({ sourceField: ['id'], destService: 'comments', destField: ['issueId'] }),
-      issueLabels: many({
-        sourceField: ['id'],
-        destService: 'issueLabels',
-        destField: ['issueId'],
-      }),
+      creator: one({ sourceField: 'creatorId', destService: 'users' }),
+      assignee: one({ sourceField: 'assigneeId', destService: 'users' }),
+      team: one({ sourceField: 'teamId', destService: 'teams' }),
+      comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' }),
+      issueLabels: many({ sourceField: 'id', destService: 'issueLabels', destField: 'issueId' }),
       // Transparent two-hop junction: consumers say `.related('labels')` and get
       // Label[] directly — figbird fetches the issueLabels junction, then the
       // labels, and hides the join. Realtime events on either service (e.g. a new
       // issueLabels row) flow into the assembled result.
       labels: many(
-        { sourceField: ['id'], destService: 'issueLabels', destField: ['issueId'] },
-        { sourceField: ['labelId'], destService: 'labels', destField: ['id'] },
+        { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
+        { sourceField: 'labelId', destService: 'labels' },
       ),
     },
     teams: {
-      members: many({ sourceField: ['id'], destService: 'users', destField: ['teamId'] }),
+      members: many({ sourceField: 'id', destService: 'users', destField: 'teamId' }),
       // embed(): the parent carries a server-maintained list of dest ids — figbird
       // fans every team's spotlightIssueIds into ONE batched IN(...) fetch and
       // assembles per-team slices preserving the server-chosen order. Membership
       // and ordering are owned by the server; freshness comes from the team's own
       // realtime events (the server re-emits the team when the list changes).
-      spotlight: embed({
-        sourceField: ['spotlightIssueIds'],
-        destService: 'issues',
-        destField: ['id'],
-      }),
+      spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' }),
       // Used with a per-team window (`.orderBy().limit()`), which fans out one
       // query per team — fine at 4 teams, and exactly the shape the fan-out
       // warning + embed pattern exist for at larger scales.
-      recentIssues: many({ sourceField: ['id'], destService: 'issues', destField: ['teamId'] }),
+      recentIssues: many({ sourceField: 'id', destService: 'issues', destField: 'teamId' }),
     },
     users: {
-      team: one({ sourceField: ['teamId'], destService: 'teams', destField: ['id'] }),
+      team: one({ sourceField: 'teamId', destService: 'teams' }),
     },
     issueLabels: {
-      label: one({ sourceField: ['labelId'], destService: 'labels', destField: ['id'] }),
+      label: one({ sourceField: 'labelId', destService: 'labels' }),
     },
     comments: {
-      author: one({ sourceField: ['authorId'], destService: 'users', destField: ['id'] }),
-      reactions: many({ sourceField: ['id'], destService: 'reactions', destField: ['commentId'] }),
+      author: one({ sourceField: 'authorId', destService: 'users' }),
+      reactions: many({ sourceField: 'id', destService: 'reactions', destField: 'commentId' }),
     },
     reactions: {
-      user: one({ sourceField: ['userId'], destService: 'users', destField: ['id'] }),
+      user: one({ sourceField: 'userId', destService: 'users' }),
     },
   }),
 })

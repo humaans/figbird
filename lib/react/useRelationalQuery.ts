@@ -230,12 +230,22 @@ export type SuspenseQueryResult<
  */
 export interface UseQueryOptions {
   /**
-   * Skip the query entirely. Returns a result with `data: undefined` (typed as `T`) — the
-   * caller is responsible for not reading it. Use this only for conditional fetching where
-   * the consuming code is gated behind the same condition.
+   * Skip the query entirely — nothing is fetched and `data` is `undefined` (the result
+   * type widens to `T | undefined` accordingly). Use for conditional fetching where the
+   * consuming code is gated behind the same condition.
    */
   skip?: boolean
 }
+
+/**
+ * `data` widens to `T | undefined` when the options could skip the query; without a
+ * (possibly-true) `skip`, `data` stays `T`.
+ */
+type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false }]
+  ? T
+  : O extends { skip: boolean }
+    ? T | undefined
+    : T
 
 /**
  * Suspense-native query hook for relational queries.
@@ -255,20 +265,22 @@ export interface UseQueryOptions {
 export function useQuery<
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
+  O extends UseQueryOptions = Record<string, never>,
 >(
   query: B,
-  options?: UseQueryOptions,
-): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
+  options?: O,
+): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
 // Overload: definition + args
 export function useQuery<
   Args,
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<any, any, any, any, any, any>,
+  O extends UseQueryOptions = Record<string, never>,
 >(
   definition: QueryDefinition<Args, B>,
   args: Args,
-  options?: UseQueryOptions,
-): SuspenseQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
+  options?: O,
+): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
 // Implementation
 export function useQuery(
   queryOrDefinition: unknown,

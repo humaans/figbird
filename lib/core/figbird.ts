@@ -262,17 +262,24 @@ export class Figbird<
    * resolves to the same builder hash and the same cache entry — so a query the router
    * prepared and a query the component reads share state.
    *
-   * The second argument is a [Standard Schema](https://github.com/standard-schema/standard-schema)
-   * validator (zod, valibot, arktype, etc.) that runs at every call site. Validation runs
-   * inside `prepare()` and `useQuery()` and throws `QueryArgsError` on failure — turning
+   * Args are typed from the build function's parameter. When args arrive from an
+   * untrusted source (URL params, storage), pass a
+   * [Standard Schema](https://github.com/standard-schema/standard-schema) validator
+   * (zod, valibot, arktype, etc.) as the middle argument — it runs at every
+   * `prepare()`/`useQuery()` call site and throws `QueryArgsError` on failure, turning
    * silent cache-misses (e.g. `{ id: "42" }` vs `{ id: 42 }`) into loud, fast failures.
-   * The (possibly normalized) value returned by the schema feeds into `build`, so the cache
-   * key reflects the normalized args.
+   * The (possibly normalized) value returned by the schema feeds into `build`, so the
+   * cache key reflects the normalized args. Args from typed code don't need one.
    *
    * @example
    * ```ts
-   * import { z } from 'zod'
+   * // Typed args, no runtime validation — the common case
+   * const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+   *   figbird.q.issues.where({ id }).one().related('comments'),
+   * )
    *
+   * // Validated args — for URL-driven call sites
+   * import { z } from 'zod'
    * const issueDetail = figbird.defineQuery(
    *   'issueDetail',
    *   z.object({ id: z.coerce.number().int().positive() }),
@@ -283,6 +290,13 @@ export class Figbird<
    * useQuery(issueDetail, { id: 42 })           // component reads the same cache entry
    * ```
    */
+  // Overload: typed args only, no runtime validation.
+  defineQuery<
+    Args,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(name: string, build: (args: Args) => B): QueryDefinition<Args, B>
+  // Overload: Standard Schema-validated args.
   defineQuery<
     TSchema extends StandardSchemaV1,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -291,14 +305,22 @@ export class Figbird<
     name: string,
     argsSchema: TSchema,
     build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B> {
-    type Args = StandardSchemaV1.InferOutput<TSchema>
+  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+  // Implementation
+  defineQuery(
+    name: string,
+    argsSchemaOrBuild: StandardSchemaV1 | ((args: unknown) => unknown),
+    maybeBuild?: (args: unknown) => unknown,
+  ): QueryDefinition<unknown, unknown> {
+    const argsSchema = maybeBuild ? (argsSchemaOrBuild as StandardSchemaV1) : null
+    const build = maybeBuild ?? (argsSchemaOrBuild as (args: unknown) => unknown)
     return {
       [QUERY_DEFINITION_BRAND]: true,
       name,
       build,
-      validate: (args: unknown): Args =>
-        validateQueryArgs(name, argsSchema as StandardSchemaV1<unknown, Args>, args),
+      validate: argsSchema
+        ? (args: unknown) => validateQueryArgs(name, argsSchema, args)
+        : (args: unknown) => args,
     }
   }
 
@@ -314,12 +336,12 @@ export class Figbird<
    *
    * @example
    * ```ts
-   * // routes.ts
+   * // routes.ts — router metadata (like a priority) is attached by the app
    * defineRoute({
    *   path: '/issues/:id',
    *   resolver: () => import('./pages/IssueDetail/screen'),
    *   prepare: ({ figbird, params }) => [
-   *     figbird.prepare(issueDetail, { id: Number(params.id) }, { priority: 'route' }),
+   *     { ...figbird.prepare(issueDetail, { id: Number(params.id) }), priority: 'route' },
    *   ],
    * })
    * ```
@@ -328,11 +350,7 @@ export class Figbird<
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
-    query: QueryDefinition<Args, B>,
-    args: Args,
-    options: { priority?: 'route' | 'defer' } = {},
-  ): PreparedQuery {
+  >(query: QueryDefinition<Args, B>, args: Args): PreparedQuery {
     const validatedArgs = query.validate(args)
     const builder = query.build(validatedArgs)
     const ref = this.relationalQuery(builder)
@@ -342,7 +360,6 @@ export class Figbird<
     const unsub = ref.subscribe(() => {})
     return {
       key: ref.hash(),
-      priority: options.priority ?? 'route',
       promise: ref.suspensePromise(),
       release: unsub,
     }

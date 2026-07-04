@@ -41,13 +41,10 @@ export function DevToolsPanel() {
       if (pausedRef.current) return
       const entry = describeEvent(event, ++counterRef.current)
       if (!entry) return
-      // Defer to microtask so figbird's synchronous emits during another component's
-      // render don't trigger React's "setState during render" warning.
-      queueMicrotask(() => {
-        setEntries(prev => {
-          const next = [...prev, entry]
-          return next.length > 200 ? next.slice(next.length - 200) : next
-        })
+      // figbird delivers events on a microtask, never mid-render — safe to set state.
+      setEntries(prev => {
+        const next = [...prev, entry]
+        return next.length > 200 ? next.slice(next.length - 200) : next
       })
     })
   }, [])

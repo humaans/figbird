@@ -13,8 +13,9 @@ import { issueCommentsQuery, issueDetailQuery } from './queries'
 export function prepareIssueDetail({ params }: RoutePrepareContext) {
   const id = Number(params.id)
   if (!Number.isFinite(id)) return []
+  // `priority` is the router's vocabulary, not figbird's — attach it here.
   return [
-    figbird.prepare(issueDetailQuery, { id }, { priority: 'route' }),
-    figbird.prepare(issueCommentsQuery, { id }, { priority: 'defer' }),
+    { ...figbird.prepare(issueDetailQuery, { id }), priority: 'route' as const },
+    { ...figbird.prepare(issueCommentsQuery, { id }), priority: 'defer' as const },
   ]
 }

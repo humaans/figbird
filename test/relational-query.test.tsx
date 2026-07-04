@@ -2633,7 +2633,6 @@ test('defineQuery + prepare: prepare and useQuery share the same cache entry', a
 
   // Prepare the query before any component reads it.
   const prepared = figbird.prepare(issueDetail, { id: 1 })
-  t.is(prepared.priority, 'route')
   t.truthy(prepared.key)
 
   await prepared.promise
@@ -2691,24 +2690,22 @@ test('defineQuery + prepare: prepare key is stable for identical args', t => {
   c.release()
 })
 
-test('defineQuery + prepare: priority option is forwarded to the handle', t => {
+test('defineQuery: typed-args form (no validator) builds and prepares', t => {
   const { figbird } = createApp()
 
-  const issueDetail = figbird.defineQuery('issueDetail', passthrough<{ id: number }>(), ({ id }) =>
+  // No Standard Schema — args are typed from the build function's parameter and
+  // pass through unvalidated.
+  const issueDetail = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
     figbird.q.issues.where({ id }).one(),
   )
 
-  const route = figbird.prepare(issueDetail, { id: 1 }, { priority: 'route' })
-  const defer = figbird.prepare(issueDetail, { id: 2 }, { priority: 'defer' })
-  const def = figbird.prepare(issueDetail, { id: 3 })
+  const a = figbird.prepare(issueDetail, { id: 1 })
+  const b = figbird.prepare(issueDetail, { id: 1 })
+  t.is(a.key, b.key, 'same args must map to the same cache key')
+  t.false('priority' in a, 'prepare handles carry no router vocabulary')
 
-  t.is(route.priority, 'route')
-  t.is(defer.priority, 'defer')
-  t.is(def.priority, 'route', 'default priority must be route')
-
-  route.release()
-  defer.release()
-  def.release()
+  a.release()
+  b.release()
 })
 
 // ============================================================================

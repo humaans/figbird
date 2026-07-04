@@ -6,34 +6,23 @@
  * with the same definitions and hits the same cache entries.
  */
 
-import { type StandardSchemaV1 } from 'figbird'
 import { figbird } from '../../figbird'
 
-// Tiny passthrough Standard Schema validator. Real consumers would pass zod/valibot/arktype.
-function passthrough<T>(): StandardSchemaV1<T, T> {
-  return {
-    '~standard': {
-      version: 1,
-      vendor: 'demo-passthrough',
-      validate: (input: unknown) => ({ value: input as T }),
-    },
-  }
-}
+// Args here come from typed code (the route prepare coerces the URL param first),
+// so the plain typed-args form is enough. Pass a zod/valibot/arktype schema as the
+// middle argument when args arrive from untrusted sources.
 
 /** Route-priority: required to render the issue header/meta. */
-export const issueDetailQuery = figbird.defineQuery(
-  'issueDetail',
-  passthrough<{ id: number }>(),
-  ({ id }) =>
-    figbird.q.issues
-      .where({ id })
-      .one()
-      .related('creator')
-      .related('assignee')
-      .related('team')
-      // Transparent two-hop junction (issues → issueLabels → labels): consumers
-      // get Label[] directly, the join is hidden by the schema relationship.
-      .related('labels'),
+export const issueDetailQuery = figbird.defineQuery('issueDetail', ({ id }: { id: number }) =>
+  figbird.q.issues
+    .where({ id })
+    .one()
+    .related('creator')
+    .related('assignee')
+    .related('team')
+    // Transparent two-hop junction (issues → issueLabels → labels): consumers
+    // get Label[] directly, the join is hidden by the schema relationship.
+    .related('labels'),
 )
 
 /**
@@ -42,8 +31,6 @@ export const issueDetailQuery = figbird.defineQuery(
  * teammate's new comment or reply merges into the thread straight from the socket
  * event — no refetch. Ordering and threading are assembled in the component.
  */
-export const issueCommentsQuery = figbird.defineQuery(
-  'issueComments',
-  passthrough<{ id: number }>(),
-  ({ id }) => figbird.q.comments.where({ issueId: id }).related('author').related('reactions'),
+export const issueCommentsQuery = figbird.defineQuery('issueComments', ({ id }: { id: number }) =>
+  figbird.q.comments.where({ issueId: id }).related('author').related('reactions'),
 )

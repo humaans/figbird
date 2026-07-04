@@ -66,7 +66,8 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
   const { data: teams } = useQuery(figbird.q.teams)
   const { data: labels } = useQuery(figbird.q.labels)
 
-  const issueMutation = useMutation('issues')
+  // The whole detail surface is optimistic — declared once at the hook.
+  const issueMutation = useMutation('issues', { optimistic: true })
   const issueLabelMutation = useMutation('issueLabels')
 
   if (!issue) {
@@ -96,37 +97,25 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
     const userIds = users.map(user => user.id)
     if (userIds.length === 0) return
     const nextUserId = userIds[(userIds.indexOf(issue.assigneeId) + 1) % userIds.length]!
-    runAction('reassign', () =>
-      issueMutation.patch(issue.id, { assigneeId: nextUserId }, { optimistic: true }),
-    )
+    runAction('reassign', () => issueMutation.patch(issue.id, { assigneeId: nextUserId }))
   }
 
   const moveTeam = () => {
     const teamIds = teams.map(team => team.id)
     if (teamIds.length === 0) return
     const nextTeamId = teamIds[(teamIds.indexOf(issue.teamId) + 1) % teamIds.length]!
-    runAction('team', () =>
-      issueMutation.patch(issue.id, { teamId: nextTeamId }, { optimistic: true }),
-    )
+    runAction('team', () => issueMutation.patch(issue.id, { teamId: nextTeamId }))
   }
 
   const boostPriority = () => {
     runAction('priority', () =>
-      issueMutation.patch(
-        issue.id,
-        { priorityScore: Math.min(99, issue.priorityScore + 12) },
-        { optimistic: true },
-      ),
+      issueMutation.patch(issue.id, { priorityScore: Math.min(99, issue.priorityScore + 12) }),
     )
   }
 
   const toggleStatus = () => {
     runAction('status', () =>
-      issueMutation.patch(
-        issue.id,
-        { status: issue.status === 'open' ? 'closed' : 'open' },
-        { optimistic: true },
-      ),
+      issueMutation.patch(issue.id, { status: issue.status === 'open' ? 'closed' : 'open' }),
     )
   }
 
@@ -144,7 +133,7 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
   const deleteIssue = () => {
     if (!window.confirm('Delete this issue?')) return
     runAction('delete', async () => {
-      await issueMutation.remove(issue.id, { optimistic: true })
+      await issueMutation.remove(issue.id)
       navigate('/')
     })
   }
@@ -252,7 +241,7 @@ function EditableTitle({ issueId, title }: { issueId: number; title: string }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(title)
   const [error, setError] = useState<string | null>(null)
-  const issueMutation = useMutation('issues')
+  const issueMutation = useMutation('issues', { optimistic: true })
 
   const startEditing = () => {
     setDraft(title)
@@ -275,7 +264,7 @@ function EditableTitle({ issueId, title }: { issueId: number; title: string }) {
     }
     setEditing(false)
     try {
-      await issueMutation.patch(issueId, { title: next }, { optimistic: true })
+      await issueMutation.patch(issueId, { title: next })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -329,7 +318,7 @@ function EditableTitle({ issueId, title }: { issueId: number; title: string }) {
 function EditableDescription({ issueId, description }: { issueId: number; description: string }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(description)
-  const issueMutation = useMutation('issues')
+  const issueMutation = useMutation('issues', { optimistic: true })
 
   const startEditing = () => {
     setDraft(description)
@@ -339,7 +328,7 @@ function EditableDescription({ issueId, description }: { issueId: number; descri
     setEditing(false)
     const next = draft.trim()
     if (next === description) return
-    await issueMutation.patch(issueId, { description: next }, { optimistic: true })
+    await issueMutation.patch(issueId, { description: next })
   }
 
   if (!editing) {
@@ -522,7 +511,7 @@ function CommentComposer({
   onDone?: () => void
 }) {
   const [body, setBody] = useState('')
-  const commentMutation = useMutation('comments')
+  const commentMutation = useMutation('comments', { optimistic: true })
   const busy = commentMutation.status === 'loading'
 
   const submit = async () => {
@@ -530,10 +519,13 @@ function CommentComposer({
     if (text.length === 0) return
     setBody('')
     onDone?.()
-    await commentMutation.create(
-      { id: Date.now(), issueId, authorId: CURRENT_USER_ID, parentId, body: text },
-      { optimistic: true },
-    )
+    await commentMutation.create({
+      id: Date.now(),
+      issueId,
+      authorId: CURRENT_USER_ID,
+      parentId,
+      body: text,
+    })
   }
 
   return (

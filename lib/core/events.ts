@@ -83,16 +83,36 @@ export interface FigbirdEvents {
 
 export class FigbirdEventEmitter implements FigbirdEvents {
   #listeners: Set<(event: FigbirdEvent) => void> = new Set()
+  #queue: FigbirdEvent[] = []
+  #flushScheduled = false
 
+  /**
+   * Emission is deferred to a microtask (batched, order-preserving). Some emits
+   * happen synchronously inside a React render (subscribing to a query can start a
+   * fetch during render) — delivering to listeners at that moment forces every
+   * React-bound subscriber to defer manually or hit "setState during render".
+   * Event payloads capture their facts (timestamps, durations) at emit time, so
+   * deferred delivery distorts nothing.
+   */
   emit(event: FigbirdEvent): void {
     if (this.#listeners.size === 0) return
-    for (const fn of this.#listeners) {
-      try {
-        fn(event)
-      } catch {
-        // Listener errors must never break the store loop.
+    this.#queue.push(event)
+    if (this.#flushScheduled) return
+    this.#flushScheduled = true
+    queueMicrotask(() => {
+      this.#flushScheduled = false
+      const events = this.#queue
+      this.#queue = []
+      for (const event of events) {
+        for (const fn of this.#listeners) {
+          try {
+            fn(event)
+          } catch {
+            // Listener errors must never break the store loop.
+          }
+        }
       }
-    }
+    })
   }
 
   subscribe(listener: (event: FigbirdEvent) => void): () => void {
