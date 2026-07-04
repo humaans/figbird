@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { resolveServicePath } from '../core/schema.js'
-import { useFigbird } from './react.js'
+import { useFigbird } from './context.js'
 
 export type UseMethodStatus = 'idle' | 'loading' | 'success' | 'error'
 

@@ -1,5 +1,5 @@
 import type { FeathersClient } from '../adapters/feathers.js'
-import { useFigbird } from './react.js'
+import { useFigbird } from './context.js'
 
 /**
  * Specific to Feathers adapter. Might remove in the future.

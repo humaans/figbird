@@ -1,4 +1,4 @@
-import type { QueryAST } from './query-builder.js'
+import type { QueryAST } from './queryBuilder.js'
 import type { RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
 import type { ProcessedRealtimeEvent, ServiceState } from './queryTypes.js'

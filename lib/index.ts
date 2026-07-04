@@ -52,14 +52,14 @@ export type {
 } from './core/schema.js'
 
 // query builder
-export { QueryBuilder, createQueryBuilderProxy } from './core/query-builder.js'
+export { QueryBuilder, createQueryBuilderProxy } from './core/queryBuilder.js'
 export type {
   QueryAST,
   QueryBuilderProxy,
   FeathersQuery,
   FieldOperators,
   WhereClause,
-} from './core/query-builder.js'
+} from './core/queryBuilder.js'
 
 // query classification (how a query node is maintained — useful for devtools)
 export {
@@ -89,7 +89,7 @@ export type {
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
-export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/react.js'
+export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
 export { useMutation } from './react/useMutation.js'
 // useMethod is the mutation path for custom (non-CRUD) service methods; useFeathers
 // is the raw-client escape hatch. Both are typed via createHooks.

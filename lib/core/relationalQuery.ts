@@ -1,5 +1,5 @@
 import { hashObject } from './hash.js'
-import type { QueryAST } from './query-builder.js'
+import type { QueryAST } from './queryBuilder.js'
 import { hasWindowFilters } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
 import type {

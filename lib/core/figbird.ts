@@ -5,7 +5,7 @@ import {
   type QueryBuilder,
   type QueryBuilderProxy,
   type QueryBuilderResult,
-} from './query-builder.js'
+} from './queryBuilder.js'
 import { isQueryDefinition, type PreparedQuery, type QueryDefinition } from './queryDefinition.js'
 import {
   classifyQueryNode,
@@ -14,7 +14,7 @@ import {
   type ClassificationReason,
   type QueryNodeClass,
 } from './queryClassification.js'
-import type { QueryAST } from './query-builder.js'
+import type { QueryAST } from './queryBuilder.js'
 import { QueryRef } from './queryRef.js'
 import { QueryStore } from './queryStore.js'
 import {
