@@ -36,7 +36,7 @@ import type {
   SuspenseQueryResult,
   UseQueryOptions,
 } from './useQuery.js'
-import type { ArgsAndOptions, QueryDefinition } from '../core/figbird.js'
+import type { ArgsAndOptions, ArgsAndRequiredOptions, QueryDefinition } from '../core/figbird.js'
 import type { QueryBuilderProxy, QueryBuilderResult } from '../core/queryBuilder.js'
 
 /**
@@ -115,15 +115,14 @@ interface UseQueryForSchema<S extends Schema> {
     query: B,
     options: UseQueryOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>>
-  // Definition + args, non-suspense
+  // Definition, non-suspense — args omittable when the definition takes none
   <
     Args,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     B extends QueryBuilder<S, any, any, any, any, any>,
   >(
     definition: QueryDefinition<Args, B>,
-    args: Args,
-    options: UseQueryOptions & { suspense: false },
+    ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
   ): RelationalQueryResult<QueryBuilderResult<B>>
   // Builder
   <
