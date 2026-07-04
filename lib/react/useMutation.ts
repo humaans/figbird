@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import type { MutationOptions } from '../core/figbird.js'
-import { useFigbird } from './react.js'
+import { useFigbird } from './context.js'
 
 // Public untyped mutation hook intentionally returns `any` for backwards compatibility.
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any

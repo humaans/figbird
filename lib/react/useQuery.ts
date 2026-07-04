@@ -20,14 +20,14 @@
  */
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
-import type { QueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/query-builder.js'
+import type { QueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
   isQueryDefinition,
   type QueryDefinition,
   type RelationalPaginationState,
   type RelationalQueryState,
 } from '../core/figbird.js'
-import { useFigbird } from './react.js'
+import { useFigbird } from './context.js'
 
 /**
  * State for the relational query hook.

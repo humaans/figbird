@@ -3,7 +3,7 @@ import { FeathersAdapter } from '../lib/adapters/feathers.js'
 import { Figbird } from '../lib/core/figbird.js'
 import { createSchema, service } from '../lib/core/schema.js'
 import { createHooks } from '../lib/react/createHooks.js'
-import { FigbirdProvider } from '../lib/react/react.js'
+import { FigbirdProvider } from '../lib/react/context.js'
 import { dom, mockFeathers } from './helpers.js'
 
 // Define typed query interfaces

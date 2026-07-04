@@ -2,7 +2,7 @@ import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react
 import type { QueryState } from '../core/figbird.js'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
 import { queryIdentityKey, type QueryIdentityConfig } from '../core/queryIdentity.js'
-import { useFigbird } from './react.js'
+import { useFigbird } from './context.js'
 
 type BaseQueryResult = {
   refetch: () => void

@@ -13,7 +13,7 @@ import {
   type QueryConfig,
   type StandardSchemaV1,
 } from '../core/figbird.js'
-import type { QueryBuilder, QueryBuilderKind } from '../core/query-builder.js'
+import type { QueryBuilder, QueryBuilderKind } from '../core/queryBuilder.js'
 import type {
   Schema,
   ServiceCreate,
@@ -25,7 +25,7 @@ import type {
   ServiceUpdate,
 } from '../core/schema.js'
 import { resolveServicePath } from '../core/schema.js'
-import { useFigbirdMaybe } from './react.js'
+import { useFigbirdMaybe } from './context.js'
 import { useMethodImpl, type UseMethodResult } from './useMethod.js'
 import { useMutationImpl, type UseMutationOptions, type UseMutationResult } from './useMutation.js'
 import { useQueryByDescImpl, type QueryResult } from './useQueryByDesc.js'
@@ -37,7 +37,7 @@ import type {
   UseQueryOptions,
 } from './useQuery.js'
 import type { QueryDefinition } from '../core/figbird.js'
-import type { QueryBuilderProxy, QueryBuilderResult } from '../core/query-builder.js'
+import type { QueryBuilderProxy, QueryBuilderResult } from '../core/queryBuilder.js'
 
 /**
  * Strongly-typed call signatures per service name.
