@@ -86,10 +86,6 @@ type TypedServiceForSchema<S extends Schema, N extends ServiceNames<S>> = TypedF
   ServiceMethods<S, N>
 >
 
-type UseServiceForSchema<S extends Schema> = <N extends ServiceNames<S>>(
-  serviceName: N,
-) => TypedServiceForSchema<S, N>
-
 type MethodArgs<TMethod> = TMethod extends (...args: infer TArgs extends unknown[]) => unknown
   ? TArgs
   : never
@@ -225,7 +221,6 @@ export function createHooks<F extends Figbird<any, any>>(
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   useMutation: UseMutationForSchema<InferSchema<F>>
-  useService: UseServiceForSchema<InferSchema<F>>
   useMethod: UseMethodForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
   useQuery: UseQueryForSchema<InferSchema<F>>
@@ -315,17 +310,6 @@ export function createHooks<F extends Figbird<any, any>>(
     >
   }
 
-  function useTypedService<N extends ServiceNames<S>>(serviceName: N) {
-    const adapter = figbird.adapter as { feathers?: FeathersClient }
-    if (!adapter?.feathers) {
-      throw new Error('useService must be used with a Feathers adapter')
-    }
-
-    return adapter.feathers.service(
-      resolveServicePath(figbird.schema, serviceName),
-    ) as unknown as TypedServiceForSchema<S, N>
-  }
-
   function useTypedMethod<N extends ServiceNames<S>, M extends keyof ServiceMethods<S, N> & string>(
     serviceName: N,
     methodName: M,
@@ -380,7 +364,6 @@ export function createHooks<F extends Figbird<any, any>>(
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
-    useService: useTypedService as UseServiceForSchema<S>,
     useMethod: useTypedMethod as UseMethodForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
     // The typed schema binding is enforced via QueryBuilder<S, T> on the call signatures.
