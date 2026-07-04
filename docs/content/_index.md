@@ -766,8 +766,7 @@ export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = crea
 Returns the daily-use kit — `useQuery`, `useMutation`, `q` (the builder proxy),
 schema-typed `defineQuery`, and instance-bound `prepare`/`prefetch` — along with
 `useMethod` (custom service methods) and `useFeathers` (the raw-client escape hatch),
-plus the deprecated legacy hooks (`useFind`, `useGet`, `useService`) for older
-codebases.
+plus the deprecated legacy hooks (`useFind`, `useGet`) for older codebases.
 
 Instance resolution: hooks use the bound instance directly, so no provider is required. If a
 `FigbirdProvider` is present in the tree, **it wins** — that's the injection point for
@@ -935,7 +934,3 @@ const { data, status, isFetching, error, refetch } = useGet(serviceName, id, par
 ```
 
 Same Figbird params as `useFind` (minus pagination). No `meta` by default.
-
-## useService
-
-**Deprecated** — prefer `useFeathers().service(name)`: same capability, one escape hatch.

@@ -95,10 +95,9 @@ export { useMutation } from './react/useMutation.js'
 // is the raw-client escape hatch. Both are typed via createHooks.
 export { useMethod } from './react/useMethod.js'
 export { useFeathers } from './react/useFeathers.js'
-// Legacy generation (deprecated): descriptor-based reads and the useService alias.
-// Fully functional, but new code should use useQuery + builders / useFeathers.
+// Legacy generation (deprecated): descriptor-based reads. Fully functional, but new
+// code should use useQuery + builders.
 export { useFind, useGet } from './react/useQueryByDesc.js'
-export { useService } from './react/useService.js'
 // useQuery is the unified, Suspense-by-default builder hook; pass { suspense: false }
 // for the explicit tagged-union variant.
 export { useQuery } from './react/useQuery.js'
