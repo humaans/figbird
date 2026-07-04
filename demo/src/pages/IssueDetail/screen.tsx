@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react'
 import { useDelayedFlag } from 'figbird'
 import { useNavigate, useRoute } from 'react-space-router'
 import { useMutation, useQuery, type Comment, type Reaction, type User } from '../../figbird'
+import { Explain } from '../../Explain'
 import { issueCommentsQuery, issueDetailQuery } from './queries'
 
 const userIds = [1, 2, 3, 4, 5, 6, 7, 8] as const
@@ -124,9 +125,11 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
   }
 
   const addMissingLabel = () => {
-    const existing = new Set(issue.issueLabels.map(link => link.labelId))
+    const existing = new Set(issue.labels.map(label => label.id))
     const labelId = labelIds.find(id => !existing.has(id))
     if (!labelId) return
+    // Creating the junction row is enough — the realtime event on issueLabels flows
+    // through the two-hop 'labels' relation and the new label appears in place.
     runAction('label', () =>
       issueLabelMutation.create({ id: Date.now(), issueId: issue.id, labelId }),
     )
@@ -161,15 +164,13 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
           {' · '}
           {issue.team?.name ?? 'no team'}
         </div>
-        {issue.issueLabels.length > 0 ? (
+        {issue.labels.length > 0 ? (
           <div className='label-row'>
-            {issue.issueLabels.map(link =>
-              link.label ? (
-                <span key={link.id} className={`label ${link.label.tone}`}>
-                  {link.label.name}
-                </span>
-              ) : null,
-            )}
+            {issue.labels.map(label => (
+              <span key={label.id} className={`label ${label.tone}`}>
+                {label.name}
+              </span>
+            ))}
           </div>
         ) : null}
       </header>
@@ -393,6 +394,23 @@ function CommentsPanel({ issueId }: { issueId: number }) {
         <span className='eyebrow'>Comments</span>
         <span className='count'>{comments.length}</span>
         <StatusDot active={isFetching} />
+        <Explain
+          label='Prepared, live thread'
+          query={`defineQuery('issueComments', schema, ({ id }) =>
+  q.comments
+    .where({ issueId: id })
+    .related('author')
+    .related('reactions'))
+
+// fired by the route, in parallel with
+// this screen's lazy chunk:
+figbird.prepare(issueCommentsQuery, { id })`}
+        >
+          The route warmed this exact query before the screen's code even downloaded, so the thread
+          usually renders without a fallback. It's deliberately unwindowed — figbird classifies it{' '}
+          <em>local-exact</em>, so new comments and replies (yours or a teammate's) merge straight
+          from the socket event, no refetch. Threading is assembled in the component.
+        </Explain>
       </header>
       {threads.length === 0 ? (
         <p className='empty-line' style={{ padding: 0 }}>

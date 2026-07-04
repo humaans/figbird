@@ -346,7 +346,11 @@ await seed()
 // from the dev-tools drawer when you want a quiet event log.
 let backgroundEnabled = true
 
-const demoState = () => ({ backgroundEnabled, latency })
+// One-shot chaos switch: when armed, the next user-originated mutation throws —
+// the visible effect client-side is figbird rolling the optimistic change back.
+let chaosArmed = false
+
+const demoState = () => ({ backgroundEnabled, latency, chaosArmed })
 
 app.use('_demo', {
   async find() {
@@ -356,6 +360,7 @@ app.use('_demo', {
     if (data && typeof data === 'object') {
       if ('backgroundEnabled' in data) backgroundEnabled = !!data.backgroundEnabled
       if ('latency' in data && data.latency in LATENCY_PROFILES) latency = data.latency
+      if ('chaosArmed' in data) chaosArmed = Boolean(data.chaosArmed)
     }
     return demoState()
   },
@@ -371,6 +376,28 @@ app.use('_demo', {
 
 // Don't broadcast _demo events — they're plumbing, not domain data.
 app.service('_demo').publish(() => null)
+
+// When chaos is armed, the next user-originated write fails. Internal writes
+// (the teammate simulator, commentIds maintenance) are exempt so chaos always
+// hits the action the user is about to take.
+const chaosHook = async context => {
+  if (context.path === '_demo') return context
+  if (context.params?.internal) return context
+  if (chaosArmed) {
+    chaosArmed = false
+    throw new Error(`chaos: simulated ${context.method} failure on ${context.path}`)
+  }
+  return context
+}
+
+app.hooks({
+  before: {
+    create: [chaosHook],
+    update: [chaosHook],
+    patch: [chaosHook],
+    remove: [chaosHook],
+  },
+})
 
 // ----- Query helpers for hooks -----
 
@@ -502,9 +529,13 @@ app.service('comments').hooks({
       async context => {
         const issue = issues.store[context.result.issueId]
         if (issue) {
-          await app.service('issues').patch(issue.id, {
-            commentIds: [...(issue.commentIds ?? []), context.result.id],
-          })
+          await app
+            .service('issues')
+            .patch(
+              issue.id,
+              { commentIds: [...(issue.commentIds ?? []), context.result.id] },
+              { internal: true },
+            )
         }
         return context
       },
@@ -562,37 +593,51 @@ setInterval(async () => {
       const reply = rootComments.length > 0 && Math.random() < 0.35
       const parent = reply ? rootComments[rand(0, rootComments.length - 1)] : null
       const issue = parent ?? recentIssues[rand(0, recentIssues.length - 1)]
-      await app.service('comments').create({
-        issueId: parent ? parent.issueId : issue.id,
-        authorId: userIds[rand(0, userIds.length - 1)],
-        parentId: parent ? parent.id : null,
-        body: COMMENT_BODIES[rand(0, COMMENT_BODIES.length - 1)],
-      })
+      await app.service('comments').create(
+        {
+          issueId: parent ? parent.issueId : issue.id,
+          authorId: userIds[rand(0, userIds.length - 1)],
+          parentId: parent ? parent.id : null,
+          body: COMMENT_BODIES[rand(0, COMMENT_BODIES.length - 1)],
+        },
+        { internal: true },
+      )
     } else if (roll < 0.7) {
       // React to a recent comment.
       const commentIds = Object.keys(comments.store).map(Number)
       if (commentIds.length === 0) return
       const recent = commentIds.sort((a, b) => b - a).slice(0, 30)
-      await app.service('reactions').create({
-        commentId: recent[rand(0, recent.length - 1)],
-        userId: userIds[rand(0, userIds.length - 1)],
-        emoji: EMOJIS[rand(0, EMOJIS.length - 1)],
-      })
+      await app.service('reactions').create(
+        {
+          commentId: recent[rand(0, recent.length - 1)],
+          userId: userIds[rand(0, userIds.length - 1)],
+          emoji: EMOJIS[rand(0, EMOJIS.length - 1)],
+        },
+        { internal: true },
+      )
     } else if (roll < 0.85) {
       // Nudge an open issue's priority.
       if (openIssues.length === 0) return
       const issue = openIssues[rand(0, openIssues.length - 1)]
-      await app.service('issues').patch(issue.id, {
-        priorityScore: Math.max(1, Math.min(99, issue.priorityScore + rand(-6, 10))),
-      })
+      await app
+        .service('issues')
+        .patch(
+          issue.id,
+          { priorityScore: Math.max(1, Math.min(99, issue.priorityScore + rand(-6, 10))) },
+          { internal: true },
+        )
     } else {
       // Close an open issue, or reopen a closed one.
       const closeable = roll < 0.93 ? openIssues : issueRows.filter(i => i.status === 'closed')
       if (closeable.length === 0) return
       const issue = closeable[rand(0, closeable.length - 1)]
-      await app.service('issues').patch(issue.id, {
-        status: issue.status === 'open' ? 'closed' : 'open',
-      })
+      await app
+        .service('issues')
+        .patch(
+          issue.id,
+          { status: issue.status === 'open' ? 'closed' : 'open' },
+          { internal: true },
+        )
     }
   } catch {
     // A racing reset can invalidate ids mid-tick; skip the beat.

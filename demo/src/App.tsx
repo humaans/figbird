@@ -15,15 +15,19 @@ import { classifyQueryNode, useDelayedFlag, type FigbirdEvent } from 'figbird'
 import {
   demoControl,
   figbird,
+  socket,
   useMutation,
   useQuery,
   type DemoState,
   type Issue,
+  type Label,
   type LatencyProfile,
   type Team,
   type User,
 } from './figbird'
+import { Explain } from './Explain'
 import { prepareIssueDetail } from './pages/IssueDetail/prepare'
+import { issueCommentsQuery, issueDetailQuery } from './pages/IssueDetail/queries'
 
 function useSelectedIssueId(): number | null {
   const route = useRoute()
@@ -61,57 +65,27 @@ function useDebouncedTransition<T>(value: T, delay = 250): T {
   return debounced
 }
 
-/**
- * Little ⓘ popover explaining what figbird is doing behind a piece of UI.
- * The didactic layer of the demo, without the tabs-full-of-prose.
- * Rendered into a portal with fixed positioning so panes' overflow can't clip it.
- */
-function Explain({ label, children }: { label: string; children: ReactNode }) {
-  const btnRef = useRef<HTMLButtonElement | null>(null)
-  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null)
-  const open = pos !== null
+// ----- Hover prefetch -----
 
-  const toggle = () => {
-    if (open) {
-      setPos(null)
-      return
-    }
-    const rect = btnRef.current!.getBoundingClientRect()
-    const width = 300
-    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 12))
-    // Flip above the button when it sits near the bottom of the viewport.
-    if (rect.bottom > window.innerHeight - 260) {
-      setPos({ bottom: window.innerHeight - rect.top + 8, left })
-    } else {
-      setPos({ top: rect.bottom + 8, left })
-    }
+// Prefetch an issue's detail + comments the moment a row is hovered or focused —
+// figbird.prepare() is an earlier read of the exact queries the detail screen will
+// ask for, so by click time the navigation is usually a warm, synchronous read.
+// A small LRU of release() handles keeps hover pins from accumulating forever;
+// released entries keep their warm data in the QueryStore either way.
+const HOVER_PIN_LIMIT = 12
+const hoverPins = new Map<number, Array<{ release: () => void }>>()
+
+function prefetchIssue(id: number): void {
+  if (hoverPins.has(id)) return
+  hoverPins.set(id, [
+    figbird.prepare(issueDetailQuery, { id }),
+    figbird.prepare(issueCommentsQuery, { id }, { priority: 'defer' }),
+  ])
+  if (hoverPins.size > HOVER_PIN_LIMIT) {
+    const [oldest] = hoverPins.keys()
+    for (const handle of hoverPins.get(oldest!) ?? []) handle.release()
+    hoverPins.delete(oldest!)
   }
-
-  return (
-    <span className='explain'>
-      <button
-        ref={btnRef}
-        type='button'
-        className={`explain-btn${open ? ' open' : ''}`}
-        onClick={toggle}
-        aria-label={`How this works: ${label}`}
-      >
-        i
-      </button>
-      {open
-        ? createPortal(
-            <>
-              <div className='explain-backdrop' onClick={() => setPos(null)} />
-              <div className='explain-pop' style={pos}>
-                <span className='explain-title'>{label}</span>
-                {children}
-              </div>
-            </>,
-            document.body,
-          )
-        : null}
-    </span>
-  )
 }
 
 // ----- Issue list pane (search + filters + infinite pagination) -----
@@ -140,7 +114,16 @@ function IssueListPane() {
             placeholder='Search issues…'
             className='search-input'
           />
-          <Explain label='Server-authoritative search'>
+          <Explain
+            label='Server-authoritative search'
+            query={`q.issues
+  .where({ title: { $regex: term, $options: 'i' } })
+  .orderBy('updatedAt', 'desc')
+  .limit(30)
+  .server()
+  .related('assignee')
+  .related('team')`}
+          >
             The search query carries <code>$regex</code>, an operator figbird's local matcher can't
             evaluate — so it classifies the query <em>server-authoritative</em>: realtime events
             trigger a refetch instead of a local merge. Typing commits through{' '}
@@ -177,7 +160,13 @@ function IssueListPane() {
               {team.name}
             </button>
           ))}
-          <Explain label='Relational filter'>
+          <Explain
+            label='Relational filter'
+            query={`q.issues.where({
+  status: 'open',
+  'assignee.teamId': team.id,
+})`}
+          >
             The team chips filter by <code>'assignee.teamId'</code> — a field on the{' '}
             <em>related</em> user, not on the issue. The dotted path resolves to a join on the
             server; on the client, figbird's matcher evaluates it against the entity cache to keep
@@ -217,7 +206,7 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
       .paginate({ pageSize: 25, returnTotal: true })
       .related('assignee')
       .related('team')
-      .related('issueLabels', link => link.related('label')),
+      .related('labels'),
   )
 
   return (
@@ -229,13 +218,23 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
           {totalCount != null ? ` of ${totalCount}` : ''}
         </span>
         <StatusDot active={isFetching} />
-        <Explain label='Paginated live list'>
+        <Explain
+          label='Paginated live list'
+          query={`q.issues
+  .where(filters)
+  .orderBy('updatedAt', 'desc')
+  .paginate({ pageSize: 25, returnTotal: true })
+  .related('assignee')
+  .related('team')
+  .related('labels') // two-hop via issueLabels`}
+        >
           The list is one <code>.paginate({'{ pageSize: 25 }'})</code> query — each page is its own
           window on the server. Windowed queries are <em>server-window</em> class: realtime events
           can change membership invisibly (a row you can't see may now belong), so figbird refetches
           the affected pages instead of guessing. Comment counts come from{' '}
           <code>issue.commentIds</code>, a server-maintained id list — no comments are fetched here
-          at all.
+          at all. Hovering a row prefetches its detail via <code>figbird.prepare()</code>, so
+          clicking is usually a warm read.
         </Explain>
       </header>
       <ul className='issue-rows'>
@@ -291,7 +290,7 @@ function SearchResults({ q, typing }: { q: string; typing: boolean }) {
 type IssueRowData = Issue & {
   assignee: User | null
   team: Team | null
-  issueLabels?: Array<{ id: number; label: { id: number; name: string; tone: string } | null }>
+  labels?: Label[]
 }
 
 function IssueRow({ issue, highlight }: { issue: IssueRowData; highlight?: string }) {
@@ -302,6 +301,8 @@ function IssueRow({ issue, highlight }: { issue: IssueRowData; highlight?: strin
       <Link
         href={`/issues/${issue.id}`}
         className={`issue-row ${issue.id === selectedId ? 'selected' : ''}`}
+        onMouseEnter={() => prefetchIssue(issue.id)}
+        onFocus={() => prefetchIssue(issue.id)}
       >
         <span className={`status-dot ${issue.status}`} />
         <span className='issue-row-main'>
@@ -314,16 +315,14 @@ function IssueRow({ issue, highlight }: { issue: IssueRowData; highlight?: strin
             {issue.team?.name ?? '—'}
             {' · '}
             {commentCount} {commentCount === 1 ? 'comment' : 'comments'}
-            {issue.issueLabels?.length ? (
+            {issue.labels?.length ? (
               <>
                 {' '}
-                {issue.issueLabels.map(link =>
-                  link.label ? (
-                    <span key={link.id} className={`label mini ${link.label.tone}`}>
-                      {link.label.name}
-                    </span>
-                  ) : null,
-                )}
+                {issue.labels.map(label => (
+                  <span key={label.id} className={`label mini ${label.tone}`}>
+                    {label.name}
+                  </span>
+                ))}
               </>
             ) : null}
           </span>
@@ -375,12 +374,17 @@ function TeamsPage() {
         <div className='detail-meta-line'>
           <span className='eyebrow'>Teams</span>
           <StatusDot active={isFetching} />
-          <Explain label='Windowed relations'>
+          <Explain
+            label='Windowed relations'
+            query={`q.teams
+  .related('members')
+  .related('recentIssues', i =>
+    i.orderBy('updatedAt', 'desc').limit(5))`}
+          >
             Each card is one relational query: <code>members</code> resolves with a single fan-in
-            IN(...) fetch, while "5 most recent issues per team" is{' '}
-            <code>.related('recentIssues', i =&gt; i.orderBy(…).limit(5))</code> — a per-parent
-            window that runs one small query per team. Fine at 4 teams; past ~10 figbird warns and
-            points at the server-maintained-id-list (embed) pattern instead.
+            IN(...) fetch, while "5 most recent issues per team" is a per-parent window that runs
+            one small query per team. Fine at 4 teams; past ~10 figbird warns and points at the
+            server-maintained-id-list (embed) pattern instead.
           </Explain>
         </div>
         <h1 className='detail-title'>Teams</h1>
@@ -498,7 +502,14 @@ function ActivityPanel() {
       <header className='section-head'>
         <span className='eyebrow'>Activity</span>
         <StatusDot active={isFetching} />
-        <Explain label='Cross-service feed'>
+        <Explain
+          label='Cross-service feed'
+          query={`q.comments.orderBy('id', 'desc').limit(10)
+  .related('author')
+q.reactions.orderBy('id', 'desc').limit(6)
+  .related('user')
+q.issues.orderBy('updatedAt', 'desc').limit(6)`}
+        >
           Three independent queries — comments, reactions, issues — merged by timestamp in the
           component. Each stays realtime on its own service; a teammate's comment lands here, in the
           list's comment count, and in the open issue simultaneously, from one socket event.
@@ -583,10 +594,16 @@ function NewIssueForm({ onClose }: { onClose: () => void }) {
     >
       <header className='modal-head'>
         <span className='eyebrow'>New issue</span>
-        <Explain label='Optimistic create'>
+        <Explain
+          label='Optimistic create'
+          query={`useMutation('issues').create(
+  { id: Date.now(), title, description, … },
+  { optimistic: true },
+)`}
+        >
           Create passes <code>{'{ optimistic: true }'}</code> with a client-generated id: the issue
           is in the cache — list, activity, detail — before the server responds, and a failure rolls
-          it back everywhere at once. Watch the mutate → realtime sequence in dev tools.
+          it back everywhere at once. Try "Fail next mutation" in dev tools to watch the rollback.
         </Explain>
         <span className='spacer' />
         <button type='button' className='link' onClick={onClose}>
@@ -672,6 +689,13 @@ function DevToolsPanel() {
 
   useEffect(() => {
     return figbird.events.subscribe(event => {
+      // A failed mutation disarms the one-shot chaos switch server-side — resync.
+      if (event.kind === 'mutate:error') {
+        demoControl
+          .getState()
+          .then(s => setDemoState(s))
+          .catch(() => {})
+      }
       if (pausedRef.current) return
       const entry = describeEvent(event, ++counterRef.current)
       if (!entry) return
@@ -720,6 +744,24 @@ function DevToolsPanel() {
     }
   }
 
+  const armChaos = async () => {
+    if (!demoState) return
+    const next = !demoState.chaosArmed
+    setDemoState({ ...demoState, chaosArmed: next }) // optimistic
+    try {
+      setDemoState(await demoControl.set({ chaosArmed: next }))
+    } catch {
+      setDemoState(demoState)
+    }
+  }
+
+  const dropConnection = () => {
+    // Kill the transport; socket.io auto-reconnects and figbird's adapter refetches
+    // every active query on the Manager's 'reconnect' event.
+    const engine = (socket.io as unknown as { engine?: { close: () => void } }).engine
+    engine?.close()
+  }
+
   const resetServer = async () => {
     if (resetting) return
     if (!window.confirm('Reset server state and reload the page?')) return
@@ -762,6 +804,21 @@ function DevToolsPanel() {
               title='A simulated teammate comments, reacts and closes issues every few seconds.'
             >
               Teammate: {demoState === null ? '…' : demoState.backgroundEnabled ? 'on' : 'off'}
+            </button>
+            <button
+              className={`link ${demoState?.chaosArmed ? 'armed' : ''}`}
+              onClick={armChaos}
+              disabled={demoState === null}
+              title='Arms a one-shot server failure: your next action fails and figbird rolls the optimistic change back.'
+            >
+              {demoState?.chaosArmed ? 'Chaos: armed' : 'Fail next mutation'}
+            </button>
+            <button
+              className='link'
+              onClick={dropConnection}
+              title='Drops the socket; on reconnect figbird refetches every active query to reconcile anything missed.'
+            >
+              Drop socket
             </button>
             <button className='link' onClick={resetServer} disabled={resetting}>
               {resetting ? 'Resetting…' : 'Reset'}

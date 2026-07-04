@@ -1706,3 +1706,24 @@ button.primary:hover:not(:disabled) {
   flex: none;
   font-variant-numeric: tabular-nums;
 }
+
+/* ----- Explain code snippets + chaos button ----- */
+
+.explain-code {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.devtools .link.armed {
+  color: var(--danger);
+  font-weight: 600;
+}

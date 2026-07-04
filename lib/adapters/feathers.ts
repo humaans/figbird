@@ -348,8 +348,13 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   #getReconnectEventSource(): ReconnectEventSource | null {
+    const io = (this.feathers as { io?: { io?: unknown } }).io
     const candidates = [
-      (this.feathers as { io?: unknown }).io,
+      // socket.io v3+ emits 'reconnect' on the Manager (socket.io), not the Socket —
+      // prefer it when present, otherwise fall back to the socket itself (older
+      // clients and primus emit 'reconnect' directly).
+      io?.io,
+      io,
       (this.feathers as { socket?: unknown }).socket,
       (this.feathers as { primus?: unknown }).primus,
     ]
