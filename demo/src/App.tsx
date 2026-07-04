@@ -365,6 +365,7 @@ function TeamsPage() {
   const { data: teams, isFetching } = useQuery(
     figbird.q.teams
       .related('members')
+      .related('spotlight')
       .related('recentIssues', issue => issue.orderBy('updatedAt', 'desc').limit(5)),
   )
 
@@ -375,22 +376,29 @@ function TeamsPage() {
           <span className='eyebrow'>Teams</span>
           <StatusDot active={isFetching} />
           <Explain
-            label='Windowed relations'
+            label='Two ways to "top N per team"'
             query={`q.teams
-  .related('members')
-  .related('recentIssues', i =>
-    i.orderBy('updatedAt', 'desc').limit(5))`}
+  .related('members')      // fan-in IN(...)
+  .related('spotlight')    // embed: server-maintained
+                           // spotlightIssueIds, ONE batched
+                           // fetch for all teams
+  .related('recentIssues', i =>          // window:
+    i.orderBy('updatedAt', 'desc').limit(5))
+                           // one query per team`}
           >
-            Each card is one relational query: <code>members</code> resolves with a single fan-in
-            IN(...) fetch, while "5 most recent issues per team" is a per-parent window that runs
-            one small query per team. Fine at 4 teams; past ~10 figbird warns and points at the
-            server-maintained-id-list (embed) pattern instead.
+            The same card demos both strategies. <strong>Recent</strong> is a windowed relation —
+            the client asks for each team's window, one query per team (fine at 4; past ~10 figbird
+            warns). <strong>Spotlight</strong> is the <code>embed()</code> pattern: the server
+            maintains <code>team.spotlightIssueIds</code> (top open issues by priority), re-emits
+            the team whenever the list changes, and figbird resolves every team's spotlight in a
+            single IN(...) fetch, preserving the server's order. Watch the teammate's priority
+            nudges reshuffle spotlights live.
           </Explain>
         </div>
         <h1 className='detail-title'>Teams</h1>
         <div className='detail-meta'>
-          Live team rosters and their most recently touched issues — the teammate simulator keeps
-          these moving.
+          Live rosters, server-curated spotlights, and each team's latest activity — the teammate
+          simulator keeps these moving.
         </div>
       </header>
       <div className='team-grid'>
@@ -409,6 +417,21 @@ function TeamsPage() {
                 </span>
               ))}
             </div>
+            <div className='team-sub'>
+              Spotlight <span className='team-sub-hint'>server-curated · by priority</span>
+            </div>
+            <ul className='team-issues'>
+              {team.spotlight.map(issue => (
+                <li key={issue.id}>
+                  <Link href={`/issues/${issue.id}`} className='team-issue'>
+                    <span className={`status-dot ${issue.status}`} />
+                    <span className='team-issue-title'>{issue.title}</span>
+                    <span className='dim team-issue-id'>{issue.priorityScore}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            <div className='team-sub'>Recent</div>
             <ul className='team-issues'>
               {team.recentIssues.map(issue => (
                 <li key={issue.id}>

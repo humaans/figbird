@@ -19,6 +19,12 @@ export interface Team {
   id: number
   name: string
   accent: string
+  /**
+   * Server-maintained id list: the team's top open issues by priority, recomputed
+   * whenever issues change and re-emitted as a team patch. Resolved on the client
+   * through the `spotlight` embed() relation.
+   */
+  spotlightIssueIds: number[]
 }
 export interface Issue {
   id: number
@@ -74,7 +80,7 @@ export const schema = createSchema({
     issueLabels: service<{ item: IssueLabel }>(),
     reactions: service<{ item: Reaction }>(),
   },
-  relationships: ({ one, many }) => ({
+  relationships: ({ one, many, embed }) => ({
     issues: {
       creator: one({ sourceField: ['creatorId'], destService: 'users', destField: ['id'] }),
       assignee: one({ sourceField: ['assigneeId'], destService: 'users', destField: ['id'] }),
@@ -96,6 +102,16 @@ export const schema = createSchema({
     },
     teams: {
       members: many({ sourceField: ['id'], destService: 'users', destField: ['teamId'] }),
+      // embed(): the parent carries a server-maintained list of dest ids — figbird
+      // fans every team's spotlightIssueIds into ONE batched IN(...) fetch and
+      // assembles per-team slices preserving the server-chosen order. Membership
+      // and ordering are owned by the server; freshness comes from the team's own
+      // realtime events (the server re-emits the team when the list changes).
+      spotlight: embed({
+        sourceField: ['spotlightIssueIds'],
+        destService: 'issues',
+        destField: ['id'],
+      }),
       // Used with a per-team window (`.orderBy().limit()`), which fans out one
       // query per team — fine at 4 teams, and exactly the shape the fan-out
       // warning + embed pattern exist for at larger scales.

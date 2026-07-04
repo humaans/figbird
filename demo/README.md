@@ -57,9 +57,12 @@ Bottom-right corner:
 - **Relational filters** — the team chips filter by `'assignee.teamId'`, a field on the
   _related_ user. The server resolves the dotted path with a join; the client matcher
   evaluates it against the entity cache for realtime freshness.
-- **Windowed relations** — the Teams panel asks for each team's 3 most recent issues via
-  `.related('recentIssues', i => i.orderBy(…).limit(3))` — one small per-parent query per
-  team.
+- **Windowed relations vs embed** — each team card shows both strategies for "top N per
+  parent". "Recent" is `.related('recentIssues', i => i.orderBy(…).limit(5))` — one small
+  per-team query. "Spotlight" is the `embed()` pattern: the server maintains
+  `team.spotlightIssueIds` (top open issues by priority), re-emits the team whenever the
+  list changes, and figbird resolves every team's spotlight in one batched IN(...) fetch,
+  preserving the server-chosen order.
 - **Cross-service activity** — the Activity panel merges three independent realtime
   queries (comments, reactions, issues) by timestamp in the component.
 - **Optimistic mutations** — creating issues and every action in the issue detail pass
