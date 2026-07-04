@@ -52,7 +52,13 @@ export type {
 
 // query builder
 export { QueryBuilder, createQueryBuilderProxy } from './core/query-builder.js'
-export type { QueryAST, QueryBuilderProxy, FeathersQuery } from './core/query-builder.js'
+export type {
+  QueryAST,
+  QueryBuilderProxy,
+  FeathersQuery,
+  FieldOperators,
+  WhereClause,
+} from './core/query-builder.js'
 
 // query classification (how a query node is maintained — useful for devtools)
 export { classifyQueryNode, hasWindowFilters } from './core/queryClassification.js'
@@ -106,7 +112,7 @@ export type {
 
 // React hook result types
 export type { UseMethodResult } from './react/useMethod.js'
-export type { UseMutationResult } from './react/useMutation.js'
+export type { UseMutationOptions, UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQueryByDesc.js'
 
 // Feathers-specific types for TypeScript users

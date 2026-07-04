@@ -51,6 +51,22 @@ export interface UseMutationResult<
 }
 
 /**
+ * Hook-level defaults for `useMutation`. Optimistic intent usually belongs to a whole
+ * surface (a task list is always optimistic; a settings modal never is) — declare it
+ * once here instead of on every call. Per-call options override in both directions.
+ */
+export interface UseMutationOptions {
+  /**
+   * Apply mutations from this hook to the local cache before the server confirms
+   * ("show it now, roll back on failure"). The default — omitted or `false` — is
+   * non-optimistic: the UI only reflects the change once the server acks it
+   * ("show it only once it's real"). Either way, the returned promise settles on
+   * the server response.
+   */
+  optimistic?: boolean
+}
+
+/**
  * Simple mutation hook exposing crud methods
  * of any feathers service. The resulting state
  * of calling these operations needs to be handled
@@ -60,11 +76,14 @@ export interface UseMutationResult<
  * Returns untyped data. For type-safe mutations, use createHooks(figbird).
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
+ * const tasks = useMutation('tasks', { optimistic: true }) // optimistic surface
  */
 export function useMutation(
   serviceName: string,
+  hookOptions: UseMutationOptions = {},
 ): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
   const figbird = useFigbird()
+  const hookOptimistic = hookOptions.optimistic
 
   const [state, dispatch] = useReducer(mutationReducer<UntypedData>, {
     status: 'idle',
@@ -108,10 +127,10 @@ export function useMutation(
           method: 'create' as const,
           data,
           params: options?.params,
-          optimistic: options?.optimistic,
+          optimistic: options?.optimistic ?? hookOptimistic,
         }),
       ),
-    [executeMutation, figbird, serviceName],
+    [executeMutation, figbird, serviceName, hookOptimistic],
   )
   const update = useCallback(
     (id: string | number, data: UntypedData, options?: MutationCallOptions) =>
@@ -122,10 +141,10 @@ export function useMutation(
           id,
           data,
           params: options?.params,
-          optimistic: options?.optimistic,
+          optimistic: options?.optimistic ?? hookOptimistic,
         }),
       ),
-    [executeMutation, figbird, serviceName],
+    [executeMutation, figbird, serviceName, hookOptimistic],
   )
   const patch = useCallback(
     (id: string | number, data: UntypedData, options?: MutationCallOptions) =>
@@ -136,10 +155,10 @@ export function useMutation(
           id,
           data,
           params: options?.params,
-          optimistic: options?.optimistic,
+          optimistic: options?.optimistic ?? hookOptimistic,
         }),
       ),
-    [executeMutation, figbird, serviceName],
+    [executeMutation, figbird, serviceName, hookOptimistic],
   )
   const remove = useCallback(
     (id: string | number, options?: MutationCallOptions) =>
@@ -149,10 +168,11 @@ export function useMutation(
           method: 'remove' as const,
           id,
           params: options?.params,
-          optimistic: Boolean(options?.optimistic),
+          // remove has no payload to synthesize — optimistic is boolean-only here
+          optimistic: Boolean(options?.optimistic ?? hookOptimistic),
         }),
       ),
-    [executeMutation, figbird, serviceName],
+    [executeMutation, figbird, serviceName, hookOptimistic],
   )
 
   return useMemo(

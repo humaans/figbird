@@ -54,7 +54,7 @@ function prefetchIssue(id: number): void {
   preparedIssues.add(id)
   hoverPins.set(id, [
     figbird.prepare(issueDetailQuery, { id }),
-    figbird.prepare(issueCommentsQuery, { id }, { priority: 'defer' }),
+    figbird.prepare(issueCommentsQuery, { id }),
   ])
   if (hoverPins.size > HOVER_PIN_LIMIT) {
     const [oldest] = hoverPins.keys()
@@ -111,15 +111,14 @@ export function IssueListPane() {
   .where({ title: { $regex: term, $options: 'i' } })
   .orderBy('updatedAt', 'desc')
   .limit(30)
-  .server()
   .related('assignee')
   .related('team')`}
           >
             The search query carries <code>$regex</code>, an operator figbird's local matcher can't
-            evaluate — so it classifies the query <em>server-authoritative</em>: realtime events
-            trigger a refetch instead of a local merge. Typing commits through{' '}
-            <code>startTransition</code>, so the previous results stay visible while the next term
-            loads.
+            evaluate — figbird classifies the query <em>server-authoritative</em> automatically (no{' '}
+            <code>.server()</code> needed): realtime events trigger a refetch instead of a local
+            merge. Typing commits through <code>startTransition</code>, so the previous results stay
+            visible while the next term loads.
           </Explain>
         </div>
         <div className='filter-row'>
@@ -240,12 +239,13 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
 
 function SearchResults({ q, typing }: { q: string; typing: boolean }) {
   const escaped = escapeRegExp(q)
+  // No `.server()` needed: `$regex` is an operator figbird's local matcher can't
+  // evaluate, so the query classifies server-authoritative automatically.
   const { data: issues, isFetching } = useQuery(
     figbird.q.issues
-      .where({ title: { $regex: escaped, $options: 'i' } } as never)
+      .where({ title: { $regex: escaped, $options: 'i' } })
       .orderBy('updatedAt', 'desc')
       .limit(30)
-      .server()
       .related('assignee')
       .related('team'),
   )

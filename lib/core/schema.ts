@@ -206,12 +206,33 @@ export type SchemaRelationships = Record<string, Record<string, RelationshipDef<
 /**
  * Hop config — one segment of a relationship's traversal. For single-hop relations there's
  * just one of these; for two-hop `many` (junction tables) there are two.
+ *
+ * Fields accept a plain string for the common single-field case; arrays remain for
+ * compound keys. `destField` defaults to `'id'`.
  */
 export interface RelationshipHop<TDest extends string = string> {
-  sourceField: string[]
+  sourceField: string | string[]
   destService: TDest
-  destField: string[]
+  destField?: string | string[]
   query?: Record<string, unknown>
+}
+
+function toFieldArray(field: string | string[]): string[] {
+  return Array.isArray(field) ? field : [field]
+}
+
+/** Normalize a hop's shorthand (string fields, defaulted destField) to the internal shape. */
+function normalizeHop<TDest extends string>(
+  hop: RelationshipHop<TDest>,
+): RelationshipHop<TDest> & {
+  sourceField: string[]
+  destField: string[]
+} {
+  return {
+    ...hop,
+    sourceField: toFieldArray(hop.sourceField),
+    destField: toFieldArray(hop.destField ?? 'id'),
+  }
 }
 
 /**
@@ -224,7 +245,7 @@ export interface RelationshipHop<TDest extends string = string> {
 export function one<TDest extends string>(
   def: RelationshipHop<TDest>,
 ): RelationshipDef<TDest, 'one'> {
-  return { ...def, cardinality: 'one' }
+  return { ...normalizeHop(def), cardinality: 'one' }
 }
 
 /**
@@ -251,19 +272,21 @@ export function many(
   second?: RelationshipHop<string>,
 ): RelationshipDef<string, 'many'> {
   if (!second) {
-    return { ...first, cardinality: 'many' }
+    return { ...normalizeHop(first), cardinality: 'many' }
   }
+  const junctionHop = normalizeHop(first)
+  const destHop = normalizeHop(second)
   return {
-    sourceField: second.sourceField,
-    destService: second.destService,
-    destField: second.destField,
+    sourceField: destHop.sourceField,
+    destService: destHop.destService,
+    destField: destHop.destField,
     cardinality: 'many',
-    ...(second.query ? { query: second.query } : {}),
+    ...(destHop.query ? { query: destHop.query } : {}),
     via: {
-      sourceField: first.sourceField,
-      destService: first.destService,
-      destField: first.destField,
-      ...(first.query ? { query: first.query } : {}),
+      sourceField: junctionHop.sourceField,
+      destService: junctionHop.destService,
+      destField: junctionHop.destField,
+      ...(junctionHop.query ? { query: junctionHop.query } : {}),
     },
   }
 }
@@ -283,7 +306,7 @@ export function many(
 export function embed<TDest extends string>(
   def: RelationshipHop<TDest>,
 ): RelationshipDef<TDest, 'embedded'> {
-  return { ...def, cardinality: 'embedded' }
+  return { ...normalizeHop(def), cardinality: 'embedded' }
 }
 
 /**

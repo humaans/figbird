@@ -140,16 +140,17 @@ export function validateQueryArgs<T>(
 }
 
 /**
- * Handle returned by `figbird.prepare(definition, args)`. The router awaits `promise`
- * for `priority: 'route'` entries before committing the navigation; `priority: 'defer'`
- * entries are awaited inside Suspense boundaries on the destination screen instead.
+ * Handle returned by `figbird.prepare(definition, args)` — an explicit lease on a
+ * query. `promise` resolves when the data is ready (rejects with what a Suspense read
+ * would throw); `release()` drops the pin that keeps the underlying ref alive — when
+ * no other subscriber remains, the ref tears down and the cache entry is evicted.
  *
- * Calling `release()` drops the pin that keeps the underlying ref alive — when no other
- * subscriber remains, the ref tears down and the cache entry is evicted.
+ * Routers commonly attach their own metadata (e.g. a blocking/deferred priority) by
+ * spreading: `{ ...figbird.prepare(def, args), priority: 'route' }` — that vocabulary
+ * belongs to the router, not to figbird.
  */
 export interface PreparedQuery {
   readonly key: string
-  readonly priority: 'route' | 'defer'
   readonly promise: Promise<void>
   release(): void
 }

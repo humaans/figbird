@@ -28,6 +28,31 @@ export type RelationNames<S extends Schema, N extends string> =
  */
 export type FeathersQuery = Record<string, unknown>
 
+/** Feathers-style comparison operators for a field of type V. */
+export interface FieldOperators<V> {
+  $in?: V[]
+  $nin?: V[]
+  $lt?: V
+  $lte?: V
+  $gt?: V
+  $gte?: V
+  $ne?: V
+  // Server-only / adapter-specific operators ($regex, $options, $like, ...) are
+  // legal on any field — they just classify the query server-authoritative.
+  [operator: `$${string}`]: unknown
+}
+
+/**
+ * Filter object accepted by `.where()`: known item fields are typed (value or
+ * comparison operators) for autocomplete and checking, while the open index
+ * signature admits everything else that is legal but not statically known —
+ * dotted relational paths (`'assignee.teamId'`), server-only operators
+ * (`$regex`), `$or`, and dynamically-built filter objects.
+ */
+export type WhereClause<TItem> = {
+  [K in keyof TItem & string]?: TItem[K] | FieldOperators<TItem[K]>
+} & Record<string, unknown>
+
 /**
  * Query AST that represents a query with optional relations.
  *
@@ -184,7 +209,7 @@ export class QueryBuilder<
    */
   where(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
-    query: FeathersQuery,
+    query: WhereClause<TItem>,
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
     return new QueryBuilder(this.#schema, this.#state.service, {
       ...this.#state,
@@ -198,7 +223,10 @@ export class QueryBuilder<
    */
   orderBy(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
-    field: string,
+    // `(string & {})` keeps autocomplete for known item fields without rejecting
+    // computed/server-side fields.
+    // oxlint-disable-next-line @typescript-eslint/no-empty-object-type
+    field: (keyof TItem & string) | (string & {}),
     direction: 'asc' | 'desc' = 'asc',
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
     const currentSort = (this.#state.query.$sort as Record<string, number>) ?? {}

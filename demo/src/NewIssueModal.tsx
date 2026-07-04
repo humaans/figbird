@@ -34,7 +34,7 @@ function NewIssueForm({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate()
   const { data: teams } = useQuery(figbird.q.teams)
   const { data: users } = useQuery(figbird.q.users)
-  const issueMutation = useMutation('issues')
+  const issueMutation = useMutation('issues', { optimistic: true })
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [teamId, setTeamId] = useState(teams[0]?.id ?? 1)
@@ -44,21 +44,18 @@ function NewIssueForm({ onClose }: { onClose: () => void }) {
     const trimmed = title.trim()
     if (trimmed.length === 0) return
     const id = Date.now()
-    const create = issueMutation.create(
-      {
-        id,
-        title: trimmed,
-        description: description.trim(),
-        status: 'open',
-        creatorId: 1,
-        assigneeId,
-        teamId,
-        priorityScore: 50,
-        updatedAt: new Date().toISOString(),
-        commentIds: [],
-      },
-      { optimistic: true },
-    )
+    const create = issueMutation.create({
+      id,
+      title: trimmed,
+      description: description.trim(),
+      status: 'open',
+      creatorId: 1,
+      assigneeId,
+      teamId,
+      priorityScore: 50,
+      updatedAt: new Date().toISOString(),
+      commentIds: [],
+    })
     // The optimistic item is already in the cache — close and navigate immediately.
     onClose()
     navigate(`/issues/${id}`)
@@ -77,14 +74,16 @@ function NewIssueForm({ onClose }: { onClose: () => void }) {
         <span className='eyebrow'>New issue</span>
         <Explain
           label='Optimistic create'
-          query={`useMutation('issues').create(
-  { id: Date.now(), title, description, … },
-  { optimistic: true },
-)`}
+          query={`const issues = useMutation('issues', {
+  optimistic: true, // declared once per surface
+})
+issues.create({ id: Date.now(), title, … })`}
         >
-          Create passes <code>{'{ optimistic: true }'}</code> with a client-generated id: the issue
-          is in the cache — list, activity, detail — before the server responds, and a failure rolls
-          it back everywhere at once. Try "Fail next mutation" in dev tools to watch the rollback.
+          The hook is declared <code>{'{ optimistic: true }'}</code> for this surface, so the create
+          (with its client-generated id) lands in the cache — list, activity, detail — before the
+          server responds, and a failure rolls it back everywhere at once. Critical surfaces just
+          omit the flag and the UI waits for the server. Try "Fail next mutation" in dev tools to
+          watch the rollback.
         </Explain>
         <span className='spacer' />
         <button type='button' className='link' onClick={onClose}>
