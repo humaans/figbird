@@ -281,7 +281,7 @@ export class RelationalQueryRef<
 
     // Relations are synced lazily from parent success, so confirm that every expected
     // relation at every already-resolved parent level has been synced before reading.
-    if (!this.#areExpectedRelationsSynced(root.rows, this.#ast, null)) {
+    if (!this.#areExpectedRelationsSynced(this.#ast, null)) {
       return this.#fetchingSnapshot()
     }
 
@@ -486,11 +486,7 @@ export class RelationalQueryRef<
    * resolved has been synced (i.e. entered into #relationSubs). Used to decide whether
    * the assembled snapshot is ready to return, or whether we're still waiting on sync.
    */
-  #areExpectedRelationsSynced(
-    _parentData: unknown[],
-    ast: QueryAST,
-    parentKey: string | null,
-  ): boolean {
+  #areExpectedRelationsSynced(ast: QueryAST, parentKey: string | null): boolean {
     const relationships = this.#schema.relationships?.[ast.service] ?? {}
     for (const [relName, relAST] of Object.entries(ast.related)) {
       if (!relationships[relName]) {
@@ -505,8 +501,7 @@ export class RelationalQueryRef<
 
       // If this relation has nested relations and its own data has resolved, recurse.
       if (sub.kind === 'perParent') {
-        const childData = this.#perParentDataIfReady(sub)
-        if (childData && !this.#areExpectedRelationsSynced(childData, relAST, key)) {
+        if (this.#perParentDataIfReady(sub) && !this.#areExpectedRelationsSynced(relAST, key)) {
           return false
         }
       }
@@ -515,7 +510,7 @@ export class RelationalQueryRef<
       if (destRef) {
         const s = destRef.getSnapshot()
         if (s?.status === 'success') {
-          if (!this.#areExpectedRelationsSynced(s.data as unknown[], relAST, key)) {
+          if (!this.#areExpectedRelationsSynced(relAST, key)) {
             return false
           }
         }
@@ -575,7 +570,7 @@ export class RelationalQueryRef<
               realtime: 'merge',
               fetchPolicy: 'swr',
               ...matcherConfig,
-            } as QueryConfig<unknown, unknown>,
+            },
           ),
         onRows,
         onChange,
@@ -595,7 +590,7 @@ export class RelationalQueryRef<
         fetchPolicy: 'swr',
         ...(this.#ast.kind === 'find' ? matcherConfig : {}),
         ...(this.#ast.server ? { server: true } : {}),
-      } as QueryConfig<unknown, unknown>),
+      }),
       isGet: this.#ast.kind === 'get',
       onRows,
       onChange,
@@ -849,7 +844,7 @@ export class RelationalQueryRef<
         realtime: 'merge',
         fetchPolicy: 'swr',
         allPages: true,
-      } as QueryConfig<unknown, unknown>,
+      },
     )
 
     // Phase 2: build/refresh the dest sub from the junction's data.
@@ -932,7 +927,7 @@ export class RelationalQueryRef<
         fetchPolicy: 'swr',
         ...(hasWindowing ? {} : { allPages: true }),
         ...(relAST.server ? { server: true } : {}),
-      } as QueryConfig<unknown, unknown>,
+      },
     )
   }
 
@@ -958,7 +953,7 @@ export class RelationalQueryRef<
         realtime: 'merge',
         fetchPolicy: 'swr',
         ...(relAST.server ? { server: true } : {}),
-      } as QueryConfig<unknown, unknown>,
+      },
     )
   }
 
