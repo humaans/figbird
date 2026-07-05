@@ -42,9 +42,10 @@
   {{ partial "favicon" . }}
    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet"> 
 
-  {{ $base := resources.Get "styles/base.scss" | toCSS }}
-  {{ $main := resources.Get "styles/main.scss" | toCSS }}
-  {{ $syntax := resources.Get "styles/syntax.scss" | toCSS }}
+  {{/* fingerprint gives content-hashed URLs, so style changes always bust caches */}}
+  {{ $base := resources.Get "styles/base.scss" | toCSS | fingerprint }}
+  {{ $main := resources.Get "styles/main.scss" | toCSS | fingerprint }}
+  {{ $syntax := resources.Get "styles/syntax.scss" | toCSS | fingerprint }}
 
   <link href="{{ $base.RelPermalink }}" rel="stylesheet" type="text/css" />
   <link href="{{ $main.RelPermalink }}" rel="stylesheet" type="text/css" />
