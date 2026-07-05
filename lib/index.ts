@@ -27,6 +27,7 @@ export type {
   PreparedQuery,
   QueryDefinition,
   StandardSchemaV1,
+  VisibilitySource,
 } from './core/figbird.js'
 
 // schema

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Burst safety for realtime reconciliation: event-driven refetches of a query now pass
+  through a cooldown with a guaranteed trailing edge (`reconcileCooldown` constructor
+  option, default 2s, `0` disables) — the first event refetches immediately, bursts
+  coalesce into one trailing refetch. Hidden tabs defer event-driven reconciliation
+  (including the reconnect sweep) until they become visible; local-exact merges keep
+  flowing while hidden. Injectable `visibility` source for non-browser environments.
+  Manual `refetch()`, first fetches, and SWR revalidation are never gated.
 - Breaking: remove the `.one()` builder modifier. Single-item reads are now two spellings
   mapped one-to-one onto transport: `.get(id)` fetches via the resource endpoint
   (`GET /:service/:id`; errors on a cold miss, nulls on realtime removal) and now allows

@@ -440,6 +440,9 @@ export function createTestApp<S extends Schema>(
     schema,
     adapter,
     eventBatchProcessingInterval: 0,
+    // Keep existing tests deterministic: no reconcile cooldown unless a test
+    // opts in with its own instance.
+    reconcileCooldown: 0,
   })
 
   // Pin the provider's generics — createElement can't infer them from the figbird prop.
