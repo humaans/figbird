@@ -802,7 +802,7 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 
-## Compared to other data layers
+## Comparison
 
 Every data library is a bet on where your app's complexity lives. Figbird's bet: a
 **server-authoritative backend with realtime events**, read by **long-lived, app-shaped
