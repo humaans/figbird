@@ -655,9 +655,12 @@ factory's `defaults` argument is gone, and with it the handle-naming problem (`i
 vs `issues` the query data). Policy is a fluent variant, not an options bag — matching how the
 read side spells policy (`.server()`, `.snapshot()`). `confirmed` is a property, not a method,
 because it _selects_ a namespace of verbs rather than operating on a pipeline value. Handle
-proxies deny well-known protocol props (`toJSON`, `asymmetricMatch`, `then`, ...) so introspection
-(JSON.stringify, jest equality) can't fire phantom custom-method calls. `figbird.mutations(name)`
-remains as the dynamic-service-name door.
+proxies deny exactly two protocol props: `then` (a callable one makes handles thenable, so an
+`await` on a handle returned from an async function hangs forever, unsettled) and `toJSON` (a
+callable one turns JSON.stringify — logging, error reporting — into a phantom network write).
+Broader duck-typing probes (jest's `asymmetricMatch`, React's `$$typeof`, ...) are deliberately
+unguarded: handles are module-scope verbs, not data, and guarding against usage the API doesn't
+invite is ceremony. `figbird.mutations(name)` remains as the dynamic-service-name door.
 
 **Optimistic by default; `confirmed` opts out.** The first pass made optimism a handle-level flag;
 the demo then passed `{ optimistic: true }` on every surface — when 100% of call sites set the

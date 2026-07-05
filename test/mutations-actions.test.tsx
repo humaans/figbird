@@ -175,12 +175,11 @@ test('m: handles are not thenable and ignore protocol probes instead of firing p
   const events = collectEvents(figbird, 'mutate:')
 
   const handle = m.notes as unknown as Record<string, unknown>
+  // A callable `then` would make `await` on a handle hang forever, unsettled.
   t.is(handle.then, undefined)
+  // A callable `toJSON` would turn JSON.stringify into a phantom network write.
   t.is(handle.toJSON, undefined)
-  t.is(handle.asymmetricMatch, undefined)
-  // JSON.stringify probes toJSON — must not fire a phantom 'toJSON' service call.
   t.notThrows(() => JSON.stringify(m.notes))
-  // jest-style deep equality probes asymmetricMatch — same story.
   t.notThrows(() => JSON.stringify(m.notes.confirmed))
 
   await Promise.resolve()
