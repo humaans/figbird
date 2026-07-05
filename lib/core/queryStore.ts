@@ -633,14 +633,16 @@ export class QueryStore<
 
       shouldRefetch = query.dirty
 
-      // A successful full, unfiltered allPages fetch means the complete row set is now
-      // local: mark the service materialized so matcher-decidable finds are answered
-      // from the cache (see #tryLocalFind).
+      // A successful unfiltered allPages fetch (`.all()` with no filters) means the
+      // complete row set is now local: mark the service materialized so matcher-
+      // decidable finds are answered from the cache (see #tryLocalFind). A *filtered*
+      // allPages fetch is complete only for its own filter — it must not materialize
+      // the service.
       const findConfig = query.config as FindQueryConfig<unknown, unknown>
       if (
         query.desc.method === 'find' &&
         findConfig.allPages &&
-        isEmptyFindQuery(query.desc.params)
+        isUnfilteredFindQuery(query.desc.params)
       ) {
         service.materialized = { queryId, fetchedAt: Date.now() }
       }
@@ -1359,9 +1361,11 @@ function createItemRemovedError(itemId: ItemId): Error {
   return error
 }
 
-function isEmptyFindQuery(params: unknown): boolean {
+// `$sort` doesn't affect which rows are fetched, so a sorted-but-unfiltered
+// allPages query still proves the complete row set.
+function isUnfilteredFindQuery(params: unknown): boolean {
   const q = (params as { query?: Record<string, unknown> } | undefined)?.query
-  return !q || Object.keys(q).length === 0
+  return !q || Object.keys(q).every(key => key === '$sort')
 }
 
 /** Split window operators off a query so the rest can feed the local matcher. */
