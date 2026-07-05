@@ -2,90 +2,32 @@
 
 ## Unreleased
 
-The relational rewrite: one schema, live relational queries, Suspense-native reads,
-optimistic writes.
+The relational rewrite — a new API centered on `q`/`useQuery` for reads and
+`m`/`useAction`/`useMutating` for writes. See the
+[docs](https://humaans.github.io/figbird) for the full story.
 
-### Reads
+- Relational queries: declare relations once in the schema, `.related()` assembles
+  typed entity graphs, kept live by realtime events.
+- `useQuery` is Suspense-native; query classification decides merge-vs-refetch
+  realtime behavior automatically (no per-query `realtime` config).
+- Writes through `m` are optimistic by default with global rollback; `confirmed`
+  opts out; optimistic creates require a client-generated id.
+- Query preparation for instant navigation: `defineQuery`, `prepare`, `prefetch`.
+- Observability: `figbird.events`, `figbird.explain()`, `figbird.inspect()`.
+- Hooks from `createHooks` are instance-bound — `FigbirdProvider` is now optional.
 
-- New schema API: `createSchema` + `service<T>()` declare services (item/query/create/
-  update/patch payloads, custom `methods`) and relationships (`one`, `many` including
-  two-hop junctions, `embed`). All TypeScript inference flows from it; no codegen.
-- `q` — the query builder proxy: `q.issues.where(...).orderBy(...).limit(...)`, plus
-  `.get(id)` (resource endpoint, chainable `.where()`), `.related()` (relations, nested
-  refinement), `.paginate()` (infinite scroll), `.snapshot()` (point-in-time),
-  `.server()` (force server-authoritative), `.all()` (exhaustive reads; unfiltered
-  `.all()` materializes the service so later reads answer locally). Builders are
-  immutable values identified by a stable content hash.
-- `useQuery(builder)` / `useQuery(definition, args)` — Suspense-native: cold reads
-  suspend, warm reads render synchronously, refetches never suspend, errors after
-  success keep the last data. `{ suspense: false }` returns a tagged union; `skip`
-  and `staleTime` per read site.
-- Query classification decides realtime behavior automatically, per query node:
-  local-exact queries merge events locally, windowed and server-authoritative queries
-  reconcile by refetch. Replaces per-query `realtime` config for builder queries.
-- Burst safety: event-driven refetches pass through a cooldown with a guaranteed
-  trailing edge (`reconcileCooldown` constructor option, default 2s, `0` disables).
-  Hidden tabs defer reconciliation until visible (injectable `visibility` source);
-  manual `refetch()`, first fetches, and SWR revalidation are never gated.
+Breaking:
 
-### Preparation
+- `defineSchema` service-definition maps are replaced by `createSchema` + `service` +
+  relationship helpers.
+- `figbird.query(desc)` → `figbird.queryDesc(desc)`, `figbird.mutate(desc)` →
+  `figbird.mutateDesc(desc)`; `figbird.query(builder | definition, args?)` is now the
+  non-React mirror of `useQuery`.
+- Removed `useService` and `useMethod` — services and custom methods live on
+  `m.<service>` handles.
 
-- `defineQuery(name?, argsSchema?, build)` — args-keyed query factories; optional
-  Standard Schema validation throws `QueryArgsError` on bad args.
-- `figbird.prepare(definition, args)` — awaitable query lease for routers;
-  `figbird.prefetch(definition, args)` — idempotent speculative warming with a
-  self-releasing pin. Component reads resolve to the same cache entry.
-
-### Writes
-
-- `m` — the write proxy, the counterpart of `q`: `m.issues.patch(id, data)`, plus typed
-  custom schema methods. Handles are stateless plain values usable anywhere (not hooks);
-  `figbird.mutations(name)` is the dynamic-name door.
-- Optimistic by default — the cache shows the change immediately, everywhere, and rolls
-  back on failure. `m.<service>.confirmed` opts a surface out ("show it only once it's
-  real"). Awaiting is unaffected: promises settle on the server response in both modes.
-- The id contract: optimistic creates must carry a client-generated id (e.g.
-  `crypto.randomUUID()`); an id-less optimistic create throws synchronously. Confirmed
-  creates await the server-assigned id. Adapters gain an optional `peekId`.
-- Per-call options carry data only (`params`, `optimisticItem`); write policy lives on
-  the handle variant, never per call.
-- `useAction(name?, fn)` — per-action `pending`/`error`/`data` around any async function;
-  one hook call site per action. The body runs as a React Action (async transition);
-  `run` works directly as a React 19 `<form action>`.
-- `useMutating(filter?)` — live "is anything in flight" for an entity, service, or the
-  whole instance, backed by a synchronous mutation tracker (`figbird.mutating`).
-- `figbird.call(serviceName, method, ...args)` — custom-method calls flow through the
-  core: tracked, observable, no cache write (result shape unknown).
-
-### Observability
-
-- `figbird.events` — batched lifecycle channel: `fetch:*`, `realtime`, `mutate:*`
-  (with a correlating `mutationId` and rollback events), `action:*` from named actions.
-- `figbird.explain(query)` — static per-node classification report with reasons.
-- `figbird.inspect()` — read-only snapshot of every live query.
-
-### Instance & React kit
-
-- `createHooks(figbird)` returns the full kit — `useQuery`, `q`, `m`, `defineQuery`,
-  `prepare`, `prefetch`, `useAction`, `useMutating` — bound to the instance, so no
-  provider is required. `FigbirdProvider` becomes an optional override (SSR
-  per-request instances, tests); `useFigbirdMaybe` added.
-- Two-layer instance API: `figbird.query(builder | definition, args?)` is the non-React
-  mirror of `useQuery`; the descriptor primitives are `figbird.queryDesc(desc)` and
-  `figbird.mutateDesc(desc)` (renamed from `query`/`mutate`) — the schema-less,
-  low-level door the engine itself runs on.
-- No-flash kit: `useDebouncedTransition`, `DelayedFallback`, `useDelayedFlag`.
-
-### Breaking & deprecated
-
-- Breaking: `defineSchema`/service-definition maps are replaced by `createSchema` +
-  `service` + relationship helpers.
-- Breaking: `figbird.query(desc)` → `figbird.queryDesc(desc)`, `figbird.mutate(desc)` →
-  `figbird.mutateDesc(desc)`.
-- Breaking: remove `useService` and `useMethod` — services and custom methods live on
-  `m.<service>` handles; wrap calls in `useAction` for lifecycle state.
-- Deprecated (fully functional, semantics unchanged): `useFind`/`useGet` in favor of
-  `useQuery` + builders; `useMutation` in favor of `m` + `useAction` + `useMutating`.
+Deprecated (fully functional, semantics unchanged): `useFind`/`useGet` in favor of
+`useQuery` + builders; `useMutation` in favor of `m` + `useAction` + `useMutating`.
 
 ## 0.23.0
 
