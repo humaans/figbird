@@ -2755,8 +2755,8 @@ test('createHooks: bound hooks and q work without a FigbirdProvider', async t =>
 test('.all(): materializes the service; subset and windowed reads answer locally', async t => {
   const { figbird, feathers } = createApp()
 
-  // Preload the complete set.
-  const unsubAll = figbird.relationalQuery(figbird.q.issues.all()).subscribe(() => {})
+  // Preload the complete set ($sort doesn't affect completeness, so it still materializes).
+  const unsubAll = figbird.relationalQuery(figbird.q.issues.orderBy('id').all()).subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   const findsAfterAll = feathers.service('issues').counts.find
   t.true(findsAfterAll >= 1)
@@ -2793,12 +2793,72 @@ test('.all(): materializes the service; subset and windowed reads answer locally
   unsubAll()
 })
 
-test('.all(): rejects filters, produces an all-kind AST', t => {
+test('.all(): accepts filters — complete slice, no materialization; rejects windowing', async t => {
   const { figbird } = createApp()
-  t.throws(() => figbird.q.issues.where({ status: 'open' }).all(), { message: /all\(\)/ })
-  const ast = figbird.q.issues.all().toAST()
+
+  // Windowing contradicts "all".
+  t.throws(() => figbird.q.issues.limit(2).all(), { message: /all\(\)/ })
+  t.throws(() => figbird.q.issues.skip(1).all(), { message: /all\(\)/ })
+
+  // Filters and ordering ride along on the all-kind AST.
+  const ast = figbird.q.issues.where({ status: 'open' }).orderBy('id', 'desc').all().toAST()
   t.is(ast.kind, 'all')
   t.is(ast.cardinality, 'many')
+  t.deepEqual(ast.query, { status: 'open', $sort: { id: -1 } })
+
+  // Behavior: a small page size forces findAll to actually drain pages.
+  const feathers = mockFeathers({
+    issues: {
+      data: {
+        1: { id: 1, title: 'A', status: 'open', creatorId: 1 },
+        2: { id: 2, title: 'B', status: 'closed', creatorId: 1 },
+        3: { id: 3, title: 'C', status: 'open', creatorId: 1 },
+        4: { id: 4, title: 'D', status: 'open', creatorId: 1 },
+      },
+    },
+  })
+  installQueryAwareFind(feathers, ['issues'])
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+  const fb = new Figbird({
+    schema,
+    adapter,
+    eventBatchProcessingInterval: 0,
+    reconcileCooldown: 0,
+  })
+
+  // The filtered .all() fetches every page of the slice.
+  const openRef = fb.relationalQuery(fb.q.issues.where({ status: 'open' }).all())
+  const unsubOpen = openRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    (openRef.getSnapshot().data as Issue[]).map(issue => issue.id).sort(),
+    [1, 3, 4],
+    'complete slice across pages',
+  )
+  const findsAfterAll = feathers.service('issues').counts.find
+  t.true(findsAfterAll >= 2, 'drained more than one page')
+
+  // The complete slice is maintained by local realtime merges, not refetches.
+  await feathers.service('issues').create({ id: 9, title: 'E', status: 'open', creatorId: 1 })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  t.deepEqual((openRef.getSnapshot().data as Issue[]).map(issue => issue.id).sort(), [1, 3, 4, 9])
+  t.is(feathers.service('issues').counts.find, findsAfterAll, 'realtime maintenance stays local')
+
+  // But it must not materialize the service: a different filter still fetches.
+  const closedRef = fb.relationalQuery(fb.q.issues.where({ status: 'closed' }))
+  const unsubClosed = closedRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.true(
+    feathers.service('issues').counts.find > findsAfterAll,
+    'filtered .all() does not materialize the service',
+  )
+  t.deepEqual(
+    (closedRef.getSnapshot().data as Issue[]).map(issue => issue.id),
+    [2],
+  )
+
+  unsubOpen()
+  unsubClosed()
 })
 
 test('snapshot: frozen queries ignore realtime; refetch still works; explain says manual', async t => {

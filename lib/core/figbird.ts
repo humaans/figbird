@@ -645,7 +645,12 @@ export class Figbird<
 
   #explainAst(ast: QueryAST, path: string, isRoot: boolean, nodes: ExplainNode[]): void {
     const snapshot = Boolean(ast.snapshot)
-    const explained = explainQueryNode(ast.query, { server: ast.server })
+    // Mirrors the runtime: .all() drains every page, so window filters ($sort — the
+    // builder refuses $limit/$skip) don't demote the class.
+    const explained = explainQueryNode(ast.query, {
+      server: ast.server,
+      allPages: ast.kind === 'all',
+    })
     if (snapshot) {
       explained.reasons = [...explained.reasons, { code: 'snapshot', detail: '.snapshot()' }]
     }

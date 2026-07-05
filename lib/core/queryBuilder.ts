@@ -382,19 +382,28 @@ export class QueryBuilder<
   }
 
   /**
-   * Preload the service's complete row set — the explicit verb for reference data
-   * (locations, currencies, roles, policies). All pages are fetched, the query
-   * classifies local-exact (realtime maintains the full set), and on success the
-   * service is marked *fully materialized*: any later matcher-decidable find against
-   * it — including sorted/limited windows — is answered locally from the cache with
-   * no network roundtrip.
+   * Fetch every row matching this query — the exhaustive verb. All pages are
+   * drained, so the server's default page cap never silently truncates the result,
+   * and the query classifies local-exact (realtime events merge into the complete
+   * set instead of triggering refetches).
    *
-   * Deliberately loud and constrained: it cannot be combined with `.where()` or
-   * windowing ("all" means all), and the schema author is responsible for reaching
-   * for it only on services with bounded, reference-table-sized row counts.
-   * `.related()` may be chained to preload joined reference sets.
+   * Unfiltered, it doubles as the reference-data preload (locations, currencies,
+   * roles, policies): on success the service is marked *fully materialized*, and
+   * any later matcher-decidable find against it — including sorted/limited
+   * windows — is answered locally from the cache with no network roundtrip.
    *
-   * Typically paired with preparation at the app shell:
+   * Filtered (`.where(...).all()`), it fetches the complete slice. Completeness
+   * holds for *this exact query* only — it does not materialize the service, and
+   * narrower reads (a subset of the filter) are separate queries that fetch on
+   * their own.
+   *
+   * Windowing contradicts "all": `.limit()`/`.skip()` cannot be combined with it
+   * (use `.paginate()` for incremental loading). `.orderBy()` is fine — order
+   * doesn't affect completeness. Chain `.where()`/`.orderBy()` *before* `.all()`;
+   * `.related()` may be chained after to preload joined sets.
+   *
+   * The schema author is responsible for reaching for it only where the matching
+   * row count is bounded. Typically paired with preparation at the app shell:
    * ```ts
    * prepare(defineQuery(() => q.locations.all()))
    * ```
@@ -402,11 +411,10 @@ export class QueryBuilder<
   all(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
   ): QueryBuilder<S, TService, TItem, TRelated, 'many', 'all'> {
-    if (Object.keys(this.#state.query).length > 0) {
+    if ('$limit' in this.#state.query || '$skip' in this.#state.query) {
       throw new Error(
-        'all(): cannot be combined with filters or windowing — "all" means the complete set. ' +
-          'Preload with .all(), then read subsets with separate .where() queries; they are ' +
-          'answered locally from the materialized cache.',
+        'all(): cannot be combined with .limit()/.skip() — "all" fetches every matching row. ' +
+          'Drop the window, or use .paginate() for incremental loading.',
       )
     }
     return new QueryBuilder(this.#schema, this.#state.service, {
