@@ -31,7 +31,7 @@ function IssueDetail({ id }: { id: number }) {
 - **Relational queries** — declare relations once, `.related()` assembles entity graphs
 - **Live queries** — results update as records change, locally or via realtime events
 - **Suspense-native** — cold reads suspend, warm reads render synchronously
-- **Optimistic mutations** — declared once per surface, rolled back on failure everywhere at once
+- **Optimistic mutations, by default** — writes show immediately and roll back on failure everywhere at once; `confirmed` for surfaces that wait
 - **Query preparation** — routers and hover handlers warm the exact queries screens will read
 - **Full TypeScript** — one schema, inference across builders, relations, and mutations
 - **Framework-agnostic core** — works outside React for SSR, testing, or background sync
@@ -89,25 +89,24 @@ export const figbird = new Figbird({
 })
 
 // The daily-use kit, bound to this instance.
-export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = createHooks(figbird)
+export const { useQuery, q, m, defineQuery, prepare, prefetch, useAction, useMutating } =
+  createHooks(figbird)
 ```
 
 ```tsx
 // components — one import, no provider required
-import { useQuery, useMutation, q } from './figbird'
+import { m, q, useQuery } from './figbird'
 
 function OpenIssues() {
   const { data: issues } = useQuery(
     q.issues.where({ status: 'open' }).orderBy('id', 'desc').related('creator'),
   )
-  const mutations = useMutation('issues')
 
   return issues.map(issue => (
     <div key={issue.id}>
       {issue.title} — {issue.creator?.name}
-      <button onClick={() => mutations.patch(issue.id, { status: 'closed' })}>
-        Close
-      </button>
+      {/* q reads, m writes — optimistic by default, rolled back on failure */}
+      <button onClick={() => m.issues.patch(issue.id, { status: 'closed' })}>Close</button>
     </div>
   ))
 }
@@ -154,7 +153,7 @@ Omitted payload types default sensibly: `Partial<item>` for create and patch, `i
 - `q.tasks.where({ completed: true })` — field names and value types check against `item` (with an open index signature for dotted paths and server operators)
 - `.orderBy('title')` — autocompletes item fields without rejecting computed ones
 - `.related('author')` — relation names come from the schema; the result type assembles automatically, nesting included
-- `useMutation('tasks').create(...)` — payloads and return types from the service definition
+- `m.tasks.create(...)` — payloads and return types from the service definition; declared custom `methods` appear on the handle, fully typed
 - `useQuery(definition, args)` — args typed from the definition's build function (or validated by its Standard Schema)
 
 ## Queries
@@ -317,50 +316,196 @@ Realtime events on a paginated query refetch the affected pages rather than merg
 
 ## Mutations
 
-`useMutation` exposes the four CRUD methods. Every mutation returns a promise that settles on the **server response**, and the cache updates flow to every query referencing the data:
+The write side is three pieces, each owning a different granularity:
+
+1. **`m`** — the write proxy, the counterpart of `q`: services are properties, verbs are
+   methods (`m.issues.patch(id, data)`), plus any custom methods from the schema. Not a
+   hook — callable at module scope, in event handlers, in non-React code.
+2. **`useAction(name?, fn)`** — per-action `pending`/`error` state around any async
+   function. One hook call site per action.
+3. **`useMutating(filter?)`** — "is anything in flight" at the entity, service, or
+   instance level, seen across the whole app.
+
+The split exists because pending state has two different identities. _Which button is
+saving_ is an app-level concept the library can't know (reassign and close are both
+`patch` on `issues`) — so it lives at the hook call site. _Is anything mutating this
+record_ is keyed by facts figbird does know (service, method, id) — so it comes from the
+store. The reads-side rule "params changes are transitions" gets a write-side mirror:
+**reads suspend, writes are actions.**
 
 ```ts
-const issues = useMutation('issues')
-
-await issues.create({ title: 'Ship it' })
-await issues.patch(id, { status: 'closed' })
-await issues.update(id, fullItem)
-await issues.remove(id)
+await m.issues.create({ title: 'Ship it' })
+await m.issues.patch(id, { status: 'closed' })
+await m.issues.update(id, fullItem)
+await m.issues.remove(id)
 ```
 
-### Optimistic mutations
+Every mutation returns a promise that settles on the **server response**, and the cache
+updates flow to every query referencing the data.
 
-The `optimistic` flag decides **when the UI may show the change**:
+### Optimistic by default; `confirmed` to wait
 
-- **off (default)** — "show it only once it's real": the cache updates after the server acks. Right for critical surfaces — settings, policies, anything where the user must know it saved.
-- **on** — "show it now, roll back on failure": the cache updates immediately (and everywhere), and a server error rolls the change back everywhere at once. Right for collaborative, high-frequency surfaces — task lists, drag-reorder, inline edits.
+Writes are **optimistic by default** — "show it now, roll back on failure": the cache
+updates immediately (and everywhere), and a server error rolls the change back everywhere
+at once, emitting `mutate:rollback` for observability. This is the right mode for most
+product surfaces — task lists, inline edits, drag-reorder, comments.
 
-Optimism is usually a property of a whole surface, so declare it once at the hook and let every call inherit it:
+Surfaces where the user must know the change saved before walking away — settings,
+policies, anything contractual — opt out with the `confirmed` variant: "show it only once
+it's real", the cache updates after the server acks:
 
 ```ts
-// A task board — everything on this surface is optimistic
-const tasks = useMutation('tasks', { optimistic: true })
-tasks.create({ id: crypto.randomUUID(), title })
-tasks.patch(id, { done: true })
+m.issues.patch(id, { status: 'closed' }) // optimistic — the default, no flags
 
-// A settings modal — the safe default, UI waits for the ack
-const policies = useMutation('policies')
-await policies.create(policy)
+m.policies.confirmed.create(policy) // waits for the server ack
+const policies = m.policies.confirmed // or name the surface once
 ```
 
-Per-call options override in both directions: `tasks.remove(id, { optimistic: false })`. You can also pass an explicit synthesized item as the optimistic value: `{ optimistic: { ...item, computedField } }`.
+Two things make the default safe. First, **awaiting is unaffected**: the promise settles
+on the server response in both modes, so a flow that awaits and then shows "saved" behaves
+identically — optimism only ever controlled when the _cache_ shows the change. Second,
+failures are never silent: rollback is global, `useAction` gives every action an `error`
+slot, and the events channel sees everything. `confirmed` is greppable on purpose — it
+names your critical surfaces.
 
-**Optimistic creates need a client-generated id** — without one there is nothing to track and roll back, so the create simply applies non-optimistically. `update`/`patch`/`remove` need nothing extra.
+### Creates and ids: the id contract
 
-Per-call adapter params ride along in the same options object: `create(data, { params: { query: { ... } } })`.
+**Optimistic creates carry a client-generated id the server will accept.** Identity is
+what everything downstream is built on — React keys, realtime echo dedup, navigation,
+child-row foreign keys — and an optimistic item without a real id has none. So the two
+modes have symmetric id stories:
+
+```ts
+// Optimistic: you mint the identity — real from the first frame
+const id = crypto.randomUUID()
+void m.issues.create({ id, title })
+navigate(`/issues/${id}`) // safe: you own the id
+
+// Confirmed: the server mints the identity — await it
+const issue = await m.issues.confirmed.create({ title })
+navigate(`/issues/${issue.id}`)
+```
+
+An optimistic create without an id **throws synchronously** — the message names both
+escapes (provide an id, or use `confirmed`). This is deliberate: silently degrading would
+mean the default's stated semantics ("shows immediately") quietly don't hold.
+
+Because the optimistic item and the server's echo share the same id, the realtime
+`created` event merges idempotently instead of duplicating, and rollback removes exactly
+the item you created. Servers with auto-assigned ids (auto-increment PKs) can't accept
+client ids — those services pair with `confirmed` creates, which is the honest shape of
+that constraint: optimistic creation without client-mintable identity was never coherent.
+
+### Per-call options
+
+Per-call options carry call-specific _data_ only — write policy lives on the handle
+variant, not per call:
+
+- `params` — adapter params passthrough: `create(data, { params: { query: { ... } } })`.
+- `optimisticItem` — an explicit synthesized cache item when the payload doesn't carry
+  computed fields: `patch(id, data, { optimisticItem: { ...item, computedField } })`.
+  Ignored on `confirmed` handles, which never show unconfirmed state.
+
+### Per-action state: useAction
+
+A screen with six buttons has six actions — each gets its own `useAction`, with its own
+pending label and its own inline error. There is no shared status slot and nothing to
+multiplex:
+
+```tsx
+function Toolbar({ issue }: { issue: Issue }) {
+  const close = useAction('close', () => m.issues.patch(issue.id, { status: 'closed' }))
+  const remove = useAction('delete', async () => {
+    await m.issues.remove(issue.id)
+    navigate('/') // per-invocation consequences live inside the body
+  })
+
+  return (
+    <>
+      <button onClick={close.run} disabled={close.pending}>
+        {close.pending ? 'Closing…' : 'Close'}
+      </button>
+      <button onClick={remove.run}>{remove.pending ? 'Deleting…' : 'Delete'}</button>
+      {close.error ? <span>{close.error.message}</span> : null}
+    </>
+  )
+}
+```
+
+The optional name labels `action:start/end/error` events on the observability channel, so
+devtools read in the app's vocabulary — "close ok · 340ms" — with the underlying
+`mutate:*` rows alongside.
+
+Semantics, precisely:
+
+- `pending` is a **counter**, not a flag — with overlapping runs it stays true until the last settles.
+- `error` and `data` are **slots**: the last settled outcome, cleared the moment a new run starts (a retry wipes the stale message immediately).
+- `run()` **never rejects** — failures land in `error`, so `onClick={run}` is always safe. Sequencing and per-call recovery belong inside the action body, which is plain async JS — `try`/`catch` and return values work natively there. Corollary: `await run()` followed by success logic is a bug (it resolves on failure too); put the consequence in the body.
+- The body runs as a **React Action** (async transition): if it triggers a navigation or a query change that would suspend, React keeps the previous UI committed instead of flashing a fallback — `await m.issues.remove(id); navigate('/')` leaves the old screen up until the destination is ready. Urgent synchronous UI (closing an editor, clearing an input) belongs _before_ `run()`, not inside the body. The `pending` flip itself stays urgent, so button labels swap immediately.
+- The wrapped function is captured fresh each render — it closes over current props/state, no deps array.
+- `reset()` clears `error`/`data` back to idle.
+
+`useAction` wraps _any_ async function, not just figbird calls — it's the write-side
+member of the no-flash kit and composes with `useDelayedFlag(action.pending, 300)` for
+flicker-free labels. `run` also works directly as a React 19 form action —
+`<form action={submit.run}>` — where the body receives the `FormData` and
+`useFormStatus` lights up in the form's children.
+
+**One identity, one call site.** Hoisting a single `useAction` over N list rows re-creates
+the shared-slot problem one level up ("which row is pending?"). Give each row component
+its own action; if you catch yourself wanting keyed pending state inside one hook, the
+component boundary is in the wrong place. For the cross-cutting question, use
+`useMutating`.
+
+**Toggle actions and rapid clicks.** An action body closes over the render it was created
+in — two rapid clicks of a toggle both read the same `issue.status` and patch the same
+value, losing an update. This isn't a `useAction` quirk; it's what closures do. The
+mitigation is the disable pattern below (`useMutating` + `disabled`), which serializes
+writes per record — or express the change as data the server can apply idempotently.
+
+### Entity-level activity: useMutating
+
+`useMutating` answers "is any mutation in flight" — for one entity, one service, or the
+whole instance — no matter where the mutation was fired from:
+
+```ts
+const busy = useMutating({ service: 'issues', id: issue.id }) // this record
+const saving = useMutating({ service: 'issues' }) // this service
+const anything = useMutating() // anywhere
+```
+
+It's backed by a synchronous mutation tracker in the core (not the batched events
+channel), so it is correct even for components that mount _while_ a mutation is already
+in flight, and it sees writes from other components, route actions, and non-React code.
+
+The canonical use is serializing writes to one record: overlapping optimistic patches to
+the same row make rollback ambiguous, so disable the whole toolbar with
+`useMutating({ service, id })` while any action on that record is in flight — each
+button's `useAction.pending` still labels _which_ one is running.
+
+Caveats: optimistic creates are tracked by their client-generated id (the id contract
+guarantees one); `confirmed` creates without a client id and custom-method calls carry no
+`id`, so they never match an `{ id }` filter (they do match service-level filters).
 
 ### Custom methods
 
-`useMutation` covers CRUD. For everything else your services expose — `archive`,
-`sendReminder`, domain actions — declare the method in the schema's `methods` and call it
-with [useMethod](#usemethod), which types the arguments and result and tracks lifecycle
-state. Custom methods don't write to the CRUD cache; realtime events from the server keep
-affected queries fresh, as with any other server-side change.
+For everything beyond CRUD that your services expose — `archive`, `sendReminder`, domain
+actions — declare the method in the schema's `methods` and it appears directly on the
+handle, fully typed:
+
+```ts
+await m.notes.archive(['id-1', 'id-2']) // args and result typed from the schema
+await m.notes.call('undeclared', arg) // untyped escape hatch
+```
+
+**Custom methods don't write to the CRUD cache** — their result shape is unknown to
+figbird, so unlike the `create`/`update`/`patch`/`remove` sitting next to them on the
+handle, calling one changes no query results by itself. Realtime events from the server
+keep affected queries fresh, as with any other server-side change. They _do_ flow through
+the mutation tracker and the `mutate:*` observability events, so `useMutating` and
+devtools see them. Wrap them in `useAction` for UI state like any other write. Reserved
+names always mean the built-in: a schema method named `create`/`update`/`patch`/`remove`/
+`call`/`confirmed` is shadowed by the handle — reach it via `call()`.
 
 ## Preparation
 
@@ -607,7 +752,12 @@ const query = figbird.query({
 })
 query.subscribe(state => {})
 
-// Mutations
+// Mutations — the m proxy works outside React too (it's not a hook anywhere)
+await figbird.m.tasks.patch(id, { done: true }) // optimistic by default
+await figbird.m.tasks.confirmed.patch(id, { done: true }) // waits for the ack
+await figbird.m.tasks.archive([id]) // custom schema methods, typed
+
+// ...or the low-level descriptor form
 await figbird.mutate({ serviceName: 'tasks', method: 'patch', id, data: { done: true } })
 ```
 
@@ -685,18 +835,20 @@ The core instance holding the adapter, schema, and shared query state.
 const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 ```
 
-| Member                                       | Description                                                                                                         |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `q`                                          | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                       |
-| `prepare(definition, args)`                  | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
-| `prefetch(definition, args, opts?)`          | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).  |
-| `explain(...)`                               | Static classification report — see [figbird.explain](#figbirdexplain).                                              |
-| `inspect()`                                  | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                       |
-| `events`                                     | Observability channel — see [figbird.events](#figbirdevents).                                                       |
-| `query(desc, config?)`                       | Low-level descriptor query (see [Using outside React](#using-outside-react)).                                       |
-| `relationalQuery(builder)`                   | Low-level relational query ref for non-React use.                                                                   |
-| `mutate(desc)`                               | Low-level mutation.                                                                                                 |
-| `getState()` / `subscribeToStateChanges(fn)` | Raw internal state — debugging only; prefer `inspect()`.                                                            |
+| Member                                        | Description                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `q`                                           | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                       |
+| `prepare(definition, args)`                   | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
+| `prefetch(definition, args, opts?)`           | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).  |
+| `m` / `mutations(service)`                    | The write proxy (and its dynamic-name door) — also returned bound from `createHooks`. See [m](#m).                  |
+| `mutating`                                    | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.            |
+| `explain(...)`                                | Static classification report — see [figbird.explain](#figbirdexplain).                                              |
+| `inspect()`                                   | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                       |
+| `events`                                      | Observability channel — see [figbird.events](#figbirdevents).                                                       |
+| `query(desc, config?)`                        | Low-level descriptor query (see [Using outside React](#using-outside-react)).                                       |
+| `relationalQuery(builder)`                    | Low-level relational query ref for non-React use.                                                                   |
+| `mutate(desc)` / `call(service, method, ...)` | Low-level mutation / custom-method call.                                                                            |
+| `getState()` / `subscribeToStateChanges(fn)`  | Raw internal state — debugging only; prefer `inspect()`.                                                            |
 
 ## defineQuery
 
@@ -764,23 +916,31 @@ components is safe:
 const unsub = figbird.events.subscribe(event => {
   // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
   //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+  //           | 'action:start' | 'action:end' | 'action:error'
 })
 ```
 
-Events carry ids, durations, and item counts — lightweight enough to subscribe in production.
+Events carry ids, durations, and item counts — lightweight enough to subscribe in
+production. `mutate:*` events carry a `mutationId` correlating one mutation's
+start/end/error/rollback, and their `method` is a CRUD name or a custom method name —
+custom-method calls flow through the same lifecycle events. `action:*` events come from
+named `useAction` hooks and speak the app's vocabulary ("reassign · 340ms"), with the
+`mutate:*` rows they wrap alongside.
 
 ## createHooks
 
 Binds a Figbird instance to typed React hooks:
 
 ```ts
-export const { useQuery, useMutation, q, defineQuery, prepare, prefetch } = createHooks(figbird)
+export const { useQuery, q, m, defineQuery, prepare, prefetch, useAction, useMutating } =
+  createHooks(figbird)
 ```
 
-Returns the daily-use kit — `useQuery`, `useMutation`, `q` (the builder proxy),
-schema-typed `defineQuery`, and instance-bound `prepare`/`prefetch` — along with
-`useMethod` (custom service methods) and `useFeathers` (the raw-client escape hatch),
-plus the deprecated legacy hooks (`useFind`, `useGet`) for older codebases.
+Returns the daily-use kit — `useQuery`, `q` (the read proxy), schema-typed
+`defineQuery`, instance-bound `prepare`/`prefetch`, and the write side: `m` (the write
+proxy), `useAction` (per-action state), and `useMutating` (in-flight activity) — along
+with `useFeathers` (the raw-client escape hatch) and the deprecated legacy hooks
+(`useMutation`, `useFind`, `useGet`) for older codebases.
 
 Instance resolution: hooks use the bound instance directly, so no provider is required. If a
 `FigbirdProvider` is present in the tree, **it wins** — that's the injection point for
@@ -813,37 +973,58 @@ Result fields (suspense form): `data` (guaranteed for the exact query passed), `
 (non-null when a refetch failed while data is showing — cold errors throw instead),
 `isFetching` (background fetch in flight on the current query), `refetch()`.
 
-## useMutation
+## m
 
 ```ts
-const m = useMutation(serviceName, { optimistic?: boolean })
+m.notes.create(data, options?)   // Promise<Item>; arrays create in batch
+m.notes.update(id, data, options?)
+m.notes.patch(id, data, options?)
+m.notes.remove(id, options?)
+m.notes.archive(...args)         // custom methods from the schema, typed
+m.notes.call(method, ...args)    // untyped custom-method escape hatch
 
-m.create(data, options?)   // Promise<Item>; arrays create in batch
-m.update(id, data, options?)
-m.patch(id, data, options?)
-m.remove(id, options?)
-m.status  // 'idle' | 'loading' | 'success' | 'error' — last call from this hook
-m.data    // last mutation result
-m.error   // last mutation error
+m.notes.confirmed                // variant that waits for the server ack
 ```
 
-Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }` — overrides the
-hook default in both directions.
+The write proxy — services as properties, mirroring `q`. Handles are stateless,
+instance-bound plain values (not hooks): access them at module scope and call from
+anywhere. Writes are optimistic by default; `confirmed` variants update the cache only
+after the server acks. Handles hold no pending/error state by design; that's
+[useAction](#useaction) and [useMutating](#usemutating). Per-call `options` carry data
+only: `{ params?: AdapterParams, optimisticItem?: Item }`. Also available as `figbird.m`,
+with `figbird.mutations(name)` as the dynamic-service-name door.
 
-## useMethod
-
-The mutation path for custom (non-CRUD) service methods — `useMutation` covers
-create/update/patch/remove; this covers everything else your services expose:
+## useAction
 
 ```ts
-const [archive, { status, data, error }] = useMethod('notes', 'archive')
+const action = useAction(fn) // fn: (...args) => Promise<T> | T
+const action = useAction(name, fn) // name labels action:* events for devtools
 
-await archive(['id-1', 'id-2']) // typed from the schema's `methods` declaration
+action.run(...args) // Promise<void> — never rejects; failures land in `error`
+action.pending // boolean — counter semantics across overlapping runs
+action.error // Error | null — last settled failure, cleared when a new run starts
+action.data // T | null — last successful result, cleared when a new run starts
+action.reset() // clear error/data
 ```
 
-Tracks local lifecycle state (`idle` | `loading` | `success` | `error`) per hook. Custom
-methods don't flow through the CRUD cache — if a method changes data that queries show,
-the server should emit realtime events for the affected records (as usual).
+Per-action UI lifecycle around any async function — one hook call site per action. The
+body runs as a React Action (async transition), so suspense-triggering consequences
+(navigation after a write, a query change) keep the previous UI on screen; `run` also
+works directly as a React 19 `<form action>`. Named actions emit `action:start/end/error`
+on the observability channel (via the kit's bound instance, or the context instance for
+the root export). See [Per-action state](#per-action-state-useaction) for the semantics
+and the one-identity-one-call-site rule.
+
+## useMutating
+
+```ts
+useMutating() // any mutation in flight, anywhere
+useMutating({ service, id?, method? }) // narrowed; service accepts schema keys
+```
+
+Returns a boolean, live via `useSyncExternalStore` over `figbird.mutating` — the core's
+synchronous tracker, so it's correct for components that mount mid-mutation and it sees
+writes from any surface. See [Entity-level activity](#entity-level-activity-usemutating).
 
 ## useFeathers
 
@@ -917,6 +1098,29 @@ instance into a subtree — per-request instances in SSR, or a fresh instance pe
 
 `useFigbird()` reads the context instance (throws without a provider); `useFigbirdMaybe()`
 returns `undefined` instead.
+
+## useMutation
+
+**Deprecated** — prefer [m](#m) + [useAction](#useaction) + [useMutating](#usemutating).
+This hook is a service client and a single status slot in one, which forces hand-rolled
+pending-state machines on multi-action screens. Note its semantics are legacy on purpose:
+writes through `useMutation` are **non-optimistic unless flagged**, unlike `m`. Fully
+functional and not going away soon.
+
+```ts
+const m = useMutation(serviceName, { optimistic?: boolean })
+
+m.create(data, options?)   // Promise<Item>; arrays create in batch
+m.update(id, data, options?)
+m.patch(id, data, options?)
+m.remove(id, options?)
+m.status  // 'idle' | 'loading' | 'success' | 'error' — last call from this hook
+m.data    // last mutation result
+m.error   // last mutation error
+```
+
+Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }` — overrides the
+hook default in both directions.
 
 ## useFind
 

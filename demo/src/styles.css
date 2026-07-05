@@ -1165,6 +1165,10 @@ button.primary:hover:not(:disabled) {
   color: #b45309;
 }
 
+.tag-action {
+  color: #7c3aed;
+}
+
 .devtools-text {
   white-space: nowrap;
   overflow: hidden;

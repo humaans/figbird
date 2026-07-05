@@ -13,7 +13,7 @@ interface LogEntry {
   id: number
   ts: number
   text: string
-  kind: 'fetch' | 'realtime' | 'mutate'
+  kind: 'fetch' | 'realtime' | 'mutate' | 'action'
   status: 'start' | 'end' | 'error' | 'rollback' | 'event'
   durationMs?: number
 }
@@ -22,7 +22,7 @@ export function DevToolsPanel() {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<'log' | 'queries'>('log')
   const [paused, setPaused] = useState(false)
-  const [filter, setFilter] = useState<'all' | 'fetch' | 'realtime' | 'mutate'>('all')
+  const [filter, setFilter] = useState<'all' | 'fetch' | 'realtime' | 'mutate' | 'action'>('all')
   const [entries, setEntries] = useState<LogEntry[]>([])
   const [demoState, setDemoState] = useState<DemoState | null>(null)
   const [resetting, setResetting] = useState(false)
@@ -163,7 +163,7 @@ export function DevToolsPanel() {
           ) : (
             <>
               <header className='devtools-head sub'>
-                {(['all', 'fetch', 'realtime', 'mutate'] as const).map(f => (
+                {(['all', 'fetch', 'realtime', 'mutate', 'action'] as const).map(f => (
                   <button
                     key={f}
                     className={`link ${filter === f ? 'selected' : ''}`}
@@ -325,6 +325,34 @@ function describeEvent(event: FigbirdEvent, id: number): LogEntry | null {
         kind: 'mutate',
         status: 'rollback',
         text: `${event.method} ${event.serviceName}${event.id != null ? ` #${event.id}` : ''} rolled back`,
+      }
+    // App-vocabulary events from named useAction hooks — the mutate rows they
+    // wrap appear alongside, correlated by time.
+    case 'action:start':
+      return {
+        id,
+        ts,
+        kind: 'action',
+        status: 'start',
+        text: event.name ?? '(anonymous action)',
+      }
+    case 'action:end':
+      return {
+        id,
+        ts,
+        kind: 'action',
+        status: 'end',
+        durationMs: event.durationMs,
+        text: `${event.name ?? '(anonymous action)'} ok`,
+      }
+    case 'action:error':
+      return {
+        id,
+        ts,
+        kind: 'action',
+        status: 'error',
+        durationMs: event.durationMs,
+        text: `${event.name ?? '(anonymous action)'} failed: ${event.error.message}`,
       }
   }
   return null

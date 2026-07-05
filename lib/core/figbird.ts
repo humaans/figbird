@@ -1,6 +1,13 @@
 import type { Adapter, AdapterFindMeta, AdapterParams, AdapterQuery } from '../adapters/adapter.js'
 import { FigbirdEventEmitter, type FigbirdEvents } from './events.js'
 import {
+  createMutationsProxy,
+  type MutationsHandle,
+  type MutationsHost,
+  type MutationsProxy,
+} from './mutations.js'
+import { MutationTracker, type MutationActivity } from './mutationTracker.js'
+import {
   createQueryBuilderProxy,
   type QueryBuilder,
   type QueryBuilderProxy,
@@ -55,7 +62,15 @@ export type {
   QueryState,
   QueryStatus,
 } from './queryTypes.js'
-export type { FigbirdEvent, FigbirdEvents, MutationMethod } from './events.js'
+export type { FigbirdEvent, FigbirdEvents, MutationEventMethod, MutationMethod } from './events.js'
+export type {
+  MethodArgs,
+  MethodData,
+  MutationCallOptions,
+  MutationsHandle,
+  MutationsProxy,
+} from './mutations.js'
+export type { InFlightMutation, MutationActivity } from './mutationTracker.js'
 export {
   defineQuery,
   isQueryDefinition,
@@ -112,6 +127,7 @@ export class Figbird<
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
   #events: FigbirdEventEmitter
+  #mutationTracker: MutationTracker
 
   // Cache of active RelationalQueryRef instances, keyed by AST hash. This is critical for
   // React 18 Suspense interop: on suspense retries React discards render-state (including
@@ -141,10 +157,12 @@ export class Figbird<
     this.adapter = adapter
     this.schema = schema
     this.#events = new FigbirdEventEmitter()
+    this.#mutationTracker = new MutationTracker()
     this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
       eventBatchProcessingInterval: eventBatchProcessingInterval,
       events: this.#events,
+      mutations: this.#mutationTracker,
     })
   }
 
@@ -521,6 +539,71 @@ export class Figbird<
       ...desc,
       serviceName: resolveServicePath(this.schema, desc.serviceName),
     })
+  }
+
+  /**
+   * Call a custom (non-CRUD) service method — the mutation path for everything
+   * beyond create/update/patch/remove. No cache update is applied (the result
+   * shape is unknown), but the call is tracked (`figbird.mutating`, `useMutating`)
+   * and emits `mutate:*` observability events like any mutation.
+   *
+   * Prefer the typed methods on a `mutations()` handle in app code; this is the
+   * underlying primitive.
+   */
+  call(serviceName: string, method: string, ...args: unknown[]): Promise<unknown> {
+    return this.queryStore.call(resolveServicePath(this.schema, serviceName), method, args)
+  }
+
+  #mutationsProxy: MutationsProxy<S> | null = null
+
+  /**
+   * The write proxy — the write-side counterpart of `q`. Services are
+   * properties; verbs are methods; handles are stateless plain values (no
+   * hook, no lifecycle) usable at module scope, in event handlers, and in
+   * non-React code. Writes are optimistic by default; `confirmed` variants
+   * wait for the server ack before the cache shows the change.
+   *
+   * @example
+   * ```ts
+   * const { m } = figbird
+   * await m.issues.patch(id, { status: 'closed' })   // optimistic (default)
+   * await m.policies.confirmed.create(policy)        // waits for the ack
+   * await m.issues.archive(id)                       // custom schema method
+   * ```
+   */
+  get m(): MutationsProxy<S> {
+    if (!this.#mutationsProxy) {
+      const host: MutationsHost = {
+        mutate: desc =>
+          this.queryStore.mutate({
+            ...desc,
+            serviceName: resolveServicePath(this.schema, desc.serviceName),
+          }),
+        call: (service, method, args) =>
+          this.queryStore.call(resolveServicePath(this.schema, service), method, args),
+      }
+      this.#mutationsProxy = createMutationsProxy(host) as MutationsProxy<S>
+    }
+    return this.#mutationsProxy
+  }
+
+  /**
+   * Programmatic form of `m` for dynamic service names —
+   * `figbird.mutations(name)` is `figbird.m[name]` with a string-typed door.
+   */
+  mutations<N extends ServiceNames<S>>(serviceName: N): MutationsHandle<S, N>
+  mutations(serviceName: string): MutationsHandle<S, ServiceNames<S>>
+  mutations(serviceName: string): MutationsHandle<S, ServiceNames<S>> {
+    return (this.m as Record<string, MutationsHandle<S, ServiceNames<S>>>)[serviceName]!
+  }
+
+  /**
+   * Live view of in-flight mutations (CRUD and custom methods). Synchronously
+   * maintained — correct even for subscribers that attach mid-mutation — and
+   * shaped for `useSyncExternalStore`. `useMutating` is the React binding.
+   */
+  get mutating(): MutationActivity {
+    return this.#mutationTracker
   }
 
   /**

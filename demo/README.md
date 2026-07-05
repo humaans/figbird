@@ -42,8 +42,9 @@ If you're here to learn figbird, read in this order — each file teaches one id
 4. **`src/pages/IssueDetail/`** — the route-prepared screen, one lesson per file:
    - `queries.ts` — `defineQuery` definitions shared by router, hover, and screen
    - `prepare.ts` — route preparation (and where router `priority` gets attached)
-   - `screen.tsx` — the `.one()` relational graph + optimistic action toolbar
-   - `Editable.tsx` — inline optimistic patch-and-rollback editing
+   - `screen.tsx` — the `.one()` relational graph + the write-side story: one `useAction`
+     per toolbar button, `useMutating` for the entity-wide disable
+   - `Editable.tsx` — inline optimistic patch-and-rollback editing via `useAction`
    - `Comments.tsx` — the local-exact realtime thread (unwindowed on purpose)
 5. **`src/pages/Teams/screen.tsx`** — windowed relations vs `embed()`, side by side on
    one card.
@@ -100,9 +101,22 @@ Bottom-right corner:
   team's spotlight in one batched IN(...) fetch, preserving the server-chosen order.
 - **Cross-service activity** — the Activity panel merges three independent realtime
   queries (comments, reactions, issues) by timestamp in the component.
-- **Optimistic mutations** — declared once per surface: `useMutation('issues',
-  { optimistic: true })`. Cache updates in the same frame, rollback on failure (arm chaos
-  in dev tools to see it).
+- **Optimistic mutations, by default** — writes go through the `m` proxy
+  (`m.issues.patch(id, data)`), the write-side counterpart of `q`: no hooks, no flags,
+  no handle setup. The cache updates in the same frame, rollback on failure (arm chaos in
+  dev tools to see it); surfaces that must wait for the server ack use
+  `m.<service>.confirmed`.
+- **The id contract** — optimistic creates carry a client-generated id (the demo mints
+  numeric ones; real apps use `crypto.randomUUID()`): identity is real from the first
+  frame, so React keys are stable, the realtime echo dedupes by id, and the New Issue
+  modal can navigate to `/issues/<id>` before the ack. Servers that assign ids pair with
+  `confirmed` creates — await the create for the server's identity.
+- **Per-action state, per-entity busy** — every issue-detail toolbar button is its own
+  named `useAction` (own pending label, own error — no shared status slot, no hand-rolled
+  state machine; the names label `action:*` events so the dev-tools log reads "boost ok ·
+  340ms"), while the toolbar-wide disable is `useMutating({ service: 'issues', id })`,
+  backed by figbird's synchronous mutation tracker: it sees writes to that issue from any
+  surface, even components that mounted mid-mutation.
 - **Transparent junction relations** — labels resolve through
   `many(issues → issueLabels, issueLabels → labels)`, so consumers just say
   `.related('labels')` and get `Label[]`; creating a junction row updates the assembled

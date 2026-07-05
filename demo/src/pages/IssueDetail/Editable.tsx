@@ -1,47 +1,47 @@
 /**
  * Inline editing — the optimistic patch-and-rollback lesson.
  *
- * Both editors patch through an optimistic mutation hook: the cached value swaps
- * in the same frame, and a server failure (arm "Fail next mutation" in dev tools)
- * rolls it back everywhere at once. The idle views render the cached value, so
- * realtime edits from other clients flow straight in.
+ * Writes are optimistic by default: the cached value swaps in the same frame,
+ * and a server failure (arm "Fail next mutation" in dev tools) rolls it back
+ * everywhere at once — the failure itself lands in the save action's `error`,
+ * no try/catch needed. The idle views render the cached value, so realtime
+ * edits from other clients flow straight in.
  */
 
 import { useState } from 'react'
-import { useMutation } from '../../figbird'
+import { m, useAction } from '../../figbird'
 
 export function EditableTitle({ issueId, title }: { issueId: number; title: string }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(title)
-  const [error, setError] = useState<string | null>(null)
-  const issueMutation = useMutation('issues', { optimistic: true })
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  // The optimistic patch closes the editor immediately; if the server rejects
+  // it, the cache rolls back and `save.error` carries the message.
+  const save = useAction('edit-title', (next: string) => m.issues.patch(issueId, { title: next }))
 
   const startEditing = () => {
     setDraft(title)
-    setError(null)
+    setValidationError(null)
+    save.reset()
     setEditing(true)
   }
   const cancel = () => {
     setEditing(false)
-    setError(null)
+    setValidationError(null)
   }
-  const save = async () => {
+  const submit = () => {
     const next = draft.trim()
     if (next.length === 0) {
-      setError('Title cannot be empty')
-      return
-    }
-    if (next === title) {
-      setEditing(false)
+      setValidationError('Title cannot be empty')
       return
     }
     setEditing(false)
-    try {
-      await issueMutation.patch(issueId, { title: next })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    setValidationError(null)
+    if (next !== title) void save.run(next)
   }
+
+  const error = validationError ?? save.error?.message ?? null
 
   if (!editing) {
     return (
@@ -61,7 +61,7 @@ export function EditableTitle({ issueId, title }: { issueId: number; title: stri
       className='title-editor'
       onSubmit={e => {
         e.preventDefault()
-        void save()
+        submit()
       }}
     >
       <input
@@ -79,6 +79,7 @@ export function EditableTitle({ issueId, title }: { issueId: number; title: stri
       <button type='button' className='link' onClick={cancel}>
         Cancel
       </button>
+      {validationError ? <span className='inline-error'>{validationError}</span> : null}
     </form>
   )
 }
@@ -92,17 +93,19 @@ export function EditableDescription({
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(description)
-  const issueMutation = useMutation('issues', { optimistic: true })
+
+  const save = useAction('edit-description', (next: string) =>
+    m.issues.patch(issueId, { description: next }),
+  )
 
   const startEditing = () => {
     setDraft(description)
     setEditing(true)
   }
-  const save = async () => {
+  const submit = () => {
     setEditing(false)
     const next = draft.trim()
-    if (next === description) return
-    await issueMutation.patch(issueId, { description: next })
+    if (next !== description) void save.run(next)
   }
 
   if (!editing) {
@@ -113,6 +116,7 @@ export function EditableDescription({
         title='Click to edit'
       >
         {description || 'Add a description…'}
+        {save.error ? <span className='inline-error'> · {save.error.message}</span> : null}
       </div>
     )
   }
@@ -126,13 +130,13 @@ export function EditableDescription({
         onChange={e => setDraft(e.target.value)}
         onKeyDown={e => {
           if (e.key === 'Escape') setEditing(false)
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save()
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
         }}
         className='description-input'
         placeholder='Add a description…'
       />
       <div className='editor-actions'>
-        <button type='button' className='link' onClick={() => void save()}>
+        <button type='button' className='link' onClick={submit}>
           Save
         </button>
         <button type='button' className='link' onClick={() => setEditing(false)}>

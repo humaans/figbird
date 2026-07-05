@@ -592,10 +592,100 @@ plain names:
 
 Optimistic and awaitable are not opposites — the promise settles on the ack in both modes.
 
-Optimistic creates need a client-generated id: without one there is nothing to track and roll back,
-so such a create simply applies non-optimistically. `update`/`patch`/`remove` synthesize their
-optimistic item from the cache (`patch` merges onto the cached entity; an explicit item can be
-passed for computed fields).
+Optimistic creates must carry a client-generated id the server will accept (the id contract —
+see "The m Proxy, Default Optimism, And The Id Contract" below); an id-less optimistic create
+throws. `update`/`patch` synthesize their optimistic item from the cache (`patch` merges onto the
+cached entity; an explicit item can be passed via `optimisticItem` for computed fields); a
+patch/update on an entity that is not cached applies nothing optimistically — there is nothing
+displaying it — and the server response updates the cache as usual.
+
+### The Write-Side Split (July 2026)
+
+`useMutation` conflated two roles: a **service client** (a bag of CRUD methods, inviting
+one-hook-per-service usage) and a **status tracker** (a single status slot, requiring
+one-hook-per-action). The shape suggested the first; the state only worked under the second — so
+every multi-action screen hand-rolled a pending-state machine next to it. The root fact: the
+library cannot know what an "action" is (reassign and close are both `patch` on `issues`); action
+identity exists only in the app's vocabulary, and React's mechanism for app-defined identity is the
+hook call site. Meanwhile "is anything mutating this record" IS knowable by the library (service,
+method, id).
+
+The replacement factors each granularity to the layer that owns it:
+
+- **`mutations(service, defaults?)`** — the stateless service client. Not a hook (it subscribes to
+  nothing); callable at module scope, in event handlers, in non-React code — the same coherence
+  move as `prepare`/`prefetch`/`defineQuery` being plain bound functions. Handle-level `optimistic`
+  replaces hook-level; custom schema `methods` appear on the handle typed (subsuming `useMethod`,
+  which was removed — its calls previously bypassed the core entirely and were invisible to
+  observability; they now flow through `figbird.call`, emitting `mutate:*` events and registering
+  with the tracker).
+- **`useAction(fn)`** — per-action `pending`/`error`/`data` around any async function; one hook
+  call site per action. `pending` is a counter (overlapping runs), `error`/`data` are last-settled
+  slots cleared on run start, and `run()` never rejects (failures land in `error`; sequencing and
+  per-invocation recovery live inside the action body — which is plain async JS where `try`/`catch`
+  works natively). The body executes as a React Action (async transition), so suspense-triggering
+  consequences — navigate-after-delete, query changes — keep the previous UI committed instead of
+  flashing fallbacks; the `pending` flip stays urgent so labels swap immediately. The reads-side
+  rule "params changes are transitions" gets its write-side mirror made literal: reads suspend,
+  writes are transitions.
+- **`useMutating(filter?)`** — entity/service/instance-level in-flight state. Deliberately NOT
+  built on the events channel: event delivery is deferred to a microtask and events never replay,
+  so a subscriber mounting mid-mutation would report a false negative. A synchronous
+  `MutationTracker` in the core (updated at the mutate call sites, exposed as `figbird.mutating`)
+  gives `useSyncExternalStore` a correct snapshot at any moment. The canonical use is serializing
+  writes per record — overlapping optimistic patches make rollback ambiguous, so the app disables
+  the surface while `useMutating({ service, id })` is true.
+
+Non-goals, decided: no keyed status on `useMutation` (stringly identity split across two call
+sites); no drop/serial/once modes on `useAction` (the entity-level disable is the real concurrency
+policy; button-level modes would paper over it); no event-stream-based `useMutating` (see above).
+`useMutation` remains as a deprecated, fully-functional legacy hook.
+
+`mutate:*` events gained a `mutationId` correlating one mutation's lifecycle, and their `method`
+widened to admit custom method names.
+
+### The m Proxy, Default Optimism, And The Id Contract (July 2026, second pass)
+
+Three refinements landed together, replacing the first pass's `mutations(service, defaults)`
+factory:
+
+**`m` — the write proxy.** Services are properties (`m.issues.patch(...)`), mirroring `q`; one
+DSL convention for the whole library: _selections are properties, operations are methods_. The
+factory's `defaults` argument is gone, and with it the handle-naming problem (`issues` the handle
+vs `issues` the query data). Policy is a fluent variant, not an options bag — matching how the
+read side spells policy (`.server()`, `.snapshot()`). `confirmed` is a property, not a method,
+because it _selects_ a namespace of verbs rather than operating on a pipeline value. Handle
+proxies deny well-known protocol props (`toJSON`, `asymmetricMatch`, `then`, ...) so introspection
+(JSON.stringify, jest equality) can't fire phantom custom-method calls. `figbird.mutations(name)`
+remains as the dynamic-service-name door.
+
+**Optimistic by default; `confirmed` opts out.** The first pass made optimism a handle-level flag;
+the demo then passed `{ optimistic: true }` on every surface — when 100% of call sites set the
+same flag, the default is wrong. The inversion is safe _now_ because the write-side split built
+its preconditions: failures land in `useAction.error`, rollback is global and observable, and
+`useMutating` powers the per-record serialization policy. Awaiting call sites are unaffected in
+both modes (the promise settles on the ack; optimism only controls when the cache shows the
+change). `confirmed` is deliberately greppable — it names the critical surfaces. The low-level
+descriptor (`figbird.mutate`) and the deprecated `useMutation` keep the old non-optimistic
+default: the inversion is a property of the `m` DSL, so legacy code changes behavior only when it
+migrates. Per-call options carry data only (`params`, `optimisticItem`) — the
+`optimistic: boolean | item` flag/payload union is gone from the new DSL.
+
+**The id contract.** Optimistic creates must carry a client-generated id the server will accept
+(`crypto.randomUUID()`); an id-less optimistic create throws synchronously, naming both escapes.
+Confirmed creates are the mode for server-assigned ids — await the create, the server's item
+carries its identity. The principle (Zero/Replicache/Linear-aligned): an optimistic item without
+a server-valid id is an item without identity, and everything downstream is built on identity —
+React keys, realtime echo dedup (the echo merges idempotently because it shares the client id),
+navigation, child-row foreign keys. Servers with auto-assigned ids can't do optimistic creates,
+and that is the honest shape of the constraint rather than a limitation to engineer around.
+Optimistic creates register their id with the mutation tracker, so `useMutating({ id })` covers
+the create→navigate→act-before-ack window.
+
+`useAction` gained an optional name (`useAction('reassign', fn)`) emitting
+`action:start/end/error` observability events — devtools speak the app's vocabulary with the
+`mutate:*` rows alongside — and its `run` doubles as a React 19 `<form action>` (verified;
+`useFormStatus` works in the form's children).
 
 ## Prepared Queries
 
@@ -1361,28 +1451,29 @@ Decisions worth recording so they are not relitigated without new information:
   no-flash kit are the supported answer.
 - **Schema-level optimistic config** — rejected; optimism is surface-level intent, and the same
   service legitimately serves both modes on different screens.
-- **Per-invocation mutation state in `useMutation`** — rejected; multi-action screens need
-  per-call pending state, which is caller-side by nature (a five-line wrapper). Documented as a
-  pattern instead.
+- **Per-invocation mutation state in `useMutation`** — first deferred to a caller-side wrapper
+  pattern, then reversed (July 2026): the wrapper every consumer would hand-roll became
+  `useAction`, and the split write-side story (`mutations` + `useAction` + `useMutating`) replaced
+  the hook — see "The Write-Side Split". Keyed status _inside_ `useMutation` stays rejected:
+  stringly identity split across two call sites.
 - **`.one()` / `.get()` unification** — rejected; null-on-miss vs error-on-miss is a real semantic
   pair worth two spellings.
 - **A separately-named non-Suspense hook** — rejected in favor of `{ suspense: false }`; see "Why
   There Is No Second Hook".
 - **`priority` on the core `PreparedQuery`** — rejected; router vocabulary the library never reads.
+- **Temp-id swap for id-less optimistic creates** — implemented briefly (July 2026), removed the
+  same day in favor of the id contract. The mechanism (cache-only temp id, swapped for the real
+  item on ack) faked identity for the create-to-ack gap, and the fakery leaked at every identity
+  seam: React keys remounted on swap, the realtime echo could duplicate the temp item (no shared
+  key — an unfixable race we had to document), and referencing the id before the ack needed a
+  documented scope guard. Machinery that ships with warning labels about itself is machinery
+  fighting the data model; requiring client ids makes both failure modes unexpressible instead of
+  documented.
 
 ## Future Ideas
 
 Unimplemented but considered worth keeping on the table. Nothing in the current design depends on
 these; each would be additive.
-
-### Client-Generated Ids And Temp-Id Swap
-
-Optimistic creates require a client-supplied id today, which pushes id-generation policy into app
-code. The designed-but-deferred mechanism: when an optimistic create has no id, figbird assigns an
-internal temp id, applies the write under it, and on the server's response swaps temp → real across
-the entity cache and query results. Scope guard: no rewriting of foreign keys recorded against an
-unresolved temp id — referencing a create's id means awaiting the create. Deferred until the rest
-of the API settles in real consumers.
 
 ### Typed Relational Filter Paths
 

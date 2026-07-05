@@ -50,6 +50,13 @@ export interface Adapter<
   // Required internal methods
   getId(item: unknown): string | number | undefined
 
+  /**
+   * Optional: read an item's id without warning when absent. Used by the store
+   * for id presence checks — enforcing the optimistic-create id contract and
+   * registering create ids with the mutation tracker.
+   */
+  peekId?(item: unknown): string | number | undefined
+
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 
   // Matcher is typed with TQuery but works with unknown items
