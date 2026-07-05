@@ -89,8 +89,9 @@ test('m: handles are interned and the confirmed variant is stable', t => {
 
   t.is(m.notes, m.notes)
   t.is(m.notes.confirmed, m.notes.confirmed)
-  // The programmatic form resolves to the same interned handle.
-  t.is(figbird.mutations('notes'), m.notes)
+  // The callable (dynamic-name) form resolves to the same interned handle.
+  t.is(m('notes'), m.notes)
+  t.is(figbird.m('notes'), m.notes)
 })
 
 test('m: optimisticItem supplies the synthesized cache item without flipping policy', async t => {

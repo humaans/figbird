@@ -1,11 +1,6 @@
 import type { Adapter, AdapterFindMeta, AdapterParams, AdapterQuery } from '../adapters/adapter.js'
 import { FigbirdEventEmitter, type FigbirdEvents } from './events.js'
-import {
-  createMutationsProxy,
-  type MutationsHandle,
-  type MutationsHost,
-  type MutationsProxy,
-} from './mutations.js'
+import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
 import { MutationTracker, type MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
@@ -560,7 +555,7 @@ export class Figbird<
    * shape is unknown), but the call is tracked (`figbird.mutating`, `useMutating`)
    * and emits `mutate:*` observability events like any mutation.
    *
-   * Prefer the typed methods on a `mutations()` handle in app code; this is the
+   * Prefer the typed methods on an `m` handle in app code; this is the
    * underlying primitive.
    */
   call(serviceName: string, method: string, ...args: unknown[]): Promise<unknown> {
@@ -582,6 +577,7 @@ export class Figbird<
    * await m.issues.patch(id, { status: 'closed' })   // optimistic (default)
    * await m.policies.confirmed.create(policy)        // waits for the ack
    * await m.issues.archive(id)                       // custom schema method
+   * m(serviceName).patch(id, data)                   // dynamic service name
    * ```
    */
   get m(): MutationsProxy<S> {
@@ -598,16 +594,6 @@ export class Figbird<
       this.#mutationsProxy = createMutationsProxy(host) as MutationsProxy<S>
     }
     return this.#mutationsProxy
-  }
-
-  /**
-   * Programmatic form of `m` for dynamic service names —
-   * `figbird.mutations(name)` is `figbird.m[name]` with a string-typed door.
-   */
-  mutations<N extends ServiceNames<S>>(serviceName: N): MutationsHandle<S, N>
-  mutations(serviceName: string): MutationsHandle<S, ServiceNames<S>>
-  mutations(serviceName: string): MutationsHandle<S, ServiceNames<S>> {
-    return (this.m as Record<string, MutationsHandle<S, ServiceNames<S>>>)[serviceName]!
   }
 
   /**

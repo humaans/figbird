@@ -233,11 +233,10 @@ export function createHooks<F extends Figbird<any, any>>(
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
   /**
-   * @deprecated Superseded by the split write-side story: `mutations()` for the
-   * stateless service handle, `useAction` for per-action pending/error state,
-   * `useMutating` for entity/service-level activity. Fully functional, but its
-   * single shared status slot forces hand-rolled state machines on multi-action
-   * screens.
+   * @deprecated Superseded by the split write-side story: `m` for the stateless
+   * service handle, `useAction` for per-action pending/error state, `useMutating`
+   * for entity/service-level activity. Fully functional, but its single shared
+   * status slot forces hand-rolled state machines on multi-action screens.
    */
   useMutation: UseMutationForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>

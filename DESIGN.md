@@ -660,7 +660,8 @@ proxies deny exactly two protocol props: `then` (a callable one makes handles th
 callable one turns JSON.stringify — logging, error reporting — into a phantom network write).
 Broader duck-typing probes (jest's `asymmetricMatch`, React's `$$typeof`, ...) are deliberately
 unguarded: handles are module-scope verbs, not data, and guarding against usage the API doesn't
-invite is ceremony. `figbird.mutations(name)` remains as the dynamic-service-name door.
+invite is ceremony. For dynamic service names the proxy is callable — `m(name)`, mirroring
+`q(name)` — rather than a separate `figbird.mutations(name)` method.
 
 **Optimistic by default; `confirmed` opts out.** The first pass made optimism a handle-level flag;
 the demo then passed `{ optimistic: true }` on every surface — when 100% of call sites set the
