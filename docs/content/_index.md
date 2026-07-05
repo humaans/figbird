@@ -31,7 +31,7 @@ function IssueDetail({ id }: { id: number }) {
 - **Relational queries** — declare relations once, `.related()` assembles entity graphs
 - **Live queries** — results update as records change, locally or via realtime events
 - **Suspense-native** — cold reads suspend, warm reads render synchronously
-- **Optimistic mutations, by default** — writes show immediately and roll back on failure everywhere at once; `confirmed` for surfaces that wait
+- **Optimistic mutations, by default** — writes show immediately and roll back on failure everywhere at once
 - **Query preparation** — routers and hover handlers warm the exact queries screens will read
 - **Full TypeScript** — one schema, inference across builders, relations, and mutations
 - **Framework-agnostic core** — works outside React for SSR, testing, or background sync
@@ -819,95 +819,83 @@ For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`,
 
 ## Comparison
 
-Every data library is a bet on where your app's complexity lives. Figbird's bet: a
+Every data library is a bet on where your app's complexity lives. Figbird bets on a
 **server-authoritative backend with realtime events**, read by **long-lived, app-shaped
-screens** that many people look at simultaneously. Each of the libraries below is the
-right tool for a different shape of problem, so the comparisons cut both ways.
+screens** that several people have open at once. The libraries below make different
+bets. Each is the right tool for a different problem, so the comparisons cut both ways.
 
 ### TanStack Query
 
-TanStack Query caches the results of arbitrary async functions under opaque keys. That
-generality is its strength: any backend, any protocol, no schema. It is also its
-limitation, because the cache doesn't know what's _inside_ a result. The same record
-living in ten queries is ten copies, and keeping them coherent is your job, via the
-invalidation choreography (`onSuccess` → `invalidateQueries`) that dominates real
-TanStack codebases. Freshness is heuristic: `staleTime`, refetch-on-focus, polling.
+TanStack Query caches the results of arbitrary async functions under opaque keys.
+That's its strength: any backend, any protocol, no schema. It's also the limitation.
+The cache can't see inside a result, so the same record fetched by ten queries exists
+as ten copies, and keeping them in sync is your job. In practice this means invalidation
+choreography: every mutation lists the query keys it may have affected. Freshness is
+heuristic: `staleTime`, refetch-on-focus, polling.
 
-Figbird's cache is **normalized and event-driven**: entities live once, queries are
-projections over them, and a mutation or socket event updates every query referencing the
-record. There is no invalidation API because there's nothing to invalidate. Optimistic
-updates are the default with automatic rollback, versus TanStack's hand-written
-`onMutate`/snapshot/rollback recipe per mutation. Relations assemble client-side with
-full types.
+Figbird's cache is **normalized**. An entity lives once, queries are views over it, and
+a mutation or socket event updates every query that references the record. There is no
+invalidation API because there is nothing to invalidate. Optimistic updates are the
+default, with automatic rollback; in TanStack that's a hand-written `onMutate` recipe
+per mutation.
 
-**Choose TanStack when** your API is heterogeneous (mixed REST endpoints, third-party
-APIs, no consistent resource shape), you have no realtime channel, or you want the
-ecosystem's maturity and escape hatches. **Figbird's model needs** service-shaped
-resources and, to shine, server-emitted events. Without them you keep SWR but lose the
-realtime freshness model that makes the cache self-maintaining.
+Choose TanStack when your API is a mix of shapes and vendors, or when you have no
+realtime channel. Figbird wants service-shaped resources, and without server-emitted
+events you keep the caching but lose the self-updating part.
 
 ### React Server Components
 
-RSC moves reads to the server: zero client JS for data fetching, direct data access, great
-first paint. It's a request/response model. The page is data at a moment in time, and
-freshness means revalidating and re-rendering server trees (`revalidatePath`/`Tag`), which
-is coarse and navigation-shaped.
+RSC moves reads to the server: no client fetching code, direct data access, great first
+paint. It's a request/response model. The page is data at a moment in time, and keeping
+it fresh means re-rendering server trees, which is coarse and tied to navigation.
 
-Figbird is for the screen that _stays open_: an issue tracker, an HRIS, a dashboard where
-a teammate's change should appear in the open view in milliseconds without anyone
-navigating. That requires a live client cache, socket events merging into it, and
-optimistic writes, which are exactly the things RSC deliberately doesn't have. (Client
-interactivity falls back to client components anyway, at which point you need a client
-data layer and you're back to this comparison.)
+Figbird is for the screen that _stays open_. An issue tracker, a dashboard: a teammate's
+change should show up in the open view without anyone navigating. That takes a live
+client cache, socket events merging into it, and optimistic writes. RSC deliberately has
+none of these, and once you add interactivity you're writing client components that need
+a data layer anyway.
 
-**These compose rather than compete**: RSC for the document-shaped parts (marketing,
-content, settings pages you visit once), figbird for the app-shaped workspace inside.
-**Choose RSC alone when** your product is read-mostly and request-scoped. Figbird's
-machinery is dead weight on a blog.
+The two compose well. Use RSC for the document-shaped pages you visit once, figbird for
+the workspace inside. If your product is read-mostly and request-scoped, RSC alone is
+right; figbird is dead weight on a blog.
 
 ### Relay + GraphQL
 
-Relay is the most principled client cache in the ecosystem: normalized store, declarative
-per-component data requirements (fragments), and compile-time guarantees against over-
-and under-fetching. Those properties cost a GraphQL server, a compiler step, codegen, and
-fragment ceremony at every component boundary. And the property that ceremony chiefly
-buys, **data masking for cross-team decoupling**, matters at hundreds-of-engineers scale
-and mostly doesn't below it.
+Relay is the most principled client cache in the ecosystem: normalized store,
+per-component data requirements, compile-time guarantees against over- and
+under-fetching. The price is a GraphQL server, a compiler step, codegen, and fragment
+ceremony at every component boundary. What that ceremony chiefly buys is **data
+masking**, which keeps teams decoupled at hundreds-of-engineers scale and mostly
+doesn't matter below it.
 
-Figbird targets the same normalized-store outcome with none of the pipeline: one
-TypeScript schema, inference instead of codegen, composition via plain functions instead
-of fragments, and your existing services instead of a GraphQL layer. Realtime is
-first-class rather than bolted on. GraphQL subscriptions exist, but wiring them to
-update a normalized store correctly is left as an exercise; in figbird that wiring _is_
-the library.
+Figbird reaches the same normalized store with none of that pipeline: one TypeScript
+schema, inference instead of codegen, plain functions instead of fragments, your
+existing services instead of a GraphQL layer. Realtime is built in rather than bolted
+on. GraphQL subscriptions exist, but wiring them into a normalized store correctly is
+left to you; in figbird that wiring _is_ the library.
 
-**Choose Relay when** you're at the org scale masking was built for, you need field-level
-fetch efficiency (figbird fetches whole rows), or GraphQL is already your API layer.
-**Figbird gives up** field selection and compile-time query validation in exchange for
-having no pipeline at all.
+Choose Relay at the scale masking was built for, when you need field-level fetch
+efficiency (figbird fetches whole rows), or when GraphQL is already your API.
 
 ### Zero (and sync engines generally)
 
-Zero syncs a queryable replica to the client: reads are local-first and instant, writes
-rebase through custom mutators, and there is no refetch model because the replica diffs
-in continuously. Where the models overlap isn't accidental. Figbird deliberately borrows
-Zero's philosophy where it fits a server-authoritative world: client-generated ids,
-optimistic-by-default writes, queries as live views.
+Zero syncs a queryable replica into the client. Reads are local-first and instant,
+writes rebase through custom mutators, and there is no refetch model because the replica
+diffs in continuously. The overlap with figbird isn't accidental: client-generated ids,
+optimistic-by-default writes, and queries as live views are all Zero ideas, borrowed
+where they fit a server-authoritative world.
 
-The difference is the infrastructure bet. Zero requires running its sync layer
-(zero-cache, Postgres logical replication) and adopting its permission model; you're
-committing your backend architecture to the sync engine. Figbird runs against the
-Feathers-style backend you already have: services, hooks, existing permissions, deployed
-today, adoptable one screen at a time. Its **classification system** also keeps
-server-only semantics natural. `$regex` search, permission-dependent membership, and
-complex joins classify as server-authoritative and reconcile by refetch, where a local
-replica must either sync everything the query needs or fall back to the server anyway.
+The difference is infrastructure. Zero means running its sync layer (zero-cache,
+Postgres logical replication) and adopting its permission model; your backend commits to
+the sync engine. Figbird runs against the backend you already have and can be adopted
+one screen at a time. It also keeps server-only logic natural: `$regex` search or
+permission-dependent membership classify as server-authoritative and reconcile by
+refetch, where a replica has to sync everything a query touches or fall back to the
+server anyway.
 
-**Choose Zero when** you're greenfield on Postgres, can operate the sync infrastructure,
-and want local-first reads everywhere. It's the stronger end state. **Choose figbird
-when** the server must stay authoritative with its existing logic, or you want most of
-the live-app experience (realtime views, optimistic writes, warm navigation via
-`prepare`/`prefetch`/`.all()`) without changing your backend.
+Choose Zero when you're greenfield on Postgres and willing to run the infrastructure;
+local-first everywhere is the stronger end state. Choose figbird when the server must
+stay authoritative, or you want most of the live-app feel without changing your backend.
 
 # API: Core
 
