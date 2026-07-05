@@ -888,180 +888,34 @@ when** the server must stay authoritative with its existing logic, or you want m
 the live-app experience (realtime views, optimistic writes, warm navigation via
 `prepare`/`prefetch`/`.all()`) without changing your backend.
 
-# API Reference
+# API: Everyday
 
-## createSchema
+## q
 
-```ts
-const schema = createSchema({ services, relationships? })
-```
-
-Builds the typed schema. `services` keys become literal service names that every API narrows
-on; the optional `relationships` factory receives `{ one, many, embed }` helpers typed against
-your services, so `destService` autocompletes.
-
-## service
+The read proxy — services as properties, each yielding an immutable, hashable query
+builder. See [Queries](#queries) and [Relations](#relations) for the semantics.
 
 ```ts
-service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>(options?)
+q.issues // a QueryBuilder for the issues service
+q('issues') // dynamic service name
 ```
 
-Declares one service's types. Only `item` is required — omitted payloads default to
-`Partial<item>` for create/patch and `item` for update. `options.path` maps an ergonomic
-schema key to the transport-level service path. `methods` types custom Feathers methods.
+The full builder surface:
 
-## one
+| Method                                  | Meaning                                                                                                           |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `.where(filters)`                       | Merge filter conditions (deep-merged across calls); typed against the item, admits dotted paths and `$` operators |
+| `.orderBy(field, dir?)`                 | Add a sort clause; calls accumulate                                                                               |
+| `.limit(n)` / `.skip(n)`                | Window the result (`$limit` / `$skip`)                                                                            |
+| `.get(id)`                              | Resource fetch by pk (`GET /:service/:id`); `.where()` after it rides along as `params.query`                     |
+| `.related(name, refine?)`               | Attach a schema relation; the refine callback filters/windows/nests the related query                             |
+| `.paginate({ pageSize, returnTotal? })` | Infinite-scroll accumulator — the hook result widens with `loadMore`/`hasMore`/`totalCount`                       |
+| `.server()`                             | Mark server-maintained: realtime events refetch instead of merging locally                                        |
+| `.snapshot()`                           | Freeze as point-in-time: realtime is ignored; only `refetch()` moves it                                           |
+| `.all()`                                | Preload the complete set; later reads against the service answer locally                                          |
 
-```ts
-creator: one({ sourceField: 'creatorId', destService: 'users' })
-```
-
-Single related item — assembles as `T | null`. `destField` defaults to `'id'`; fields accept
-`string | string[]` for compound keys.
-
-## many
-
-```ts
-comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' })
-
-// two-hop (junction table) — traversed transparently, consumers get Label[] directly
-labels: many(
-  { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
-  { sourceField: 'labelId', destService: 'labels' },
-)
-```
-
-Array relation, single-hop or two-hop through a junction service.
-
-## embed
-
-```ts
-spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' })
-```
-
-The parent carries a server-maintained list of destination ids; Figbird fans every parent's
-list into one batched `IN (...)` fetch and assembles per-parent slices preserving the server's
-order.
-
-## Figbird
-
-The core instance holding the adapter, schema, and shared query state.
-
-```ts
-const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
-```
-
-| Member                                        | Description                                                                                                         |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `q`                                           | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                       |
-| `prepare(definition, args)`                   | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
-| `prefetch(definition, args, opts?)`           | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).  |
-| `m` / `mutations(service)`                    | The write proxy (and its dynamic-name door) — also returned bound from `createHooks`. See [m](#m).                  |
-| `mutating`                                    | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.            |
-| `explain(...)`                                | Static classification report — see [figbird.explain](#figbirdexplain).                                              |
-| `inspect()`                                   | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                       |
-| `events`                                      | Observability channel — see [figbird.events](#figbirdevents).                                                       |
-| `query(desc, config?)`                        | Low-level descriptor query (see [Using outside React](#using-outside-react)).                                       |
-| `relationalQuery(builder)`                    | Low-level relational query ref for non-React use.                                                                   |
-| `mutate(desc)` / `call(service, method, ...)` | Low-level mutation / custom-method call.                                                                            |
-| `getState()` / `subscribeToStateChanges(fn)`  | Raw internal state — debugging only; prefer `inspect()`.                                                            |
-
-## defineQuery
-
-```ts
-defineQuery(build)
-defineQuery(argsSchema, build) // Standard Schema-validated args
-defineQuery(name, build) // optional name — labels errors and devtools, never identity
-defineQuery(name, argsSchema, build)
-```
-
-Args-keyed query factory — a pure value, not tied to an instance; `prepare`,
-`prefetch`, and `useQuery` against the same definition and args share one cache entry.
-The `createHooks` kit returns a schema-typed version; the standalone export from
-`'figbird'` serves non-React code. See [Preparation](#preparation).
-
-## figbird.prepare
-
-```ts
-const { key, promise, release } = figbird.prepare(definition, args, { staleTime? })
-```
-
-Starts a query and returns an awaitable lease — the router-grade primitive. `args` may be
-omitted when the definition's build function takes none. See [prepare](#prepare).
-
-## figbird.prefetch
-
-```ts
-figbird.prefetch(definition, args, { staleTime? }) // staleTime defaults to 30s
-```
-
-Idempotent, fire-and-forget speculative warming with a self-releasing pin. See
-[prefetch](#prefetch).
-
-## figbird.explain
-
-```ts
-figbird.explain(builderOrDefinition, args?)
-// → { nodes: [{ path, service, kind, class, reasons, realtime, via? }] }
-```
-
-Static analysis of a query: one entry per node (root + each relation, dotted paths for
-nesting) with its classification, the structured reasons that produced it
-(`{ code: 'server-only-operator', detail: '$regex' }`), and the resulting realtime mode.
-No fetching happens — callable anywhere, assertable in tests. See
-[Realtime](#realtime) for a worked example.
-
-## figbird.inspect
-
-```ts
-figbird.inspect()
-// → [{ queryId, serviceName, method, query, classification,
-//      status, isFetching, itemCount, fetchedAt, subscriberCount }]
-```
-
-Read-only snapshot of every query currently in the store — the stable projection to build
-devtools on (internal store shapes stay free to change).
-
-## figbird.events
-
-Emits lifecycle facts — fetches, realtime events, mutations (including optimistic rollbacks).
-Delivery is batched on a microtask and never happens mid-render, so subscribing from React
-components is safe:
-
-```ts
-const unsub = figbird.events.subscribe(event => {
-  // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
-  //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
-  //           | 'action:start' | 'action:end' | 'action:error'
-})
-```
-
-Events carry ids, durations, and item counts — lightweight enough to subscribe in
-production. `mutate:*` events carry a `mutationId` correlating one mutation's
-start/end/error/rollback, and their `method` is a CRUD name or a custom method name —
-custom-method calls flow through the same lifecycle events. `action:*` events come from
-named `useAction` hooks and speak the app's vocabulary ("reassign · 340ms"), with the
-`mutate:*` rows they wrap alongside.
-
-## createHooks
-
-Binds a Figbird instance to typed React hooks:
-
-```ts
-export const { useQuery, q, m, defineQuery, prepare, prefetch, useAction, useMutating } =
-  createHooks(figbird)
-```
-
-Returns the daily-use kit — `useQuery`, `q` (the read proxy), schema-typed
-`defineQuery`, instance-bound `prepare`/`prefetch`, and the write side: `m` (the write
-proxy), `useAction` (per-action state), and `useMutating` (in-flight activity) — along
-with `useFeathers` (the raw-client escape hatch) and the deprecated legacy hooks
-(`useMutation`, `useFind`, `useGet`) for older codebases.
-
-Instance resolution: hooks use the bound instance directly, so no provider is required. If a
-`FigbirdProvider` is present in the tree, **it wins** — that's the injection point for
-per-request SSR instances and tests. A dev-mode error fires if a provider holds a _different_
-instance than the bound one.
+Builders are immutable values identified by a stable content hash, so constructing them
+inline in render needs no dependency arrays. Also available as `figbird.q`.
 
 ## useQuery
 
@@ -1142,19 +996,37 @@ Returns a boolean, live via `useSyncExternalStore` over `figbird.mutating` — t
 synchronous tracker, so it's correct for components that mount mid-mutation and it sees
 writes from any surface. See [Entity-level activity](#entity-level-activity-usemutating).
 
-## useFeathers
-
-Returns the underlying Feathers client — the escape hatch for one-off operations outside
-Figbird's caching layer:
+## defineQuery
 
 ```ts
-const feathers = useFeathers()
-await feathers.service('notes').get('1')
-await feathers.service('notes').archive(['1', '2']) // custom methods fully typed
+defineQuery(build)
+defineQuery(argsSchema, build) // Standard Schema-validated args
+defineQuery(name, build) // optional name — labels errors and devtools, never identity
+defineQuery(name, argsSchema, build)
 ```
 
-When obtained from `createHooks`, the client and every service are typed from your
-schema, including custom `methods`.
+Args-keyed query factory — a pure value, not tied to an instance; `prepare`,
+`prefetch`, and `useQuery` against the same definition and args share one cache entry.
+The `createHooks` kit returns a schema-typed version; the standalone export from
+`'figbird'` serves non-React code. See [Preparation](#preparation).
+
+## figbird.prepare
+
+```ts
+const { key, promise, release } = figbird.prepare(definition, args, { staleTime? })
+```
+
+Starts a query and returns an awaitable lease — the router-grade primitive. `args` may be
+omitted when the definition's build function takes none. See [prepare](#prepare).
+
+## figbird.prefetch
+
+```ts
+figbird.prefetch(definition, args, { staleTime? }) // staleTime defaults to 30s
+```
+
+Idempotent, fire-and-forget speculative warming with a self-releasing pin. See
+[prefetch](#prefetch).
 
 ## useDebouncedTransition
 
@@ -1184,6 +1056,84 @@ const showSpinner = useDelayedFlag(isFetching, 300, 800)
 Spinner flag that turns on only after `delay` ms of sustained truth, and once shown stays for
 at least `minVisible` ms — no flashing, no yo-yo.
 
+# API: Setup
+
+## createSchema
+
+```ts
+const schema = createSchema({ services, relationships? })
+```
+
+Builds the typed schema. `services` keys become literal service names that every API narrows
+on; the optional `relationships` factory receives `{ one, many, embed }` helpers typed against
+your services, so `destService` autocompletes.
+
+## service
+
+```ts
+service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>(options?)
+```
+
+Declares one service's types. Only `item` is required — omitted payloads default to
+`Partial<item>` for create/patch and `item` for update. `options.path` maps an ergonomic
+schema key to the transport-level service path. `methods` types custom Feathers methods.
+
+## one
+
+```ts
+creator: one({ sourceField: 'creatorId', destService: 'users' })
+```
+
+Single related item — assembles as `T | null`. `destField` defaults to `'id'`; fields accept
+`string | string[]` for compound keys.
+
+## many
+
+```ts
+comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' })
+
+// two-hop (junction table) — traversed transparently, consumers get Label[] directly
+labels: many(
+  { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
+  { sourceField: 'labelId', destService: 'labels' },
+)
+```
+
+Array relation, single-hop or two-hop through a junction service.
+
+## embed
+
+```ts
+spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' })
+```
+
+The parent carries a server-maintained list of destination ids; Figbird fans every parent's
+list into one batched `IN (...)` fetch and assembles per-parent slices preserving the server's
+order.
+
+## Figbird
+
+The core instance holding the adapter, schema, and shared query state.
+
+```ts
+const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
+```
+
+| Member                                        | Description                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `q`                                           | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                       |
+| `prepare(definition, args)`                   | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
+| `prefetch(definition, args, opts?)`           | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).  |
+| `m` / `mutations(service)`                    | The write proxy (and its dynamic-name door) — also returned bound from `createHooks`. See [m](#m).                  |
+| `mutating`                                    | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.            |
+| `explain(...)`                                | Static classification report — see [figbird.explain](#figbirdexplain).                                              |
+| `inspect()`                                   | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                       |
+| `events`                                      | Observability channel — see [figbird.events](#figbirdevents).                                                       |
+| `query(desc, config?)`                        | Low-level descriptor query (see [Using outside React](#using-outside-react)).                                       |
+| `relationalQuery(builder)`                    | Low-level relational query ref for non-React use.                                                                   |
+| `mutate(desc)` / `call(service, method, ...)` | Low-level mutation / custom-method call.                                                                            |
+| `getState()` / `subscribeToStateChanges(fn)`  | Raw internal state — debugging only; prefer `inspect()`.                                                            |
+
 ## FeathersAdapter
 
 Connects Figbird to a Feathers.js backend: data fetching, realtime subscriptions, reconnect
@@ -1203,6 +1153,26 @@ const adapter = new FeathersAdapter(feathers, options)
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
 
+## createHooks
+
+Binds a Figbird instance to typed React hooks:
+
+```ts
+export const { useQuery, q, m, defineQuery, prepare, prefetch, useAction, useMutating } =
+  createHooks(figbird)
+```
+
+Returns the daily-use kit — `useQuery`, `q` (the read proxy), schema-typed
+`defineQuery`, instance-bound `prepare`/`prefetch`, and the write side: `m` (the write
+proxy), `useAction` (per-action state), and `useMutating` (in-flight activity) — along
+with `useFeathers` (the raw-client escape hatch) and the deprecated legacy hooks
+(`useMutation`, `useFind`, `useGet`) for older codebases.
+
+Instance resolution: hooks use the bound instance directly, so no provider is required. If a
+`FigbirdProvider` is present in the tree, **it wins** — that's the injection point for
+per-request SSR instances and tests. A dev-mode error fires if a provider holds a _different_
+instance than the bound one.
+
 ## FigbirdProvider
 
 Optional. Hooks from `createHooks` work without any provider; use one to inject a different
@@ -1214,6 +1184,69 @@ instance into a subtree — per-request instances in SSR, or a fresh instance pe
 
 `useFigbird()` reads the context instance (throws without a provider); `useFigbirdMaybe()`
 returns `undefined` instead.
+
+# API: Observability
+
+## figbird.explain
+
+```ts
+figbird.explain(builderOrDefinition, args?)
+// → { nodes: [{ path, service, kind, class, reasons, realtime, via? }] }
+```
+
+Static analysis of a query: one entry per node (root + each relation, dotted paths for
+nesting) with its classification, the structured reasons that produced it
+(`{ code: 'server-only-operator', detail: '$regex' }`), and the resulting realtime mode.
+No fetching happens — callable anywhere, assertable in tests. See
+[Realtime](#realtime) for a worked example.
+
+## figbird.inspect
+
+```ts
+figbird.inspect()
+// → [{ queryId, serviceName, method, query, classification,
+//      status, isFetching, itemCount, fetchedAt, subscriberCount }]
+```
+
+Read-only snapshot of every query currently in the store — the stable projection to build
+devtools on (internal store shapes stay free to change).
+
+## figbird.events
+
+Emits lifecycle facts — fetches, realtime events, mutations (including optimistic rollbacks).
+Delivery is batched on a microtask and never happens mid-render, so subscribing from React
+components is safe:
+
+```ts
+const unsub = figbird.events.subscribe(event => {
+  // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
+  //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+  //           | 'action:start' | 'action:end' | 'action:error'
+})
+```
+
+Events carry ids, durations, and item counts — lightweight enough to subscribe in
+production. `mutate:*` events carry a `mutationId` correlating one mutation's
+start/end/error/rollback, and their `method` is a CRUD name or a custom method name —
+custom-method calls flow through the same lifecycle events. `action:*` events come from
+named `useAction` hooks and speak the app's vocabulary ("reassign · 340ms"), with the
+`mutate:*` rows they wrap alongside.
+
+## useFeathers
+
+Returns the underlying Feathers client — the escape hatch for one-off operations outside
+Figbird's caching layer:
+
+```ts
+const feathers = useFeathers()
+await feathers.service('notes').get('1')
+await feathers.service('notes').archive(['1', '2']) // custom methods fully typed
+```
+
+When obtained from `createHooks`, the client and every service are typed from your
+schema, including custom `methods`.
+
+# API: Deprecated
 
 ## useMutation
 
