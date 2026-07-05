@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Breaking: remove the `.one()` builder modifier. Single-item reads are now two spellings
+  mapped one-to-one onto transport: `.get(id)` fetches via the resource endpoint
+  (`GET /:service/:id`; errors on a cold miss, nulls on realtime removal) and now allows
+  `.where()` after it — the conditions ride along as `params.query`; "first match of a
+  filter" is `.where(...).limit(1)`.
+
 - Add `m` — the write proxy, the counterpart of `q`: `m.issues.patch(id, data)`. Services are
   properties; handles are stateless plain values (CRUD + typed custom schema methods) usable
   anywhere, interned per service. `figbird.mutations(name)` is the dynamic-name door.

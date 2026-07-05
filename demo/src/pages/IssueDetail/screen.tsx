@@ -129,8 +129,7 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
             label='Route-prepared issue graph'
             query={`defineQuery(({ id }: { id: number }) =>
   q.issues
-    .where({ id })
-    .one()
+    .get(id) // GET /issues/:id
     .related('creator')
     .related('assignee')
     .related('team')
@@ -141,8 +140,8 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
 // on hover, before you even click):
 prepare(issueDetailQuery, { id })`}
           >
-            One <code>.one()</code> query assembles the whole graph — issue, people, team, labels —
-            from per-service caches. The route (and row hover) prepared this exact query, so warm
+            One <code>.get(id)</code> query assembles the whole graph — issue, people, team, labels
+            — from per-service caches. The route (and row hover) prepared this exact query, so warm
             visits render synchronously inside the issue-keyed Suspense boundary. The relation
             leaves stay live: Reassign patches the foreign key and figbird fetches and swaps in the
             new assignee; a teammate's edits merge from socket events.

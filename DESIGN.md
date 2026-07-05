@@ -139,7 +139,7 @@ Examples:
 ```ts
 figbird.q.people.where({ companyId })
 figbird.q.people.where({ status: 'active' })
-figbird.q.companies.where({ id }).one().related('departments')
+figbird.q.companies.get(id).related('departments')
 ```
 
 These are safe when filters are local predicates, required fields are present in events, and the
@@ -698,8 +698,7 @@ before any component mounts. Prepared queries bridge that.
 ```ts
 const issueDetail = defineQuery(({ id }: { id: number }) =>
   q.issues
-    .where({ id })
-    .one()
+    .get(id)
     .related('comments', c => c.orderBy('createdAt', 'desc').limit(50))
     .related('labels'),
 )
@@ -1045,8 +1044,7 @@ Opening a profile by deep link should not require loading every person or job ro
 ```ts
 useQuery(
   figbird.q.people
-    .where({ id: personId })
-    .one()
+    .get(personId)
     .related('currentJobRole')
     .related('manager')
     .related('location')
@@ -1106,7 +1104,7 @@ Expected behavior:
 ### Entity Label / Small Reference Fetch
 
 ```ts
-useQuery(figbird.q.people.where({ id: personId }).one())
+useQuery(figbird.q.people.get(personId))
 ```
 
 Expected behavior:
@@ -1120,7 +1118,11 @@ Expected behavior:
 
 ```ts
 useQuery(
-  figbird.q.jobRoles.where({ personId, $asOf: today }).one().related('person').related('manager'),
+  figbird.q.jobRoles
+    .where({ personId, $asOf: today })
+    .limit(1)
+    .related('person')
+    .related('manager'),
 )
 ```
 
@@ -1235,7 +1237,7 @@ Expected behavior:
 ### Spreadsheet Projection
 
 ```ts
-useQuery(figbird.q.spreadsheetActions.where({ id: spreadsheetTabId }).one())
+useQuery(figbird.q.spreadsheetActions.get(spreadsheetTabId))
 ```
 
 Expected behavior:
@@ -1265,8 +1267,7 @@ Expected behavior:
 ```ts
 useQuery(
   figbird.q.people
-    .where({ id: personId })
-    .one()
+    .get(personId)
     .related('manager', manager =>
       manager.related('manager', manager => manager.related('manager')),
     ),
@@ -1459,8 +1460,17 @@ Decisions worth recording so they are not relitigated without new information:
   `useAction`, and the split write-side story (`mutations` + `useAction` + `useMutating`) replaced
   the hook — see "The Write-Side Split". Keyed status _inside_ `useMutation` stays rejected:
   stringly identity split across two call sites.
-- **`.one()` / `.get()` unification** — rejected; null-on-miss vs error-on-miss is a real semantic
-  pair worth two spellings.
+- **`.one()` as a cardinality modifier** — removed (July 2026), resolving the
+  `.limit(1)` / `.one()` / `.get()` trio down to two spellings mapped one-to-one onto transport:
+  `.get(id)` is the resource-verb fetch (`GET /:service/:id`, with `.where()` chainable after it
+  as `params.query`), and `.where(...).limit(1)` is find-one. The earlier framing here —
+  "null-on-miss vs error-on-miss is a pair worth two spellings" — was the wrong axis: miss
+  behavior is downstream of the verb, and both remain expressible (`get` errors on a cold miss
+  and nulls on realtime removal; `limit(1)` yields an empty array). The extraction alternative
+  (`.where({ id }).one()` compiling to the get verb) was rejected: the pk key is not statically
+  knowable (`idField` may be a function), mixed where-keys are ambiguous, and invalid shapes
+  could only fail at runtime — uniform syntax hiding nonuniform semantics. Bonus: `one` now
+  means exactly one thing in the library (relationship cardinality).
 - **A separately-named non-Suspense hook** — rejected in favor of `{ suspense: false }`; see "Why
   There Is No Second Hook".
 - **`priority` on the core `PreparedQuery`** — rejected; router vocabulary the library never reads.
@@ -1567,7 +1577,7 @@ const myTeamCriticalIssues = figbird.deriveQuery(
   'myTeamCriticalIssues',
   z.object({ currentUserId: z.number() }),
   ({ currentUserId }, { read }) => {
-    const me = read(q.people.where({ id: currentUserId }).one())
+    const me = read(q.people.get(currentUserId))
     if (!me) return []
     const teammates = read(q.people.where({ teamId: me.teamId, status: 'active' }))
     const teammateIds = new Set(teammates.map(t => t.id))

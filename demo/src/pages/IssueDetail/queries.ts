@@ -15,8 +15,9 @@ import { defineQuery, q } from '../../figbird'
 /** Route-priority: required to render the issue header/meta. */
 export const issueDetailQuery = defineQuery(({ id }: { id: number }) =>
   q.issues
-    .where({ id })
-    .one()
+    // `.get(id)` fetches via the resource endpoint (GET /issues/:id) — the
+    // pk-lookup spelling; "first match of a filter" is `.where().limit(1)`.
+    .get(id)
     .related('creator')
     .related('assignee')
     .related('team')

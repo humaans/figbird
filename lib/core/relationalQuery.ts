@@ -595,7 +595,16 @@ export class RelationalQueryRef<
 
     const rootDesc: QueryDescriptor =
       this.#ast.kind === 'get'
-        ? { serviceName, method: 'get', resourceId: this.#ast.resourceId! }
+        ? {
+            serviceName,
+            method: 'get',
+            resourceId: this.#ast.resourceId!,
+            // `.get(id).where(...)` conditions ride along as params.query to the
+            // get endpoint (rare filters, $select, ...).
+            ...(Object.keys(this.#ast.query).length > 0
+              ? { params: { query: this.#ast.query } }
+              : {}),
+          }
         : { serviceName, method: 'find', params: { query: this.#ast.query } }
 
     this.#root = new SingleQueryRoot({

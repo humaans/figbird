@@ -8,7 +8,7 @@
  * ```tsx
  * function IssueView({ issueId }: { issueId: number }) {
  *   const issue = useQuery(
- *     figbird.q.issues.where({ id: issueId }).one().related('comments'),
+ *     figbird.q.issues.get(issueId).related('comments'),
  *     { suspense: false },
  *   )
  *
@@ -216,7 +216,7 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
  *
  * ```tsx
  * function IssueDetail({ id }: { id: number }) {
- *   const { data } = useQuery(figbird.q.issues.where({ id }).one().related('comments'))
+ *   const { data } = useQuery(figbird.q.issues.get(id).related('comments'))
  *   return <div>{data.title} ({data.comments.length})</div>
  * }
  * ```

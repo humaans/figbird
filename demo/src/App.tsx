@@ -3,7 +3,7 @@
  * IssueList, ActivityPanel, NewIssueModal, DevTools, and pages/.
  */
 
-import { Suspense, useState, type ReactNode } from 'react'
+import { Component, Suspense, useState, type ReactNode } from 'react'
 import { DelayedFallback } from 'figbird'
 import { Link, Router, Routes, useRoute } from 'react-space-router'
 import { ActivityPanel } from './components/ActivityPanel'
@@ -20,6 +20,37 @@ function EmptyDetail() {
       <p className='empty-line'>Pick an issue from the list.</p>
     </main>
   )
+}
+
+/**
+ * A cold `.get(id)` of a nonexistent issue enters the error state and throws
+ * from `useQuery` — "this must exist" semantics. This boundary (keyed by issue
+ * id alongside the Suspense boundary, so each issue gets a fresh start) renders
+ * the not-found screen for that case; realtime removal of an issue you're
+ * already viewing nulls the data instead and is handled inside the screen.
+ */
+class DetailErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className='detail'>
+          <div className='detail-empty'>
+            <div className='detail-empty-title'>Issue not found</div>
+            <div className='detail-empty-hint'>
+              It may have been removed, or the id doesn't exist on the server.
+            </div>
+          </div>
+        </main>
+      )
+    }
+    return this.props.children
+  }
 }
 
 function WorkspaceSkeleton() {
@@ -81,9 +112,9 @@ function Workspace({ children }: { children?: ReactNode }) {
       ) : (
         <div className='grid grid-fade'>
           <IssueListPane />
-          <Suspense key={issueId ?? 'empty'} fallback={<DetailSkeleton />}>
-            {children}
-          </Suspense>
+          <DetailErrorBoundary key={issueId ?? 'empty'}>
+            <Suspense fallback={<DetailSkeleton />}>{children}</Suspense>
+          </DetailErrorBoundary>
           <aside className='aside'>
             <ActivityPanel />
           </aside>
