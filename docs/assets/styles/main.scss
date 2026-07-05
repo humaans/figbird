@@ -185,7 +185,7 @@ h4:hover .heading-anchor,
   padding: 1rem;
   overflow: auto;
   border-radius: 8px;
-  font-size: 0.8125rem;
+  /* size comes from the base `pre` rule (0.875rem) */
   font-weight: 500;
 }
 
