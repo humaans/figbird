@@ -321,7 +321,9 @@ figcaption {
 }
 
 p code,
-li code {
+li code,
+td code,
+th code {
   display: inline;
   background: lab(96.52% -0.0000298023 0.0000119209);
   border: 1px solid lab(92% 0 0);
