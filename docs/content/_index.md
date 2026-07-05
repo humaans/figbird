@@ -970,8 +970,9 @@ instance-bound plain values (not hooks): access them at module scope and call fr
 anywhere. Writes are optimistic by default; `confirmed` variants update the cache only
 after the server acks. Handles hold no pending/error state by design; that's
 [useAction](#useaction) and [useMutating](#usemutating). Per-call `options` carry data
-only: `{ params?: AdapterParams, optimisticItem?: Item }`. Also available as `figbird.m`,
-with `figbird.mutations(name)` as the dynamic-service-name door.
+only: `{ params?: AdapterParams, optimisticItem?: Item }`. Also available as `figbird.m`.
+Like `q`, the proxy is callable for dynamic service names: `m(name)` is `m.<name>` with a
+string-typed door.
 
 ## useAction
 
@@ -1133,7 +1134,7 @@ const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 | `q`                                           | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                       |
 | `prepare(definition, args)`                   | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
 | `prefetch(definition, args, opts?)`           | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).  |
-| `m` / `mutations(service)`                    | The write proxy (and its dynamic-name door) — also returned bound from `createHooks`. See [m](#m).                  |
+| `m`                                           | The write proxy — `m.issues.patch(...)`, callable as `m(service)` for dynamic names — also returned bound from `createHooks`. See [m](#m). |
 | `mutating`                                    | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.            |
 | `explain(...)`                                | Static classification report — see [figbird.explain](#figbirdexplain).                                              |
 | `inspect()`                                   | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                       |

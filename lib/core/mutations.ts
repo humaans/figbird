@@ -132,8 +132,13 @@ export type MutationsHandle<S extends Schema, N extends ServiceNames<S>> = Handl
 /**
  * The write proxy: services as properties, mirroring `q`.
  * `m.issues.patch(...)`, `m.policies.confirmed.create(...)`.
+ * Also callable for dynamic service names — `m(serviceName)` is `m.<name>`
+ * with a string-typed door, mirroring `q(serviceName)`.
  */
 export type MutationsProxy<S extends Schema> = {
+  <N extends ServiceNames<S>>(serviceName: N): MutationsHandle<S, N>
+  (serviceName: string): MutationsHandle<S, ServiceNames<S>>
+} & {
   readonly [N in ServiceNames<S>]: MutationsHandle<S, N>
 }
 
@@ -240,10 +245,15 @@ export function createMutationsProxy(host: MutationsHost): object {
     return handle
   }
 
-  // No protocol guards needed at this level: properties resolve to handle
-  // OBJECTS (not functions), so probes like `then` or `toJSON` are never
-  // callable here and `await m` / JSON.stringify(m) behave inertly.
-  return new Proxy(Object.create(null) as object, {
+  // No protocol guards needed at this level: every string property resolves to a
+  // handle OBJECT (not a function) — including function-target props like `call`
+  // or `name` — so probes like `then` or `toJSON` are never callable here and
+  // `await m` / JSON.stringify(m) behave inertly.
+  const callable = (serviceName: string) => handleFor(serviceName)
+  return new Proxy(callable as object, {
+    apply(_target, _thisArg, [serviceName]: [string]) {
+      return handleFor(serviceName)
+    },
     get(_target, prop) {
       if (typeof prop === 'symbol') return undefined
       return handleFor(prop)
