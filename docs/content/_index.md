@@ -183,18 +183,11 @@ function IssueList({ status }: { status: string }) {
 
 `.where()` autocompletes and type-checks the fields of the service's item type, and also admits everything it can't statically know: dotted relational paths (`'creator.teamId'`), server-only operators (`$regex`), and dynamically-built filter objects.
 
-### One thing: `.get(id)` vs `.limit(1)`
-
-Two spellings, mapped one-to-one onto the transport:
-
-- `.get(id)` fetches through the **resource endpoint** (`GET /issues/:id`) — "this thing".
-  A cold fetch of a missing row enters the **error** state ("this must exist", mirroring
-  `service.get(id)` NotFound semantics); the data is still typed `T | null` because
-  realtime removal of the row you're viewing nulls it. `.where()` may be chained after it —
-  the conditions ride along as `params.query` to the get endpoint (rare extra conditions,
-  `$select`, ...).
-- `.where(...).limit(1)` is the **find** spelling — "the first match, if any" — returning
-  an array of zero or one to destructure.
+`.get(id)` is the resource-endpoint fetch (`GET /issues/:id`) with "this must exist"
+semantics: a cold fetch of a missing row enters the error state, while realtime removal
+of a row you're viewing nulls the data — hence `T | null`. Chaining `.where()` after it
+sends the conditions along as `params.query`. For "the first match of a filter, if any",
+use `.where(...).limit(1)` and destructure the array.
 
 ## Relations
 
