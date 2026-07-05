@@ -611,6 +611,30 @@ Use `.server()` on a builder when a query _looks_ locally provable but isn't —
 q.documents.where({ visibleTo: userId }).server()
 ```
 
+### Reconciliation cadence
+
+A refetch triggered by an event is a **reconciliation**, not a freshness requirement:
+correctness demands the query reconciles with the server _eventually_ after the last
+relevant event, not within milliseconds of each one. The engine owns the cadence — there
+is no per-query throttle config — via two built-in guards on event-driven refetches:
+
+- **Cooldown with a trailing edge.** A query reconciles at most once per
+  `reconcileCooldown` (default 2s, a `Figbird` constructor option; `0` disables). The
+  first event refetches immediately, so isolated changes land as fast as ever; further
+  events within the window coalesce into **one guaranteed trailing refetch** — a
+  500-event bulk import costs each affected query about two refetches instead of fifty,
+  and still lands on the final answer. The trailing edge is the correctness guarantee;
+  the interval is UX tuning.
+- **Hidden tabs don't reconcile.** When the tab is hidden, event-driven refetches are
+  deferred (queries show as `pending` in `inspect()`) and reconcile once on
+  `visibilitychange` — including the reconnect sweep, so a background tab riding through
+  network blips stops replaying refetch storms. Local-exact merges keep flowing while
+  hidden (they're free); only network reconciliation pauses. Inject a custom
+  `visibility` source in the constructor for non-browser environments.
+
+Manual `refetch()`, first fetches, and SWR revalidation are user/loader intent and are
+never gated.
+
 A practical consequence worth knowing: an **unwindowed** relation like `.related('comments')` is local-exact, so a teammate's new comment merges straight from the socket event with no refetch. If you don't need a window, don't add one.
 
 ### Freshness tolerance: staleTime

@@ -1405,21 +1405,30 @@ reconcile. There is no per-query throttle option, no `staleTime`, no reconciliat
 builder. All of the following are built-in default behaviors of a single global reconciliation
 scheduler inside Figbird:
 
-- **Cooldown with a trailing edge.** A query reconciles at most once per short interval (order of
-  a few seconds). If events arrive during the cooldown, one trailing refetch is always scheduled —
-  the trailing edge is the correctness guarantee; the interval is UX tuning. A 500-event burst
-  costs each affected query roughly two refetches instead of fifty, and still lands on the right
-  answer.
-- **Deduped, concurrency-capped queue.** Reconciliations drain through one global queue, deduped
-  by query id, with a small parallelism cap — clients pull at a controlled, leisurely pace rather
-  than all at once.
-- **Jitter.** The same burst hits every connected client. Randomizing refetch timing client-side
-  breaks the thundering herd against the backend.
-- **Visibility gating.** A hidden tab does not reconcile at all: its queries are marked stale and
-  reconcile on `visibilitychange`. This extends the existing "no listeners → mark pending,
-  reconcile on next subscribe" behavior to "listeners nobody can see." For an app kept open in a
-  background tab all day, this is a larger traffic reduction than any throttle.
-- **Priority.** Visible, actively-subscribed queries reconcile first.
+- **Cooldown with a trailing edge** _(shipped, July 2026)_. A query reconciles at most once per
+  short interval (`reconcileCooldown`, default 2s, constructor-level; `0` disables). The first
+  event in a window refetches immediately — the leading edge keeps isolated changes as fast as
+  ever — and events arriving during the cooldown coalesce into one guaranteed trailing refetch,
+  the correctness guarantee. A 500-event burst costs each affected query roughly two refetches
+  instead of fifty, and still lands on the right answer. Implemented as a single gate
+  (`#requestReconcile`) that all three event-driven refetch paths route through: server-maintained
+  followups, `realtime: 'refetch'` queries, and the reconnect sweep. Manual `refetch()`, first
+  fetches, and SWR revalidation are intent, not reconciliation, and bypass it.
+- **Visibility gating** _(shipped, July 2026)_. A hidden tab does not reconcile at all: its
+  queries are marked pending (visible in `inspect()`) and reconcile once on `visibilitychange`.
+  This extends the existing "no listeners → mark pending, reconcile on next subscribe" behavior
+  to "listeners nobody can see." Reconnects while hidden defer the refetch-all sweep the same
+  way; local-exact merges keep flowing while hidden — only network reconciliation pauses. The
+  visibility source is injectable (`visibility` constructor option) for tests and non-browser
+  environments. For an app kept open in a background tab all day, this is a larger traffic
+  reduction than any throttle.
+- **Deduped, concurrency-capped queue** _(deferred until telemetry demands it)_. Reconciliations
+  drain through one global queue, deduped by query id, with a small parallelism cap — clients
+  pull at a controlled, leisurely pace rather than all at once.
+- **Jitter** _(deferred until telemetry demands it)_. The same burst hits every connected client.
+  Randomizing refetch timing client-side breaks the thundering herd against the backend.
+- **Priority** _(deferred until telemetry demands it)_. Visible, actively-subscribed queries
+  reconcile first.
 
 Instance-level tuning (constructor options on the Figbird instance) may exist for the interval and
 concurrency values, but the defaults should be good enough that no consumer ever sets them. Query

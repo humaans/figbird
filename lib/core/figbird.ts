@@ -29,7 +29,9 @@ import {
 } from './queryClassification.js'
 import type { QueryAST } from './queryBuilder.js'
 import { QueryRef } from './queryRef.js'
-import { QueryStore } from './queryStore.js'
+import { QueryStore, type VisibilitySource } from './queryStore.js'
+
+export type { VisibilitySource } from './queryStore.js'
 import {
   normalizeQueryConfig,
   type InferQueryData,
@@ -144,15 +146,24 @@ export class Figbird<
    * @param adapter Data adapter (e.g. FeathersAdapter)
    * @param eventBatchProcessingInterval Optional interval (ms) for batching realtime events
    * @param schema Optional schema to enable full TypeScript inference
+   * @param reconcileCooldown Burst safety: minimum interval (ms) between event-driven
+   *   refetches of one query. First event refetches immediately; further events within
+   *   the window coalesce into one guaranteed trailing refetch. Default 2000; 0 disables.
+   * @param visibility Visibility source for hidden-tab gating (defaults to `document`).
+   *   Hidden tabs defer event-driven reconciliation until they become visible.
    */
   constructor({
     adapter,
     eventBatchProcessingInterval,
     schema,
+    reconcileCooldown,
+    visibility,
   }: {
     adapter: A
     eventBatchProcessingInterval?: number
     schema?: S
+    reconcileCooldown?: number
+    visibility?: VisibilitySource
   }) {
     this.adapter = adapter
     this.schema = schema
@@ -163,6 +174,8 @@ export class Figbird<
       eventBatchProcessingInterval: eventBatchProcessingInterval,
       events: this.#events,
       mutations: this.#mutationTracker,
+      ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
+      ...(visibility !== undefined ? { visibility } : {}),
     })
   }
 

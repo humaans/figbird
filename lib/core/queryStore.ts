@@ -21,6 +21,27 @@ import type {
 } from './queryTypes.js'
 
 /**
+ * Where the store learns whether the tab is visible. Injectable for tests and
+ * non-browser environments; the default reads `document.visibilityState`.
+ */
+export interface VisibilitySource {
+  isHidden(): boolean
+  /** Notify on visibility changes. Returns an unsubscribe function. */
+  onChange(listener: () => void): () => void
+}
+
+function documentVisibility(): VisibilitySource {
+  return {
+    isHidden: () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
+    onChange: listener => {
+      if (typeof document === 'undefined') return () => {}
+      document.addEventListener('visibilitychange', listener)
+      return () => document.removeEventListener('visibilitychange', listener)
+    },
+  }
+}
+
+/**
  * Internal query store managing entities, queries, and subscriptions.
  */
 export class QueryStore<
@@ -41,6 +62,16 @@ export class QueryStore<
   #state: Map<string, ServiceState<TMeta>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
 
+  // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
+  // with trailing timers, and the set of reconciliations deferred while hidden.
+  #reconcileCooldown: number
+  #visibility: VisibilitySource
+  #reconcileWindows: Map<
+    string,
+    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null }
+  > = new Map()
+  #deferredWhileHidden: Set<string> = new Set()
+
   #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchProcessingInterval: number | undefined = 100
@@ -54,16 +85,30 @@ export class QueryStore<
     eventBatchProcessingInterval = 100,
     events,
     mutations,
+    reconcileCooldown = 2000,
+    visibility,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchProcessingInterval?: number | undefined
     events?: FigbirdEventEmitter
     mutations?: MutationTracker
+    /**
+     * Minimum interval (ms) between event-driven refetches of one query — burst
+     * safety for server-window/server-authoritative reconciliation. The first
+     * event refetches immediately (leading edge); further events within the
+     * window coalesce into one guaranteed trailing refetch. `0` disables.
+     */
+    reconcileCooldown?: number
+    /** Visibility source for hidden-tab gating. Defaults to `document`. */
+    visibility?: VisibilitySource
   }) {
     this.#adapter = adapter
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
     this.#events = events ?? new FigbirdEventEmitter()
     this.#mutations = mutations ?? new MutationTracker()
+    this.#reconcileCooldown = reconcileCooldown
+    this.#visibility = visibility ?? documentVisibility()
+    this.#visibility.onChange(() => this.#drainDeferredReconciles())
     this.#adapter.subscribeToReconnect?.(() => this.#refetchActiveQueries())
   }
 
@@ -793,14 +838,11 @@ export class QueryStore<
           serverMaintainedQueriesToRefetch,
           processedEvents,
         } of followups) {
-          // Server-maintained queries can't merge events locally: refetch active ones,
-          // mark inactive cached ones pending so their next subscription reconciles.
+          // Server-maintained queries can't merge events locally: reconcile active
+          // ones through the gate (cooldown + hidden-tab deferral); the gate marks
+          // inactive cached ones pending so their next subscription reconciles.
           for (const queryId of serverMaintainedQueriesToRefetch) {
-            if (this.#listenerCount(queryId) > 0) {
-              this.refetch(queryId)
-            } else {
-              this.#markQueryPending(queryId)
-            }
+            this.#requestReconcile(queryId)
           }
 
           for (const event of processedEvents) {
@@ -832,9 +874,91 @@ export class QueryStore<
 
     for (const query of service.queries.values()) {
       if (query.config.realtime === 'refetch' && this.#listenerCount(query.queryId) > 0) {
-        this.refetch(query.queryId)
+        this.#requestReconcile(query.queryId)
       }
     }
+  }
+
+  /**
+   * The reconciliation gate. Every EVENT-DRIVEN refetch (server-window /
+   * server-authoritative queries reacting to realtime events, `realtime:
+   * 'refetch'` queries, and the reconnect sweep) passes through here — manual
+   * `refetch()`, first fetches, and SWR revalidation do not.
+   *
+   * Correctness contract: a reconciliation may be delayed and coalesced, never
+   * dropped — the trailing refetch (or the drain-on-visible) always lands on
+   * the latest server state after the last relevant event.
+   *
+   * - Hidden tab → defer: mark the query pending (truthful in `inspect()`) and
+   *   reconcile once when the tab becomes visible. Local-exact merges are
+   *   unaffected — only network reconciliation pauses.
+   * - Cooldown: the first event in a window refetches immediately (leading
+   *   edge — isolated changes stay as fast as today); further events within
+   *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
+   */
+  #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
+    if (!force && this.#listenerCount(queryId) === 0) {
+      this.#markQueryPending(queryId)
+      return
+    }
+
+    if (this.#visibility.isHidden()) {
+      this.#deferredWhileHidden.add(queryId)
+      this.#markQueryPending(queryId)
+      return
+    }
+
+    if (this.#reconcileCooldown <= 0) {
+      this.refetch(queryId)
+      return
+    }
+
+    const now = Date.now()
+    const window = this.#reconcileWindows.get(queryId)
+
+    if (!window || now - window.lastAt >= this.#reconcileCooldown) {
+      this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
+      this.refetch(queryId)
+      return
+    }
+
+    if (window.trailing) return // the pending trailing refetch already covers this
+
+    const timer = setTimeout(
+      () => {
+        const current = this.#reconcileWindows.get(queryId)
+        if (current) current.trailing = null
+        if (!this.#getQuery(queryId)) {
+          this.#reconcileWindows.delete(queryId)
+          return
+        }
+        // Re-enter the gate: the window has expired so this fires leading-edge,
+        // unless the tab went hidden or the last subscriber left in the meantime.
+        this.#requestReconcile(queryId)
+      },
+      window.lastAt + this.#reconcileCooldown - now,
+    )
+    // Never keep a Node process alive for a pending reconciliation.
+    ;(timer as { unref?: () => void }).unref?.()
+    window.trailing = timer
+  }
+
+  /** On becoming visible, reconcile everything that deferred while hidden. */
+  #drainDeferredReconciles(): void {
+    if (this.#visibility.isHidden() || this.#deferredWhileHidden.size === 0) return
+    const deferred = Array.from(this.#deferredWhileHidden)
+    this.#deferredWhileHidden.clear()
+    for (const queryId of deferred) {
+      if (!this.#getQuery(queryId)) continue
+      this.#requestReconcile(queryId)
+    }
+  }
+
+  #clearReconcileState(queryId: string): void {
+    const window = this.#reconcileWindows.get(queryId)
+    if (window?.trailing) clearTimeout(window.trailing)
+    this.#reconcileWindows.delete(queryId)
+    this.#deferredWhileHidden.delete(queryId)
   }
 
   #refetchActiveQueries(): void {
@@ -842,7 +966,7 @@ export class QueryStore<
       // Materialization roots reconcile even with no subscribers — every local read
       // depends on their completeness, and events may have been missed while offline.
       if (service.materialized) {
-        this.refetch(service.materialized.queryId)
+        this.#requestReconcile(service.materialized.queryId, { force: true })
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
@@ -851,7 +975,7 @@ export class QueryStore<
           query.config.realtime !== 'disabled' &&
           this.#listenerCount(query.queryId) > 0
         ) {
-          this.refetch(query.queryId)
+          this.#requestReconcile(query.queryId)
         }
       }
     }
@@ -1068,6 +1192,7 @@ export class QueryStore<
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
+    this.#clearReconcileState(queryId)
     this.#transactOverService(
       queryId,
       (service, query) => {
