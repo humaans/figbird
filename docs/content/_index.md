@@ -888,7 +888,7 @@ when** the server must stay authoritative with its existing logic, or you want m
 the live-app experience (realtime views, optimistic writes, warm navigation via
 `prepare`/`prefetch`/`.all()`) without changing your backend.
 
-# API: Everyday
+# API: Core
 
 ## q
 
