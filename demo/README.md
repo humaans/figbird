@@ -42,7 +42,7 @@ If you're here to learn figbird, read in this order — each file teaches one id
 4. **`src/pages/IssueDetail/`** — the route-prepared screen, one lesson per file:
    - `queries.ts` — `defineQuery` definitions shared by router, hover, and screen
    - `prepare.ts` — route preparation (and where router `priority` gets attached)
-   - `screen.tsx` — the `.one()` relational graph + the write-side story: one `useAction`
+   - `screen.tsx` — the `.get(id)` relational graph + the write-side story: one `useAction`
      per toolbar button, `useMutating` for the entity-wide disable
    - `Editable.tsx` — inline optimistic patch-and-rollback editing via `useAction`
    - `Comments.tsx` — the local-exact realtime thread (unwindowed on purpose)

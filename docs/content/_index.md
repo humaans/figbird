@@ -165,8 +165,8 @@ q.issues // all issues
 q.issues.where({ status: 'open' }) // filtered
 q.issues.where({ priority: { $gte: 50 } }) // comparison operators
 q.issues.orderBy('updatedAt', 'desc').limit(30) // windowed
-q.issues.where({ id }).one() // single item — null when no match
-q.issues.get(id) // by primary key — error when missing
+q.issues.get(id) // one thing, by pk — GET /issues/:id
+q.issues.where({ status: 'open' }).limit(1) // first match of a filter, if any
 q.issues.related('comments') // with relations
 q.issues.where({ id }).snapshot() // point-in-time: frozen until refetch()
 q.locations.all() // preload the complete set (reference data)
@@ -183,12 +183,18 @@ function IssueList({ status }: { status: string }) {
 
 `.where()` autocompletes and type-checks the fields of the service's item type, and also admits everything it can't statically know: dotted relational paths (`'creator.teamId'`), server-only operators (`$regex`), and dynamically-built filter objects.
 
-### `.one()` vs `.get()`
+### One thing: `.get(id)` vs `.limit(1)`
 
-Both return a single item, with a deliberate semantic difference:
+Two spellings, mapped one-to-one onto the transport:
 
-- `.where({ id }).one()` resolves to **`null`** when nothing matches — "find me the one matching row, if any".
-- `.get(id)` is a primary-key lookup that enters the **error** state when the row doesn't exist — "this row must exist" (mirroring `service.get(id)` and NotFound semantics).
+- `.get(id)` fetches through the **resource endpoint** (`GET /issues/:id`) — "this thing".
+  A cold fetch of a missing row enters the **error** state ("this must exist", mirroring
+  `service.get(id)` NotFound semantics); the data is still typed `T | null` because
+  realtime removal of the row you're viewing nulls it. `.where()` may be chained after it —
+  the conditions ride along as `params.query` to the get endpoint (rare extra conditions,
+  `$select`, ...).
+- `.where(...).limit(1)` is the **find** spelling — "the first match, if any" — returning
+  an array of zero or one to destructure.
 
 ## Relations
 

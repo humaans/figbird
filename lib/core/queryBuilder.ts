@@ -212,17 +212,20 @@ export class QueryBuilder<
   }
 
   /**
-   * Merge a Feathers query object into the current query
-   * Multiple calls are deep-merged together
+   * Merge a Feathers query object into the current query.
+   * Multiple calls are deep-merged together.
+   *
+   * On a `find` builder these are the filter; on a `.get(id)` builder they ride
+   * along as `params.query` to the get endpoint (rare conditions, `$select`, ...).
    */
-  where(
-    this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
+  where<K extends 'find' | 'get'>(
+    this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>,
     query: WhereClause<TItem>,
-  ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
+  ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, K> {
     return new QueryBuilder(this.#schema, this.#state.service, {
       ...this.#state,
       query: deepMerge(this.#state.query, query),
-    })
+    }) as QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>
   }
 
   /**
@@ -317,26 +320,16 @@ export class QueryBuilder<
   }
 
   /**
-   * Set cardinality to 'one' — the hook will return a single item (or null if no match).
-   */
-  one(
-    this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
-  ): QueryBuilder<S, TService, TItem, TRelated, 'one', 'find'> {
-    return new QueryBuilder(this.#schema, this.#state.service, {
-      ...this.#state,
-      cardinality: 'one',
-    }) as QueryBuilder<S, TService, TItem, TRelated, 'one', 'find'>
-  }
-
-  /**
-   * Fetch a single entity by primary key. The result is the item with any declared
-   * relations attached, or the query enters an error state if the row does not exist
-   * (mirroring `service.get(id)` semantics — distinct from `.where({ id }).one()`,
-   * which resolves to `null` when no row matches).
+   * Fetch a single entity by primary key — `GET /:service/:id`. The result is the
+   * item with any declared relations attached (typed `T | null`: a cold fetch of a
+   * missing row enters the error state, mirroring `service.get(id)` semantics, while
+   * realtime removal of the row nulls the data). For "the first match of a filter,
+   * if any", use `.where(...).limit(1)` — the find-semantics spelling.
    *
-   * Only callable on a fresh service builder — `.where`/`.orderBy`/`.limit`/`.skip`/
-   * `.server` are not meaningful for a primary-key lookup. `.related()` is, and can
-   * be chained after `.get()`.
+   * Only callable on a fresh service builder. `.where()` may be chained after it —
+   * the conditions ride along as `params.query` to the get endpoint — as may
+   * `.related()`. Windowing/ordering (`.orderBy`/`.limit`/`.skip`) and `.server`/
+   * `.snapshot` are find-only.
    */
   get(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,

@@ -620,7 +620,7 @@ test('QueryBuilder: one() sets cardinality', t => {
   const { figbird } = createApp()
   const { q } = figbird
 
-  const query = q.issues.where({ id: 1 }).one()
+  const query = q.issues.get(1)
   const ast = query.toAST()
 
   t.is(ast.cardinality, 'one')
@@ -1055,7 +1055,7 @@ test('useRelationalQuery: with relations', async t => {
   const { App, figbird } = createApp()
 
   function IssueWithCreator() {
-    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('creator'))
+    const issue = useStatusQuery(figbird.q.issues.get(1).related('creator'))
 
     if (issue.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1097,7 +1097,7 @@ test('useRelationalQuery: with many relation', async t => {
   const { App, figbird } = createApp()
 
   function IssueWithComments() {
-    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
+    const issue = useStatusQuery(figbird.q.issues.get(1).related('comments'))
 
     if (issue.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1401,7 +1401,7 @@ test('createHooks: useQuery with suspense:false is exported and works', async t 
 
   function IssueWithCreator() {
     // Use the typed hook - the query builder should be properly typed
-    const issue = useTypedQuery(q.issues.where({ id: 1 }).one().related('creator'), {
+    const issue = useTypedQuery(q.issues.get(1).related('creator'), {
       suspense: false,
     })
 
@@ -1449,7 +1449,7 @@ test('realtime: creating a child entity appears in the active relation view', as
   const { App, figbird, feathers } = createApp()
 
   function IssueWithComments() {
-    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
+    const issue = useStatusQuery(figbird.q.issues.get(1).related('comments'))
     if (issue.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issue.data as Issue & { comments: Comment[] }
     return (
@@ -1499,7 +1499,7 @@ test('realtime: patching a related entity updates the assembled view', async t =
   const { App, figbird, feathers } = createApp()
 
   function IssueWithCreator() {
-    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('creator'))
+    const issue = useStatusQuery(figbird.q.issues.get(1).related('creator'))
     if (issue.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issue.data as Issue & { creator: User | null }
     return <div className='creator'>{data.creator?.name ?? 'Unknown'}</div>
@@ -1527,7 +1527,7 @@ test('realtime: removing a related entity removes it from the assembled view', a
   const { App, figbird, feathers } = createApp()
 
   function IssueWithComments() {
-    const issue = useStatusQuery(figbird.q.issues.where({ id: 1 }).one().related('comments'))
+    const issue = useStatusQuery(figbird.q.issues.get(1).related('comments'))
     if (issue.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issue.data as Issue & { comments: Comment[] }
     return <div className='comment-count'>{data.comments.length}</div>
@@ -1740,10 +1740,7 @@ test('realtime: child entity arrival on nested relation updates the assembled vi
 
   function IssueWithCommentReactions() {
     const issue = useStatusQuery(
-      figbird.q.issues
-        .where({ id: 1 })
-        .one()
-        .related('comments', c => c.related('reactions')),
+      figbird.q.issues.get(1).related('comments', c => c.related('reactions')),
     )
     if (issue.status !== 'success') return <div className='loading'>Loading...</div>
     const data = issue.data as Issue & {
@@ -1808,7 +1805,7 @@ test('suspense: first-mount cold shows fallback, then data', async t => {
   const { App, figbird } = createApp()
 
   function IssueDetail() {
-    const { data } = useQuery(figbird.q.issues.where({ id: 1 }).one().related('creator'))
+    const { data } = useQuery(figbird.q.issues.get(1).related('creator'))
     // With Suspense mode, data is guaranteed to be defined here.
     const issue = data as Issue & { creator: User | null }
     return (
@@ -1875,9 +1872,7 @@ test('suspense: refetch does not re-suspend', async t => {
   let refetchFn: (() => void) | null = null
 
   function IssueDetail() {
-    const { data, isFetching, refetch } = useQuery(
-      figbird.q.issues.where({ id: 1 }).one().related('creator'),
-    )
+    const { data, isFetching, refetch } = useQuery(figbird.q.issues.get(1).related('creator'))
     refetchFn = refetch
     const issue = data as Issue & { creator: User | null }
     return (
@@ -1920,9 +1915,7 @@ test('suspense: param change inside startTransition keeps previous render commit
   function IssueDetail() {
     const [issueId, _setIssueId] = React.useState(1)
     setIssueId = _setIssueId
-    const { data, isFetching } = useQuery(
-      figbird.q.issues.where({ id: issueId }).one().related('creator'),
-    )
+    const { data, isFetching } = useQuery(figbird.q.issues.get(issueId).related('creator'))
     const issue = data as Issue & { creator: User | null }
     return (
       <div className='issue-detail' data-fetching={isFetching}>
@@ -1966,14 +1959,15 @@ test('suspense: first-mount error throws to ErrorBoundary', async t => {
   const { App, figbird, feathers } = createApp()
 
   // Make the root fetch reject — this should trigger throw to the ErrorBoundary on
-  // first mount, not render the fallback nor the component.
+  // first mount, not render the fallback nor the component. `.get()` fetches via
+  // the resource verb, so break `get`.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  feathers.service('issues').find = async () => {
+  feathers.service('issues').get = async () => {
     throw new Error('boom')
   }
 
   function IssueDetail() {
-    const { data } = useQuery(figbird.q.issues.where({ id: 1 }).one())
+    const { data } = useQuery(figbird.q.issues.get(1))
     const issue = data as Issue
     return <div className='issue-detail'>{issue.title}</div>
   }
@@ -2013,9 +2007,7 @@ test('suspense: refetch failure keeps previous data, exposes error, clears on re
   let refetchFn: (() => void) | null = null
 
   function IssueDetail() {
-    const { data, error, refetch } = useQuery(
-      figbird.q.issues.where({ id: 1 }).one().related('creator'),
-    )
+    const { data, error, refetch } = useQuery(figbird.q.issues.get(1).related('creator'))
     refetchFn = refetch
     const issue = data as Issue & { creator: User | null }
     return (
@@ -2039,9 +2031,10 @@ test('suspense: refetch failure keeps previous data, exposes error, clears on re
 
   // Break the service, then refetch. The screen must stay mounted with the last good
   // data (no fallback, no ErrorBoundary) and surface the failure via `error`.
-  const originalFind = feathers.service('issues').find
+  // `.get()` fetches via the resource verb, so break `get`.
+  const originalGet = feathers.service('issues').get
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  feathers.service('issues').find = async () => {
+  feathers.service('issues').get = async () => {
     throw new Error('network down')
   }
 
@@ -2054,7 +2047,7 @@ test('suspense: refetch failure keeps previous data, exposes error, clears on re
   t.is($('.issue-detail')!.getAttribute('data-error'), 'network down')
 
   // Heal the service and refetch again — the error clears on the next successful fetch.
-  feathers.service('issues').find = originalFind
+  feathers.service('issues').get = originalGet
   await flush(() => {
     refetchFn!()
   })
@@ -2109,10 +2102,7 @@ test('suspense: revisiting a query with warm nested relations does not re-suspen
 
   function IssueWithCommentReactions({ issueId }: { issueId: number }) {
     const { data } = useQuery(
-      figbird.q.issues
-        .where({ id: issueId })
-        .one()
-        .related('comments', c => c.related('reactions')),
+      figbird.q.issues.get(issueId).related('comments', c => c.related('reactions')),
     )
     if (!data) return <div className='empty'>none</div>
     return <div className='view' data-id={data.id} data-comments={data.comments.length} />
@@ -2204,8 +2194,7 @@ test('useQuery: refined relations assemble from the relation query result, not t
   function CompanyView() {
     const { data } = useQuery(
       figbird.q.companies
-        .where({ id: 1 })
-        .one()
+        .get(1)
         .related('departments', d => d.where({ archived: false }))
         .related('people', p =>
           p
@@ -2252,8 +2241,7 @@ test('useQuery: profile graph fetches manager and windowed direct reports on dem
   function ProfileView() {
     const { data } = useQuery(
       figbird.q.people
-        .where({ id: 1 })
-        .one()
+        .get(1)
         .related('manager')
         .related('currentEmployment', e => e.where({ effectiveAt: '2025-04-24' }))
         .related('directReports', r =>
@@ -2308,16 +2296,18 @@ test('useQuery: server refetches a server-authoritative query from its service e
   const periodsService = feathers.service('timeAwayPeriods')
 
   function PeriodView() {
+    // Find-one is spelled `.limit(1)` — `.get()` is the pk/resource fetch.
     const { data, isFetching } = useQuery(
-      figbird.q.timeAwayPeriods.where({ personId: 1 }).one().server(),
+      figbird.q.timeAwayPeriods.where({ personId: 1 }).limit(1).server(),
     )
+    const period = data[0]
 
-    if (!data) return <div className='empty'>none</div>
+    if (!period) return <div className='empty'>none</div>
 
     return (
       <div
         className='period'
-        data-balance={String(data.balance)}
+        data-balance={String(period.balance)}
         data-fetching={String(isFetching)}
       />
     )
@@ -2352,7 +2342,7 @@ test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
   const { App, figbird, feathers } = createProfileQueryApp()
 
   function ProfileView() {
-    const { data } = useQuery(figbird.q.people.where({ id: 1 }).one().related('manager'))
+    const { data } = useQuery(figbird.q.people.get(1).related('manager'))
 
     if (!data) return <div className='empty'>none</div>
 
@@ -2393,10 +2383,7 @@ test('useQuery: fixed-depth manager chains resolve through nested relations', as
 
   function ManagerChainView() {
     const { data } = useQuery(
-      figbird.q.people
-        .where({ id: 1 })
-        .one()
-        .related('manager', manager => manager.related('manager')),
+      figbird.q.people.get(1).related('manager', manager => manager.related('manager')),
     )
 
     if (!data) return <div className='empty'>none</div>
@@ -2432,10 +2419,7 @@ test('useQuery: many-to-many through a join service expands nested relation leav
 
   function PersonTeamsView() {
     const { data } = useQuery(
-      figbird.q.people
-        .where({ id: 1 })
-        .one()
-        .related('memberships', membership => membership.related('team')),
+      figbird.q.people.get(1).related('memberships', membership => membership.related('team')),
     )
 
     if (!data) return <div className='empty'>none</div>
@@ -2474,17 +2458,14 @@ test('useQuery: limited sorted relation refetches its server window after a visi
 
   function CompanyView() {
     const { data, isFetching } = useQuery(
-      figbird.q.companies
-        .where({ id: 1 })
-        .one()
-        .related('people', p =>
-          p
-            .where({ status: 'active' })
-            .orderBy('startDate', 'desc')
-            .orderBy('id', 'asc')
-            .limit(2)
-            .related('currentEmployment', e => e.where({ effectiveAt: '2025-04-23' })),
-        ),
+      figbird.q.companies.get(1).related('people', p =>
+        p
+          .where({ status: 'active' })
+          .orderBy('startDate', 'desc')
+          .orderBy('id', 'asc')
+          .limit(2)
+          .related('currentEmployment', e => e.where({ effectiveAt: '2025-04-23' })),
+      ),
     )
 
     if (!data) return <div className='empty'>none</div>
@@ -2582,8 +2563,7 @@ test('useQuery: limited sorted relation refetches when an out-of-window item ent
   function ProfileView() {
     const { data, isFetching } = useQuery(
       figbird.q.people
-        .where({ id: 1 })
-        .one()
+        .get(1)
         .related('directReports', r =>
           r.where({ status: 'active' }).orderBy('startDate', 'desc').orderBy('id', 'asc').limit(2),
         ),
@@ -2637,7 +2617,7 @@ test('defineQuery + prepare: prepare and useQuery share the same cache entry', a
   const { render, unmount, flush, $ } = dom()
 
   const issueDetail = defineQuery('issueDetail', passthrough<{ id: number }>(), ({ id }) =>
-    figbird.q.issues.where({ id }).one().related('comments'),
+    figbird.q.issues.get(id).related('comments'),
   )
 
   // Prepare the query before any component reads it.
@@ -2684,7 +2664,7 @@ test('defineQuery + prepare: prepare key is stable for identical args', t => {
   const { figbird } = createApp()
 
   const issueDetail = defineQuery('issueDetail', passthrough<{ id: number }>(), ({ id }) =>
-    figbird.q.issues.where({ id }).one(),
+    figbird.q.issues.get(id),
   )
 
   const a = figbird.prepare(issueDetail, { id: 1 })
@@ -2903,7 +2883,7 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
 test('prefetch: idempotent within staleTime and warms the cache for a later read', async t => {
   const { figbird, feathers } = createApp()
   const issueDetail = defineQuery('issueDetailPrefetch', ({ id }: { id: number }) =>
-    figbird.q.issues.where({ id }).one().related('creator'),
+    figbird.q.issues.get(id).related('creator'),
   )
 
   // Hover-spam: repeated calls within staleTime must not re-trigger fetches.
@@ -2912,7 +2892,8 @@ test('prefetch: idempotent within staleTime and warms the cache for a later read
   figbird.prefetch(issueDetail, { id: 1 })
   await new Promise(resolve => setTimeout(resolve, 10))
 
-  t.is(feathers.service('issues').counts.find, 1, 'three prefetch calls, one fetch')
+  // `.get(id)` fetches via the resource verb, so count `get` calls.
+  t.is(feathers.service('issues').counts.get, 1, 'three prefetch calls, one fetch')
 
   // The data is warm — the interned ref reads success synchronously.
   const ref = figbird.relationalQuery(issueDetail.build({ id: 1 }))
@@ -2949,7 +2930,7 @@ test('defineQuery: typed-args form (no validator, no name) builds and prepares',
 
   // No Standard Schema, no name — args are typed from the build function's parameter,
   // and identity is the built AST's hash (the name is optional label metadata).
-  const issueDetail = defineQuery(({ id }: { id: number }) => figbird.q.issues.where({ id }).one())
+  const issueDetail = defineQuery(({ id }: { id: number }) => figbird.q.issues.get(id))
   t.is(issueDetail.name, '')
 
   const a = figbird.prepare(issueDetail, { id: 1 })
@@ -3117,7 +3098,7 @@ test('embed: realtime — patching a referenced person updates the inline previe
   const { render, unmount, flush, $ } = dom()
 
   function AdminRole() {
-    const { data } = useQuery(figbird.q.roles.where({ id: 1 }).one().related('membersPreview'))
+    const { data } = useQuery(figbird.q.roles.get(1).related('membersPreview'))
     return <div className='preview'>{data!.membersPreview.map(p => p.name).join(',')}</div>
   }
 
@@ -3146,7 +3127,7 @@ test("embed: realtime — patching the parent's id-list reorders/changes the pre
   const { render, unmount, flush, $ } = dom()
 
   function AdminRole() {
-    const { data } = useQuery(figbird.q.roles.where({ id: 1 }).one().related('membersPreview'))
+    const { data } = useQuery(figbird.q.roles.get(1).related('membersPreview'))
     return <div className='preview'>{data!.membersPreview.map(p => p.name).join(',')}</div>
   }
 
@@ -3318,7 +3299,7 @@ test('junction: realtime — adding a roleMember row appears under the right rol
   const { render, unmount, flush, $ } = dom()
 
   function AdminRole() {
-    const { data } = useQuery(figbird.q.roles2.where({ id: 1 }).one().related('members'))
+    const { data } = useQuery(figbird.q.roles2.get(1).related('members'))
     return (
       <div className='members'>
         {data!.members
@@ -3354,7 +3335,7 @@ test('junction: realtime — patching a destination user updates the assembled v
   const { render, unmount, flush, $ } = dom()
 
   function AdminRole() {
-    const { data } = useQuery(figbird.q.roles2.where({ id: 1 }).one().related('members'))
+    const { data } = useQuery(figbird.q.roles2.get(1).related('members'))
     return (
       <div className='members'>
         {data!.members
@@ -3383,13 +3364,13 @@ test('junction: realtime — patching a destination user updates the assembled v
   unmount()
 })
 
-test('junction: empty parent set (.one() no match) resolves with no junction fetch needed', async t => {
+test('junction: empty parent set (no find match) resolves with no junction fetch needed', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, $ } = dom()
 
   function NoSuchRole() {
-    const { data } = useQuery(figbird.q.roles2.where({ id: 999 }).one().related('members'))
-    return <div className='result'>{data === null ? 'no-match' : 'matched'}</div>
+    const { data } = useQuery(figbird.q.roles2.where({ id: 999 }).limit(1).related('members'))
+    return <div className='result'>{data.length === 0 ? 'no-match' : 'matched'}</div>
   }
 
   const beforeJunctionFinds = feathers.service('roleMembers').counts.find
