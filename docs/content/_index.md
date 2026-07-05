@@ -802,6 +802,99 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 
+## Compared to other data layers
+
+Every data library is a bet on where your app's complexity lives. Figbird's bet: a
+**server-authoritative backend with realtime events**, read by **long-lived, app-shaped
+screens** that many people look at simultaneously. Here's how that bet compares to the
+alternatives — honestly, since each of these is the right tool for a different shape of
+problem.
+
+### TanStack Query
+
+TanStack Query caches the results of arbitrary async functions under opaque keys. That
+generality is its superpower — it works with any backend, any protocol, no schema — and
+its limitation: the cache doesn't know what's _inside_ a result. The same record living in
+ten queries is ten copies, and keeping them coherent is your job, via the invalidation
+choreography (`onSuccess` → `invalidateQueries`) that dominates real TanStack codebases.
+Freshness is heuristic: `staleTime`, refetch-on-focus, polling.
+
+Figbird's cache is **normalized and event-driven**: entities live once, queries are
+projections over them, and a mutation or socket event updates every query referencing the
+record — there is no invalidation API because there's nothing to invalidate. Optimistic
+updates are the default with automatic rollback, versus TanStack's hand-written
+`onMutate`/snapshot/rollback recipe per mutation. Relations assemble client-side with
+full types.
+
+**Choose TanStack when** your API is heterogeneous (mixed REST endpoints, third-party
+APIs, no consistent resource shape), you have no realtime channel, or you want the
+ecosystem's maturity and escape hatches. **Figbird's model needs** service-shaped
+resources and (to shine) server-emitted events — without them you keep SWR but lose the
+realtime freshness model that makes the cache self-maintaining.
+
+### React Server Components
+
+RSC moves reads to the server: zero client JS for data fetching, direct data access, great
+first paint. It's a request/response model — the page is data at a moment in time, and
+freshness means revalidating and re-rendering server trees (`revalidatePath`/`Tag`), which
+is coarse and navigation-shaped.
+
+Figbird is for the screen that _stays open_: an issue tracker, an HRIS, a dashboard where
+a teammate's change should appear in the open view in milliseconds without anyone
+navigating. That requires a live client cache, socket events merging into it, and
+optimistic writes — the exact things RSC deliberately doesn't have (client interactivity
+falls back to client components anyway, at which point you need a client data layer and
+you're back to this comparison).
+
+**These compose rather than compete**: RSC for the document-shaped parts (marketing,
+content, settings pages you visit once), figbird for the app-shaped workspace inside.
+**Choose RSC alone when** your product is read-mostly and request-scoped — figbird's
+machinery is dead weight on a blog.
+
+### Relay + GraphQL
+
+Relay is the most principled client cache in the ecosystem: normalized store, declarative
+per-component data requirements (fragments), and compile-time guarantees against over-
+and under-fetching. Those properties cost a GraphQL server, a compiler step, codegen, and
+fragment ceremony at every component boundary — and the property that ceremony chiefly
+buys, **data masking for cross-team decoupling**, matters at hundreds-of-engineers scale
+and mostly doesn't below it.
+
+Figbird targets the same normalized-store outcome with none of the pipeline: one
+TypeScript schema, inference instead of codegen, composition via plain functions instead
+of fragments, and your existing services instead of a GraphQL layer. And realtime is
+first-class rather than bolted on — GraphQL subscriptions exist, but wiring them to
+update a normalized store correctly is famously left as an exercise; in figbird that
+wiring _is_ the library.
+
+**Choose Relay when** you're at the org scale masking was built for, you need field-level
+fetch efficiency (figbird fetches whole rows), or GraphQL is already your API layer.
+**Figbird gives up** field selection and compile-time query validation in exchange for
+having no pipeline at all.
+
+### Zero (and sync engines generally)
+
+Zero syncs a queryable replica to the client: reads are local-first and instant, writes
+rebase through custom mutators, and there is no refetch model because the replica diffs
+in continuously. Where the models overlap isn't accidental — figbird deliberately borrows
+Zero's philosophy where it fits a server-authoritative world: client-generated ids,
+optimistic-by-default writes, queries as live views.
+
+The difference is the infrastructure bet. Zero requires running its sync layer
+(zero-cache, Postgres logical replication) and adopting its permission model — you're
+committing your backend architecture to the sync engine. Figbird runs against the
+Feathers-style backend you already have: services, hooks, existing permissions, deployed
+today, adoptable one screen at a time. And its **classification system** keeps
+server-only semantics natural — `$regex` search, permission-dependent membership, complex
+joins classify as server-authoritative and reconcile by refetch, where a local replica
+must either sync everything the query needs or fall back to the server anyway.
+
+**Choose Zero when** you're greenfield on Postgres, can operate the sync infrastructure,
+and want local-first reads everywhere — it's the stronger end state. **Choose figbird
+when** the server must stay authoritative with its existing logic, or you want most of
+the live-app experience (realtime views, optimistic writes, warm navigation via
+`prepare`/`prefetch`/`.all()`) without changing your backend.
+
 # API Reference
 
 ## createSchema
