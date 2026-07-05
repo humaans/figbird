@@ -146,28 +146,6 @@ export interface MutationsHost {
   call(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 }
 
-/**
- * Well-known introspection/protocol properties that must never be treated as
- * custom method calls. Without this, `JSON.stringify(handle)` would invoke a
- * phantom `toJSON` service call, jest's `toEqual` would invoke
- * `asymmetricMatch`, and so on. (`then` additionally guards against the handle
- * becoming thenable.)
- */
-const PROTOCOL_PROPS = new Set([
-  'then',
-  'catch',
-  'finally',
-  'toJSON',
-  'toString',
-  'valueOf',
-  'inspect',
-  'constructor',
-  'asymmetricMatch',
-  '$$typeof',
-  'nodeType',
-  '@@iterator',
-])
-
 interface HandleConfig {
   /** false → confirmed variant: the cache updates only after the server acks. */
   optimistic: boolean
@@ -234,7 +212,12 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
       if (typeof prop === 'symbol' || prop in target) {
         return Reflect.get(target, prop, receiver)
       }
-      if (PROTOCOL_PROPS.has(prop)) return undefined
+      // A callable `then` makes the handle thenable: returning one from an async
+      // function would make the `await` invoke it and hang forever, unsettled.
+      if (prop === 'then') return undefined
+      // A callable `toJSON` would turn JSON.stringify(handle) — logging, error
+      // reporting — into a phantom network write.
+      if (prop === 'toJSON') return undefined
       return (...args: unknown[]) => host.call(serviceName, prop, args)
     },
   })
@@ -257,9 +240,12 @@ export function createMutationsProxy(host: MutationsHost): object {
     return handle
   }
 
+  // No protocol guards needed at this level: properties resolve to handle
+  // OBJECTS (not functions), so probes like `then` or `toJSON` are never
+  // callable here and `await m` / JSON.stringify(m) behave inertly.
   return new Proxy(Object.create(null) as object, {
     get(_target, prop) {
-      if (typeof prop === 'symbol' || PROTOCOL_PROPS.has(prop)) return undefined
+      if (typeof prop === 'symbol') return undefined
       return handleFor(prop)
     },
   })
