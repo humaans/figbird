@@ -35,7 +35,7 @@ export function useGet(
   resourceId: string | number,
   params: Record<string, UntypedData> = {},
 ): QueryResult<UntypedData> {
-  // Service path aliases are resolved centrally by figbird.query().
+  // Service path aliases are resolved centrally by figbird.queryDesc().
   const { desc, config } = splitConfig<UntypedData, Record<string, unknown>>({
     serviceName,
     method: 'get' as const,
@@ -59,7 +59,7 @@ export function useFind(
   serviceName: string,
   params: Record<string, UntypedData> = {},
 ): QueryResult<UntypedData[], Record<string, unknown>> {
-  // Service path aliases are resolved centrally by figbird.query().
+  // Service path aliases are resolved centrally by figbird.queryDesc().
   const { desc, config } = splitConfig<UntypedData[], Record<string, unknown>>({
     serviceName,
     method: 'find' as const,
@@ -132,7 +132,7 @@ export function useQueryByDescImpl<
         [queryIdentityKey]: uniqueId,
       } as QueryConfig<unknown, unknown> & QueryIdentityConfig)
     : (config as QueryConfig<unknown, unknown>)
-  const _q = figbird.query(desc, queryConfig)
+  const _q = figbird.queryDesc(desc, queryConfig)
 
   // a bit of React foo to create stable fn references
   const hash = _q.hash()

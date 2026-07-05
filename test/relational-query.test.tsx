@@ -713,29 +713,29 @@ test('QueryBuilder: server marks query as server-maintained in AST', t => {
 // RelationalQueryRef (Imperative) Tests
 // ============================================================================
 
-test('figbird.relationalQuery: creates RelationalQueryRef', t => {
+test('figbird.query: creates RelationalQueryRef', t => {
   const { figbird } = createApp()
 
-  const qRef = figbird.relationalQuery(figbird.q.issues.where({ status: 'open' }))
+  const qRef = figbird.query(figbird.q.issues.where({ status: 'open' }))
 
   t.truthy(qRef)
   t.truthy(qRef.hash())
   t.truthy(qRef.details().queryId)
 })
 
-test('figbird.relationalQuery: hash is stable for same query', t => {
+test('figbird.query: hash is stable for same query', t => {
   const { figbird } = createApp()
 
-  const qRef1 = figbird.relationalQuery(figbird.q.issues.where({ status: 'open' }))
-  const qRef2 = figbird.relationalQuery(figbird.q.issues.where({ status: 'open' }))
+  const qRef1 = figbird.query(figbird.q.issues.where({ status: 'open' }))
+  const qRef2 = figbird.query(figbird.q.issues.where({ status: 'open' }))
 
   t.is(qRef1.hash(), qRef2.hash())
 })
 
-test('figbird.relationalQuery: subscribe triggers fetch', async t => {
+test('figbird.query: subscribe triggers fetch', async t => {
   const { figbird } = createApp()
 
-  const qRef = figbird.relationalQuery(figbird.q.issues)
+  const qRef = figbird.query(figbird.q.issues)
 
   // Track state changes
   const states: string[] = []
@@ -758,10 +758,10 @@ test('figbird.relationalQuery: subscribe triggers fetch', async t => {
   t.is(states.filter(s => s === 'success').length, 1) // Only notified once
 })
 
-test('figbird.relationalQuery: getSnapshot returns current state', async t => {
+test('figbird.query: getSnapshot returns current state', async t => {
   const { figbird } = createApp()
 
-  const qRef = figbird.relationalQuery(figbird.q.issues)
+  const qRef = figbird.query(figbird.q.issues)
 
   // Before subscribe, should return loading
   const beforeSnapshot = qRef.getSnapshot()
@@ -790,7 +790,7 @@ test('figbird.query: inactive server-maintained cache-first query refetches on n
   const { figbird, feathers } = createServerProjectionQueryApp()
   const periodsService = feathers.service('timeAwayPeriods')
 
-  const queryRef = figbird.query(
+  const queryRef = figbird.queryDesc(
     {
       serviceName: 'timeAwayPeriods',
       method: 'find',
@@ -839,7 +839,7 @@ test('figbird.query: unsupported query operators are auto server-maintained', as
   const { figbird, feathers } = createWindowQueryApp()
   const peopleService = feathers.service('people')
 
-  const queryRef = figbird.query(
+  const queryRef = figbird.queryDesc(
     {
       serviceName: 'people',
       method: 'find',
@@ -882,7 +882,7 @@ test('figbird.query: inactive server-windowed cache-first query refetches on nex
   const { figbird, feathers } = createWindowQueryApp()
   const peopleService = feathers.service('people')
 
-  const queryRef = figbird.query(
+  const queryRef = figbird.queryDesc(
     {
       serviceName: 'people',
       method: 'find',
@@ -974,7 +974,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
     eventBatchProcessingInterval: 0,
   })
   const peopleService = feathers.service('people')
-  const queryRef = figbird.query({
+  const queryRef = figbird.queryDesc({
     serviceName: 'people',
     method: 'find',
     params: { query: { companyId: 1 } },
@@ -1846,7 +1846,7 @@ test('get(): consecutive getSnapshot reads return ref-equal results (regression)
   // useSyncExternalStore enters an infinite render loop ("getSnapshot should be cached").
   const { figbird } = createApp()
 
-  const ref = figbird.relationalQuery(figbird.q.issues.get(1).related('creator'))
+  const ref = figbird.query(figbird.q.issues.get(1).related('creator'))
 
   // Subscribe so the underlying query actually fires.
   const unsubscribe = ref.subscribe(() => {})
@@ -2711,7 +2711,7 @@ test('explain: classifies nodes with structured reasons', t => {
 test('inspect: stable read-only projection of live queries', async t => {
   const { figbird } = createApp()
 
-  const ref = figbird.relationalQuery(figbird.q.issues.related('comments'))
+  const ref = figbird.query(figbird.q.issues.related('comments'))
   const unsub = ref.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
 
@@ -2756,13 +2756,13 @@ test('.all(): materializes the service; subset and windowed reads answer locally
   const { figbird, feathers } = createApp()
 
   // Preload the complete set ($sort doesn't affect completeness, so it still materializes).
-  const unsubAll = figbird.relationalQuery(figbird.q.issues.orderBy('id').all()).subscribe(() => {})
+  const unsubAll = figbird.query(figbird.q.issues.orderBy('id').all()).subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   const findsAfterAll = feathers.service('issues').counts.find
   t.true(findsAfterAll >= 1)
 
   // Filtered subset — answered from the materialized cache, no fetch.
-  const openRef = figbird.relationalQuery(figbird.q.issues.where({ status: 'open' }))
+  const openRef = figbird.query(figbird.q.issues.where({ status: 'open' }))
   const unsubOpen = openRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(openRef.getSnapshot().status, 'success')
@@ -2770,7 +2770,7 @@ test('.all(): materializes the service; subset and windowed reads answer locally
   t.is(feathers.service('issues').counts.find, findsAfterAll, 'subset read must not fetch')
 
   // Windowed subset — sorted and sliced locally.
-  const winRef = figbird.relationalQuery(figbird.q.issues.orderBy('id', 'desc').limit(2))
+  const winRef = figbird.query(figbird.q.issues.orderBy('id', 'desc').limit(2))
   const unsubWin = winRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.deepEqual(
@@ -2827,7 +2827,7 @@ test('.all(): accepts filters — complete slice, no materialization; rejects wi
   })
 
   // The filtered .all() fetches every page of the slice.
-  const openRef = fb.relationalQuery(fb.q.issues.where({ status: 'open' }).all())
+  const openRef = fb.query(fb.q.issues.where({ status: 'open' }).all())
   const unsubOpen = openRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.deepEqual(
@@ -2845,7 +2845,7 @@ test('.all(): accepts filters — complete slice, no materialization; rejects wi
   t.is(feathers.service('issues').counts.find, findsAfterAll, 'realtime maintenance stays local')
 
   // But it must not materialize the service: a different filter still fetches.
-  const closedRef = fb.relationalQuery(fb.q.issues.where({ status: 'closed' }))
+  const closedRef = fb.query(fb.q.issues.where({ status: 'closed' }))
   const unsubClosed = closedRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.true(
@@ -2900,10 +2900,7 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
   t.is($('.frozen')!.getAttribute('data-count'), '4')
 
   // Identity: frozen and live reads of the same filters do not share a cache entry.
-  t.not(
-    figbird.relationalQuery(figbird.q.issues.snapshot()).hash(),
-    figbird.relationalQuery(figbird.q.issues).hash(),
-  )
+  t.not(figbird.query(figbird.q.issues.snapshot()).hash(), figbird.query(figbird.q.issues).hash())
 
   // explain() reports the frozen realtime mode.
   const report = figbird.explain(figbird.q.issues.related('comments').snapshot())
@@ -2918,14 +2915,14 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
   const builder = figbird.q.issues.related('creator')
 
   // Cold read — fetches.
-  const unsub1 = figbird.relationalQuery(builder).subscribe(() => {}, { staleTime: 60_000 })
+  const unsub1 = figbird.query(builder).subscribe(() => {}, { staleTime: 60_000 })
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.find, 1)
   unsub1()
   await new Promise(resolve => setTimeout(resolve, 10)) // let deferred teardown run
 
   // Resubscribe within the tolerance — warm store data, no revalidation.
-  const ref2 = figbird.relationalQuery(builder)
+  const ref2 = figbird.query(builder)
   const unsub2 = ref2.subscribe(() => {}, { staleTime: 60_000 })
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.find, 1, 'fresh data must not refetch')
@@ -2934,7 +2931,7 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
   await new Promise(resolve => setTimeout(resolve, 10))
 
   // Default tolerance (0) revalidates on resubscribe.
-  const unsub3 = figbird.relationalQuery(builder).subscribe(() => {})
+  const unsub3 = figbird.query(builder).subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.find, 2, 'default revalidates on resubscribe')
   unsub3()
@@ -2956,7 +2953,7 @@ test('prefetch: idempotent within staleTime and warms the cache for a later read
   t.is(feathers.service('issues').counts.get, 1, 'three prefetch calls, one fetch')
 
   // The data is warm — the interned ref reads success synchronously.
-  const ref = figbird.relationalQuery(issueDetail.build({ id: 1 }))
+  const ref = figbird.query(issueDetail.build({ id: 1 }))
   t.is(ref.getSnapshot().status, 'success')
 })
 

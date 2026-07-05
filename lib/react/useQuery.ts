@@ -69,7 +69,7 @@ type AnyQueryBuilder = QueryBuilder<any, any, any, any, any, any>
 
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
-  relationalQuery(builder: AnyQueryBuilder): {
+  query(builder: AnyQueryBuilder): {
     subscribe(
       fn: (state: unknown) => void,
       options?: { staleTime?: number | undefined },
@@ -95,7 +95,7 @@ const idleState: RelationalQueryState<null> = {
  * Shared subscription skeleton for both hook variants: resolve the interned
  * RelationalQueryRef for a builder and read its state via useSyncExternalStore.
  *
- * `figbird.relationalQuery()` interns refs by AST hash, so the same builder shape
+ * `figbird.query()` interns refs by AST hash, so the same builder shape
  * yields a reference-stable qRef across renders while subscribed — no memoization
  * here. (If the ref was evicted between renders, this picks up the freshly interned
  * instance instead of pinning the stale one.)
@@ -105,7 +105,7 @@ function useQueryRef<
   B extends QueryBuilder<any, any, any, any, any, any>,
 >(figbird: FigbirdLike, query: B, skip: boolean, staleTime?: number) {
   type T = QueryBuilderResult<B>
-  const qRef = skip ? null : figbird.relationalQuery(query)
+  const qRef = skip ? null : figbird.query(query)
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {

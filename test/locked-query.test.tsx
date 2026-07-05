@@ -93,7 +93,7 @@ test('locked-down query types work correctly', async t => {
   // Note: The mock doesn't actually filter by query fields - it returns all items.
   // This is a limitation of the test mock, not the actual library.
   // In production, the server would handle the filtering.
-  const peopleQuery = figbird.query({
+  const peopleQuery = figbird.queryDesc({
     serviceName: 'people',
     method: 'find',
     params: {
@@ -119,7 +119,7 @@ test('locked-down query types work correctly', async t => {
 
   // Test 2: Paginated queries work with pagination fields
   // Note: The mock doesn't actually filter by query fields - it returns all items.
-  const todosQuery = figbird.query({
+  const todosQuery = figbird.queryDesc({
     serviceName: 'todos',
     method: 'find',
     params: {
@@ -147,7 +147,7 @@ test('locked-down query types work correctly', async t => {
 
   // Test 3: Minimal queries work without any extras
   // Note: The mock doesn't actually filter by query fields - it returns all items.
-  const notesQuery = figbird.query({
+  const notesQuery = figbird.queryDesc({
     serviceName: 'notes',
     method: 'find',
     params: {
@@ -206,7 +206,7 @@ test('allPages works correctly with proper pagination fields', async t => {
   })
   const figbird = new Figbird({ adapter, schema })
 
-  const query = figbird.query(
+  const query = figbird.queryDesc(
     {
       serviceName: 'todos',
       method: 'find',

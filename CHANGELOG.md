@@ -20,7 +20,7 @@
   anywhere, interned per service. `figbird.mutations(name)` is the dynamic-name door.
 - Writes through `m` are **optimistic by default** — the cache shows the change immediately
   and rolls back on failure. `m.<service>.confirmed` opts a surface out ("show it only once
-  it's real"). The low-level `figbird.mutate` descriptor and the deprecated `useMutation`
+  it's real"). The low-level `figbird.mutateDesc` descriptor and the deprecated `useMutation`
   keep the old non-optimistic default.
 - The id contract: optimistic creates must carry a client-generated id the server will accept
   (e.g. `crypto.randomUUID()`) — an id-less optimistic create throws synchronously. Confirmed
@@ -40,9 +40,14 @@
   core, emitting `mutate:*` observability events and registering with the mutation tracker.
 - Add `mutationId` to `mutate:*` events, correlating one mutation's start/end/error/rollback.
 - Deprecate `useMutation` in favor of `m` + `useAction` + `useMutating` (still fully
-  functional, unchanged semantics).
+  functional, unchanged semantics — always non-optimistic, per-call `params`, as in 0.23).
 - Breaking: remove `useMethod` — custom methods live on `m.<service>` handles; wrap calls in
   `useAction` for lifecycle state.
+- Breaking: two-layer instance API. `figbird.query(builder)` is now the non-React mirror of
+  `useQuery` (formerly `figbird.relationalQuery`) and also accepts `(definition, args)`.
+  The descriptor-based primitives are renamed to make the layering explicit:
+  `figbird.query(desc)` → `figbird.queryDesc(desc)`, `figbird.mutate(desc)` →
+  `figbird.mutateDesc(desc)`. Descriptors remain the schema-less/low-level door.
 
 ## 0.23.0
 

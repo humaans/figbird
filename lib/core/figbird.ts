@@ -53,7 +53,6 @@ export type {
   EventType,
   FindQueryConfig,
   GetQueryConfig,
-  MutationOptions,
   QueryConfig,
   QueryDescriptor,
   QueryState,
@@ -98,7 +97,7 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
     const adapter = new FeathersAdapter({ feathers })
     const figbird = new Figbird({ adapter })
 
-    const q = figbird.query({ serviceName: 'notes', method: 'find' })
+    const q = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
 
     // Execute query and begin listening for realtime updates
     const unsub = q.subscribe(state => console.log(state.status, state.data))
@@ -225,12 +224,13 @@ export class Figbird<
   }
 
   /**
-   * Create a relational query reference from a QueryBuilder.
-   * The returned RelationalQueryRef manages sub-queries and assembles related data.
+   * Materialize a query and return its live reference — the non-React mirror of
+   * `useQuery`. Accepts a builder, or a definition plus args. The returned
+   * RelationalQueryRef manages sub-queries and assembles related data.
    *
    * @example
    * ```ts
-   * const qRef = figbird.relationalQuery(
+   * const qRef = figbird.query(
    *   figbird.q.issues
    *     .where({ status: 'open' })
    *     .related('comments')
@@ -247,13 +247,44 @@ export class Figbird<
    *
    * // Refetch
    * qRef.refetch()
+   *
+   * // Definition form — same cache entry as useQuery(issueDetail, { id })
+   * const ref = figbird.query(issueDetail, { id: 42 })
    * ```
    */
-  relationalQuery<
+  query<
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     B extends QueryBuilder<S, any, any, any, any, any>,
   >(
     builder: B,
+  ): RelationalQueryRef<
+    QueryBuilderResult<B>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
+  query<
+    Args,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    query: QueryDefinition<Args, B>,
+    ...rest: ArgsAndOptions<Args, never>
+  ): RelationalQueryRef<
+    QueryBuilderResult<B>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
+  query<
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    B extends QueryBuilder<S, any, any, any, any, any>,
+  >(
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    queryOrBuilder: B | QueryDefinition<unknown, B>,
+    args?: unknown,
   ): RelationalQueryRef<
     QueryBuilderResult<B>,
     S,
@@ -268,6 +299,9 @@ export class Figbird<
           'Pass schema to Figbird constructor: new Figbird({ schema, adapter })',
       )
     }
+    const builder = isQueryDefinition(queryOrBuilder)
+      ? queryOrBuilder.build(queryOrBuilder.validate(args))
+      : queryOrBuilder
     const hash = builder.hash()
     const cached = this.#relationalQueryCache.get(hash)
     if (cached) {
@@ -344,7 +378,7 @@ export class Figbird<
     )
     const validatedArgs = query.validate(args)
     const builder = query.build(validatedArgs)
-    const ref = this.relationalQuery(builder)
+    const ref = this.query(builder)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
@@ -400,7 +434,7 @@ export class Figbird<
     const staleTime = options?.staleTime ?? 30_000
     const validatedArgs = query.validate(args)
     const builder = query.build(validatedArgs)
-    const ref = this.relationalQuery(builder)
+    const ref = this.query(builder)
     const hash = ref.hash()
 
     const now = Date.now()
@@ -424,9 +458,14 @@ export class Figbird<
     this.#prefetches.set(hash, { at: now, release, timer })
   }
 
+  // Descriptor layer — the primitive the relational engine (and the deprecated
+  // useFind/useGet path) is built on. Speaks plain `{ serviceName, method }`
+  // descriptors, requires no schema, and resolves service path aliases centrally.
+  // Prefer `figbird.query(builder)` in app code.
+
   // Strongly-typed overloads for inference from serviceName and method
-  /** Create a typed `find` query reference. */
-  query<N extends ServiceNames<S>>(
+  /** Create a typed `find` query reference from a descriptor. */
+  queryDesc<N extends ServiceNames<S>>(
     desc: { serviceName: N; method: 'find'; params?: ParamsWithServiceQuery<S, N, A> },
     config?: QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>,
   ): QueryRef<
@@ -437,8 +476,8 @@ export class Figbird<
     AdapterFindMeta<A>,
     AdapterQuery<A>
   >
-  /** Create a typed `get` query reference. */
-  query<N extends ServiceNames<S>>(
+  /** Create a typed `get` query reference from a descriptor. */
+  queryDesc<N extends ServiceNames<S>>(
     desc: {
       serviceName: N
       method: 'get'
@@ -455,7 +494,7 @@ export class Figbird<
     AdapterQuery<A>
   >
   // Generic fallback overload (for dynamic descriptors)
-  query<D extends QueryDescriptor>(
+  queryDesc<D extends QueryDescriptor>(
     desc: D,
     config?: QueryConfig<InferQueryData<S, D>, AdapterQuery<A>>,
   ): QueryRef<
@@ -467,7 +506,7 @@ export class Figbird<
     AdapterQuery<A>
   >
   // Implementation
-  query(
+  queryDesc(
     desc: {
       serviceName: string
       method: 'find' | 'get'
@@ -491,10 +530,14 @@ export class Figbird<
     )
   }
 
+  // Descriptor layer, write side — the primitive `m` is built on. Speaks plain
+  // `{ serviceName, method, id, data }` descriptors and requires no schema.
+  // Prefer `figbird.m` in app code.
+
   // Strongly-typed mutation overloads
 
   /** Create a single new item. */
-  mutate<N extends ServiceNames<S>>(desc: {
+  mutateDesc<N extends ServiceNames<S>>(desc: {
     serviceName: N
     method: 'create'
     data: ServiceCreate<S, N>
@@ -503,7 +546,7 @@ export class Figbird<
   }): Promise<ServiceItem<S, N>>
 
   /** Create multiple new items (batch). */
-  mutate<N extends ServiceNames<S>>(desc: {
+  mutateDesc<N extends ServiceNames<S>>(desc: {
     serviceName: N
     method: 'create'
     data: ServiceCreate<S, N>[]
@@ -512,7 +555,7 @@ export class Figbird<
   }): Promise<ServiceItem<S, N>[]>
 
   /** Update an existing item by ID (full replacement). */
-  mutate<N extends ServiceNames<S>>(desc: {
+  mutateDesc<N extends ServiceNames<S>>(desc: {
     serviceName: N
     method: 'update'
     id: string | number
@@ -522,7 +565,7 @@ export class Figbird<
   }): Promise<ServiceItem<S, N>>
 
   /** Patch an existing item by ID (partial update). */
-  mutate<N extends ServiceNames<S>>(desc: {
+  mutateDesc<N extends ServiceNames<S>>(desc: {
     serviceName: N
     method: 'patch'
     id: string | number
@@ -532,7 +575,7 @@ export class Figbird<
   }): Promise<ServiceItem<S, N>>
 
   /** Remove an item by ID. */
-  mutate<N extends ServiceNames<S>>(desc: {
+  mutateDesc<N extends ServiceNames<S>>(desc: {
     serviceName: N
     method: 'remove'
     id: string | number
@@ -542,7 +585,7 @@ export class Figbird<
 
   // Implementation
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  mutate(desc: MutationDescriptor): Promise<any> {
+  mutateDesc(desc: MutationDescriptor): Promise<any> {
     return this.queryStore.mutate({
       ...desc,
       serviceName: resolveServicePath(this.schema, desc.serviceName),

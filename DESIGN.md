@@ -670,7 +670,7 @@ its preconditions: failures land in `useAction.error`, rollback is global and ob
 `useMutating` powers the per-record serialization policy. Awaiting call sites are unaffected in
 both modes (the promise settles on the ack; optimism only controls when the cache shows the
 change). `confirmed` is deliberately greppable — it names the critical surfaces. The low-level
-descriptor (`figbird.mutate`) and the deprecated `useMutation` keep the old non-optimistic
+descriptor (`figbird.mutateDesc`) and the deprecated `useMutation` keep the old non-optimistic
 default: the inversion is a property of the `m` DSL, so legacy code changes behavior only when it
 migrates. Per-call options carry data only (`params`, `optimisticItem`) — the
 `optimistic: boolean | item` flag/payload union is gone from the new DSL.
@@ -793,22 +793,22 @@ we double-check).
   either matches the filter or doesn't); it does not materialize the service. Unfiltered, on
   success the service is fully materialized: matcher-decidable finds — including sorted/limited
   windows — are answered locally by a small local executor (matcher filter + `$sort` comparator
-  + slice), realtime events maintain the set (windowed subsets recompute locally, no network),
-  and the materialization root reconciles on reconnect even with no subscribers. Refuses
-  `.limit()`/`.skip()` at the verb level (windowing contradicts "all"; `.orderBy()` is fine —
-  order doesn't affect completeness); server-only predicates still go to the server. The
-  unfiltered form is the one deliberate step toward a local database, scoped to services the
-  author explicitly opted in.
+  - slice), realtime events maintain the set (windowed subsets recompute locally, no network),
+    and the materialization root reconciles on reconnect even with no subscribers. Refuses
+    `.limit()`/`.skip()` at the verb level (windowing contradicts "all"; `.orderBy()` is fine —
+    order doesn't affect completeness); server-only predicates still go to the server. The
+    unfiltered form is the one deliberate step toward a local database, scoped to services the
+    author explicitly opted in.
 
 The recipe table:
 
-| Data                                          | Recipe                                          |
-| --------------------------------------------- | ----------------------------------------------- |
-| Reference data (locations, currencies, roles) | unfiltered `.all()` at the shell — reads free   |
-| Complete filtered sets ("no page cap" reads)  | `.where(...).all()` — exhaustive, merge-kept    |
-| Ordinary live data                            | default: swr + classification                   |
-| Expensive-but-tolerant data                   | `staleTime` — bounded revalidation, still live  |
-| Point-in-time data                            | `.snapshot()` — frozen until `refetch()`        |
+| Data                                          | Recipe                                         |
+| --------------------------------------------- | ---------------------------------------------- |
+| Reference data (locations, currencies, roles) | unfiltered `.all()` at the shell — reads free  |
+| Complete filtered sets ("no page cap" reads)  | `.where(...).all()` — exhaustive, merge-kept   |
+| Ordinary live data                            | default: swr + classification                  |
+| Expensive-but-tolerant data                   | `staleTime` — bounded revalidation, still live |
+| Point-in-time data                            | `.snapshot()` — frozen until `refetch()`       |
 
 ## Router Integration
 

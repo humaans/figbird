@@ -99,7 +99,7 @@ test('m: optimisticItem supplies the synthesized cache item without flipping pol
   const { m } = createHooks(figbird)
 
   // Observe the cache through a subscribed query.
-  const ref = figbird.query({ serviceName: 'notes', method: 'find' })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
   ref.subscribe(state => {
     latest = state as QueryState<Note[], Record<string, unknown>>
@@ -232,7 +232,7 @@ test('id contract: optimistic creates with a client id show immediately; the rea
   const { figbird, feathers } = createTestApp(schema, services())
   const { m } = createHooks(figbird)
 
-  const ref = figbird.query({ serviceName: 'notes', method: 'find' })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
   ref.subscribe(state => {
     latest = state as QueryState<Note[], Record<string, unknown>>
@@ -258,7 +258,7 @@ test('id contract: confirmed creates need no id — await the create for the ser
   const { figbird, feathers } = createTestApp(schema, services())
   const { m } = createHooks(figbird)
 
-  const ref = figbird.query({ serviceName: 'notes', method: 'find' })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
   ref.subscribe(state => {
     latest = state as QueryState<Note[], Record<string, unknown>>
@@ -279,7 +279,7 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
   const { figbird, feathers } = createTestApp(schema, services())
   const { m } = createHooks(figbird)
 
-  const ref = figbird.query({ serviceName: 'notes', method: 'find' })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
   ref.subscribe(state => {
     latest = state as QueryState<Note[], Record<string, unknown>>

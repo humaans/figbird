@@ -21,7 +21,6 @@ export type {
   MutationCallOptions,
   MutationEventMethod,
   MutationMethod,
-  MutationOptions,
   MutationsHandle,
   MutationsProxy,
   PreparedQuery,
@@ -135,7 +134,7 @@ export type {
 // React hook result types
 export type { UseActionHook, UseActionResult } from './react/useAction.js'
 export type { UseMutatingFilter } from './react/useMutating.js'
-export type { UseMutationOptions, UseMutationResult } from './react/useMutation.js'
+export type { UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQueryByDesc.js'
 
 // Feathers-specific types for TypeScript users

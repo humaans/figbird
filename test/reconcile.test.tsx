@@ -77,7 +77,7 @@ function serverCreate(
 
 /** Subscribe a refetch-mode find so every service event requests a reconcile. */
 function subscribeRefetchQuery(figbird: ReturnType<typeof createApp>['figbird']) {
-  const ref = figbird.query(
+  const ref = figbird.queryDesc(
     { serviceName: 'notes', method: 'find' },
     { realtime: 'refetch' as const },
   )
@@ -190,7 +190,7 @@ test('hidden tabs: event-driven reconciliation defers; local-exact merges keep f
   // A refetch-mode query (network reconciliation — gated while hidden)...
   const { ref: refetchRef, unsub: unsubRefetch } = subscribeRefetchQuery(figbird)
   // ...and a default merge-mode query (local-exact — unaffected by visibility).
-  const mergeRef = figbird.query({ serviceName: 'notes', method: 'find' })
+  const mergeRef = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsubMerge = mergeRef.subscribe(() => {})
   await sleep(20)
   const baseline = notes.counts.find
@@ -235,7 +235,7 @@ test('hidden tabs: a reconnect while hidden defers the refetch-all until visible
   })
   const notes = feathers.service('notes')
 
-  const ref = figbird.query({ serviceName: 'notes', method: 'find' })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsub = ref.subscribe(() => {})
   await sleep(20)
   const baseline = notes.counts.find

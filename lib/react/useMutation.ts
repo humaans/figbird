@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import type { MutationOptions } from '../core/figbird.js'
 import { useFigbird } from './context.js'
-
-/**
- * Per-call options for the deprecated `useMutation` — the legacy shape, where
- * `optimistic` is a per-call boolean-or-item flag. The current DSL (`m`) puts
- * policy on the handle (`m.issues` / `m.issues.confirmed`) and accepts only
- * call-specific data (`params`, `optimisticItem`) per call.
- */
-export interface UseMutationCallOptions<TItem = unknown> extends MutationOptions<TItem> {
-  params?: unknown
-}
 
 // Public untyped mutation hook intentionally returns `any` for backwards compatibility.
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
@@ -34,42 +23,15 @@ export interface UseMutationResult<
   TPatch = Partial<TItem>,
 > {
   // Overloaded create method for better type inference
-  create(data: TCreate, options?: UseMutationCallOptions<TItem>): Promise<TItem>
-  create(data: TCreate[], options?: UseMutationCallOptions<TItem[]>): Promise<TItem[]>
-  create(
-    data: TCreate | TCreate[],
-    options?: UseMutationCallOptions<TItem | TItem[]>,
-  ): Promise<TItem | TItem[]>
-  update: (
-    id: string | number,
-    data: TUpdate,
-    options?: UseMutationCallOptions<TItem>,
-  ) => Promise<TItem>
-  patch: (
-    id: string | number,
-    data: TPatch,
-    options?: UseMutationCallOptions<TItem>,
-  ) => Promise<TItem>
-  remove: (id: string | number, options?: UseMutationCallOptions<TItem>) => Promise<TItem>
+  create(data: TCreate, params?: unknown): Promise<TItem>
+  create(data: TCreate[], params?: unknown): Promise<TItem[]>
+  create(data: TCreate | TCreate[], params?: unknown): Promise<TItem | TItem[]>
+  update: (id: string | number, data: TUpdate, params?: unknown) => Promise<TItem>
+  patch: (id: string | number, data: TPatch, params?: unknown) => Promise<TItem>
+  remove: (id: string | number, params?: unknown) => Promise<TItem>
   data: TItem | TItem[] | null
   status: 'idle' | 'loading' | 'success' | 'error'
   error: Error | null
-}
-
-/**
- * Hook-level defaults for `useMutation`. Optimistic intent usually belongs to a whole
- * surface (a task list is always optimistic; a settings modal never is) — declare it
- * once here instead of on every call. Per-call options override in both directions.
- */
-export interface UseMutationOptions {
-  /**
-   * Apply mutations from this hook to the local cache before the server confirms
-   * ("show it now, roll back on failure"). The default — omitted or `false` — is
-   * non-optimistic: the UI only reflects the change once the server acks it
-   * ("show it only once it's real"). Either way, the returned promise settles on
-   * the server response.
-   */
-  optimistic?: boolean
 }
 
 /**
@@ -79,29 +41,30 @@ export interface UseMutationOptions {
  * by the caller. As you create/update/patch/remove
  * entities using this helper, the entities cache gets updated.
  *
+ * Writes are non-optimistic: the cache reflects the change once the server acks.
+ * Optimistic writes are a feature of the current write API (`m`).
+ *
  * Returns untyped data. For type-safe mutations, use createHooks(figbird).
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
- * const tasks = useMutation('tasks', { optimistic: true }) // optimistic surface
  *
- * @deprecated Superseded by the split write-side story: `mutations()` is the
- * stateless service handle (callable anywhere, not a hook), `useAction` carries
- * per-action `pending`/`error` (one hook call site per action), and `useMutating`
- * answers entity/service-level "is anything in flight". This hook conflates the
- * two roles — a service client with a single status slot — which forces
- * hand-rolled pending-state machines on any screen with more than one action.
- * Fully functional and not going away soon.
+ * @deprecated Superseded by the split write-side story: `m` is the stateless
+ * write proxy (callable anywhere, not a hook), `useAction` carries per-action
+ * `pending`/`error` (one hook call site per action), and `useMutating` answers
+ * entity/service-level "is anything in flight". This hook conflates the two
+ * roles — a service client with a single status slot — which forces hand-rolled
+ * pending-state machines on any screen with more than one action. Fully
+ * functional and not going away soon.
  */
 export function useMutation(
   serviceName: string,
-  hookOptions: UseMutationOptions = {},
 ): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
-  return useMutationImpl(useFigbird(), serviceName, hookOptions)
+  return useMutationImpl(useFigbird(), serviceName)
 }
 
 /** The slice of a Figbird instance the mutation hook needs. @internal */
 interface MutatingFigbird {
-  mutate(desc: UntypedData): Promise<UntypedData>
+  mutateDesc(desc: UntypedData): Promise<UntypedData>
 }
 
 /**
@@ -111,10 +74,7 @@ interface MutatingFigbird {
 export function useMutationImpl(
   figbird: MutatingFigbird,
   serviceName: string,
-  hookOptions: UseMutationOptions = {},
 ): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
-  const hookOptimistic = hookOptions.optimistic
-
   const [state, dispatch] = useReducer(mutationReducer<UntypedData>, {
     status: 'idle',
     data: null,
@@ -150,59 +110,28 @@ export function useMutationImpl(
   )
 
   const create = useCallback(
-    (data: UntypedData, options?: UseMutationCallOptions) =>
-      executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'create' as const,
-          data,
-          params: options?.params,
-          optimistic: options?.optimistic ?? hookOptimistic,
-        }),
-      ),
-    [executeMutation, figbird, serviceName, hookOptimistic],
+    (data: UntypedData, params?: unknown) =>
+      executeMutation(figbird.mutateDesc({ serviceName, method: 'create' as const, data, params })),
+    [executeMutation, figbird, serviceName],
   )
   const update = useCallback(
-    (id: string | number, data: UntypedData, options?: UseMutationCallOptions) =>
+    (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'update' as const,
-          id,
-          data,
-          params: options?.params,
-          optimistic: options?.optimistic ?? hookOptimistic,
-        }),
+        figbird.mutateDesc({ serviceName, method: 'update' as const, id, data, params }),
       ),
-    [executeMutation, figbird, serviceName, hookOptimistic],
+    [executeMutation, figbird, serviceName],
   )
   const patch = useCallback(
-    (id: string | number, data: UntypedData, options?: UseMutationCallOptions) =>
+    (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'patch' as const,
-          id,
-          data,
-          params: options?.params,
-          optimistic: options?.optimistic ?? hookOptimistic,
-        }),
+        figbird.mutateDesc({ serviceName, method: 'patch' as const, id, data, params }),
       ),
-    [executeMutation, figbird, serviceName, hookOptimistic],
+    [executeMutation, figbird, serviceName],
   )
   const remove = useCallback(
-    (id: string | number, options?: UseMutationCallOptions) =>
-      executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'remove' as const,
-          id,
-          params: options?.params,
-          // remove has no payload to synthesize — optimistic is boolean-only here
-          optimistic: Boolean(options?.optimistic ?? hookOptimistic),
-        }),
-      ),
-    [executeMutation, figbird, serviceName, hookOptimistic],
+    (id: string | number, params?: unknown) =>
+      executeMutation(figbird.mutateDesc({ serviceName, method: 'remove' as const, id, params })),
+    [executeMutation, figbird, serviceName],
   )
 
   return useMemo(

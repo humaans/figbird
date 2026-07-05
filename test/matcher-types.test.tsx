@@ -72,7 +72,7 @@ test('matcher receives properly typed query from schema', async t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Test that the query is properly typed in matcher
-  const todosQuery = figbird.query(
+  const todosQuery = figbird.queryDesc(
     {
       serviceName: 'todos',
       method: 'find',
@@ -120,7 +120,7 @@ test('matcher receives properly typed query from schema', async t => {
   unsubscribe()
 
   // Test with users service to verify different query type
-  const usersQuery = figbird.query(
+  const usersQuery = figbird.queryDesc(
     {
       serviceName: 'users',
       method: 'find',
@@ -272,7 +272,7 @@ test('matcher with undefined query works correctly', async t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Query with no query params - matcher should receive undefined
-  const query = figbird.query(
+  const query = figbird.queryDesc(
     {
       serviceName: 'items',
       method: 'find',

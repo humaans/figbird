@@ -540,67 +540,6 @@ test('useMutation patch updates the get binding', async t => {
   unmount()
 })
 
-test('useMutation hook-level optimistic applies before ack; per-call override wins', async t => {
-  const { render, flush, unmount, $ } = dom()
-  const { App, useGet, useMutation, feathers } = app()
-
-  let _patch: UseMutationResult<Note>['patch']
-  function NoteView() {
-    const note = useGet('notes', 1)
-    // Optimistic intent declared once for the surface — no per-call flags.
-    const { patch } = useMutation('notes', { optimistic: true })
-    _patch = patch
-    return <NoteList notes={note} />
-  }
-
-  render(
-    <App>
-      <NoteView />
-    </App>,
-  )
-  await flush()
-  t.is($('.note')!.innerHTML, 'hello')
-
-  // Make patch hang so the optimistic write is observable before the server acks.
-  const service = feathers.service('notes')
-  const originalPatch = service.patch.bind(service)
-  let ackPatch: (() => void) | undefined
-  const hangNextPatch = () => {
-    service.patch = (id, data, params) =>
-      new Promise(resolve => {
-        ackPatch = () => resolve(originalPatch(id, data, params))
-      })
-  }
-
-  hangNextPatch()
-  let pending: Promise<Note> | undefined
-  await flush(async () => {
-    pending = _patch(1, { content: 'optimistic!' })
-  })
-  t.is($('.note')!.innerHTML, 'optimistic!', 'hook-level optimistic applies before the ack')
-
-  await flush(async () => {
-    ackPatch!()
-    await pending
-  })
-  t.is($('.note')!.innerHTML, 'optimistic!')
-
-  // Per-call override: a non-optimistic call from an optimistic hook waits for the ack.
-  hangNextPatch()
-  await flush(async () => {
-    pending = _patch(1, { content: 'confirmed' }, { optimistic: false })
-  })
-  t.is($('.note')!.innerHTML, 'optimistic!', 'per-call optimistic:false must wait for the ack')
-
-  await flush(async () => {
-    ackPatch!()
-    await pending
-  })
-  t.is($('.note')!.innerHTML, 'confirmed')
-
-  unmount()
-})
-
 test('useMutation handles errors', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useGet, useMutation, feathers } = app()
