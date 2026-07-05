@@ -169,7 +169,8 @@ q.issues.get(id) // one thing, by pk — GET /issues/:id
 q.issues.where({ status: 'open' }).limit(1) // first match of a filter, if any
 q.issues.related('comments') // with relations
 q.issues.where({ id }).snapshot() // point-in-time: frozen until refetch()
-q.locations.all() // preload the complete set (reference data)
+q.locations.all() // exhaustive: every row, all pages (materializes the service)
+q.issues.where({ status: 'open' }).all() // exhaustive slice: every matching row
 ```
 
 Builders are immutable — every method returns a new builder — and identified by a stable hash of their contents, so you can build them inline in render with no dependency arrays:
@@ -650,13 +651,28 @@ refetches — for the root and every relation under it. `refetch()` is the only 
 Frozen and live reads of the same filters don't share a cache entry (snapshot-ness changes what
 the data means). Use for audit views, diff screens, "results as of when you searched".
 
-### Reference data: .all()
+### Exhaustive reads: .all()
 
-`.all()` preloads a service's complete row set — the explicit verb for reference tables
-(locations, currencies, roles). On success the service is **fully materialized**: every later
-find the client can evaluate — including sorted/limited windows — is answered locally from
-the cache with **no network roundtrip**, and realtime events maintain the set (windowed reads
-recompute locally). Typically paired with preparation at the app shell:
+`.all()` fetches **every row matching the query** — all pages are drained, so the server's
+default page cap never silently truncates the result. Without it, an unwindowed find returns a
+single server page; that cap is the safety mechanism (an unbounded query shouldn't slurp the
+world by accident), and `.all()` is the explicit opt-in to "I want the complete set".
+
+Filtered, it reads a complete slice:
+
+```ts
+// every open issue for this team — however many pages that takes
+useQuery(q.issues.where({ teamId, status: 'open' }).all())
+```
+
+Completeness makes realtime cheap and sound: an event either matches the filter and belongs in
+the set or it doesn't, so the slice is maintained by local merges with no refetching.
+
+Unfiltered, it doubles as the reference-data preload (locations, currencies, roles). On success
+the service is **fully materialized**: every later find the client can evaluate — including
+sorted/limited windows — is answered locally from the cache with **no network roundtrip**, and
+realtime events maintain the set (windowed reads recompute locally). Typically paired with
+preparation at the app shell:
 
 ```ts
 export const allLocations = defineQuery('allLocations', () => q.locations.all())
@@ -670,13 +686,18 @@ useQuery(q.locations.where({ countryCode: 'GB' }).orderBy('name').limit(10))
 
 A few properties worth knowing:
 
-- `.all()` refuses filters — "all" means all; read subsets separately
+- `.limit()`/`.skip()` can't be combined with it — windowing contradicts "all"; use
+  `.paginate()` for incremental loading. `.orderBy()` is fine (order doesn't affect
+  completeness — a sorted, unfiltered `.all()` still materializes)
+- a **filtered** `.all()` is complete for that exact query only — it does not materialize the
+  service, and narrower reads (say `country + city` after `.where({ country }).all()`) are
+  separate queries that fetch on their own
 - it may chain `.related()` to preload joined reference sets
-- it reconciles on reconnect, even with no subscribers
+- the materialized set reconciles on reconnect, even with no subscribers
 - server-only predicates (`$regex`, `$select`, `.server()`) still go to the server
 
-Whether a service warrants `.all()` is the schema author's judgment call — reach for it only
-where row counts are bounded.
+Whether a set warrants `.all()` is the author's judgment call — reach for it only where the
+matching row count is bounded, for the whole service and for a filtered slice alike.
 
 # Guides
 
