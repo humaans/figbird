@@ -6,6 +6,14 @@ import type { EventType } from './queryTypes.js'
 export type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
 /**
+ * Method name carried on `mutate:*` events — one of the CRUD methods, or a custom
+ * service method name (custom methods flow through the same lifecycle events so
+ * devtools and `useMutating` see them). `(string & {})` keeps CRUD autocomplete.
+ */
+// oxlint-disable-next-line @typescript-eslint/no-empty-object-type
+export type MutationEventMethod = MutationMethod | (string & {})
+
+/**
  * Observability events emitted by a Figbird instance — the same signal a dev tool
  * panel or trace logger would want to subscribe to.
  *
@@ -45,23 +53,27 @@ export type FigbirdEvent =
     }
   | {
       kind: 'mutate:start'
+      /** Correlates the start/end/error/rollback events of one mutation. */
+      mutationId: number
       serviceName: string
-      method: MutationMethod
+      method: MutationEventMethod
       id?: string | number
       optimistic: boolean
     }
   | {
       kind: 'mutate:end'
+      mutationId: number
       serviceName: string
-      method: MutationMethod
+      method: MutationEventMethod
       durationMs: number
       id?: string | number
       optimistic: boolean
     }
   | {
       kind: 'mutate:error'
+      mutationId: number
       serviceName: string
-      method: MutationMethod
+      method: MutationEventMethod
       durationMs: number
       error: Error
       id?: string | number
@@ -69,9 +81,31 @@ export type FigbirdEvent =
     }
   | {
       kind: 'mutate:rollback'
+      mutationId: number
       serviceName: string
-      method: MutationMethod
+      method: MutationEventMethod
       id?: string | number
+    }
+  | {
+      kind: 'action:start'
+      /** Correlates one invocation's start/end/error. */
+      actionId: number
+      /** The label passed to `useAction(name, fn)` — absent for unnamed actions. */
+      name?: string
+    }
+  | {
+      kind: 'action:end'
+      actionId: number
+      name?: string
+      durationMs: number
+    }
+  | {
+      kind: 'action:error'
+      actionId: number
+      name?: string
+      durationMs: number
+      /** The captured failure — also available on the hook's `error` slot. */
+      error: Error
     }
 
 /**

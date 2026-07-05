@@ -9,6 +9,7 @@ import {
   defineQuery as baseDefineQuery,
   splitConfig,
   type Figbird,
+  type MutationsProxy,
   type PreparedQuery,
   type QueryConfig,
   type StandardSchemaV1,
@@ -26,7 +27,8 @@ import type {
 } from '../core/schema.js'
 import { resolveServicePath } from '../core/schema.js'
 import { useFigbirdMaybe } from './context.js'
-import { useMethodImpl, type UseMethodResult } from './useMethod.js'
+import { useActionImpl, type UseActionHook, type UseActionResult } from './useAction.js'
+import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
 import { useMutationImpl, type UseMutationOptions, type UseMutationResult } from './useMutation.js'
 import { useQueryByDescImpl, type QueryResult } from './useQueryByDesc.js'
 import { useQueryImpl, type FigbirdLike } from './useQuery.js'
@@ -86,23 +88,9 @@ type TypedServiceForSchema<S extends Schema, N extends ServiceNames<S>> = TypedF
   ServiceMethods<S, N>
 >
 
-type MethodArgs<TMethod> = TMethod extends (...args: infer TArgs extends unknown[]) => unknown
-  ? TArgs
-  : never
-
-type MethodData<TMethod> = TMethod extends (...args: infer TArgs extends unknown[]) => infer TResult
-  ? TArgs extends unknown[]
-    ? Awaited<TResult>
-    : never
-  : never
-
-type UseMethodForSchema<S extends Schema> = <
-  N extends ServiceNames<S>,
-  M extends keyof ServiceMethods<S, N> & string,
->(
-  serviceName: N,
-  methodName: M,
-) => UseMethodResult<MethodArgs<ServiceMethods<S, N>[M]>, MethodData<ServiceMethods<S, N>[M]>>
+type UseMutatingForSchema<S extends Schema> = (
+  filter?: Omit<UseMutatingFilter, 'service'> & { service?: ServiceNames<S> },
+) => boolean
 
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
@@ -227,13 +215,13 @@ type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
  * ```typescript
  * const adapter = new FeathersAdapter(feathers)
  * const figbird = new Figbird({ adapter, schema })
- * const { useFind, useGet, useMutation } = createHooks(figbird)
+ * export const { useQuery, q, m, useAction, useMutating } = createHooks(figbird)
  *
  * // component.tsx
- * import { useFind } from './hooks'
+ * import { q, useQuery } from './figbird'
  *
  * function MyComponent() {
- *   const people = useFind('api/people') // Fully typed to QueryResult<Person[], FeathersFindMeta>
+ *   const { data: people } = useQuery(q.people) // fully typed from the schema
  * }
  * ```
  */
@@ -244,14 +232,23 @@ export function createHooks<F extends Figbird<any, any>>(
 ): {
   useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
   useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
+  /**
+   * @deprecated Superseded by the split write-side story: `mutations()` for the
+   * stateless service handle, `useAction` for per-action pending/error state,
+   * `useMutating` for entity/service-level activity. Fully functional, but its
+   * single shared status slot forces hand-rolled state machines on multi-action
+   * screens.
+   */
   useMutation: UseMutationForSchema<InferSchema<F>>
-  useMethod: UseMethodForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
   useQuery: UseQueryForSchema<InferSchema<F>>
   q: QueryBuilderProxy<InferSchema<F>>
   defineQuery: DefineQueryForSchema<InferSchema<F>>
   prepare: PrepareForSchema<InferSchema<F>>
   prefetch: PrefetchForSchema<InferSchema<F>>
+  m: MutationsProxy<InferSchema<F>>
+  useAction: UseActionHook
+  useMutating: UseMutatingForSchema<InferSchema<F>>
 } {
   type S = InferSchema<F>
   type TParams = InferParams<F>
@@ -334,15 +331,15 @@ export function createHooks<F extends Figbird<any, any>>(
     >
   }
 
-  function useTypedMethod<N extends ServiceNames<S>, M extends keyof ServiceMethods<S, N> & string>(
-    serviceName: N,
-    methodName: M,
-  ) {
-    return useMethodImpl<MethodArgs<ServiceMethods<S, N>[M]>, MethodData<ServiceMethods<S, N>[M]>>(
-      useBoundFigbird(),
-      serviceName,
-      methodName,
-    )
+  function useTypedMutating(filter?: UseMutatingFilter) {
+    return useMutatingImpl(useBoundFigbird(), filter)
+  }
+
+  function useTypedAction<TArgs extends unknown[], TResult>(
+    fnOrName: string | ((...args: TArgs) => Promise<TResult> | TResult),
+    maybeFn?: (...args: TArgs) => Promise<TResult> | TResult,
+  ): UseActionResult<TArgs, TResult> {
+    return useActionImpl(useBoundFigbird(), fnOrName, maybeFn)
   }
 
   function useTypedFeathers() {
@@ -388,7 +385,6 @@ export function createHooks<F extends Figbird<any, any>>(
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
-    useMethod: useTypedMethod as UseMethodForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
     // The typed schema binding is enforced via QueryBuilder<S, T> on the call signatures.
     useQuery: useTypedQuery as unknown as UseQueryForSchema<S>,
@@ -403,5 +399,14 @@ export function createHooks<F extends Figbird<any, any>>(
     // Instance-bound conveniences: same primitives as figbird.prepare/prefetch.
     prepare: figbird.prepare.bind(figbird) as PrepareForSchema<S>,
     prefetch: figbird.prefetch.bind(figbird) as PrefetchForSchema<S>,
+    // The write proxy — not a hook; callable anywhere. Like prepare/prefetch,
+    // bound to the createHooks instance (a provider override can't reach non-hooks).
+    get m(): MutationsProxy<S> {
+      return figbird.m as MutationsProxy<S>
+    },
+    // Per-action state, reporting action:* events through the bound instance so
+    // devtools speak the app's vocabulary.
+    useAction: useTypedAction as UseActionHook,
+    useMutating: useTypedMutating as UseMutatingForSchema<S>,
   }
 }

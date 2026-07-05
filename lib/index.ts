@@ -16,8 +16,14 @@ export type {
   EventType,
   FigbirdEvent,
   FigbirdEvents,
+  InFlightMutation,
+  MutationActivity,
+  MutationCallOptions,
+  MutationEventMethod,
   MutationMethod,
   MutationOptions,
+  MutationsHandle,
+  MutationsProxy,
   PreparedQuery,
   QueryDefinition,
   StandardSchemaV1,
@@ -91,10 +97,14 @@ export type {
 // react hooks
 export { createHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
+// The write-side story: mutations() handles (from figbird.mutations / createHooks)
+// are stateless service clients; useAction carries per-action pending/error;
+// useMutating answers entity/service-level "is anything in flight".
+export { useAction } from './react/useAction.js'
+export { useMutating } from './react/useMutating.js'
+// Deprecated: superseded by mutations() + useAction + useMutating.
 export { useMutation } from './react/useMutation.js'
-// useMethod is the mutation path for custom (non-CRUD) service methods; useFeathers
-// is the raw-client escape hatch. Both are typed via createHooks.
-export { useMethod } from './react/useMethod.js'
+// useFeathers is the raw-client escape hatch, typed via createHooks.
 export { useFeathers } from './react/useFeathers.js'
 // Legacy generation (deprecated): descriptor-based reads. Fully functional, but new
 // code should use useQuery + builders.
@@ -122,7 +132,8 @@ export type {
 } from './core/figbird.js'
 
 // React hook result types
-export type { UseMethodResult } from './react/useMethod.js'
+export type { UseActionHook, UseActionResult } from './react/useAction.js'
+export type { UseMutatingFilter } from './react/useMutating.js'
 export type { UseMutationOptions, UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQueryByDesc.js'
 

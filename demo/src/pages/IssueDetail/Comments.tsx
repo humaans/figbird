@@ -8,7 +8,7 @@
  */
 
 import { useMemo, useState } from 'react'
-import { useMutation, useQuery, type Comment, type Reaction, type User } from '../../figbird'
+import { m, useAction, useQuery, type Comment, type Reaction, type User } from '../../figbird'
 import { Explain } from '../../components/Explain'
 import { StatusDot } from '../../components/ui'
 import { issueCommentsQuery } from './queries'
@@ -135,9 +135,13 @@ function CommentCard({ comment }: { comment: CommentWithRelations }) {
 }
 
 /**
- * Comment composer. Creates are optimistic with a client-generated id, so the
- * comment appears in the thread in the same frame — the server response (and
- * the realtime event echo) then confirms it.
+ * Comment composer. Creates are optimistic by default, and optimistic creates
+ * carry a client-generated id — the comment's identity is real from the first
+ * frame, so the server's realtime echo dedupes by id instead of duplicating.
+ * (The demo mints numeric ids to match its seed data; real apps use
+ * crypto.randomUUID().) The submit action carries the composer's pending/error
+ * state; a rolled-back comment surfaces its failure right here instead of
+ * vanishing silently.
  */
 function CommentComposer({
   issueId,
@@ -153,21 +157,23 @@ function CommentComposer({
   onDone?: () => void
 }) {
   const [body, setBody] = useState('')
-  const commentMutation = useMutation('comments', { optimistic: true })
-  const busy = commentMutation.status === 'loading'
 
-  const submit = async () => {
-    const text = body.trim()
-    if (text.length === 0) return
-    setBody('')
-    onDone?.()
-    await commentMutation.create({
+  const post = useAction('comment', (text: string) =>
+    m.comments.create({
       id: Date.now(),
       issueId,
       authorId: CURRENT_USER_ID,
       parentId,
       body: text,
-    })
+    }),
+  )
+
+  const submit = () => {
+    const text = body.trim()
+    if (text.length === 0) return
+    setBody('')
+    onDone?.()
+    void post.run(text)
   }
 
   return (
@@ -175,7 +181,7 @@ function CommentComposer({
       className='composer'
       onSubmit={e => {
         e.preventDefault()
-        void submit()
+        submit()
       }}
     >
       <textarea
@@ -184,14 +190,14 @@ function CommentComposer({
         value={body}
         onChange={e => setBody(e.target.value)}
         onKeyDown={e => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit()
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
           if (e.key === 'Escape') onDone?.()
         }}
         placeholder={placeholder}
         className='composer-input'
       />
       <div className='editor-actions'>
-        <button type='submit' className='link' disabled={busy || body.trim().length === 0}>
+        <button type='submit' className='link' disabled={post.pending || body.trim().length === 0}>
           {parentId == null ? 'Comment' : 'Reply'}
         </button>
         {onDone ? (
@@ -199,6 +205,7 @@ function CommentComposer({
             Cancel
           </button>
         ) : null}
+        {post.error ? <span className='inline-error'>{post.error.message}</span> : null}
       </div>
     </form>
   )

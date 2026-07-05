@@ -1,5 +1,36 @@
 # Figbird Changelog
 
+## Unreleased
+
+- Add `m` — the write proxy, the counterpart of `q`: `m.issues.patch(id, data)`. Services are
+  properties; handles are stateless plain values (CRUD + typed custom schema methods) usable
+  anywhere, interned per service. `figbird.mutations(name)` is the dynamic-name door.
+- Writes through `m` are **optimistic by default** — the cache shows the change immediately
+  and rolls back on failure. `m.<service>.confirmed` opts a surface out ("show it only once
+  it's real"). The low-level `figbird.mutate` descriptor and the deprecated `useMutation`
+  keep the old non-optimistic default.
+- The id contract: optimistic creates must carry a client-generated id the server will accept
+  (e.g. `crypto.randomUUID()`) — an id-less optimistic create throws synchronously. Confirmed
+  creates await the server-assigned id (`const item = await m.notes.confirmed.create(data)`).
+  Adapters gain an optional `peekId` for warn-free id presence checks.
+- Per-call mutation options now carry data only: `params` and `optimisticItem` (explicit
+  synthesized cache item). The `optimistic: boolean | item` per-call flag is gone from the
+  new DSL — policy lives on the handle variant.
+- Add `useAction(name?, fn)` — per-action `pending`/`error`/`data` state around any async
+  function; one hook call site per action. The body runs as a React Action (async
+  transition); `run` works directly as a React 19 `<form action>`. Named actions emit
+  `action:start/end/error` observability events.
+- Add `useMutating(filter?)` — live "is anything in flight" for an entity, service, or the
+  whole instance, backed by a new synchronous mutation tracker (`figbird.mutating`).
+  Optimistic creates with client ids are tracked by id.
+- Add `figbird.call(serviceName, method, ...args)` — custom-method calls now flow through the
+  core, emitting `mutate:*` observability events and registering with the mutation tracker.
+- Add `mutationId` to `mutate:*` events, correlating one mutation's start/end/error/rollback.
+- Deprecate `useMutation` in favor of `m` + `useAction` + `useMutating` (still fully
+  functional, unchanged semantics).
+- Breaking: remove `useMethod` — custom methods live on `m.<service>` handles; wrap calls in
+  `useAction` for lifecycle state.
+
 ## 0.23.0
 
 - Breaking: replace `defineSchema`/`defineService` service-object schemas with a canonical service-definition map passed to `defineSchema<ServiceMap>()`.

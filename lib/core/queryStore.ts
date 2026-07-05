@@ -2,6 +2,7 @@ import type { Adapter, QueryResponse } from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { FigbirdEventEmitter, type MutationMethod } from './events.js'
+import { MutationTracker } from './mutationTracker.js'
 import { classifyQueryNode, isServerMaintainedFindQuery } from './queryClassification.js'
 import type {
   ElementType,
@@ -30,6 +31,7 @@ export class QueryStore<
 > {
   #adapter: Adapter<TParams, TMeta, TQuery>
   #events: FigbirdEventEmitter
+  #mutations: MutationTracker
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
@@ -51,14 +53,17 @@ export class QueryStore<
     adapter,
     eventBatchProcessingInterval = 100,
     events,
+    mutations,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchProcessingInterval?: number | undefined
     events?: FigbirdEventEmitter
+    mutations?: MutationTracker
   }) {
     this.#adapter = adapter
     this.#eventBatchProcessingInterval = eventBatchProcessingInterval
     this.#events = events ?? new FigbirdEventEmitter()
+    this.#mutations = mutations ?? new MutationTracker()
     this.#adapter.subscribeToReconnect?.(() => this.#refetchActiveQueries())
   }
 
@@ -214,7 +219,9 @@ export class QueryStore<
   /** Perform a service mutation and update the store from the result. */
   mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
     const { serviceName, method, optimistic } = desc
-    const id = method !== 'create' ? desc.id : undefined
+    // For creates, track by the client-generated id — this is what lets
+    // `useMutating({ id })` cover the create→navigate→act-before-ack window.
+    const id = method !== 'create' ? desc.id : this.#peekId(desc.data)
     const isOptimistic = optimistic !== undefined && optimistic !== false
     const optimisticItem = isOptimistic ? this.#resolveOptimisticItem(desc) : null
     const restoreItem =
@@ -222,8 +229,34 @@ export class QueryStore<
         ? this.#getEntity(serviceName, id)
         : null
     const startedAt = Date.now()
+
+    // The id contract: an optimistic create must carry a client-generated id the
+    // server will accept. Identity is what everything downstream is built on —
+    // React keys, realtime echo dedup, navigation, child-row foreign keys — and
+    // an optimistic item without a real id has none. Confirmed creates
+    // (non-optimistic) are the mode for server-assigned ids: await the create,
+    // the server's item carries its identity.
+    if (isOptimistic && method === 'create' && optimisticItem !== null) {
+      const items: unknown[] = Array.isArray(optimisticItem) ? optimisticItem : [optimisticItem]
+      if (items.some(item => this.#peekId(item) === undefined)) {
+        throw new Error(
+          `figbird: optimistic creates on "${serviceName}" need a client-generated id the ` +
+            'server will accept (e.g. crypto.randomUUID()) — provide one in the data, or use ' +
+            'a confirmed create to wait for the server-assigned id.',
+        )
+      }
+    }
+
+    // Registered synchronously (not via the deferred events channel) so
+    // `figbird.mutating` snapshots are correct at any moment — see MutationTracker.
+    const mutationId = this.#mutations.start({
+      serviceName,
+      method,
+      ...(id !== undefined ? { id } : {}),
+    })
     this.#events.emit({
       kind: 'mutate:start',
+      mutationId,
       serviceName,
       method,
       ...(id !== undefined ? { id } : {}),
@@ -231,21 +264,16 @@ export class QueryStore<
     })
 
     if (isOptimistic && optimisticItem !== null) {
-      if (method === 'create') {
-        // Optimistic items are tracked (and rolled back) by id. Without one, the
-        // synthetic created event is silently dropped by the entity cache — warn so
-        // the no-op is diagnosable instead of mystifying.
-        const items = Array.isArray(optimisticItem) ? optimisticItem : [optimisticItem]
-        if (items.some(item => this.#adapter.getId(item) === undefined)) {
-          console.warn(
-            `figbird: optimistic create on service "${serviceName}" has item(s) without an id ` +
-              'and will not be applied to the cache. Optimistic creates need a client-generated ' +
-              'id so the item can be tracked and rolled back — pass one explicitly via ' +
-              '`optimistic: { id, ...data }`.',
-          )
-        }
+      // patch/update on an entity that is not in the cache: the merged optimistic
+      // item has no id and nothing displays it — skip silently (the server response
+      // updates the cache as usual). Applying it would just warn and no-op.
+      const skipUncached =
+        (method === 'patch' || method === 'update') &&
+        restoreItem === null &&
+        this.#peekId(optimisticItem) === undefined
+      if (!skipUncached) {
+        this.#applyMutationEvent(serviceName, method, optimisticItem)
       }
-      this.#applyMutationEvent(serviceName, method, optimisticItem)
     }
 
     const updaters: Record<string, (item: unknown) => void> = {
@@ -260,9 +288,13 @@ export class QueryStore<
 
     return this.#adapter.mutate(serviceName, method, args).then(
       (item: unknown) => {
+        // Apply the cache update before ending the tracker entry, so by the time a
+        // `useMutating` subscriber sees "not busy" the data is already in the cache.
         updaters[method]?.(item)
+        this.#mutations.end(mutationId)
         this.#events.emit({
           kind: 'mutate:end',
+          mutationId,
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
@@ -277,19 +309,70 @@ export class QueryStore<
           this.#rollbackOptimistic(serviceName, method, id, optimisticItem, restoreItem)
           this.#events.emit({
             kind: 'mutate:rollback',
+            mutationId,
             serviceName,
             method,
             ...(id !== undefined ? { id } : {}),
           })
         }
+        this.#mutations.end(mutationId)
         this.#events.emit({
           kind: 'mutate:error',
+          mutationId,
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
           error,
           ...(id !== undefined ? { id } : {}),
           optimistic: isOptimistic,
+        })
+        throw error
+      },
+    )
+  }
+
+  /**
+   * Call a custom (non-CRUD) service method — the mutation path for everything
+   * beyond create/update/patch/remove (`archive`, `sendReminder`, ...). The result
+   * shape is unknown to figbird, so no cache update is applied; the call still
+   * flows through the mutation tracker and the `mutate:*` observability events so
+   * `useMutating` and devtools see it. No `id` is recorded — custom method args
+   * are positional and opaque.
+   */
+  call(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+    const startedAt = Date.now()
+    const mutationId = this.#mutations.start({ serviceName, method })
+    this.#events.emit({
+      kind: 'mutate:start',
+      mutationId,
+      serviceName,
+      method,
+      optimistic: false,
+    })
+    return this.#adapter.mutate(serviceName, method, args).then(
+      result => {
+        this.#mutations.end(mutationId)
+        this.#events.emit({
+          kind: 'mutate:end',
+          mutationId,
+          serviceName,
+          method,
+          durationMs: Date.now() - startedAt,
+          optimistic: false,
+        })
+        return result
+      },
+      (err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err))
+        this.#mutations.end(mutationId)
+        this.#events.emit({
+          kind: 'mutate:error',
+          mutationId,
+          serviceName,
+          method,
+          durationMs: Date.now() - startedAt,
+          error,
+          optimistic: false,
         })
         throw error
       },
@@ -799,6 +882,12 @@ export class QueryStore<
    * (create) or a merge of `data` onto the cached item (update/patch). For remove there
    * is no explicit item — `null` is returned and the caller treats it as a delete.
    */
+  /** Warn-free id read — presence checks on payloads that may lack ids. */
+  #peekId(item: unknown): string | number | undefined {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
+    return this.#adapter.peekId ? this.#adapter.peekId(item) : undefined
+  }
+
   #resolveOptimisticItem(desc: MutationDescriptor): unknown {
     const { optimistic } = desc
     if (optimistic !== undefined && optimistic !== true && optimistic !== false) {

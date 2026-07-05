@@ -6,7 +6,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-space-router'
-import { q, useMutation, useQuery } from '../figbird'
+import { m, q, useQuery } from '../figbird'
 import { Explain } from './Explain'
 
 export function NewIssueModal({ onClose }: { onClose: () => void }) {
@@ -34,17 +34,19 @@ function NewIssueForm({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate()
   const { data: teams } = useQuery(q.teams)
   const { data: users } = useQuery(q.users)
-  const issueMutation = useMutation('issues', { optimistic: true })
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [teamId, setTeamId] = useState(teams[0]?.id ?? 1)
   const [assigneeId, setAssigneeId] = useState(users[0]?.id ?? 1)
 
-  const submit = async () => {
+  const submit = () => {
     const trimmed = title.trim()
     if (trimmed.length === 0) return
+    // The id contract: optimistic creates carry a client-generated id — the
+    // issue's identity is real from the first frame, which is what lets this
+    // modal navigate to /issues/<id> before the ack.
     const id = Date.now()
-    const create = issueMutation.create({
+    void m.issues.create({
       id,
       title: trimmed,
       description: description.trim(),
@@ -56,10 +58,11 @@ function NewIssueForm({ onClose }: { onClose: () => void }) {
       updatedAt: new Date().toISOString(),
       commentIds: [],
     })
-    // The optimistic item is already in the cache — close and navigate immediately.
+    // The optimistic item is already in the cache — close and navigate
+    // immediately. No useAction here: the modal unmounts on submit, so there is
+    // no pending UI to hold; a failure rolls the item back everywhere at once.
     onClose()
     navigate(`/issues/${id}`)
-    await create
   }
 
   return (
@@ -67,23 +70,33 @@ function NewIssueForm({ onClose }: { onClose: () => void }) {
       className='modal-form'
       onSubmit={e => {
         e.preventDefault()
-        void submit()
+        submit()
       }}
     >
       <header className='modal-head'>
         <span className='eyebrow'>New issue</span>
         <Explain
           label='Optimistic create'
-          query={`const issues = useMutation('issues', {
-  optimistic: true, // declared once per surface
-})
-issues.create({ id: Date.now(), title, … })`}
+          query={`// writes are optimistic by default, and
+// optimistic creates carry a client id —
+// identity is real from the first frame:
+m.issues.create({ id: Date.now(), title, … })
+
+// that's what makes navigating before
+// the ack safe: you own the id.
+
+// surfaces that want a server-assigned id
+// wait for it instead:
+const issue = await m.issues.confirmed.create(...)
+navigate(issue.id)`}
         >
-          The hook is declared <code>{'{ optimistic: true }'}</code> for this surface, so the create
-          (with its client-generated id) lands in the cache — list, activity, detail — before the
-          server responds, and a failure rolls it back everywhere at once. Critical surfaces just
-          omit the flag and the UI waits for the server. Try "Fail next mutation" in dev tools to
-          watch the rollback.
+          The create lands in the cache — list, activity, detail — before the server responds, and a
+          failure rolls it back everywhere at once; no flags, that's the default. Optimistic creates
+          carry a <em>client-generated id</em> (the id contract): the item's identity is real from
+          the first frame, so React keys are stable, the realtime echo dedupes by id, and this modal
+          can navigate to the new issue immediately. Servers that assign ids pair with{' '}
+          <code>confirmed</code> creates — await the create, the server's item carries its identity.
+          Try "Fail next mutation" in dev tools to watch the rollback.
         </Explain>
         <span className='spacer' />
         <button type='button' className='link' onClick={onClose}>
