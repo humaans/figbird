@@ -31,9 +31,9 @@ function subscribeFn<Fn extends (...args: never[]) => unknown>(q: { subscribe: F
 }
 
 // QueryRef for find and get to inspect subscribe param typing
-const findSubscribe = subscribeFn(figbird.query({ serviceName: 'api/people', method: 'find' }))
+const findSubscribe = subscribeFn(figbird.queryDesc({ serviceName: 'api/people', method: 'find' }))
 const getSubscribe = subscribeFn(
-  figbird.query({ serviceName: 'api/people', method: 'get', resourceId: '1' }),
+  figbird.queryDesc({ serviceName: 'api/people', method: 'get', resourceId: '1' }),
 )
 
 // Export the state type expected by the subscribe callback for both query kinds
@@ -46,5 +46,5 @@ const createDesc = {
   method: 'create',
   data: {} as Partial<Person>,
 } as const
-const createPromise = figbird.mutate(createDesc)
+const createPromise = figbird.mutateDesc(createDesc)
 export type CreateResult = Awaited<typeof createPromise>

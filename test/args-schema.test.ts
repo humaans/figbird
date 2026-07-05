@@ -127,7 +127,7 @@ test('figbird.prepare uses normalized args so prepared and direct calls share th
   const prepared = figbird.prepare(issueDetail, { id: '1' } as never)
   // The same cache entry is hit when args normalize to the same value.
   const directBuilder = issueDetail.build(issueDetail.validate({ id: 1 }))
-  const directRef = figbird.relationalQuery(directBuilder)
+  const directRef = figbird.query(directBuilder)
   t.is(prepared.key, directRef.hash())
   prepared.release()
 })

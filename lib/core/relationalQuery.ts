@@ -42,7 +42,7 @@ export interface RelationalQueryHost<TMeta extends Record<string, unknown>, TQue
   }
   getState(): Map<string, ServiceState<TMeta>>
   /** Returns a QueryRef; typed loosely here and re-typed once at the engine's seam. */
-  query(desc: QueryDescriptor, config?: QueryConfig<unknown, unknown>): unknown
+  queryDesc(desc: QueryDescriptor, config?: QueryConfig<unknown, unknown>): unknown
 }
 
 /**
@@ -237,7 +237,14 @@ export class RelationalQueryRef<
     desc: QueryDescriptor,
     config: QueryConfig<unknown, unknown>,
   ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
-    return this.#host.query(desc, config) as QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+    return this.#host.queryDesc(desc, config) as QueryRef<
+      unknown[],
+      unknown,
+      S,
+      TParams,
+      TMeta,
+      TQuery
+    >
   }
 
   /**

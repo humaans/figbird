@@ -29,7 +29,7 @@ import { resolveServicePath } from '../core/schema.js'
 import { useFigbirdMaybe } from './context.js'
 import { useActionImpl, type UseActionHook, type UseActionResult } from './useAction.js'
 import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
-import { useMutationImpl, type UseMutationOptions, type UseMutationResult } from './useMutation.js'
+import { useMutationImpl, type UseMutationResult } from './useMutation.js'
 import { useQueryByDescImpl, type QueryResult } from './useQueryByDesc.js'
 import { useQueryImpl, type FigbirdLike } from './useQuery.js'
 import type {
@@ -71,7 +71,6 @@ type UseFindForSchema<
 
 type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
   serviceName: N,
-  options?: UseMutationOptions,
 ) => UseMutationResult<
   ServiceItem<S, N>,
   ServiceCreate<S, N>,
@@ -287,7 +286,7 @@ export function createHooks<F extends Figbird<any, any>>(
       Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
   ) {
     const combinedConfig = Object.assign(
-      // Service path aliases are resolved centrally by figbird.query().
+      // Service path aliases are resolved centrally by figbird.queryDesc().
       { serviceName: serviceName as string, method: 'get' as const, resourceId },
       params || {},
     )
@@ -306,7 +305,7 @@ export function createHooks<F extends Figbird<any, any>>(
       Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
   ) {
     const combinedConfig = Object.assign(
-      // Service path aliases are resolved centrally by figbird.query().
+      // Service path aliases are resolved centrally by figbird.queryDesc().
       { serviceName: serviceName as string, method: 'find' as const },
       params || {},
     )
@@ -318,11 +317,8 @@ export function createHooks<F extends Figbird<any, any>>(
     )
   }
 
-  function useTypedMutation<N extends ServiceNames<S>>(
-    serviceName: N,
-    options?: UseMutationOptions,
-  ) {
-    return useMutationImpl(useBoundFigbird(), serviceName, options) as UseMutationResult<
+  function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
+    return useMutationImpl(useBoundFigbird(), serviceName) as UseMutationResult<
       ServiceItem<S, N>,
       ServiceCreate<S, N>,
       ServiceUpdate<S, N>,

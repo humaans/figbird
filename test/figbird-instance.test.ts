@@ -60,7 +60,7 @@ test('figbird.query with get returns typed data', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ schema, adapter })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -88,7 +88,7 @@ test('figbird.query with find returns typed data', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ schema, adapter })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'find' })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -116,7 +116,7 @@ test('figbird.query with get returns typed data for the second service', async t
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ schema, adapter })
 
-  const query = figbird.query({ serviceName: 'posts', method: 'get', resourceId: 1 })
+  const query = figbird.queryDesc({ serviceName: 'posts', method: 'get', resourceId: 1 })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -144,7 +144,7 @@ test('figbird.query with find returns typed data for the second service', async 
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ schema, adapter })
 
-  const query = figbird.query({ serviceName: 'posts', method: 'find' })
+  const query = figbird.queryDesc({ serviceName: 'posts', method: 'find' })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -167,7 +167,7 @@ test('figbird.query with get returns any data when no schema is provided', async
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -190,7 +190,7 @@ test('figbird.query with find returns any data when no schema is provided', asyn
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'find' })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -213,13 +213,13 @@ test('figbird.mutate with create', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  await figbird.mutate({
+  await figbird.mutateDesc({
     serviceName: 'notes',
     method: 'create',
     data: { id: 2, content: 'world' },
   })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'find' })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -245,14 +245,14 @@ test('figbird.mutate with update', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  await figbird.mutate({
+  await figbird.mutateDesc({
     serviceName: 'notes',
     method: 'update',
     id: 1,
     data: { id: 1, content: 'world' },
   })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -275,9 +275,14 @@ test('figbird.mutate with patch', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  await figbird.mutate({ serviceName: 'notes', method: 'patch', id: 1, data: { content: 'world' } })
+  await figbird.mutateDesc({
+    serviceName: 'notes',
+    method: 'patch',
+    id: 1,
+    data: { content: 'world' },
+  })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {
@@ -300,9 +305,9 @@ test('figbird.mutate with remove', async t => {
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter })
 
-  await figbird.mutate({ serviceName: 'notes', method: 'remove', id: 1 })
+  await figbird.mutateDesc({ serviceName: 'notes', method: 'remove', id: 1 })
 
-  const query = figbird.query({ serviceName: 'notes', method: 'find' })
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const result = await new Promise(resolve => {
     query.subscribe(state => {
       if (state.status === 'success') {

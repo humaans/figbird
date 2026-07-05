@@ -35,23 +35,6 @@ export interface ProcessedRealtimeEvent {
   itemId: string | number | undefined
 }
 
-/**
- * Options for an individual mutation call.
- */
-export interface MutationOptions<TItem = unknown> {
-  /**
-   * Apply the change to the local store before the server has confirmed it. The store
-   * reflects the change immediately; if the request fails, the change is rolled back.
-   *
-   * - For `create`: pass `true` to use the request body as the optimistic item, or pass
-   *   a synthesized item (e.g. with a temp id and `updatedAt`) as `optimistic`.
-   * - For `update`/`patch`: pass `true` to merge the patch into the cached item, or
-   *   pass an explicit next item.
-   * - For `remove`: pass `true` to drop the item from the cache immediately.
-   */
-  optimistic?: boolean | TItem
-}
-
 export type QueryStatus = 'loading' | 'success' | 'error'
 
 type QueryStatusState = {

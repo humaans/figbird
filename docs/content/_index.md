@@ -775,13 +775,13 @@ Because all three paths resolve to the same cache entry (the definition + args h
 
 ## Using outside React
 
-The core is framework-agnostic, which is useful for background sync, tests, and non-React code.
+The core is framework-agnostic, which is useful for background sync, tests, and non-React code. The instance mirrors the React kit exactly: `q` builds, `query` reads, `m` writes.
 
 ```ts
 const figbird = new Figbird({ adapter, schema })
 
-// Relational queries — same builders as the hooks
-const ref = figbird.relationalQuery(q.issues.where({ status: 'open' }).related('creator'))
+// Reads — same builders as the hooks; query() is the non-React useQuery
+const ref = figbird.query(q.issues.where({ status: 'open' }).related('creator'))
 const unsub = ref.subscribe(state => {
   // { status, data, error, isFetching }
 })
@@ -789,21 +789,28 @@ ref.getSnapshot()
 ref.refetch()
 unsub()
 
-// Descriptor queries — the low-level primitive
-const query = figbird.query({
+// Definitions work too — same cache entry as useQuery(issueDetail, { id })
+figbird.query(issueDetail, { id: 42 })
+
+// Writes — the m proxy works outside React too (it's not a hook anywhere)
+await figbird.m.tasks.patch(id, { done: true }) // optimistic by default
+await figbird.m.tasks.confirmed.patch(id, { done: true }) // waits for the ack
+await figbird.m.tasks.archive([id]) // custom schema methods, typed
+```
+
+Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects, no
+schema required. It's the primitive the relational engine itself is built on, and the
+only surface a schema-less instance can use.
+
+```ts
+const query = figbird.queryDesc({
   serviceName: 'tasks',
   method: 'find',
   params: { query: { completed: true } },
 })
 query.subscribe(state => {})
 
-// Mutations — the m proxy works outside React too (it's not a hook anywhere)
-await figbird.m.tasks.patch(id, { done: true }) // optimistic by default
-await figbird.m.tasks.confirmed.patch(id, { done: true }) // waits for the ack
-await figbird.m.tasks.archive([id]) // custom schema methods, typed
-
-// ...or the low-level descriptor form
-await figbird.mutate({ serviceName: 'tasks', method: 'patch', id, data: { done: true } })
+await figbird.mutateDesc({ serviceName: 'tasks', method: 'patch', id, data: { done: true } })
 ```
 
 ## Custom adapters
@@ -1129,20 +1136,20 @@ The core instance holding the adapter, schema, and shared query state.
 const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 ```
 
-| Member                                        | Description                                                                                                         |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `q`                                           | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                       |
-| `prepare(definition, args)`                   | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare). |
-| `prefetch(definition, args, opts?)`           | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).  |
-| `m`                                           | The write proxy — `m.issues.patch(...)`, callable as `m(service)` for dynamic names — also returned bound from `createHooks`. See [m](#m). |
-| `mutating`                                    | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.            |
-| `explain(...)`                                | Static classification report — see [figbird.explain](#figbirdexplain).                                              |
-| `inspect()`                                   | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                       |
-| `events`                                      | Observability channel — see [figbird.events](#figbirdevents).                                                       |
-| `query(desc, config?)`                        | Low-level descriptor query (see [Using outside React](#using-outside-react)).                                       |
-| `relationalQuery(builder)`                    | Low-level relational query ref for non-React use.                                                                   |
-| `mutate(desc)` / `call(service, method, ...)` | Low-level mutation / custom-method call.                                                                            |
-| `getState()` / `subscribeToStateChanges(fn)`  | Raw internal state — debugging only; prefer `inspect()`.                                                            |
+| Member                                            | Description                                                                                                                                   |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `q`                                               | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                                                 |
+| `prepare(definition, args)`                       | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare).                           |
+| `prefetch(definition, args, opts?)`               | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).                            |
+| `m`                                               | The write proxy — `m.issues.patch(...)`, callable as `m(service)` for dynamic names — also returned bound from `createHooks`. See [m](#m).    |
+| `mutating`                                        | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                      |
+| `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                        |
+| `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                 |
+| `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                 |
+| `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts `(definition, args)`. See [Using outside React](#using-outside-react). |
+| `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                  |
+| `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                               |
+| `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state — debugging only; prefer `inspect()`.                                                                                      |
 
 ## FeathersAdapter
 
@@ -1262,24 +1269,21 @@ schema, including custom `methods`.
 
 **Deprecated** — prefer [m](#m) + [useAction](#useaction) + [useMutating](#usemutating).
 This hook is a service client and a single status slot in one, which forces hand-rolled
-pending-state machines on multi-action screens. Note its semantics are legacy on purpose:
-writes through `useMutation` are **non-optimistic unless flagged**, unlike `m`. Fully
-functional and not going away soon.
+pending-state machines on multi-action screens. Writes through it are always
+non-optimistic; optimistic writes are a feature of `m`. Fully functional and not going
+away soon.
 
 ```ts
-const m = useMutation(serviceName, { optimistic?: boolean })
+const m = useMutation(serviceName)
 
-m.create(data, options?)   // Promise<Item>; arrays create in batch
-m.update(id, data, options?)
-m.patch(id, data, options?)
-m.remove(id, options?)
+m.create(data, params?)   // Promise<Item>; arrays create in batch
+m.update(id, data, params?)
+m.patch(id, data, params?)
+m.remove(id, params?)
 m.status  // 'idle' | 'loading' | 'success' | 'error' — last call from this hook
 m.data    // last mutation result
 m.error   // last mutation error
 ```
-
-Per-call `options`: `{ optimistic?: boolean | Item, params?: AdapterParams }`; overrides the
-hook default in both directions.
 
 ## useFind
 

@@ -253,7 +253,7 @@ test('schema-based type inference', t => {
 
     useEffect(() => {
       // Direct query API infers types from schema
-      const query = figbird.query({
+      const query = figbird.queryDesc({
         serviceName: 'api/people',
         method: 'find',
       })
