@@ -56,7 +56,9 @@
 <body class="page-kube">
   <header>{{ block "header" . }}{{ end }}</header>
   <main>{{ block "main" . }}{{ end }}</main>
-  <script src="{{ .Site.BaseURL }}js/master.js" type="text/javascript"></script>
+  {{/* fingerprinted like the styles, so script changes always bust caches */}}
+  {{ $master := resources.Get "js/master.js" | fingerprint }}
+  <script src="{{ $master.RelPermalink }}" type="text/javascript"></script>
 </body>
 
 </html>
