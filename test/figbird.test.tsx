@@ -67,7 +67,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
   const adapter = new FeathersAdapter(feathers, config)
   // Create a properly typed figbird instance
   const figbirdInstance: Figbird<AppSchema, typeof adapter> =
-    figbird || new Figbird({ schema, adapter, eventBatchProcessingInterval: 0 })
+    figbird || new Figbird({ schema, adapter, eventBatchInterval: 0 })
 
   // Create typed hooks from the figbird instance
   const { useGet, useFind, useMutation } = createHooks(figbirdInstance)
@@ -2555,7 +2555,7 @@ test('realtime events are batched to reduce re-renders', async t => {
   // Create custom figbird with specific event batching interval
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter, eventBatchProcessingInterval: 100 })
+  const figbird = new Figbird({ schema, adapter, eventBatchInterval: 100 })
 
   const { App, useFind } = app({ figbird })
 

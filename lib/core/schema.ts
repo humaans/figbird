@@ -20,26 +20,28 @@ export interface ServiceTypeDefinition {
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyMethodsType = Record<string, (...args: any[]) => any>
 
-// Internal service representation - matches expected type structure
+/**
+ * The fully-resolved shape a service's phantom slot carries: every payload present,
+ * defaults already applied. `service<T>()` resolves a user-facing
+ * `ServiceTypeDefinition` (optional fields) into this.
+ */
+export interface ResolvedServiceDef {
+  item: unknown
+  query: unknown
+  create: unknown
+  update: unknown
+  patch: unknown
+  methods: AnyMethodsType
+}
+
+// Internal service representation — the resolved definition lives in one phantom slot
 export interface Service<
-  TItem = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
+  TDef extends ResolvedServiceDef = ResolvedServiceDef,
   TName extends string = string,
-  TCreate = unknown,
-  TUpdate = unknown,
-  TPatch = unknown,
-  TMethods extends AnyMethodsType = AnyMethodsType,
 > {
   readonly name: TName
   readonly path: string
-  readonly [$phantom]?: {
-    item: TItem
-    query: TQuery
-    create: TCreate
-    update: TUpdate
-    patch: TPatch
-    methods: TMethods
-  }
+  readonly [$phantom]?: TDef
 }
 
 export interface ServiceOptions<TPath extends string = string> {
@@ -72,35 +74,27 @@ type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends ke
   ? Exclude<TServiceDef['query'], undefined>
   : Record<string, unknown>
 
+/** Apply the payload defaults, turning a user definition into a resolved one. */
+type ResolveDef<TServiceDef extends ServiceTypeDefinition> = {
+  item: TServiceDef['item']
+  query: DeriveQuery<TServiceDef>
+  create: DeriveCreate<TServiceDef>
+  update: DeriveUpdate<TServiceDef>
+  patch: DerivePatch<TServiceDef>
+  methods: DeriveMethods<TServiceDef>
+}
+
 // Phase 1: Create a service definition (no name yet)
 export function service<
   TServiceDef extends ServiceTypeDefinition,
   const TPath extends string = string,
->(
-  options: ServiceOptions<TPath> = {},
-): Service<
-  TServiceDef['item'],
-  DeriveQuery<TServiceDef>,
-  string,
-  DeriveCreate<TServiceDef>,
-  DeriveUpdate<TServiceDef>,
-  DerivePatch<TServiceDef>,
-  DeriveMethods<TServiceDef>
-> {
-  return { name: '', path: options.path ?? '' } as Service<
-    TServiceDef['item'],
-    DeriveQuery<TServiceDef>,
-    string,
-    DeriveCreate<TServiceDef>,
-    DeriveUpdate<TServiceDef>,
-    DerivePatch<TServiceDef>,
-    DeriveMethods<TServiceDef>
-  >
+>(options: ServiceOptions<TPath> = {}): Service<ResolveDef<TServiceDef>> {
+  return { name: '', path: options.path ?? '' } as Service<ResolveDef<TServiceDef>>
 }
 
 // Base schema interface - flexible to preserve specific service types
 export interface Schema {
-  services: Record<string, Service<unknown, unknown, string>>
+  services: Record<string, Service>
   relationships?: SchemaRelationships
 }
 
@@ -251,15 +245,10 @@ function normalizeHop<TDest extends string>(
 }
 
 /**
- * Helper to define a one-to-one relationship.
- *
- * The bare form (no schema binding) is useful outside the factory. Inside createSchema's
- * relationships factory, prefer the `one` helper from the factory argument — it's typed
- * so destService is constrained to one of your schema's service names.
+ * Runtime implementation behind the scoped `one` factory helper. Only reachable
+ * through a per-service relationships factory, which is what types every hop end.
  */
-export function one<TDest extends string>(
-  def: RelationshipHop<TDest>,
-): RelationshipDef<TDest, 'one'> {
+function one<TDest extends string>(def: RelationshipHop<TDest>): RelationshipDef<TDest, 'one'> {
   return { ...normalizeHop(def), cardinality: 'one' }
 }
 
@@ -273,16 +262,14 @@ export function one<TDest extends string>(
  * Capped at two hops, matching Zero. For deeper traversals, model an intermediate
  * relation explicitly or reach for `embed` if a server-materialised slice is enough.
  *
- * See `one` for typing notes.
+ * See `one` for how these are reached.
  */
-export function many<TDest extends string>(
-  def: RelationshipHop<TDest>,
-): RelationshipDef<TDest, 'many'>
-export function many<TJunction extends string, TDest extends string>(
+function many<TDest extends string>(def: RelationshipHop<TDest>): RelationshipDef<TDest, 'many'>
+function many<TJunction extends string, TDest extends string>(
   parentToJunction: RelationshipHop<TJunction>,
   junctionToDest: RelationshipHop<TDest>,
 ): RelationshipDef<TDest, 'many'>
-export function many(
+function many(
   first: RelationshipHop<string>,
   second?: RelationshipHop<string>,
 ): RelationshipDef<string, 'many'> {
@@ -318,16 +305,14 @@ export function many(
  * the parent's id-list field is recomputed. For unbounded relations, use `many` (with
  * a second hop if there's a junction table).
  */
-export function embed<TDest extends string>(
+function embed<TDest extends string>(
   def: RelationshipHop<TDest>,
 ): RelationshipDef<TDest, 'embedded'> {
   return { ...normalizeHop(def), cardinality: 'embedded' }
 }
 
 /** Extract the item type carried by a Service value's phantom slot. */
-type ServiceItemOf<S> =
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  S extends Service<infer TItem, any, any, any, any, any, any> ? TItem : unknown
+type ServiceItemOf<S> = S extends Service<infer TDef, string> ? TDef['item'] : unknown
 
 /**
  * Relationship helpers passed to a per-service relationships factory. Scoped to both
@@ -336,10 +321,7 @@ type ServiceItemOf<S> =
  * source item's fields, and `destField` to the destination item's fields — including
  * both hops of a junction `many`, where the second hop's source is the junction item.
  */
-export interface RelationshipHelpers<
-  TServices = Record<string, Service<unknown, unknown, string>>,
-  TSourceItem = unknown,
-> {
+export interface RelationshipHelpers<TServices = Record<string, Service>, TSourceItem = unknown> {
   one: <TDest extends keyof TServices & string>(
     def: RelationshipHop<TDest, TSourceItem, ServiceItemOf<TServices[TDest]>>,
   ) => RelationshipDef<TDest, 'one'>
@@ -378,19 +360,9 @@ export type RelationshipsConfig<TServiceMap> = {
   ) => Record<string, RelationshipDef<any, any>>
 }
 
-// Helper type to extract all service parameters and update name
+// Helper type to re-key a service with its literal schema name
 type ExtractServiceWithName<S, N extends string> =
-  S extends Service<
-    infer TItem,
-    infer TQuery,
-    string,
-    infer TCreate,
-    infer TUpdate,
-    infer TPatch,
-    infer TMethods extends AnyMethodsType
-  >
-    ? Service<TItem, TQuery, N, TCreate, TUpdate, TPatch, TMethods>
-    : never
+  S extends Service<infer TDef, string> ? Service<TDef, N> : never
 
 // Phase 2: Create a schema with services object map (preserves literal keys + typed
 // relationships so downstream hooks can infer related item types at call sites).
@@ -405,7 +377,7 @@ type ResolvedRelationships<TServiceMap, TRelFactories> = {
 }
 
 export function createSchema<
-  const TServiceMap extends Record<string, Service<unknown, unknown, string>>,
+  const TServiceMap extends Record<string, Service>,
   const TRelFactories extends RelationshipsConfig<TServiceMap> = {},
 >(config: {
   services: TServiceMap
@@ -476,29 +448,11 @@ export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
     ? M
     : Record<string, never>
 
-// Utility type to extract item type from a service
-export type Item<S> = S extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
-
-// Utility type to extract create type from a service
-export type Create<S> = S extends { [$phantom]?: { create: infer C } } ? C : Record<string, unknown>
-
-// Utility type to extract update type from a service
-export type Update<S> = S extends { [$phantom]?: { update: infer U } } ? U : Record<string, unknown>
-
-// Utility type to extract patch type from a service
-export type Patch<S> = S extends { [$phantom]?: { patch: infer P } } ? P : Record<string, unknown>
-
-// Utility type to extract query type from a service
-export type Query<S> = S extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
-
-// Utility type to extract methods from a service
-export type Methods<S> = S extends { [$phantom]?: { methods: infer M } } ? M : Record<string, never>
-
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(
   schema: S | undefined,
   name: string,
-): Service<unknown, unknown, string> | undefined {
+): Service | undefined {
   if (!schema) return undefined
   return schema.services[name]
 }
@@ -518,6 +472,3 @@ declare const $anySchemaBrand: unique symbol
 export interface AnySchema extends Schema {
   readonly [$anySchemaBrand]: 'AnySchema'
 }
-
-// Type for untyped services (fallback for services not in schema)
-export type UntypedService = Service<Record<string, unknown>, unknown, string>

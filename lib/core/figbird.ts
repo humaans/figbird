@@ -4,7 +4,7 @@ import { createMutationsProxy, type MutationsHost, type MutationsProxy } from '.
 import { MutationTracker, type MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
-  type QueryBuilder,
+  type AnyQueryBuilder,
   type QueryBuilderProxy,
   type QueryBuilderResult,
 } from './queryBuilder.js'
@@ -138,7 +138,7 @@ export class Figbird<
   /**
    * Create a Figbird instance.
    * @param adapter Data adapter (e.g. FeathersAdapter)
-   * @param eventBatchProcessingInterval Optional interval (ms) for batching realtime events
+   * @param eventBatchInterval Optional interval (ms) for batching realtime events
    * @param schema Optional schema to enable full TypeScript inference
    * @param reconcileCooldown Burst safety: minimum interval (ms) between event-driven
    *   refetches of one query. First event refetches immediately; further events within
@@ -148,13 +148,13 @@ export class Figbird<
    */
   constructor({
     adapter,
-    eventBatchProcessingInterval,
+    eventBatchInterval,
     schema,
     reconcileCooldown,
     visibility,
   }: {
     adapter: A
-    eventBatchProcessingInterval?: number
+    eventBatchInterval?: number
     schema?: S
     reconcileCooldown?: number
     visibility?: VisibilitySource
@@ -165,7 +165,7 @@ export class Figbird<
     this.#mutationTracker = new MutationTracker()
     this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
-      eventBatchProcessingInterval: eventBatchProcessingInterval,
+      eventBatchInterval,
       events: this.#events,
       mutations: this.#mutationTracker,
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
@@ -189,7 +189,12 @@ export class Figbird<
     return this.#events
   }
 
-  /** Returns the entire internal state map keyed by service name. */
+  /**
+   * Returns the entire internal state map keyed by service name — including the
+   * cached entities themselves, which `inspect()` deliberately omits. Debug-grade:
+   * internal shapes may change between versions; prefer `inspect()` for anything
+   * built to last.
+   */
   getState(): Map<string, ServiceState<AdapterFindMeta<A>>> {
     return this.queryStore.getState()
   }
@@ -252,10 +257,7 @@ export class Figbird<
    * const ref = figbird.query(issueDetail, { id: 42 })
    * ```
    */
-  query<
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  query<B extends AnyQueryBuilder<S>>(
     builder: B,
   ): RelationalQueryRef<
     QueryBuilderResult<B>,
@@ -264,11 +266,7 @@ export class Figbird<
     AdapterFindMeta<A>,
     AdapterQuery<A>
   >
-  query<
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  query<Args, B extends AnyQueryBuilder<S>>(
     query: QueryDefinition<Args, B>,
     ...rest: ArgsAndOptions<Args, never>
   ): RelationalQueryRef<
@@ -278,10 +276,7 @@ export class Figbird<
     AdapterFindMeta<A>,
     AdapterQuery<A>
   >
-  query<
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  query<B extends AnyQueryBuilder<S>>(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     queryOrBuilder: B | QueryDefinition<unknown, B>,
     args?: unknown,
@@ -357,17 +352,12 @@ export class Figbird<
    * })
    * ```
    */
-  prepare<
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  prepare<Args, B extends AnyQueryBuilder<S>>(
     query: QueryDefinition<Args, B>,
     ...rest: ArgsAndOptions<Args, { staleTime?: number }>
   ): PreparedQuery
   prepare(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    query: QueryDefinition<unknown, QueryBuilder<S, any, any, any, any, any>>,
+    query: QueryDefinition<unknown, AnyQueryBuilder<S>>,
     argsOrOptions?: unknown,
     maybeOptions?: { staleTime?: number },
   ): PreparedQuery {
@@ -415,14 +405,12 @@ export class Figbird<
    * <Row onMouseEnter={() => figbird.prefetch(issueDetail, { id: issue.id })} />
    * ```
    */
-  prefetch<
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(query: QueryDefinition<Args, B>, ...rest: ArgsAndOptions<Args, { staleTime?: number }>): void
+  prefetch<Args, B extends AnyQueryBuilder<S>>(
+    query: QueryDefinition<Args, B>,
+    ...rest: ArgsAndOptions<Args, { staleTime?: number }>
+  ): void
   prefetch(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    query: QueryDefinition<unknown, QueryBuilder<S, any, any, any, any, any>>,
+    query: QueryDefinition<unknown, AnyQueryBuilder<S>>,
     argsOrOptions?: unknown,
     maybeOptions?: { staleTime?: number },
   ): void {
@@ -657,12 +645,10 @@ export class Figbird<
    * assert a query's class in tests, or to power devtools.
    */
   explain(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    builderOrDefinition: QueryBuilder<S, any, any, any, any, any> | QueryDefinition<any, any>,
+    builderOrDefinition: AnyQueryBuilder<S> | QueryDefinition<any, any>,
     args?: unknown,
   ): ExplainReport {
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    type AnyBuilder = QueryBuilder<S, any, any, any, any, any>
+    type AnyBuilder = AnyQueryBuilder<S>
     const builder: AnyBuilder = isQueryDefinition(builderOrDefinition)
       ? (builderOrDefinition.build(builderOrDefinition.validate(args)) as AnyBuilder)
       : (builderOrDefinition as AnyBuilder)

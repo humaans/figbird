@@ -30,14 +30,9 @@ export type {
 } from './core/figbird.js'
 
 // schema
-export { createSchema, service, one, many, embed } from './core/schema.js'
+export { createSchema, service } from './core/schema.js'
 export type {
   AnySchema,
-  Create,
-  Item,
-  Methods,
-  Patch,
-  Query,
   RelationshipDef,
   RelationshipHelpers,
   RelationshipHop,
@@ -54,26 +49,13 @@ export type {
   ServiceQuery,
   ServiceTypeDefinition,
   ServiceUpdate,
-  UntypedService,
-  Update,
 } from './core/schema.js'
 
 // query builder
-export { QueryBuilder, createQueryBuilderProxy } from './core/queryBuilder.js'
-export type {
-  QueryAST,
-  QueryBuilderProxy,
-  FeathersQuery,
-  FieldOperators,
-  WhereClause,
-} from './core/queryBuilder.js'
+export { QueryBuilder } from './core/queryBuilder.js'
+export type { QueryAST, QueryBuilderProxy } from './core/queryBuilder.js'
 
-// query classification (how a query node is maintained — useful for devtools)
-export {
-  classifyQueryNode,
-  explainQueryNode,
-  hasWindowFilters,
-} from './core/queryClassification.js'
+// query classification report types (returned by figbird.explain / figbird.inspect)
 export type { ClassificationReason, QueryNodeClass } from './core/queryClassification.js'
 export type { ExplainNode, ExplainReport, InspectedQuery } from './core/figbird.js'
 
@@ -97,12 +79,12 @@ export type {
 // react hooks
 export { createHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
-// The write-side story: mutations() handles (from figbird.mutations / createHooks)
-// are stateless service clients; useAction carries per-action pending/error;
-// useMutating answers entity/service-level "is anything in flight".
+// The write-side story: m is the stateless write proxy (figbird.m / createHooks);
+// useAction carries per-action pending/error; useMutating answers entity/service-level
+// "is anything in flight".
 export { useAction } from './react/useAction.js'
 export { useMutating } from './react/useMutating.js'
-// Deprecated: superseded by mutations() + useAction + useMutating.
+// Deprecated: superseded by m + useAction + useMutating.
 export { useMutation } from './react/useMutation.js'
 // useFeathers is the raw-client escape hatch, typed via createHooks.
 export { useFeathers } from './react/useFeathers.js'

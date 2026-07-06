@@ -74,7 +74,7 @@ export class QueryStore<
 
   #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
-  #eventBatchProcessingInterval: number | undefined = 100
+  #eventBatchInterval: number | undefined = 100
   #processingEventQueue = false
   // Query ids whose listener notification has been deferred to the next microtask
   // (see #scheduleDeferredNotify). Null when nothing is scheduled.
@@ -82,14 +82,14 @@ export class QueryStore<
 
   constructor({
     adapter,
-    eventBatchProcessingInterval = 100,
+    eventBatchInterval = 100,
     events,
     mutations,
     reconcileCooldown = 2000,
     visibility,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
-    eventBatchProcessingInterval?: number | undefined
+    eventBatchInterval?: number | undefined
     events?: FigbirdEventEmitter
     mutations?: MutationTracker
     /**
@@ -103,7 +103,7 @@ export class QueryStore<
     visibility?: VisibilitySource
   }) {
     this.#adapter = adapter
-    this.#eventBatchProcessingInterval = eventBatchProcessingInterval
+    this.#eventBatchInterval = eventBatchInterval
     this.#events = events ?? new FigbirdEventEmitter()
     this.#mutations = mutations ?? new MutationTracker()
     this.#reconcileCooldown = reconcileCooldown
@@ -751,11 +751,11 @@ export class QueryStore<
 
     if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later
-      if (this.#eventBatchProcessingInterval) {
+      if (this.#eventBatchInterval) {
         this.#eventBatchProcessingTimer = setTimeout(() => {
           this.#eventBatchProcessingTimer = null
           this.#processQueuedEvents()
-        }, this.#eventBatchProcessingInterval)
+        }, this.#eventBatchInterval)
       } else {
         // batching is disabled, process each event immediately
         this.#processQueuedEvents()

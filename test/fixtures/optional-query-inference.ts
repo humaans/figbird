@@ -24,6 +24,4 @@ export const schema = createSchema({
 
 export const taskService = schema.services.tasks
 
-type TaskService = (typeof schema.services)['tasks']
-
-export type TaskQueryType = import('../../lib').Query<TaskService>
+export type TaskQueryType = import('../../lib').ServiceQuery<typeof schema, 'tasks'>

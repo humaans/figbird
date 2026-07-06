@@ -417,8 +417,7 @@ test('backward compatibility - untyped usage still works', t => {
 
 test('type extraction utilities', t => {
   // Test that type extraction utilities work correctly
-  type PersonService = (typeof schema.services)['api/people']
-  type PersonItem = import('../lib').Item<PersonService>
+  type PersonItem = import('../lib').ServiceItem<typeof schema, 'api/people'>
 
   // These assertions are compile-time only, but we can test runtime behavior
   const person: PersonItem = {
@@ -432,8 +431,7 @@ test('type extraction utilities', t => {
   t.is(person.role, 'user')
 
   // Query type includes custom extensions
-  type TaskService = (typeof schema.services)['api/tasks']
-  type TaskQueryType = import('../lib').Query<TaskService>
+  type TaskQueryType = import('../lib').ServiceQuery<typeof schema, 'api/tasks'>
 
   const query: TaskQueryType = {
     $search: 'test',

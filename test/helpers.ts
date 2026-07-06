@@ -439,7 +439,7 @@ export function createTestApp<S extends Schema>(
   const figbird = new Figbird({
     schema,
     adapter,
-    eventBatchProcessingInterval: 0,
+    eventBatchInterval: 0,
     // Keep existing tests deterministic: no reconcile cooldown unless a test
     // opts in with its own instance.
     reconcileCooldown: 0,

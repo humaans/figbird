@@ -59,7 +59,7 @@ function createApp({
   const figbird = new Figbird({
     schema,
     adapter,
-    eventBatchProcessingInterval: 0,
+    eventBatchInterval: 0,
     ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
   })
@@ -229,7 +229,7 @@ test('hidden tabs: a reconnect while hidden defers the refetch-all until visible
   const figbird = new Figbird({
     schema,
     adapter,
-    eventBatchProcessingInterval: 0,
+    eventBatchInterval: 0,
     reconcileCooldown: 0,
     visibility: visibility.source,
   })

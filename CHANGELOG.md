@@ -26,6 +26,11 @@ Breaking:
 - `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
 - `figbird.query(builder | definition, args?)` is now the non-React mirror of `useQuery`
 - Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
+- Constructor option `eventBatchProcessingInterval` renamed to `eventBatchInterval`.
+- Removed orphaned exports: the `Item`/`Create`/`Update`/`Patch`/`Query`/`Methods`/
+  `UntypedService` type extractors (use the `ServiceItem<S, N>` family), bare
+  `one`/`many`/`embed` (reachable only via the typed relationships factories),
+  `createQueryBuilderProxy`, and classification internals (use `figbird.explain()`).
 
 Deprecated (still fully functional): `useFind`/`useGet` in favor of
 `useQuery` + builders, and `useMutation` in favor of `m` + `useAction` + `useMutating`.

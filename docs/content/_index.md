@@ -1136,7 +1136,7 @@ order.
 The core instance holding the adapter, schema, and shared query state.
 
 ```ts
-const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
+const figbird = new Figbird({ adapter, schema, eventBatchInterval? })
 ```
 
 | Member                                            | Description                                                                                                                                   |
@@ -1152,7 +1152,7 @@ const figbird = new Figbird({ adapter, schema, eventBatchProcessingInterval? })
 | `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts `(definition, args)`. See [Using outside React](#using-outside-react). |
 | `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                  |
 | `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                               |
-| `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state — debugging only; prefer `inspect()`.                                                                                      |
+| `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.     |
 
 ## FeathersAdapter
 

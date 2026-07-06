@@ -20,7 +20,7 @@
  */
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
-import type { QueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
+import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
   isQueryDefinition,
   splitDefinitionRest,
@@ -62,11 +62,6 @@ export type RelationalQueryResult<T> =
       refetch: () => void
     }
 
-// Loosely-typed builder for the untyped overload-dispatch path — the public overloads
-// carry the real types.
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyQueryBuilder = QueryBuilder<any, any, any, any, any, any>
-
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
   query(builder: AnyQueryBuilder): {
@@ -100,10 +95,12 @@ const idleState: RelationalQueryState<null> = {
  * here. (If the ref was evicted between renders, this picks up the freshly interned
  * instance instead of pinning the stale one.)
  */
-function useQueryRef<
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<any, any, any, any, any, any>,
->(figbird: FigbirdLike, query: B, skip: boolean, staleTime?: number) {
+function useQueryRef<B extends AnyQueryBuilder>(
+  figbird: FigbirdLike,
+  query: B,
+  skip: boolean,
+  staleTime?: number,
+) {
   type T = QueryBuilderResult<B>
   const qRef = skip ? null : figbird.query(query)
 
@@ -226,26 +223,18 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
  * the previous render committed while the new data resolves.
  */
 // Overload: builder, non-suspense — returns the tagged union, never throws
-export function useQuery<
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<any, any, any, any, any, any>,
->(
+export function useQuery<B extends AnyQueryBuilder>(
   query: B,
   options: UseQueryOptions & { suspense: false },
 ): RelationalQueryResult<QueryBuilderResult<B>>
 // Overload: definition, non-suspense — args omittable when the definition takes none
-export function useQuery<
-  Args,
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<any, any, any, any, any, any>,
->(
+export function useQuery<Args, B extends AnyQueryBuilder>(
   definition: QueryDefinition<Args, B>,
   ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
 ): RelationalQueryResult<QueryBuilderResult<B>>
 // Overload: builder
 export function useQuery<
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<any, any, any, any, any, any>,
+  B extends AnyQueryBuilder,
   O extends UseQueryOptions = Record<string, never>,
 >(
   query: B,
@@ -254,8 +243,7 @@ export function useQuery<
 // Overload: definition — args omittable when the definition takes none
 export function useQuery<
   Args,
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<any, any, any, any, any, any>,
+  B extends AnyQueryBuilder,
   O extends UseQueryOptions = Record<string, never>,
 >(
   definition: QueryDefinition<Args, B>,
@@ -304,10 +292,11 @@ const idlePagination: RelationalPaginationState = {
   totalCount: undefined,
 }
 
-function useQueryForBuilder<
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<any, any, any, any, any, any>,
->(figbird: FigbirdLike, query: B, options: UseQueryOptions): unknown {
+function useQueryForBuilder<B extends AnyQueryBuilder>(
+  figbird: FigbirdLike,
+  query: B,
+  options: UseQueryOptions,
+): unknown {
   type T = QueryBuilderResult<B>
   const { skip = false, suspense = true, staleTime } = options
   const { qRef, state } = useQueryRef(figbird, query, skip, staleTime)
