@@ -590,9 +590,28 @@ export class QueryStore<
     result: QueryResponse<unknown, TMeta | undefined>
   }): void {
     let shouldRefetch = false
+    const processedEvents: ProcessedRealtimeEvent[] = []
+    const serverMaintainedQueriesToRefetch = new Set<string>()
 
-    const touched = this.#transactOverService(queryId, (service, query) => {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const touched = this.#transactOverServiceByName(serviceName ?? '', (service, touch) => {
+      const query = service.queries.get(queryId)
       if (!query) return
+      touch(queryId)
+
+      // A complete-set fetch (unfiltered allPages — the materialization condition)
+      // is authoritative for the whole service: snapshot the entity cache before
+      // applying the result so it can be diffed below and the changes propagated
+      // to every other query the same way realtime events are. `.server()` fetches
+      // don't diff — a server-authoritative query refetching in response to diff
+      // events must not itself produce diff events, or two of them could cycle.
+      const findConfig = query.config as FindQueryConfig<unknown, unknown>
+      const isCompleteSet =
+        query.desc.method === 'find' &&
+        Boolean(findConfig.allPages) &&
+        isUnfilteredFindQuery(query.desc.params)
+      const previousEntities =
+        isCompleteSet && !findConfig.server ? new Map(service.entities) : null
 
       const data = result.data
       const meta = (result as { meta?: TMeta }).meta
@@ -648,12 +667,7 @@ export class QueryStore<
       // decidable finds are answered from the cache (see #tryLocalFind). A *filtered*
       // allPages fetch is complete only for its own filter — it must not materialize
       // the service.
-      const findConfig = query.config as FindQueryConfig<unknown, unknown>
-      if (
-        query.desc.method === 'find' &&
-        findConfig.allPages &&
-        isUnfilteredFindQuery(query.desc.params)
-      ) {
+      if (isCompleteSet) {
         service.materialized = { queryId, fetchedAt: Date.now() }
       }
 
@@ -668,8 +682,74 @@ export class QueryStore<
           error: null,
         },
       })
+
+      // Diff the complete set against the pre-fetch cache and apply the changes as
+      // synthetic events. Without this, queries answered locally from the cache
+      // (see #tryLocalFind) would never observe changes a root refetch brought in —
+      // rows created or removed out-of-band would be invisible to them forever.
+      // The fetched query itself is excluded: its state was just set from the result.
+      if (previousEntities) {
+        for (const [itemId, previousItem] of previousEntities) {
+          if (!nextItemIds.has(itemId)) {
+            service.entities.delete(itemId)
+            processedEvents.push({
+              serviceName: query.desc.serviceName,
+              type: 'removed',
+              item: previousItem,
+              previousItem,
+              itemId,
+            })
+          }
+        }
+        for (const itemId of nextItemIds) {
+          const item = service.entities.get(itemId)!
+          const previousItem = previousEntities.get(itemId)
+          if (!previousItem) {
+            processedEvents.push({
+              serviceName: query.desc.serviceName,
+              type: 'created',
+              item,
+              previousItem: null,
+              itemId,
+            })
+          } else if (previousItem !== item) {
+            processedEvents.push({
+              serviceName: query.desc.serviceName,
+              type: 'updated',
+              item,
+              previousItem,
+              itemId,
+            })
+          }
+        }
+        if (processedEvents.length > 0) {
+          updateQueriesFromEvents({
+            service,
+            appliedItems: processedEvents,
+            touch,
+            getId,
+            itemAdded: meta => this.#adapter.itemAdded(meta),
+            itemRemoved: meta => this.#adapter.itemRemoved(meta),
+            serverMaintainedQueriesToRefetch,
+            excludeQueryId: queryId,
+          })
+        }
+      }
     })
     this.#notify(touched)
+
+    if (processedEvents.length > 0) {
+      // Same follow-ups as the realtime event path: reconcile queries that can't
+      // merge locally and surface the changes to relational-filter invalidation.
+      // Unlike realtime events, diffs don't trigger `realtime: 'refetch'` queries —
+      // a refetch-on-diff that itself diffs would cycle.
+      for (const id of serverMaintainedQueriesToRefetch) {
+        if (id !== queryId) this.#requestReconcile(id)
+      }
+      for (const event of processedEvents) {
+        this.#emitProcessedEvent(event)
+      }
+    }
 
     if (shouldRefetch && this.#listenerCount(queryId) > 0) {
       this.#queue(queryId)
@@ -1486,6 +1566,7 @@ function updateQueriesFromEvents<TMeta>({
   itemAdded,
   itemRemoved,
   serverMaintainedQueriesToRefetch,
+  excludeQueryId,
 }: {
   service: ServiceState<TMeta>
   appliedItems: ProcessedRealtimeEvent[]
@@ -1494,6 +1575,8 @@ function updateQueriesFromEvents<TMeta>({
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
   serverMaintainedQueriesToRefetch: Set<string>
+  /** A query whose state already reflects the applied items (e.g. the fetch they came from). */
+  excludeQueryId?: string
 }): void {
   for (const { type, item, itemId } of appliedItems) {
     if (!service.itemQueryIndex.has(itemId)) {
@@ -1503,6 +1586,10 @@ function updateQueriesFromEvents<TMeta>({
 
     for (const [queryId, query] of service.queries) {
       let matches: boolean
+
+      if (queryId === excludeQueryId) {
+        continue
+      }
 
       if (query.config.realtime !== 'merge') {
         continue
