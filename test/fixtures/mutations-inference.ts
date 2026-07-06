@@ -73,7 +73,7 @@ export const invalidResult: Promise<{ id: string; status: 'draft' }> =
   m['api/esign-instances'].requestSendDocument('esign_1')
 
 // @ts-expect-error - the confirmed variant has no nested confirmed
-m['api/esign-instances'].confirmed.confirmed
+export const nestedConfirmed = m['api/esign-instances'].confirmed.confirmed
 
 // @ts-expect-error - unknown service names are rejected on the proxy
-m.notAService
+export const unknownService = m.notAService
