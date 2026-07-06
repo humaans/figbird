@@ -76,6 +76,10 @@ export class QueryStore<
   > = new Map()
   #deferredWhileHidden: Set<string> = new Set()
 
+  // Custom operator names the adapter evaluates locally — extends classification's
+  // locally-evaluable operator set (see FeathersAdapterOptions.operators).
+  #localOperators: ReadonlySet<string>
+
   #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchInterval: number | undefined = 100
@@ -107,6 +111,7 @@ export class QueryStore<
     visibility?: VisibilitySource
   }) {
     this.#adapter = adapter
+    this.#localOperators = new Set(adapter.customOperators ?? [])
     this.#eventBatchInterval = eventBatchInterval
     this.#events = events ?? new FigbirdEventEmitter()
     this.#mutations = mutations ?? new MutationTracker()
@@ -150,6 +155,7 @@ export class QueryStore<
               {
                 server: (config as { server?: boolean }).server,
                 allPages: (config as { allPages?: boolean }).allPages,
+                localOperators: this.#localOperators,
               },
             )
 
@@ -516,7 +522,12 @@ export class QueryStore<
     const q = (query.desc.params as { query?: Record<string, unknown> } | undefined)?.query
     // allPages: true neutralizes window filters in classification — windows are
     // computed locally below; anything else non-local still goes to the server.
-    if (classifyQueryNode(q, { allPages: true }) !== 'local-exact') return null
+    if (
+      classifyQueryNode(q, { allPages: true, localOperators: this.#localOperators }) !==
+      'local-exact'
+    ) {
+      return null
+    }
 
     const { filters, sort, limit, skip } = splitWindow(q)
     const match = config.matcher

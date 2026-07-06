@@ -608,6 +608,38 @@ Use `.server()` on a builder when a query _looks_ locally provable but isn't, sa
 q.documents.where({ visibleTo: userId }).server()
 ```
 
+### Teaching the client custom operators
+
+The inverse escape hatch: when your API has a custom operator the client _could_
+evaluate, register it on the adapter and queries using it stay realtime-mergeable
+instead of classifying server-authoritative. The canonical example is `$asOf` on
+effective-dated services:
+
+```ts
+const adapter = new FeathersAdapter(feathers, {
+  operators: {
+    $asOf: asOf => item => isEffectiveOn(item, asOf),
+  },
+})
+
+// classifies local-exact — a patched endDate or a newly created row merges
+// straight from the socket event, no refetch
+useQuery(q.people.related('jobRole', r => r.where({ $asOf: today })))
+```
+
+The implementation receives the operand from the query (`'2026-07-06'`) and returns
+an item predicate. Registered operators apply at the top level of the query, work in
+relation refinements and `.all()` materialized reads alike, and show up in
+`figbird.explain()` as local.
+
+This is a correctness contract: the predicate must reproduce the server's membership
+semantics for that operator _exactly_ — figbird trusts it to decide which realtime
+events belong in which results. If the server's operator does more than filter (picks
+one row among several, orders, dedupes), keep it unregistered and let refetching stay
+authoritative. And mind operators whose meaning shifts with time: "current as of
+today" changes at midnight with no event; a day-keyed operand rolls the cache entry
+naturally.
+
 ### Reconciliation cadence
 
 A refetch triggered by an event is a **reconciliation**, not a freshness requirement:
@@ -1170,6 +1202,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `updatedAtField` — string or function, defaults to `item => item.updatedAt || item.updated_at`; used to avoid overwriting newer cached data with older data when requests race
   - `defaultPageSize` — default `query.$limit` when fetching, unset by default so the server decides
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
+  - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
 

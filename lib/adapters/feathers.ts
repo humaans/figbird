@@ -164,11 +164,32 @@ export type TypedFeathersClient<S extends Schema> = {
   >
 }
 
+/**
+ * A custom query operator implementation: receives the operand from the query
+ * (`{ $asOf: '2026-07-06' }` → `'2026-07-06'`) and returns an item predicate.
+ * Registered operators are matched at the top level of the query.
+ */
+export type CustomOperator = (operand: unknown) => (item: unknown) => boolean
+
 interface FeathersAdapterOptions {
   idField?: IdFieldType
   updatedAtField?: UpdatedAtFieldType
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
+  /**
+   * Teach the client to evaluate custom query operators locally, so queries using
+   * them stay realtime-mergeable instead of classifying server-authoritative.
+   *
+   * This is a correctness contract: the predicate must reproduce the server's
+   * membership semantics for the operator exactly — figbird will trust it to decide
+   * which realtime events belong in which query results.
+   *
+   * @example
+   * operators: {
+   *   $asOf: asOf => item => isEffectiveOn(item, asOf),
+   * }
+   */
+  operators?: Record<string, CustomOperator>
 }
 
 /**
@@ -193,6 +214,12 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #updatedAtField: UpdatedAtFieldType
   #defaultPageSize: number | undefined
   #defaultPageSizeWhenFetchingAll: number | undefined
+  #operators: Record<string, CustomOperator>
+
+  /** Names of the registered custom operators — consumed by query classification. */
+  get customOperators(): readonly string[] {
+    return Object.keys(this.#operators)
+  }
 
   /**
    * Helper to merge query parameters while maintaining type safety
@@ -220,6 +247,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       },
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
+      operators = {},
     }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
@@ -227,6 +255,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#updatedAtField = updatedAtField
     this.#defaultPageSize = defaultPageSize
     this.#defaultPageSizeWhenFetchingAll = defaultPageSizeWhenFetchingAll
+    this.#operators = operators
   }
 
   #service(serviceName: string): FeathersService {
@@ -411,8 +440,24 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   matcher(query: TQuery | undefined, options?: PrepareQueryOptions): (item: unknown) => boolean {
-    // Cast to Query type - the matcher function will validate and clean the query internally
-    return matcher(query as Query | undefined, options)
+    // Registered custom operators are peeled off the top level of the query and
+    // composed as predicates around the sift-based matcher for the rest.
+    const q = query as Record<string, unknown> | undefined
+    const present = q ? Object.keys(this.#operators).filter(name => name in q) : []
+    if (present.length === 0) {
+      // Cast to Query type - the matcher function will validate and clean the query internally
+      return matcher(query as Query | undefined, options)
+    }
+
+    const rest: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(q as Record<string, unknown>)) {
+      if (this.#operators[key] === undefined) rest[key] = value
+    }
+    const predicates = present.map(name =>
+      this.#operators[name]!((q as Record<string, unknown>)[name]),
+    )
+    const base = matcher(rest as Query, options)
+    return item => base(item) && predicates.every(predicate => predicate(item))
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {

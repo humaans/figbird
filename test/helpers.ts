@@ -4,7 +4,13 @@ import type { ReactElement, ReactNode } from 'react'
 import { act, createElement, StrictMode } from 'react'
 import type { Root } from 'react-dom/client'
 import { createRoot } from 'react-dom/client'
-import { FeathersAdapter, Figbird, FigbirdProvider, type Schema } from '../lib/index.js'
+import {
+  FeathersAdapter,
+  Figbird,
+  FigbirdProvider,
+  type CustomOperator,
+  type Schema,
+} from '../lib/index.js'
 import type { FeathersClient } from '../lib/index.js'
 
 // Local test type for Feathers items
@@ -429,13 +435,16 @@ export function installQueryAwareFind(
 export function createTestApp<S extends Schema>(
   schema: S,
   services: MockFeathersServices,
-  { queryAwareFind = false }: { queryAwareFind?: boolean } = {},
+  {
+    queryAwareFind = false,
+    operators,
+  }: { queryAwareFind?: boolean; operators?: Record<string, CustomOperator> } = {},
 ) {
   const serviceNames = Object.keys(services).filter(name => name !== 'skipTotal')
   const feathers = mockFeathers(services)
   if (queryAwareFind) installQueryAwareFind(feathers, serviceNames)
 
-  const adapter = new FeathersAdapter(feathers)
+  const adapter = new FeathersAdapter(feathers, operators ? { operators } : {})
   const figbird = new Figbird({
     schema,
     adapter,

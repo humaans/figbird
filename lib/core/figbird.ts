@@ -657,17 +657,24 @@ export class Figbird<
       : queryOrBuilder
     const ast = builder.toAST()
     const nodes: ExplainNode[] = []
-    this.#explainAst(ast, '(root)', true, nodes)
+    this.#explainAst(ast, '(root)', true, nodes, new Set(this.adapter.customOperators ?? []))
     return { nodes }
   }
 
-  #explainAst(ast: QueryAST, path: string, isRoot: boolean, nodes: ExplainNode[]): void {
+  #explainAst(
+    ast: QueryAST,
+    path: string,
+    isRoot: boolean,
+    nodes: ExplainNode[],
+    localOperators: ReadonlySet<string>,
+  ): void {
     const snapshot = Boolean(ast.snapshot)
     // Mirrors the runtime: .all() drains every page, so window filters ($sort — the
     // builder refuses $limit/$skip) don't demote the class.
     const explained = explainQueryNode(ast.query, {
       server: ast.server,
       allPages: ast.kind === 'all',
+      localOperators,
     })
     if (snapshot) {
       explained.reasons = [...explained.reasons, { code: 'snapshot', detail: '.snapshot()' }]
@@ -689,14 +696,20 @@ export class Figbird<
       realtime: snapshot ? 'manual' : explained.class === 'local-exact' ? 'merge' : 'refetch',
     })
 
-    this.#explainRelations(ast, path, snapshot, nodes)
+    this.#explainRelations(ast, path, snapshot, nodes, localOperators)
   }
 
   /**
    * One walk for relations at every depth. `snapshot` is the root's — `.snapshot()`
    * freezes the root and every relation under it, so it propagates all the way down.
    */
-  #explainRelations(ast: QueryAST, path: string, snapshot: boolean, nodes: ExplainNode[]): void {
+  #explainRelations(
+    ast: QueryAST,
+    path: string,
+    snapshot: boolean,
+    nodes: ExplainNode[],
+    localOperators: ReadonlySet<string>,
+  ): void {
     const relationships = this.schema?.relationships?.[ast.service] ?? {}
     for (const [relName, relAST] of Object.entries(ast.related)) {
       const relDef = relationships[relName]
@@ -708,6 +721,7 @@ export class Figbird<
       const relExplained = explainQueryNode(relAST.query, {
         server: relAST.server,
         allPages: !windowed,
+        localOperators,
       })
       if (windowed && relDef?.cardinality === 'many' && !relDef.via) {
         relExplained.reasons = [
@@ -724,7 +738,7 @@ export class Figbird<
         realtime: snapshot ? 'manual' : relExplained.class === 'local-exact' ? 'merge' : 'refetch',
         ...(relDef?.via ? { via: relDef.via.destService } : {}),
       })
-      this.#explainRelations(relAST, relPath, snapshot, nodes)
+      this.#explainRelations(relAST, relPath, snapshot, nodes, localOperators)
     }
   }
 

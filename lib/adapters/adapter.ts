@@ -62,6 +62,15 @@ export interface Adapter<
   // Matcher is typed with TQuery but works with unknown items
   matcher(query: TQuery | undefined, options?: unknown): (item: unknown) => boolean
 
+  /**
+   * Optional: names of custom query operators the app has taught this adapter to
+   * evaluate client-side (e.g. `$asOf` on effective-dated services). Queries using
+   * these classify as locally maintainable — realtime events merge instead of
+   * refetching — so the adapter's `matcher` MUST evaluate them with exactly the
+   * server's membership semantics.
+   */
+  customOperators?: readonly string[]
+
   // Meta transformation methods
   itemAdded(meta: TMeta): TMeta
   itemRemoved(meta: TMeta): TMeta
