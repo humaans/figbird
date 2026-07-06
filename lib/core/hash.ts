@@ -4,39 +4,71 @@
  */
 
 /**
- * Stable serialization that ensures consistent key ordering
+ * Stable serialization that ensures consistent key ordering.
+ *
+ * Matches `JSON.stringify` semantics (toJSON honored, undefined/function values
+ * dropped from objects and nulled in arrays, NaN/Infinity → null, BigInt throws)
+ * with two deliberate differences: object keys are sorted, and true cycles encode
+ * as a `"__circular"` marker instead of throwing. The cycle guard tracks only the
+ * *current path* of ancestors — a shared (DAG) reference appearing twice as a
+ * sibling serializes normally both times, so two structurally identical queries
+ * hash identically regardless of object aliasing.
  */
 function stableSerialize(value: unknown): string {
-  const seen = new WeakSet<object>()
+  const out = serialize(value, new Set<object>())
+  // A top-level value with no JSON form (undefined, function, symbol) has no
+  // stable identity — fail loudly rather than hash an empty string.
+  if (out === undefined) {
+    throw new TypeError('hashObject: value has no serializable form')
+  }
+  return out
+}
 
-  function replacer(_key: string, val: unknown): unknown {
-    // Handle objects
-    if (typeof val === 'object' && val !== null) {
-      // Check for cycles
-      if (seen.has(val as object)) {
-        return '__circular'
-      }
-      seen.add(val as object)
+function serialize(value: unknown, path: Set<object>): string | undefined {
+  if (value === null) return 'null'
+  const t = typeof value
+  if (t === 'string' || t === 'number' || t === 'boolean') {
+    return JSON.stringify(value) // JSON escaping; NaN/Infinity → 'null'
+  }
+  if (t === 'bigint') {
+    throw new TypeError('Do not know how to serialize a BigInt')
+  }
+  if (t !== 'object') return undefined // undefined, function, symbol
 
-      // Handle arrays - preserve order
-      if (Array.isArray(val)) {
-        return val
-      }
+  const obj = value as object
 
-      // Handle regular objects - sort keys for stability
-      const sorted: Record<string, unknown> = {}
-      const keys = Object.keys(val as Record<string, unknown>).sort()
-      for (const key of keys) {
-        sorted[key] = (val as Record<string, unknown>)[key]
-      }
-      return sorted
-    }
-
-    // Handle primitives
-    return val
+  // toJSON runs first, exactly as in JSON.stringify (this is what turns Dates
+  // inside query filters into ISO strings).
+  const toJSON = (obj as { toJSON?: () => unknown }).toJSON
+  if (typeof toJSON === 'function') {
+    return serialize(toJSON.call(obj), path)
   }
 
-  return JSON.stringify(value, replacer)
+  if (path.has(obj)) return '"__circular"'
+  path.add(obj)
+  try {
+    if (Array.isArray(obj)) {
+      let out = '['
+      for (let i = 0; i < obj.length; i++) {
+        if (i > 0) out += ','
+        out += serialize(obj[i], path) ?? 'null'
+      }
+      return out + ']'
+    }
+    const record = obj as Record<string, unknown>
+    let out = '{'
+    let first = true
+    for (const key of Object.keys(record).sort()) {
+      const child = serialize(record[key], path)
+      if (child === undefined) continue
+      if (!first) out += ','
+      first = false
+      out += JSON.stringify(key) + ':' + child
+    }
+    return out + '}'
+  } finally {
+    path.delete(obj)
+  }
 }
 
 // FNV-1a 32-bit parameters. Two independent accumulators with different offset
