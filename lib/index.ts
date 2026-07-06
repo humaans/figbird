@@ -13,6 +13,7 @@ export {
 
 export type {
   ArgsAndOptions,
+  DefineQuery,
   EventType,
   FigbirdEvent,
   FigbirdEvents,
@@ -101,6 +102,7 @@ export { DelayedFallback } from './react/DelayedFallback.js'
 export type {
   RelationalQueryResult,
   SuspenseQueryResult,
+  UseQueryHook,
   UseQueryOptions,
 } from './react/useQuery.js'
 
