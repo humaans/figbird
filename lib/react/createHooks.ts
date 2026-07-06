@@ -12,9 +12,8 @@ import {
   type MutationsProxy,
   type PreparedQuery,
   type QueryConfig,
-  type StandardSchemaV1,
 } from '../core/figbird.js'
-import type { AnyQueryBuilder, QueryBuilderKind } from '../core/queryBuilder.js'
+import type { AnyQueryBuilder } from '../core/queryBuilder.js'
 import type {
   Schema,
   ServiceCreate,
@@ -31,15 +30,14 @@ import { useActionImpl, type UseActionHook, type UseActionResult } from './useAc
 import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
 import { useMutationImpl, type UseMutationResult } from './useMutation.js'
 import { useQueryByDescImpl, type QueryResult } from './useQueryByDesc.js'
-import { useQueryImpl, type FigbirdLike } from './useQuery.js'
-import type {
-  RelationalQueryResult,
-  SkipAware,
-  SuspenseQueryResult,
-  UseQueryOptions,
+import {
+  useQueryImpl,
+  type FigbirdLike,
+  type UseQueryHook,
+  type UseQueryOptions,
 } from './useQuery.js'
-import type { ArgsAndOptions, ArgsAndRequiredOptions, QueryDefinition } from '../core/figbird.js'
-import type { QueryBuilderProxy, QueryBuilderResult } from '../core/queryBuilder.js'
+import type { ArgsAndOptions, DefineQuery, QueryDefinition } from '../core/figbird.js'
+import type { QueryBuilderProxy } from '../core/queryBuilder.js'
 
 /**
  * Strongly-typed call signatures per service name.
@@ -93,48 +91,8 @@ type UseMutatingForSchema<S extends Schema> = (
 
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
-interface UseQueryForSchema<S extends Schema> {
-  // Builder, non-suspense — returns the tagged union, never throws
-  <B extends AnyQueryBuilder<S>>(
-    query: B,
-    options: UseQueryOptions & { suspense: false },
-  ): RelationalQueryResult<QueryBuilderResult<B>>
-  // Definition, non-suspense — args omittable when the definition takes none
-  <Args, B extends AnyQueryBuilder<S>>(
-    definition: QueryDefinition<Args, B>,
-    ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
-  ): RelationalQueryResult<QueryBuilderResult<B>>
-  // Builder
-  <B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
-    query: B,
-    options?: O,
-  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-  // Definition — args omittable when the definition takes none
-  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
-    definition: QueryDefinition<Args, B>,
-    ...rest: ArgsAndOptions<Args, O>
-  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-}
-
 /** Schema-typed defineQuery: builders must come from this schema. Name optional. */
-interface DefineQueryForSchema<S extends Schema> {
-  <B extends AnyQueryBuilder<S>>(build: () => B): QueryDefinition<void, B>
-  <Args, B extends AnyQueryBuilder<S>>(build: (args: Args) => B): QueryDefinition<Args, B>
-  <TSchema extends StandardSchemaV1, B extends AnyQueryBuilder<S>>(
-    argsSchema: TSchema,
-    build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
-  <B extends AnyQueryBuilder<S>>(name: string, build: () => B): QueryDefinition<void, B>
-  <Args, B extends AnyQueryBuilder<S>>(
-    name: string,
-    build: (args: Args) => B,
-  ): QueryDefinition<Args, B>
-  <TSchema extends StandardSchemaV1, B extends AnyQueryBuilder<S>>(
-    name: string,
-    argsSchema: TSchema,
-    build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
-}
+type DefineQueryForSchema<S extends Schema> = DefineQuery<AnyQueryBuilder<S>>
 
 type PrepareForSchema<S extends Schema> = <Args, B extends AnyQueryBuilder<S>>(
   query: QueryDefinition<Args, B>,
@@ -186,7 +144,7 @@ export function createHooks<F extends Figbird<any, any>>(
    */
   useMutation: UseMutationForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
-  useQuery: UseQueryForSchema<InferSchema<F>>
+  useQuery: UseQueryHook<InferSchema<F>>
   q: QueryBuilderProxy<InferSchema<F>>
   defineQuery: DefineQueryForSchema<InferSchema<F>>
   prepare: PrepareForSchema<InferSchema<F>>
@@ -329,7 +287,7 @@ export function createHooks<F extends Figbird<any, any>>(
     useMutation: useTypedMutation as UseMutationForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
     // The typed schema binding is enforced via QueryBuilder<S, T> on the call signatures.
-    useQuery: useTypedQuery as unknown as UseQueryForSchema<S>,
+    useQuery: useTypedQuery as unknown as UseQueryHook<S>,
     // The builder proxy off the bound instance — `useQuery(q.issues.where(...))` with a
     // single import. Lazy so schemaless instances only throw if actually accessed.
     get q(): QueryBuilderProxy<S> {

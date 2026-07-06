@@ -78,6 +78,7 @@ export {
 export type {
   ArgsAndOptions,
   ArgsAndRequiredOptions,
+  DefineQuery,
   PreparedQuery,
   QueryDefinition,
   StandardSchemaV1,
@@ -686,6 +687,14 @@ export class Figbird<
       realtime: snapshot ? 'manual' : explained.class === 'local-exact' ? 'merge' : 'refetch',
     })
 
+    this.#explainRelations(ast, path, snapshot, nodes)
+  }
+
+  /**
+   * One walk for relations at every depth. `snapshot` is the root's — `.snapshot()`
+   * freezes the root and every relation under it, so it propagates all the way down.
+   */
+  #explainRelations(ast: QueryAST, path: string, snapshot: boolean, nodes: ExplainNode[]): void {
     const relationships = this.schema?.relationships?.[ast.service] ?? {}
     for (const [relName, relAST] of Object.entries(ast.related)) {
       const relDef = relationships[relName]
@@ -713,35 +722,7 @@ export class Figbird<
         realtime: snapshot ? 'manual' : relExplained.class === 'local-exact' ? 'merge' : 'refetch',
         ...(relDef?.via ? { via: relDef.via.destService } : {}),
       })
-      if (Object.keys(relAST.related).length > 0) {
-        this.#explainRelated(relAST, relPath, nodes)
-      }
-    }
-  }
-
-  #explainRelated(ast: QueryAST, path: string, nodes: ExplainNode[]): void {
-    // Nested relations reuse the same walk minus the root handling.
-    const relationships = this.schema?.relationships?.[ast.service] ?? {}
-    for (const [relName, relAST] of Object.entries(ast.related)) {
-      const relDef = relationships[relName]
-      const relPath = `${path}.${relName}`
-      const windowed = hasWindowFilters(relAST.query)
-      const relExplained = explainQueryNode(relAST.query, {
-        server: relAST.server,
-        allPages: !windowed,
-      })
-      nodes.push({
-        path: relPath,
-        service: relDef?.destService ?? relName,
-        kind: 'find',
-        class: relExplained.class,
-        reasons: relExplained.reasons,
-        realtime: relExplained.class === 'local-exact' ? 'merge' : 'refetch',
-        ...(relDef?.via ? { via: relDef.via.destService } : {}),
-      })
-      if (Object.keys(relAST.related).length > 0) {
-        this.#explainRelated(relAST, relPath, nodes)
-      }
+      this.#explainRelations(relAST, relPath, snapshot, nodes)
     }
   }
 

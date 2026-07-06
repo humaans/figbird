@@ -177,6 +177,27 @@ export function validateQueryArgs<T>(
 }
 
 /**
+ * The `defineQuery` call surface — declared once and shared by the standalone export
+ * (unconstrained builders) and the `createHooks` kit variant (builders bound to a
+ * schema via `TBuilder`), so the two can never drift.
+ */
+export interface DefineQuery<TBuilder = unknown> {
+  <B extends TBuilder>(build: () => B): QueryDefinition<void, B>
+  <Args, B extends TBuilder>(build: (args: Args) => B): QueryDefinition<Args, B>
+  <TSchema extends StandardSchemaV1, B extends TBuilder>(
+    argsSchema: TSchema,
+    build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
+  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+  <B extends TBuilder>(name: string, build: () => B): QueryDefinition<void, B>
+  <Args, B extends TBuilder>(name: string, build: (args: Args) => B): QueryDefinition<Args, B>
+  <TSchema extends StandardSchemaV1, B extends TBuilder>(
+    name: string,
+    argsSchema: TSchema,
+    build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
+  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+}
+
+/**
  * Create a named, args-keyed query factory. Definitions are inert, pure values — they
  * hold no cache state and are not tied to a Figbird instance; identity comes from the
  * built builder's AST hash. Prefer the schema-typed `defineQuery` returned by
@@ -193,27 +214,11 @@ export function validateQueryArgs<T>(
  * A zero-param build produces a `QueryDefinition<void, B>`, whose consumers
  * (`prepare`, `prefetch`, `useQuery`) may omit the `args` argument entirely.
  */
-export function defineQuery<B>(build: () => B): QueryDefinition<void, B>
-export function defineQuery<Args, B>(build: (args: Args) => B): QueryDefinition<Args, B>
-export function defineQuery<TSchema extends StandardSchemaV1, B>(
-  argsSchema: TSchema,
-  build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
-export function defineQuery<B>(name: string, build: () => B): QueryDefinition<void, B>
-export function defineQuery<Args, B>(
-  name: string,
-  build: (args: Args) => B,
-): QueryDefinition<Args, B>
-export function defineQuery<TSchema extends StandardSchemaV1, B>(
-  name: string,
-  argsSchema: TSchema,
-  build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
-export function defineQuery(
+export const defineQuery: DefineQuery = ((
   a: string | StandardSchemaV1 | ((args: unknown) => unknown),
   b?: StandardSchemaV1 | ((args: unknown) => unknown),
   c?: (args: unknown) => unknown,
-): QueryDefinition<unknown, unknown> {
+): QueryDefinition<unknown, unknown> => {
   const name = typeof a === 'string' ? a : ''
   const [x, y] = typeof a === 'string' ? [b, c] : [a, b]
   const argsSchema = y ? (x as StandardSchemaV1) : null
@@ -226,7 +231,7 @@ export function defineQuery(
       ? (args: unknown) => validateQueryArgs(name || '(anonymous)', argsSchema, args)
       : (args: unknown) => args,
   }
-}
+}) as DefineQuery
 
 /**
  * Handle returned by `figbird.prepare(definition, args)` — an explicit lease on a

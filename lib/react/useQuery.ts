@@ -30,6 +30,7 @@ import {
   type RelationalPaginationState,
   type RelationalQueryState,
 } from '../core/figbird.js'
+import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
 
 /**
@@ -209,6 +210,35 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
     : T
 
 /**
+ * The `useQuery` call surface — builder/definition × suspense/non-suspense. Declared
+ * once and shared by the root export (schema-agnostic) and the `createHooks` kit
+ * (bound to a schema), so the two can never drift.
+ */
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export interface UseQueryHook<S extends Schema = any> {
+  // Builder, non-suspense — returns the tagged union, never throws
+  <B extends AnyQueryBuilder<S>>(
+    query: B,
+    options: UseQueryOptions & { suspense: false },
+  ): RelationalQueryResult<QueryBuilderResult<B>>
+  // Definition, non-suspense — args omittable when the definition takes none
+  <Args, B extends AnyQueryBuilder<S>>(
+    definition: QueryDefinition<Args, B>,
+    ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
+  ): RelationalQueryResult<QueryBuilderResult<B>>
+  // Builder
+  <B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+    query: B,
+    options?: O,
+  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
+  // Definition — args omittable when the definition takes none
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+    definition: QueryDefinition<Args, B>,
+    ...rest: ArgsAndOptions<Args, O>
+  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
+}
+
+/**
  * Suspense-native query hook for relational queries.
  *
  * ```tsx
@@ -222,41 +252,17 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
  * across a param change, wrap the param state update in `startTransition` — React keeps
  * the previous render committed while the new data resolves.
  */
-// Overload: builder, non-suspense — returns the tagged union, never throws
-export function useQuery<B extends AnyQueryBuilder>(
-  query: B,
-  options: UseQueryOptions & { suspense: false },
-): RelationalQueryResult<QueryBuilderResult<B>>
-// Overload: definition, non-suspense — args omittable when the definition takes none
-export function useQuery<Args, B extends AnyQueryBuilder>(
-  definition: QueryDefinition<Args, B>,
-  ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
-): RelationalQueryResult<QueryBuilderResult<B>>
-// Overload: builder
-export function useQuery<
-  B extends AnyQueryBuilder,
-  O extends UseQueryOptions = Record<string, never>,
->(
-  query: B,
-  options?: O,
-): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-// Overload: definition — args omittable when the definition takes none
-export function useQuery<
-  Args,
-  B extends AnyQueryBuilder,
-  O extends UseQueryOptions = Record<string, never>,
->(
-  definition: QueryDefinition<Args, B>,
-  ...rest: ArgsAndOptions<Args, O>
-): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-// Implementation
-export function useQuery(
+export const useQuery: UseQueryHook = ((
   queryOrDefinition: unknown,
   argsOrOptions?: unknown,
   maybeOptions?: UseQueryOptions,
-): unknown {
-  return useQueryImpl(useFigbird() as FigbirdLike, queryOrDefinition, argsOrOptions, maybeOptions)
-}
+): unknown =>
+  useQueryImpl(
+    useFigbird() as FigbirdLike,
+    queryOrDefinition,
+    argsOrOptions,
+    maybeOptions,
+  )) as UseQueryHook
 
 /**
  * Instance-taking dispatch shared by the context-bound `useQuery` and the
