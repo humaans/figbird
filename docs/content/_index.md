@@ -734,9 +734,10 @@ the set or it doesn't, so the slice is maintained by local merges with no refetc
 Unfiltered, it doubles as the reference-data preload (locations, currencies, roles). On success
 the service is **fully materialized**: every later read the client can evaluate — finds with
 filters, sorted and limited windows, and `get(id)` — is answered locally from the cache with
-**no network roundtrip**, and realtime events maintain the set. (A `get` for an id that isn't
-in the set still asks the server, and `.get(id).where(...)` conditions are always
-server-evaluated.) Typically paired with preparation at the app shell:
+**no network roundtrip**, and realtime events maintain the set. (`.get(id).where(...)`
+conditions evaluate locally too when the matcher can decide them; a `get` whose local
+answer would be an error — missing id, failing predicate — still asks the server, which
+owns the error shape.) Typically paired with preparation at the app shell:
 
 ```ts
 export const allLocations = defineQuery('allLocations', () => q.locations.all())
