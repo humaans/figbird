@@ -41,7 +41,7 @@ export type {
   RelationshipDef,
   RelationshipHelpers,
   RelationshipHop,
-  RelationshipsFactory,
+  RelationshipsConfig,
   Schema,
   SchemaRelationships,
   Service,

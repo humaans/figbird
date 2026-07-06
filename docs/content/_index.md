@@ -72,15 +72,15 @@ export const schema = createSchema({
     users: service<{ item: User }>(),
     comments: service<{ item: Comment }>(),
   },
-  relationships: ({ one, many }) => ({
-    issues: {
+  relationships: {
+    issues: ({ one, many }) => ({
       creator: one({ sourceField: 'creatorId', destService: 'users' }),
       comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' }),
-    },
-    comments: {
+    }),
+    comments: ({ one }) => ({
       author: one({ sourceField: 'authorId', destService: 'users' }),
-    },
-  }),
+    }),
+  },
 })
 
 export const figbird = new Figbird({
@@ -140,9 +140,9 @@ const schema = createSchema({
     tasks: service<TaskService>(),
     people: service<PersonService>({ path: 'api/people' }),
   },
-  relationships: ({ one, many, embed }) => ({
-    /* ... */
-  }),
+  relationships: {
+    /* per-service factories — see Relations */
+  },
 })
 ```
 
@@ -212,8 +212,8 @@ Relation names autocomplete from the schema and the result type is assembled aut
 Three relationship kinds cover the shapes you'll meet:
 
 ```ts
-relationships: ({ one, many, embed }) => ({
-  issues: {
+relationships: {
+  issues: ({ one, many }) => ({
     // one: FK on the parent → single item
     creator: one({ sourceField: 'creatorId', destService: 'users' }),
 
@@ -226,16 +226,18 @@ relationships: ({ one, many, embed }) => ({
       { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
       { sourceField: 'labelId', destService: 'labels' },
     ),
-  },
-  teams: {
+  }),
+  teams: ({ embed }) => ({
     // embed: the parent carries a server-maintained list of ids; Figbird fans
     // every parent's list into ONE batched IN(...) fetch, preserving order
     spotlight: embed({ sourceField: 'spotlightIssueIds', destService: 'issues' }),
-  },
-})
+  }),
+}
 ```
 
-`destField` defaults to `'id'`; fields accept arrays for compound keys. Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service's realtime events.
+`destField` defaults to `'id'`; fields accept arrays for compound keys. Each service's factory gets helpers scoped to it, so every field name above type-checks: `sourceField` against the source item, `destService` against the schema, `destField` against the destination item. A generated schema fails to compile at exactly the relationship that went stale.
+
+Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service's realtime events.
 
 Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** like `.related('recent', i => i.orderBy(...).limit(5))`, which needs one query _per parent_ because per-parent windows can't be expressed as a single find. Figbird warns past 10 parents and points at `embed` as the batched alternative.
 
@@ -1082,8 +1084,9 @@ const schema = createSchema({ services, relationships? })
 ```
 
 Builds the typed schema. `services` keys become literal service names that every API narrows
-on; the optional `relationships` factory receives `{ one, many, embed }` helpers typed against
-your services, so `destService` autocompletes.
+on. `relationships` takes one factory per source service, each receiving `{ one, many, embed }`
+helpers scoped to that service — so `sourceField`, `destService`, and `destField` all
+type-check against the actual items, including both hops of a junction `many`.
 
 ## service
 

@@ -1,13 +1,15 @@
 # Figbird Changelog
 
-## Unreleased
+## 0.24.0
 
 The relational rewrite — a new API centered on `q`/`useQuery` for reads and
 `m`/`useAction`/`useMutating` for writes. See the
 [docs](https://humaans.github.io/figbird) for the full story.
 
 - Relational queries: declare relations once in the schema, `.related()` assembles
-  typed entity graphs, kept live by realtime events.
+  typed entity graphs, kept live by realtime events. Relationships are declared per
+  source service, so `sourceField`/`destService`/`destField` all type-check against
+  the actual items.
 - `useQuery` is Suspense-native; query classification decides merge-vs-refetch
   realtime behavior automatically (no per-query `realtime` config).
 - Writes through `m` are optimistic by default with global rollback; `confirmed`
@@ -20,14 +22,13 @@ Breaking:
 
 - `defineSchema` service-definition maps are replaced by `createSchema` + `service` +
   relationship helpers.
-- `figbird.query(desc)` → `figbird.queryDesc(desc)`, `figbird.mutate(desc)` →
-  `figbird.mutateDesc(desc)`; `figbird.query(builder | definition, args?)` is now the
-  non-React mirror of `useQuery`.
-- Removed `useService` and `useMethod` — services and custom methods live on
-  `m.<service>` handles.
+- `figbird.query(desc)` → `figbird.queryDesc(desc)`
+- `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
+- `figbird.query(builder | definition, args?)` is now the non-React mirror of `useQuery`
+- Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
 
-Deprecated (fully functional, semantics unchanged): `useFind`/`useGet` in favor of
-`useQuery` + builders; `useMutation` in favor of `m` + `useAction` + `useMutating`.
+Deprecated (still fully functional): `useFind`/`useGet` in favor of
+`useQuery` + builders, and `useMutation` in favor of `m` + `useAction` + `useMutating`.
 
 ## 0.23.0
 
