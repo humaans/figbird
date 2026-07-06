@@ -155,6 +155,8 @@ export function createHooks<F extends Figbird<any, any>>(
   defineQuery: DefineQueryForSchema<InferSchema<F>>
   prepare: PrepareForSchema<InferSchema<F>>
   prefetch: PrefetchForSchema<InferSchema<F>>
+  /** Manual refetch escape hatch for eventless changes (see `figbird.refetch`). */
+  refetch: (serviceName?: ServiceNames<InferSchema<F>> | (string & {})) => void
   m: MutationsProxy<InferSchema<F>>
   useAction: UseActionHook
   useMutating: UseMutatingForSchema<InferSchema<F>>
@@ -309,6 +311,10 @@ export function createHooks<F extends Figbird<any, any>>(
     // Instance-bound conveniences: same primitives as figbird.prepare/prefetch.
     prepare: figbird.prepare.bind(figbird) as PrepareForSchema<S>,
     prefetch: figbird.prefetch.bind(figbird) as PrefetchForSchema<S>,
+    // Manual refetch escape hatch for eventless changes (see figbird.refetch).
+    refetch: figbird.refetch.bind(figbird) as (
+      serviceName?: ServiceNames<S> | (string & {}),
+    ) => void,
     // The write proxy — not a hook; callable anywhere. Like prepare/prefetch,
     // bound to the createHooks instance (a provider override can't reach non-hooks).
     get m(): MutationsProxy<S> {

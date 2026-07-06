@@ -635,6 +635,19 @@ export class Figbird<
   }
 
   /**
+   * Manually refetch cached queries — the escape hatch for changes figbird cannot
+   * observe (custom methods on services without realtime events, out-of-band
+   * writes). `figbird.refetch('issues')` refetches every query on the service;
+   * `figbird.refetch()` refetches everything. Active queries refetch immediately;
+   * inactive cached ones refetch when next subscribed.
+   */
+  refetch(serviceName?: ServiceNames<S> | (string & {})): void {
+    this.queryStore.refetchQueries(
+      serviceName === undefined ? undefined : resolveServicePath(this.schema, serviceName),
+    )
+  }
+
+  /**
    * Static analysis of a query: one entry per node (root + each relation, dotted
    * paths for nesting) with figbird's classification of how that node is maintained
    * and the structured reasons why. No fetching happens — callable anywhere.

@@ -972,6 +972,33 @@ export class QueryStore<
     this.#deferredWhileHidden.delete(queryId)
   }
 
+  /**
+   * Manually refetch cached queries — the escape hatch for changes figbird cannot
+   * observe: custom methods on services without realtime events, out-of-band writes,
+   * eventless integrations. Scoped to one service, or the whole store when called
+   * with no argument.
+   *
+   * Manual intent is never gated: active queries refetch immediately (no reconcile
+   * cooldown, no hidden-tab deferral); inactive cached queries are marked pending so
+   * their next subscriber refetches; a materialized `.all()` root refetches even
+   * with no subscribers, since local reads depend on its completeness.
+   */
+  refetchQueries(serviceName?: string): void {
+    for (const [name, service] of this.getState()) {
+      if (serviceName !== undefined && name !== serviceName) continue
+      for (const query of service.queries.values()) {
+        if (query.config.skip) continue
+        const active = this.#listenerCount(query.queryId) > 0
+        const isMaterializedRoot = query.queryId === service.materialized?.queryId
+        if (active || isMaterializedRoot) {
+          this.#queue(query.queryId)
+        } else {
+          this.#markQueryPending(query.queryId)
+        }
+      }
+    }
+  }
+
   #refetchActiveQueries(): void {
     for (const service of this.getState().values()) {
       // Materialization roots reconcile even with no subscribers — every local read

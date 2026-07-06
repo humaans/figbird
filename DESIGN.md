@@ -1713,3 +1713,85 @@ version header on responses — protocol additions an adapter can carry without 
 architecture. Together they close missed-event detection, the stale-response membership race, and
 read-your-writes, which is most of the practical distance between a request orchestrator and a
 sync engine for a fraction of the machine. Nothing else in this document depends on this section.
+
+### Count Queries
+
+There is no way to ask "how many open issues?" without fetching rows — the only door to
+`total` is `.paginate({ returnTotal: true })`, which drags a page of data along. Badges,
+tab counters, and dashboard tiles all want a number, not a window.
+
+```ts
+const { data: count } = useQuery(q.issues.where({ status: 'open' }).count()) // number
+```
+
+Transport: `$limit: 0` plus the find meta's `total` — cheap for any Feathers-compatible
+server. Builder-wise it is a new `kind` alongside `paginate`/`all` (the type-state
+machinery already forbids nonsense chains like `.count().related(...)`). Realtime: a
+count cannot generally be maintained locally (an event says membership changed, not by
+how much the total moved), so the honest baseline classifies counts as refetch-on-event
+riding the reconcile cooldown. The one refinement worth considering later: a local-exact
+filter over a materialized service _can_ maintain its count exactly — same rule the
+membership classification already encodes.
+
+Status: **planned** — concrete, additive, no open questions beyond result-shape naming.
+
+### Testing Utilities (`figbird/testing`)
+
+The repository's own test harness contains exactly what every consuming app needs to test
+components against figbird: an in-memory Feathers-compatible client with seeded per-service
+data, a query-aware `find` (equality, `$in`, `$sort`, `$limit`/`$skip`), CRUD that emits
+realtime events, `service.emit()` for simulating server-side changes, and per-method call
+counters for asserting fetch behavior. Today it is private to `test/helpers.ts`, so every
+consumer either mocks around figbird (testing their mocks) or rebuilds this.
+
+Ship it as a subpath export:
+
+```ts
+import { mockFeathers } from 'figbird/testing'
+
+const feathers = mockFeathers({ issues: { data: { 1: { id: 1, title: 'Ship it' } } } })
+const figbird = new Figbird({ adapter: new FeathersAdapter(feathers), schema })
+// render, then: feathers.service('issues').emit('patched', {...}) and assert
+```
+
+Constraints: no Node builtins in the published module (the internal mock leans on Node's
+`EventEmitter`; the extracted version carries a ~10-line emitter) so it runs under any
+bundler/test runner. The React-specific scaffolding (`createTestApp`, jsdom mounting)
+stays in the repo — apps have their own rendering setup; the valuable part is the client.
+
+Status: **planned** — extraction plus a docs recipe; the repo's own suite becomes the
+first consumer.
+
+### Devtools
+
+The observability layer was built as three stable projections — `figbird.events` (batched
+lifecycle facts with correlation ids), `figbird.inspect()` (live query table), and
+`figbird.explain()` (static per-node classification with reasons) — precisely so a
+devtools surface could be built without touching internals. The surface itself doesn't
+exist yet.
+
+The target experience is screen-centric: _I'm looking at a screen; show me everything it
+queries._ One live table, one row per active query on the page:
+
+- **Identity** — service, filters, relation tree (definition name when there is one).
+- **Liveness** — classification per node (local-exact / server-window /
+  server-authoritative) and what realtime does to it (merge / refetch / manual), i.e.
+  "is this row self-maintaining or does it cost a roundtrip per event".
+- **Traffic counters** — fetch count and total/last duration, realtime events received,
+  events merged vs. refetches triggered, last reconcile time. A query refetching once per
+  event when its siblings merge is the "why is this one expensive" answer at a glance.
+- **Waterfall view** — fetch spans on a timeline. Relational queries make N+1 and
+  chained-dependency shapes visible instantly: parents → fan-in IN(...) at depth 1 →
+  nested fan-ins, versus the pathological per-parent windowed staircase the fan-out
+  warning exists for. `prepare`/`prefetch` spans render on the same timeline, so "did the
+  router actually warm this before the screen read it" is visible rather than inferred.
+- **Write lane** — `mutate:*` rows correlated by `mutationId` with rollbacks highlighted,
+  `action:*` rows in the app's own vocabulary above them.
+
+Everything above is derivable from the three projections plus timestamps; the events
+channel already carries durations, item counts, and correlation ids. Packaging question
+(in-app drawer component à la the demo, versus a browser extension) is open — the drawer
+is dramatically cheaper and works everywhere, and the demo already prototypes one.
+
+Status: **wanted** — highest fun-to-effort ratio of the ideas here, but deliberately
+sequenced after real dogfooding so the panel shows what its users actually reach for.
