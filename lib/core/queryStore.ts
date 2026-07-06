@@ -3,7 +3,11 @@ import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { FigbirdEventEmitter, type MutationMethod } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
-import { classifyQueryNode, isServerMaintainedFindQuery } from './queryClassification.js'
+import {
+  classifyQueryNode,
+  isServerMaintained,
+  type StoredQueryClass,
+} from './queryClassification.js'
 import type {
   ElementType,
   Event,
@@ -138,16 +142,29 @@ export class QueryStore<
     if (!this.#getQuery(queryId)) {
       this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
 
+      const classification: StoredQueryClass =
+        desc.method === 'get'
+          ? 'get'
+          : classifyQueryNode(
+              (desc.params as { query?: Record<string, unknown> } | undefined)?.query,
+              {
+                server: (config as { server?: boolean }).server,
+                allPages: (config as { allPages?: boolean }).allPages,
+              },
+            )
+
       this.#transactOverService(queryId, service => {
         service.queries.set(queryId, {
           queryId,
           desc,
           config: config as QueryConfig<unknown, unknown>,
+          classification,
           pending: !config.skip,
           dirty: false,
           filterItem: this.#createItemFilter<unknown, unknown>(
             desc,
             config as QueryConfig<unknown, unknown>,
+            classification,
           ) as (item: unknown) => boolean,
           state: {
             status: 'loading' as const,
@@ -1170,6 +1187,7 @@ export class QueryStore<
   #createItemFilter<T, TQueryType>(
     desc: QueryDescriptor,
     config: QueryConfig<T, TQueryType>,
+    classification: StoredQueryClass,
   ): ItemMatcher<ElementType<T>> {
     // if this query is not using the realtime mode
     // we will never be merging events into the cache
@@ -1183,7 +1201,7 @@ export class QueryStore<
     }
 
     // Server-maintained queries never merge events locally either — they refetch.
-    if (desc.method === 'find' && isServerMaintainedFindQuery(desc, config)) {
+    if (isServerMaintained(classification)) {
       return () => false
     }
 
@@ -1456,7 +1474,7 @@ function updateQueriesFromEvents<TMeta>({
         continue
       }
 
-      if (query.desc.method === 'find' && isServerMaintainedFindQuery(query.desc, query.config)) {
+      if (isServerMaintained(query.classification)) {
         serverMaintainedQueriesToRefetch.add(queryId)
         continue
       }
