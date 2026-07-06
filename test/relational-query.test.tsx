@@ -3828,3 +3828,29 @@ test('suspense: remounting after a cold error refetches and recovers', async t =
 
   unmount()
 })
+
+test('useQuery definition: null skips zero-arg definitions too', async t => {
+  const { App, figbird, feathers } = createApp()
+  const { render, unmount, flush, $ } = dom()
+
+  const allIssues = defineQuery(() => figbird.q.issues)
+
+  function Issues({ enabled }: { enabled: boolean }) {
+    const { data } = useQuery(allIssues, enabled ? undefined : null)
+    return <div className='all'>{data ? data.length : 'skipped'}</div>
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <Issues enabled={false} />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  t.is($('.all')?.innerHTML, 'skipped')
+  t.is(feathers.service('issues').counts.find, 0, 'nothing fetched')
+
+  unmount()
+})
