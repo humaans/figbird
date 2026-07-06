@@ -16,7 +16,6 @@ import {
   type QueryDefinition,
 } from './queryDefinition.js'
 import {
-  classifyQueryNode,
   explainQueryNode,
   hasWindowFilters,
   type ClassificationReason,
@@ -738,13 +737,12 @@ export class Figbird<
     for (const [serviceName, service] of this.queryStore.getState()) {
       for (const query of service.queries.values()) {
         const q = (query.desc.params as { query?: Record<string, unknown> } | undefined)?.query
-        const config = query.config as { server?: boolean; allPages?: boolean }
         rows.push({
           queryId: query.queryId,
           serviceName,
           method: query.desc.method,
           query: q,
-          classification: query.desc.method === 'get' ? 'get' : classifyQueryNode(q, config),
+          classification: query.classification,
           status: query.state.status,
           isFetching: query.state.isFetching,
           itemCount: Array.isArray(query.state.data)

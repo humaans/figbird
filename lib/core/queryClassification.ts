@@ -1,5 +1,3 @@
-import type { FindDescriptor } from './queryTypes.js'
-
 /**
  * Query classification — the single place that decides how a query node can be
  * maintained by the client:
@@ -114,15 +112,16 @@ export function hasWindowFilters(value: unknown): boolean {
 }
 
 /**
- * A find query the client must not merge realtime events into locally — anything
- * classified above local-exact refetches instead.
+ * A stored query's classification: `desc`/`config` are frozen at materialize time,
+ * so this is computed once and carried on the `Query` record. `'get'` marks get
+ * queries, which have no find classification.
  */
-export function isServerMaintainedFindQuery(
-  desc: FindDescriptor,
-  config: { server?: boolean; allPages?: boolean },
-): boolean {
-  const query = (desc.params as { query?: Record<string, unknown> } | undefined)?.query
-  return (
-    classifyQueryNode(query, { server: config.server, allPages: config.allPages }) !== 'local-exact'
-  )
+export type StoredQueryClass = QueryNodeClass | 'get'
+
+/**
+ * A query the client must not merge realtime events into locally — anything
+ * classified above local-exact refetches instead. Get queries always merge.
+ */
+export function isServerMaintained(classification: StoredQueryClass): boolean {
+  return classification === 'server-window' || classification === 'server-authoritative'
 }

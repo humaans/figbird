@@ -1,4 +1,5 @@
 import type { AnySchema, Schema, ServiceItem, ServiceNames } from './schema.js'
+import type { StoredQueryClass } from './queryClassification.js'
 
 /**
  * Event types supported by Figbird
@@ -92,6 +93,12 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   queryId: string
   desc: QueryDescriptor
   config: QueryConfig<T, TQuery>
+  /**
+   * How this query is maintained, computed once at materialize time (`desc` and
+   * `config` are frozen — they are what the query id hashes). The realtime event
+   * loop reads this instead of re-walking the query per item.
+   */
+  classification: StoredQueryClass
   pending: boolean
   dirty: boolean
   filterItem: (item: ElementType<T>) => boolean
