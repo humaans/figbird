@@ -273,7 +273,6 @@ export class QueryStore<
       isOptimistic && method !== 'create' && id !== undefined
         ? this.#getEntity(serviceName, id)
         : null
-    const startedAt = Date.now()
 
     // The id contract: an optimistic create must carry a client-generated id the
     // server will accept. Identity is what everything downstream is built on —
@@ -292,35 +291,6 @@ export class QueryStore<
       }
     }
 
-    // Registered synchronously (not via the deferred events channel) so
-    // `figbird.mutating` snapshots are correct at any moment — see MutationTracker.
-    const mutationId = this.#mutations.start({
-      serviceName,
-      method,
-      ...(id !== undefined ? { id } : {}),
-    })
-    this.#events.emit({
-      kind: 'mutate:start',
-      mutationId,
-      serviceName,
-      method,
-      ...(id !== undefined ? { id } : {}),
-      optimistic: isOptimistic,
-    })
-
-    if (isOptimistic && optimisticItem !== null) {
-      // patch/update on an entity that is not in the cache: the merged optimistic
-      // item has no id and nothing displays it — skip silently (the server response
-      // updates the cache as usual). Applying it would just warn and no-op.
-      const skipUncached =
-        (method === 'patch' || method === 'update') &&
-        restoreItem === null &&
-        this.#peekId(optimisticItem) === undefined
-      if (!skipUncached) {
-        this.#applyMutationEvent(serviceName, method, optimisticItem)
-      }
-    }
-
     const updaters: Record<string, (item: unknown) => void> = {
       create: item => this.#processEvent(serviceName, { type: 'created', item }),
       update: item => this.#processEvent(serviceName, { type: 'updated', item }),
@@ -331,49 +301,41 @@ export class QueryStore<
     // Convert named params to args array for the adapter
     const args = this.#buildMutationArgs(desc)
 
-    return this.#adapter.mutate(serviceName, method, args).then(
-      (item: unknown) => {
+    return this.#trackMutation(
+      { serviceName, method, ...(id !== undefined ? { id } : {}), optimistic: isOptimistic },
+      () => {
+        if (isOptimistic && optimisticItem !== null) {
+          // patch/update on an entity that is not in the cache: the merged optimistic
+          // item has no id and nothing displays it — skip silently (the server response
+          // updates the cache as usual). Applying it would just warn and no-op.
+          const skipUncached =
+            (method === 'patch' || method === 'update') &&
+            restoreItem === null &&
+            this.#peekId(optimisticItem) === undefined
+          if (!skipUncached) {
+            this.#applyMutationEvent(serviceName, method, optimisticItem)
+          }
+        }
+        return this.#adapter.mutate(serviceName, method, args)
+      },
+      {
         // Apply the cache update before ending the tracker entry, so by the time a
         // `useMutating` subscriber sees "not busy" the data is already in the cache.
-        updaters[method]?.(item)
-        this.#mutations.end(mutationId)
-        this.#events.emit({
-          kind: 'mutate:end',
-          mutationId,
-          serviceName,
-          method,
-          durationMs: Date.now() - startedAt,
-          ...(id !== undefined ? { id } : {}),
-          optimistic: isOptimistic,
-        })
-        return item as InferMutationData<S, D>
+        onSuccess: item => updaters[method]?.(item),
+        onError: (_error, mutationId) => {
+          if (isOptimistic) {
+            this.#rollbackOptimistic(serviceName, method, id, optimisticItem, restoreItem)
+            this.#events.emit({
+              kind: 'mutate:rollback',
+              mutationId,
+              serviceName,
+              method,
+              ...(id !== undefined ? { id } : {}),
+            })
+          }
+        },
       },
-      (err: unknown) => {
-        const error = err instanceof Error ? err : new Error(String(err))
-        if (isOptimistic) {
-          this.#rollbackOptimistic(serviceName, method, id, optimisticItem, restoreItem)
-          this.#events.emit({
-            kind: 'mutate:rollback',
-            mutationId,
-            serviceName,
-            method,
-            ...(id !== undefined ? { id } : {}),
-          })
-        }
-        this.#mutations.end(mutationId)
-        this.#events.emit({
-          kind: 'mutate:error',
-          mutationId,
-          serviceName,
-          method,
-          durationMs: Date.now() - startedAt,
-          error,
-          ...(id !== undefined ? { id } : {}),
-          optimistic: isOptimistic,
-        })
-        throw error
-      },
-    )
+    ) as Promise<InferMutationData<S, D>>
   }
 
   /**
@@ -385,17 +347,45 @@ export class QueryStore<
    * are positional and opaque.
    */
   call(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+    return this.#trackMutation({ serviceName, method, optimistic: false }, () =>
+      this.#adapter.mutate(serviceName, method, args),
+    )
+  }
+
+  /**
+   * Shared mutation lifecycle around `run()` (which performs any optimistic apply
+   * and the adapter call, synchronously in that order). The tracker entry is
+   * registered synchronously — not via the deferred events channel — so
+   * `figbird.mutating` snapshots are correct at any moment (see MutationTracker),
+   * and it registers *before* `run()` so an optimistic apply never notifies
+   * subscribers while the tracker still reads "not busy". On settle, the
+   * `onSuccess`/`onError` hooks fire before the tracker entry ends, so by the time
+   * a `useMutating` subscriber sees "not busy" the cache already reflects the
+   * outcome. Errors are normalized to `Error` and rethrown.
+   */
+  #trackMutation<T>(
+    entry: { serviceName: string; method: string; id?: string | number; optimistic: boolean },
+    run: () => Promise<T>,
+    hooks?: {
+      onSuccess?: (result: T) => void
+      onError?: (error: Error, mutationId: number) => void
+    },
+  ): Promise<T> {
+    const { serviceName, method, id, optimistic } = entry
+    const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
-    const mutationId = this.#mutations.start({ serviceName, method })
+    const mutationId = this.#mutations.start({ serviceName, method, ...idField })
     this.#events.emit({
       kind: 'mutate:start',
       mutationId,
       serviceName,
       method,
-      optimistic: false,
+      ...idField,
+      optimistic,
     })
-    return this.#adapter.mutate(serviceName, method, args).then(
+    return run().then(
       result => {
+        hooks?.onSuccess?.(result)
         this.#mutations.end(mutationId)
         this.#events.emit({
           kind: 'mutate:end',
@@ -403,12 +393,14 @@ export class QueryStore<
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
-          optimistic: false,
+          ...idField,
+          optimistic,
         })
         return result
       },
       (err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err))
+        hooks?.onError?.(error, mutationId)
         this.#mutations.end(mutationId)
         this.#events.emit({
           kind: 'mutate:error',
@@ -417,7 +409,8 @@ export class QueryStore<
           method,
           durationMs: Date.now() - startedAt,
           error,
-          optimistic: false,
+          ...idField,
+          optimistic,
         })
         throw error
       },
@@ -796,7 +789,7 @@ export class QueryStore<
           const modifiedQueries = this.#transactOverServiceByName(
             serviceName,
             (service, touch) => {
-              const appliedEvents = applyEventsToService({
+              applyEventsToService({
                 service,
                 serviceName,
                 events,
@@ -805,11 +798,12 @@ export class QueryStore<
                 processedEvents,
               })
 
-              // Update queries only for non-stale items
-              if (appliedEvents.length > 0) {
+              // Update queries only for the items actually applied to the entity
+              // cache — stale-skipped items never reach query state.
+              if (processedEvents.length > 0) {
                 updateQueriesFromEvents({
                   service,
-                  appliedEvents,
+                  appliedItems: processedEvents,
                   touch,
                   getId,
                   itemAdded: meta => this.#adapter.itemAdded(meta),
@@ -1432,8 +1426,7 @@ function applyEventsToService<TMeta>({
   getId: (item: unknown) => ItemId | undefined
   isItemStale: (curr: unknown, next: unknown) => boolean
   processedEvents: ProcessedRealtimeEvent[]
-}): QueuedEvent[] {
-  const appliedEvents: QueuedEvent[] = []
+}): void {
   for (const event of events) {
     const { type, items } = event
     for (const item of items) {
@@ -1442,7 +1435,6 @@ function applyEventsToService<TMeta>({
         if (itemId !== undefined) {
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.set(itemId, item)
-          appliedEvents.push(event)
           processedEvents.push({ serviceName, type, item, previousItem, itemId })
         }
       } else if (type === 'updated' || type === 'patched') {
@@ -1451,7 +1443,6 @@ function applyEventsToService<TMeta>({
           const currItem = service.entities.get(itemId)
           if (!currItem || !isItemStale(currItem, item)) {
             service.entities.set(itemId, item)
-            appliedEvents.push(event)
             processedEvents.push({
               serviceName,
               type,
@@ -1466,19 +1457,16 @@ function applyEventsToService<TMeta>({
         if (itemId !== undefined) {
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.delete(itemId)
-          appliedEvents.push(event)
           processedEvents.push({ serviceName, type, item, previousItem, itemId })
         }
       }
     }
   }
-
-  return appliedEvents
 }
 
 function updateQueriesFromEvents<TMeta>({
   service,
-  appliedEvents,
+  appliedItems,
   touch,
   getId,
   itemAdded,
@@ -1486,131 +1474,124 @@ function updateQueriesFromEvents<TMeta>({
   serverMaintainedQueriesToRefetch,
 }: {
   service: ServiceState<TMeta>
-  appliedEvents: QueuedEvent[]
+  appliedItems: ProcessedRealtimeEvent[]
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
   serverMaintainedQueriesToRefetch: Set<string>
 }): void {
-  for (const { type, items } of appliedEvents) {
-    for (const item of items) {
-      const itemId = getId(item)
-      if (itemId === undefined) continue
+  for (const { type, item, itemId } of appliedItems) {
+    if (!service.itemQueryIndex.has(itemId)) {
+      service.itemQueryIndex.set(itemId, new Set())
+    }
+    const itemQueryIndex = service.itemQueryIndex.get(itemId)!
 
-      if (!service.itemQueryIndex.has(itemId)) {
-        service.itemQueryIndex.set(itemId, new Set())
+    for (const [queryId, query] of service.queries) {
+      let matches: boolean
+
+      if (query.config.realtime !== 'merge') {
+        continue
       }
-      const itemQueryIndex = service.itemQueryIndex.get(itemId)!
 
-      for (const [queryId, query] of service.queries) {
-        let matches: boolean
+      if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
+        continue
+      }
 
-        if (query.config.realtime !== 'merge') {
-          continue
-        }
+      if (query.desc.method === 'find' && isServerMaintainedFindQuery(query.desc, query.config)) {
+        serverMaintainedQueriesToRefetch.add(queryId)
+        continue
+      }
 
-        if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
-          continue
-        }
+      if (type === 'removed') {
+        matches = false
+      } else {
+        matches = query.filterItem(item)
+      }
 
-        if (query.desc.method === 'find' && isServerMaintainedFindQuery(query.desc, query.config)) {
-          serverMaintainedQueriesToRefetch.add(queryId)
-          continue
-        }
-
-        if (type === 'removed') {
-          matches = false
-        } else {
-          matches = query.filterItem(item)
-        }
-
-        const hasItem = itemQueryIndex.has(queryId)
-        if (hasItem && !matches) {
-          // remove
-          const query = service.queries.get(queryId)!
-          // A get query whose item was removed reaches a terminal, refetchable error
-          // state (the resource no longer exists — same as a server NotFound). It must
-          // not park in 'loading': nothing would ever complete that fetch, and
-          // relational consumers would serve the stale previous snapshot forever.
-          const nextState: QueryState<unknown, TMeta> =
-            query.desc.method === 'get' && query.state.status === 'success'
+      const hasItem = itemQueryIndex.has(queryId)
+      if (hasItem && !matches) {
+        // remove
+        const query = service.queries.get(queryId)!
+        // A get query whose item was removed reaches a terminal, refetchable error
+        // state (the resource no longer exists — same as a server NotFound). It must
+        // not park in 'loading': nothing would ever complete that fetch, and
+        // relational consumers would serve the stale previous snapshot forever.
+        const nextState: QueryState<unknown, TMeta> =
+          query.desc.method === 'get' && query.state.status === 'success'
+            ? {
+                status: 'error' as const,
+                data: null,
+                meta: itemRemoved(query.state.meta),
+                isFetching: false,
+                error: createItemRemovedError(itemId),
+              }
+            : query.state.status === 'success'
               ? {
-                  status: 'error' as const,
-                  data: null,
+                  ...query.state,
                   meta: itemRemoved(query.state.meta),
-                  isFetching: false,
-                  error: createItemRemovedError(itemId),
+                  data: (query.state.data as unknown[]).filter((x: unknown) => getId(x) !== itemId),
                 }
-              : query.state.status === 'success'
-                ? {
-                    ...query.state,
-                    meta: itemRemoved(query.state.meta),
-                    data: (query.state.data as unknown[]).filter(
-                      (x: unknown) => getId(x) !== itemId,
-                    ),
-                  }
-                : query.state
-          service.queries.set(queryId, {
-            ...query,
-            state: nextState,
-          })
-          itemQueryIndex.delete(queryId)
-          touch(queryId)
-        } else if (hasItem && matches) {
-          // update
-          service.queries.set(queryId, {
-            ...query,
-            state:
-              query.state.status === 'success'
-                ? {
-                    ...query.state,
-                    data:
-                      query.desc.method === 'get'
-                        ? item
-                        : (query.state.data as unknown[]).map((x: unknown) =>
-                            getId(x) === itemId ? item : x,
-                          ),
-                  }
-                : query.state,
-          })
-          touch(queryId)
-        } else if (matches && query.desc.method === 'find' && query.state.data) {
-          service.queries.set(queryId, {
-            ...query,
-            state:
-              query.state.status === 'success'
-                ? {
-                    ...query.state,
-                    meta: itemAdded(query.state.meta),
-                    data: (query.state.data as unknown[]).concat(item),
-                  }
-                : query.state,
-          })
-          itemQueryIndex.add(queryId)
-          touch(queryId)
-        } else if (
-          matches &&
-          type === 'created' &&
-          query.desc.method === 'get' &&
-          isSameId(query.desc.resourceId, itemId)
-        ) {
-          // The resource behind a get query reappeared (realtime re-create, or an
-          // optimistic remove rolling back). Restore the query from the event instead
-          // of leaving it in the removed-error state until a manual refetch.
-          service.queries.set(queryId, {
-            ...query,
-            state: {
-              status: 'success' as const,
-              data: item,
-              meta: query.state.meta,
-              isFetching: false,
-              error: null,
-            },
-          })
-          itemQueryIndex.add(queryId)
-          touch(queryId)
-        }
+              : query.state
+        service.queries.set(queryId, {
+          ...query,
+          state: nextState,
+        })
+        itemQueryIndex.delete(queryId)
+        touch(queryId)
+      } else if (hasItem && matches) {
+        // update
+        service.queries.set(queryId, {
+          ...query,
+          state:
+            query.state.status === 'success'
+              ? {
+                  ...query.state,
+                  data:
+                    query.desc.method === 'get'
+                      ? item
+                      : (query.state.data as unknown[]).map((x: unknown) =>
+                          getId(x) === itemId ? item : x,
+                        ),
+                }
+              : query.state,
+        })
+        touch(queryId)
+      } else if (matches && query.desc.method === 'find' && query.state.data) {
+        service.queries.set(queryId, {
+          ...query,
+          state:
+            query.state.status === 'success'
+              ? {
+                  ...query.state,
+                  meta: itemAdded(query.state.meta),
+                  data: (query.state.data as unknown[]).concat(item),
+                }
+              : query.state,
+        })
+        itemQueryIndex.add(queryId)
+        touch(queryId)
+      } else if (
+        matches &&
+        type === 'created' &&
+        query.desc.method === 'get' &&
+        isSameId(query.desc.resourceId, itemId)
+      ) {
+        // The resource behind a get query reappeared (realtime re-create, or an
+        // optimistic remove rolling back). Restore the query from the event instead
+        // of leaving it in the removed-error state until a manual refetch.
+        service.queries.set(queryId, {
+          ...query,
+          state: {
+            status: 'success' as const,
+            data: item,
+            meta: query.state.meta,
+            isFetching: false,
+            error: null,
+          },
+        })
+        itemQueryIndex.add(queryId)
+        touch(queryId)
       }
     }
   }
