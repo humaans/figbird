@@ -299,9 +299,12 @@ export function useQueryImpl(
     )
     // `null` args skip the query — the definition's build function is never invoked
     // (it may dereference its args), so the condition lives in the args themselves:
-    // `useQuery(issueDetail, id ? { id } : null)`. Routed through the same code path
-    // as `skip: true` so the hook sequence is identical when args flip null <-> real.
-    if (args === null) {
+    // `useQuery(issueDetail, id ? { id } : null)`. Checked against the raw first
+    // argument too, because splitDefinitionRest folds a zero-arg definition's first
+    // slot into options — a `null` there must still mean skip, not "no options".
+    // Routed through the same code path as `skip: true` so the hook sequence is
+    // identical when args flip null <-> real.
+    if (args === null || argsOrOptions === null) {
       return useQueryForBuilder(figbird, SKIPPED_BUILDER, { ...options, skip: true })
     }
     const validatedArgs = definition.validate(args)
