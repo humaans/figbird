@@ -661,78 +661,93 @@ export class RelationalQueryRef<
         if (!this.#relationSubs.has(key)) {
           this.#relationSubs.set(key, { kind: 'empty', sourceKey: '' })
         }
-        continue
-      }
-
-      if (relDef.via) {
+      } else if (relDef.via) {
         this.#syncJunctionRelation(parentData, relDef, relAST, key)
-        continue
-      }
-
-      if (relDef.cardinality === 'many' && hasWindowFilters(relAST.query)) {
+      } else if (relDef.cardinality === 'many' && hasWindowFilters(relAST.query)) {
         this.#syncWindowedManyRelation(parentData, relDef, relAST, key)
-        continue
-      }
-
-      // Collect the set of ids we need to IN(...) for this relation. For 'embedded' the
-      // parent's sourceField is itself a list — flat-map across parents.
-      let uniqueValues: (string | number)[]
-      if (relDef.cardinality === 'embedded') {
-        const all: (string | number)[] = []
-        for (const item of parentData) {
-          const list = getFieldValueAsList(item, relDef.sourceField)
-          if (list) for (const v of list) all.push(v)
-        }
-        uniqueValues = [...new Set(all)].sort()
       } else {
-        const sourceValues = parentData
-          .map(item => getFieldValue(item, relDef.sourceField))
-          .filter((v): v is string | number => v !== undefined)
-        uniqueValues = [...new Set(sourceValues)].sort()
+        this.#syncFanInRelation(parentData, relDef, relAST, key)
       }
-      const newSourceKey = JSON.stringify(uniqueValues)
-
-      const existing = this.#relationSubs.get(key)
-      if (
-        existing &&
-        existing.kind !== 'junction' &&
-        existing.kind !== 'perParent' &&
-        existing.sourceKey === newSourceKey
-      ) {
-        // Already synced for this exact set of source values. Still need to recurse into
-        // nested relations in case this relation's data already resolved and its own
-        // children need to be synced.
-        if (existing.kind === 'fanIn' && Object.keys(relAST.related).length > 0) {
-          const s = existing.queryRef.getSnapshot()
-          if (s?.status === 'success') {
-            this.#syncRelations(s.data as unknown[], relAST, key)
-          }
-        }
-        continue
-      }
-
-      // Dispose old subscription (if source values changed or entry didn't exist)
-      if (existing) this.#disposeRelationSub(existing)
-
-      if (uniqueValues.length === 0) {
-        this.#relationSubs.set(key, { kind: 'empty', sourceKey: newSourceKey })
-        continue
-      }
-
-      const queryRef = this.#buildRelationQueryRef(relDef.destService, relDef, relAST, uniqueValues)
-      const unsub = subscribeAndSeed(
-        queryRef,
-        data => {
-          if (Object.keys(relAST.related).length > 0) {
-            this.#syncRelations(data, relAST, key)
-          }
-        },
-        () => this.#notifyListeners(),
-        this.#staleTime,
-      )
-
-      this.#relationSubs.set(key, { kind: 'fanIn', sourceKey: newSourceKey, queryRef, unsub })
     }
+  }
+
+  /** Recurse into a relation's own nested relations, if it declares any. */
+  #syncNested(data: unknown[], relAST: QueryAST, key: string): void {
+    if (Object.keys(relAST.related).length === 0) return
+    this.#syncRelations(data, relAST, key)
+  }
+
+  /** Like #syncNested, but reading the relation's current (possibly resolved) snapshot. */
+  #syncNestedFromSnapshot(
+    queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
+    relAST: QueryAST,
+    key: string,
+  ): void {
+    if (Object.keys(relAST.related).length === 0) return
+    const s = queryRef.getSnapshot()
+    if (s?.status === 'success') {
+      this.#syncRelations(s.data as unknown[], relAST, key)
+    }
+  }
+
+  /**
+   * Sync a single-hop fan-in relation (`one` / unwindowed `many` / `embedded`): one
+   * IN(...) query on `destField` keyed by the parents' source values.
+   */
+  #syncFanInRelation(
+    parentData: unknown[],
+    relDef: RelationshipDef,
+    relAST: QueryAST,
+    key: string,
+  ): void {
+    // Collect the set of ids we need to IN(...) for this relation. For 'embedded' the
+    // parent's sourceField is itself a list — flat-map across parents.
+    let values: (string | number)[]
+    let sourceKey: string
+    if (relDef.cardinality === 'embedded') {
+      const all: (string | number)[] = []
+      for (const item of parentData) {
+        const list = getFieldValueAsList(item, relDef.sourceField)
+        if (list) for (const v of list) all.push(v)
+      }
+      ;({ values, key: sourceKey } = sourceSet(all))
+    } else {
+      ;({ values, key: sourceKey } = uniqueSourceValues(parentData, relDef.sourceField))
+    }
+
+    const existing = this.#relationSubs.get(key)
+    if (
+      existing &&
+      existing.kind !== 'junction' &&
+      existing.kind !== 'perParent' &&
+      existing.sourceKey === sourceKey
+    ) {
+      // Already synced for this exact set of source values. Still need to recurse into
+      // nested relations in case this relation's data already resolved and its own
+      // children need to be synced.
+      if (existing.kind === 'fanIn') {
+        this.#syncNestedFromSnapshot(existing.queryRef, relAST, key)
+      }
+      return
+    }
+
+    // Dispose old subscription (if source values changed or entry didn't exist)
+    if (existing) this.#disposeRelationSub(existing)
+
+    if (values.length === 0) {
+      this.#relationSubs.set(key, { kind: 'empty', sourceKey })
+      return
+    }
+
+    const queryRef = this.#buildRelationQueryRef(relDef.destService, relDef, relAST, values)
+    const unsub = subscribeAndSeed(
+      queryRef,
+      data => this.#syncNested(data, relAST, key),
+      () => this.#notifyListeners(),
+      this.#staleTime,
+    )
+
+    this.#relationSubs.set(key, { kind: 'fanIn', sourceKey, queryRef, unsub })
   }
 
   #syncWindowedManyRelation(
@@ -741,11 +756,10 @@ export class RelationalQueryRef<
     relAST: QueryAST,
     key: string,
   ): void {
-    const sourceValues = parentData
-      .map(item => getFieldValue(item, relDef.sourceField))
-      .filter((v): v is string | number => v !== undefined)
-    const uniqueValues = [...new Set(sourceValues)].sort()
-    const newSourceKey = JSON.stringify(uniqueValues)
+    const { values: uniqueValues, key: newSourceKey } = uniqueSourceValues(
+      parentData,
+      relDef.sourceField,
+    )
 
     const existing = this.#relationSubs.get(key)
     if (existing?.kind === 'perParent' && existing.sourceKey === newSourceKey) {
@@ -833,11 +847,10 @@ export class RelationalQueryRef<
   ): void {
     const via = relDef.via!
 
-    const parentIds = parentData
-      .map(item => getFieldValue(item, via.sourceField))
-      .filter((v): v is string | number => v !== undefined)
-    const uniqueParentIds = [...new Set(parentIds)].sort()
-    const junctionSourceKey = JSON.stringify(uniqueParentIds)
+    const { values: uniqueParentIds, key: junctionSourceKey } = uniqueSourceValues(
+      parentData,
+      via.sourceField,
+    )
 
     const existing = this.#relationSubs.get(key)
 
@@ -848,12 +861,7 @@ export class RelationalQueryRef<
       existing.junction.sourceKey === junctionSourceKey &&
       existing.dest?.queryRef
     ) {
-      if (Object.keys(relAST.related).length > 0) {
-        const s = existing.dest.queryRef.getSnapshot()
-        if (s?.status === 'success') {
-          this.#syncRelations(s.data as unknown[], relAST, key)
-        }
-      }
+      this.#syncNestedFromSnapshot(existing.dest.queryRef, relAST, key)
       return
     }
 
@@ -887,11 +895,10 @@ export class RelationalQueryRef<
 
     // Phase 2: build/refresh the dest sub from the junction's data.
     const refreshDest = (junctionItems: unknown[]): void => {
-      const destIds = junctionItems
-        .map(j => getFieldValue(j, relDef.sourceField))
-        .filter((v): v is string | number => v !== undefined)
-      const uniqueDestIds = [...new Set(destIds)].sort()
-      const destSourceKey = JSON.stringify(uniqueDestIds)
+      const { values: uniqueDestIds, key: destSourceKey } = uniqueSourceValues(
+        junctionItems,
+        relDef.sourceField,
+      )
 
       const cur = this.#relationSubs.get(key)
       if (cur?.kind !== 'junction') return
@@ -907,11 +914,7 @@ export class RelationalQueryRef<
       const destRef = this.#buildRelationQueryRef(relDef.destService, relDef, relAST, uniqueDestIds)
       const destUnsub = subscribeAndSeed(
         destRef,
-        data => {
-          if (Object.keys(relAST.related).length > 0) {
-            this.#syncRelations(data, relAST, key)
-          }
-        },
+        data => this.#syncNested(data, relAST, key),
         () => this.#notifyListeners(),
         this.#staleTime,
       )
@@ -1600,6 +1603,28 @@ function getFieldValue(item: unknown, fields: string[]): string | number | undef
     return undefined
   }
   return JSON.stringify(values)
+}
+
+/**
+ * Dedupe + sort + stable-encode a set of key values. The encoded key is what relation
+ * subs compare to detect "same source set, nothing to re-fetch" — every sync path must
+ * produce it identically or subscriptions churn.
+ */
+function sourceSet(raw: (string | number)[]): { values: (string | number)[]; key: string } {
+  const values = [...new Set(raw)].sort()
+  return { values, key: JSON.stringify(values) }
+}
+
+/** Collect the deduped, sorted values of `fields` across parents, with the stable key. */
+function uniqueSourceValues(
+  parentData: unknown[],
+  fields: string[],
+): { values: (string | number)[]; key: string } {
+  return sourceSet(
+    parentData
+      .map(item => getFieldValue(item, fields))
+      .filter((v): v is string | number => v !== undefined),
+  )
 }
 
 /**
