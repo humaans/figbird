@@ -24,4 +24,10 @@ const w = watch ? ' -w' : ''
   await sh(
     'rsync -r --include="*/" --include="*.d.ts" --include="*.d.ts.map" --exclude="*" dist/esm/ dist/cjs/',
   )
+
+  // The root package.json declares "type": "module", so without this marker Node
+  // treats the CJS-syntax files under dist/cjs as ESM and require() of the package
+  // fails. The nearest package.json wins module-scope resolution.
+  const { writeFile } = await import('node:fs/promises')
+  await writeFile('dist/cjs/package.json', JSON.stringify({ type: 'commonjs' }) + '\n')
 })()
