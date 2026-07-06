@@ -300,12 +300,6 @@ export class RelationalQueryRef<
     if (root.phase === 'error') return this.#errorSnapshot(root.error!)
     if (root.phase === 'loading') return this.#fetchingSnapshot()
 
-    // Relations are synced lazily from parent success, so confirm that every expected
-    // relation at every already-resolved parent level has been synced before reading.
-    if (!this.#areExpectedRelationsSynced(this.#ast, null)) {
-      return this.#fetchingSnapshot()
-    }
-
     const gathered = this.#gatherRelationData()
     if (gathered.kind === 'loading') return this.#fetchingSnapshot()
     if (gathered.kind === 'error') return this.#errorSnapshot(gathered.error)
@@ -432,40 +426,69 @@ export class RelationalQueryRef<
   }
 
   /**
-   * Collect every relation's current data in one pass — loading/error states
-   * short-circuit, and the result feeds both change detection (dataRefs) and the pure
-   * assembly pass. For two-hop `many` relations both the junction and dest halves are
-   * walked so realtime events on either service trigger reassembly.
+   * Walk the query AST collecting every relation's current data — the one definition
+   * of readiness. A declared relation whose sub is missing, or any sub still loading,
+   * short-circuits to loading; errors short-circuit to error. Nested relations are
+   * visited only once their parent's data is resolved, mirroring how sync creates
+   * them. The result feeds both change detection (dataRefs) and the pure assembly
+   * pass; for two-hop `many` relations both the junction and dest halves are walked
+   * so realtime events on either service trigger reassembly.
    */
-  #gatherRelationData(): GatherResult {
-    const dataRefs = new Map<string, unknown[] | null>()
-    const assembly = new Map<string, AssembledRelationData>()
+  #gatherRelationData(
+    ast: QueryAST = this.#ast,
+    parentKey: string | null = null,
+    acc: {
+      dataRefs: Map<string, unknown[] | null>
+      assembly: Map<string, AssembledRelationData>
+    } = { dataRefs: new Map(), assembly: new Map() },
+  ): GatherResult {
+    const relationships = this.#schema.relationships?.[ast.service] ?? {}
+    for (const [relName, relAST] of Object.entries(ast.related)) {
+      const key = parentKey ? `${parentKey}.${relName}` : relName
+      const sub = this.#relationSubs.get(key)
 
-    for (const [key, sub] of this.#relationSubs) {
+      if (!relationships[relName]) {
+        // Missing relationship definition was warned about in sync, which parks an
+        // 'empty' sub so rendering doesn't block on it.
+        if (sub) {
+          acc.dataRefs.set(key, null)
+          acc.assembly.set(key, { kind: 'none' })
+        }
+        continue
+      }
+
+      // Relations are synced lazily from parent success; a declared relation whose
+      // sub doesn't exist yet simply hasn't been reached — the snapshot is loading.
+      if (!sub) return { kind: 'loading' }
+
       switch (sub.kind) {
         case 'empty': {
-          dataRefs.set(key, null)
-          assembly.set(key, { kind: 'none' })
+          // No parent rows ⇒ no nested subs exist either; nothing to recurse into.
+          acc.dataRefs.set(key, null)
+          acc.assembly.set(key, { kind: 'none' })
           break
         }
         case 'fanIn': {
           const s = sub.queryRef.getSnapshot()
           if (!s || s.status === 'loading') return { kind: 'loading' }
           if (s.status === 'error') return { kind: 'error', error: s.error }
-          dataRefs.set(key, s.data as unknown[])
-          assembly.set(key, { kind: 'fanIn', items: s.data as unknown[] })
+          acc.dataRefs.set(key, s.data as unknown[])
+          acc.assembly.set(key, { kind: 'fanIn', items: s.data as unknown[] })
+          const nested = this.#gatherRelationData(relAST, key, acc)
+          if (nested.kind !== 'ready') return nested
           break
         }
         case 'junction': {
           const js = sub.junction.queryRef.getSnapshot()
           if (!js || js.status === 'loading') return { kind: 'loading' }
           if (js.status === 'error') return { kind: 'error', error: js.error }
-          dataRefs.set(`${key}#junction`, js.data as unknown[])
+          acc.dataRefs.set(`${key}#junction`, js.data as unknown[])
 
           if (!sub.dest?.queryRef) {
-            // Dest pending (junction still settling) or resolved to zero edges.
-            dataRefs.set(key, null)
-            assembly.set(key, {
+            // Dest pending (junction still settling) or resolved to zero edges —
+            // no dest data yet, so no nested subs to recurse into.
+            acc.dataRefs.set(key, null)
+            acc.assembly.set(key, {
               kind: 'junction',
               items: [],
               junctionItems: js.data as unknown[],
@@ -475,31 +498,35 @@ export class RelationalQueryRef<
           const ds = sub.dest.queryRef.getSnapshot()
           if (!ds || ds.status === 'loading') return { kind: 'loading' }
           if (ds.status === 'error') return { kind: 'error', error: ds.error }
-          dataRefs.set(key, ds.data as unknown[])
-          assembly.set(key, {
+          acc.dataRefs.set(key, ds.data as unknown[])
+          acc.assembly.set(key, {
             kind: 'junction',
             items: ds.data as unknown[],
             junctionItems: js.data as unknown[],
           })
+          const nested = this.#gatherRelationData(relAST, key, acc)
+          if (nested.kind !== 'ready') return nested
           break
         }
         case 'perParent': {
-          dataRefs.set(key, null)
+          acc.dataRefs.set(key, null)
           const byParent = new Map<string, unknown[]>()
           for (const [childKey, child] of sub.children) {
             const s = child.queryRef.getSnapshot()
             if (!s || s.status === 'loading') return { kind: 'loading' }
             if (s.status === 'error') return { kind: 'error', error: s.error }
-            dataRefs.set(`${key}#parent:${childKey}`, s.data as unknown[])
+            acc.dataRefs.set(`${key}#parent:${childKey}`, s.data as unknown[])
             byParent.set(childKey, s.data as unknown[])
           }
-          assembly.set(key, { kind: 'perParent', byParent })
+          acc.assembly.set(key, { kind: 'perParent', byParent })
+          const nested = this.#gatherRelationData(relAST, key, acc)
+          if (nested.kind !== 'ready') return nested
           break
         }
       }
     }
 
-    return { kind: 'ready', dataRefs, assembly }
+    return { kind: 'ready', dataRefs: acc.dataRefs, assembly: acc.assembly }
   }
 
   /**
@@ -507,39 +534,6 @@ export class RelationalQueryRef<
    * resolved has been synced (i.e. entered into #relationSubs). Used to decide whether
    * the assembled snapshot is ready to return, or whether we're still waiting on sync.
    */
-  #areExpectedRelationsSynced(ast: QueryAST, parentKey: string | null): boolean {
-    const relationships = this.#schema.relationships?.[ast.service] ?? {}
-    for (const [relName, relAST] of Object.entries(ast.related)) {
-      if (!relationships[relName]) {
-        // Missing relationship definition was warned about in sync; treat as synced so
-        // we don't block rendering.
-        continue
-      }
-      const key = parentKey ? `${parentKey}.${relName}` : relName
-      const sub = this.#relationSubs.get(key)
-      if (!sub) return false
-      if (Object.keys(relAST.related).length === 0) continue
-
-      // If this relation has nested relations and its own data has resolved, recurse.
-      if (sub.kind === 'perParent') {
-        if (this.#perParentDataIfReady(sub) && !this.#areExpectedRelationsSynced(relAST, key)) {
-          return false
-        }
-      }
-      const destRef =
-        sub.kind === 'fanIn' ? sub.queryRef : sub.kind === 'junction' ? sub.dest?.queryRef : null
-      if (destRef) {
-        const s = destRef.getSnapshot()
-        if (s?.status === 'success') {
-          if (!this.#areExpectedRelationsSynced(relAST, key)) {
-            return false
-          }
-        }
-      }
-    }
-    return true
-  }
-
   /**
    * Triggers a refetch for the root (for paginated queries this drops follow-up pages
    * and re-fetches from page 0).
