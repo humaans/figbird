@@ -191,8 +191,8 @@ const schema = createSchema({
     users: service<UserService>(),
     reactions: service<ReactionService>(),
   },
-  relationships: ({ one: oneRel, many: manyRel }) => ({
-    issues: {
+  relationships: {
+    issues: ({ one: oneRel, many: manyRel }) => ({
       comments: manyRel({
         sourceField: ['id'],
         destService: 'comments',
@@ -203,8 +203,8 @@ const schema = createSchema({
         destService: 'users',
         destField: ['id'],
       }),
-    },
-    comments: {
+    }),
+    comments: ({ one: oneRel, many: manyRel }) => ({
       author: oneRel({
         sourceField: ['authorId'],
         destService: 'users',
@@ -215,8 +215,8 @@ const schema = createSchema({
         destService: 'reactions',
         destField: ['commentId'],
       }),
-    },
-  }),
+    }),
+  },
 })
 
 // ============================================================================
@@ -267,8 +267,8 @@ const exactQuerySchema = createSchema({
     people: service<EmployeeService>(),
     employments: service<EmploymentService>(),
   },
-  relationships: ({ many: manyRel, one: oneRel }) => ({
-    companies: {
+  relationships: {
+    companies: ({ many: manyRel }) => ({
       departments: manyRel({
         sourceField: ['id'],
         destService: 'departments',
@@ -279,15 +279,15 @@ const exactQuerySchema = createSchema({
         destService: 'people',
         destField: ['companyId'],
       }),
-    },
-    people: {
+    }),
+    people: ({ one: oneRel }) => ({
       currentEmployment: oneRel({
         sourceField: ['id'],
         destService: 'employments',
         destField: ['personId'],
       }),
-    },
-  }),
+    }),
+  },
 })
 
 const profileQuerySchema = createSchema({
@@ -295,8 +295,8 @@ const profileQuerySchema = createSchema({
     people: service<ProfilePersonService>(),
     employments: service<ProfileEmploymentService>(),
   },
-  relationships: ({ one: oneRel, many: manyRel }) => ({
-    people: {
+  relationships: {
+    people: ({ one: oneRel, many: manyRel }) => ({
       manager: oneRel({
         sourceField: ['managerId'],
         destService: 'people',
@@ -312,8 +312,8 @@ const profileQuerySchema = createSchema({
         destService: 'employments',
         destField: ['personId'],
       }),
-    },
-  }),
+    }),
+  },
 })
 
 const serverProjectionQuerySchema = createSchema({
@@ -328,22 +328,22 @@ const membershipQuerySchema = createSchema({
     memberships: service<MembershipService>(),
     teams: service<TeamService>(),
   },
-  relationships: ({ one: oneRel, many: manyRel }) => ({
-    people: {
+  relationships: {
+    people: ({ many: manyRel }) => ({
       memberships: manyRel({
         sourceField: ['id'],
         destService: 'memberships',
         destField: ['personId'],
       }),
-    },
-    memberships: {
+    }),
+    memberships: ({ one: oneRel }) => ({
       team: oneRel({
         sourceField: ['teamId'],
         destService: 'teams',
         destField: ['id'],
       }),
-    },
-  }),
+    }),
+  },
 })
 
 function createExactQueryApp() {
@@ -1631,14 +1631,14 @@ test('realtime: relation-path filters match root events through cached relations
       people: service<{ item: FilterPerson }>(),
       orgUnits: service<{ item: FilterOrgUnit }>(),
     },
-    relationships: ({ one: oneRel }) => ({
-      documents: {
+    relationships: {
+      documents: ({ one: oneRel }) => ({
         person: oneRel({ sourceField: ['personId'], destService: 'people', destField: ['id'] }),
-      },
-      people: {
+      }),
+      people: ({ one: oneRel }) => ({
         orgUnit: oneRel({ sourceField: ['orgUnitId'], destService: 'orgUnits', destField: ['id'] }),
-      },
-    }),
+      }),
+    },
   })
 
   const { App, figbird, feathers } = createTestApp(filterSchema, {
@@ -3067,15 +3067,15 @@ const embedSchema = createSchema({
     roles: service<RoleService>(),
     people: service<PersonService>(),
   },
-  relationships: ({ embed: embedRel }) => ({
-    roles: {
+  relationships: {
+    roles: ({ embed: embedRel }) => ({
       membersPreview: embedRel({
         sourceField: ['membersPreview'],
         destService: 'people',
         destField: ['id'],
       }),
-    },
-  }),
+    }),
+  },
 })
 
 function createEmbedApp() {
@@ -3246,8 +3246,8 @@ const junctionSchema = createSchema({
     roleMembers: service<RoleMemberService>(),
     users2: service<User2Service>(),
   },
-  relationships: ({ many: manyRel }) => ({
-    roles2: {
+  relationships: {
+    roles2: ({ many: manyRel }) => ({
       // Two-hop many: roles2 → roleMembers → users2. The consumer of `.related('members')`
       // never sees roleMembers; figbird traverses the junction transparently.
       members: manyRel(
@@ -3258,8 +3258,8 @@ const junctionSchema = createSchema({
         },
         { sourceField: ['userId'], destService: 'users2', destField: ['id'] },
       ),
-    },
-  }),
+    }),
+  },
 })
 
 function createJunctionApp() {

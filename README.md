@@ -20,11 +20,11 @@ const schema = createSchema({
     notes: service<{ item: Note }>(),
     users: service<{ item: User }>(),
   },
-  relationships: ({ one }) => ({
-    notes: {
+  relationships: {
+    notes: ({ one }) => ({
       author: one({ sourceField: 'authorId', destService: 'users' }),
-    },
-  }),
+    }),
+  },
 })
 
 const figbird = new Figbird({

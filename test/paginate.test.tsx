@@ -35,15 +35,15 @@ const paginateSchema = createSchema({
     issues: service<IssueService>(),
     comments: service<CommentService>(),
   },
-  relationships: ({ many: manyRel }) => ({
-    issues: {
+  relationships: {
+    issues: ({ many: manyRel }) => ({
       comments: manyRel({
         sourceField: ['id'],
         destService: 'comments',
         destField: ['issueId'],
       }),
-    },
-  }),
+    }),
+  },
 })
 
 function makeIssues(n: number): Record<string, Issue> {

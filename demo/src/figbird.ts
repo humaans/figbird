@@ -81,8 +81,8 @@ export const schema = createSchema({
     reactions: service<{ item: Reaction }>(),
   },
   // destField defaults to 'id'; string fields cover the common single-key case.
-  relationships: ({ one, many, embed }) => ({
-    issues: {
+  relationships: {
+    issues: ({ one, many }) => ({
       creator: one({ sourceField: 'creatorId', destService: 'users' }),
       assignee: one({ sourceField: 'assigneeId', destService: 'users' }),
       team: one({ sourceField: 'teamId', destService: 'teams' }),
@@ -96,8 +96,8 @@ export const schema = createSchema({
         { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
         { sourceField: 'labelId', destService: 'labels' },
       ),
-    },
-    teams: {
+    }),
+    teams: ({ many, embed }) => ({
       members: many({ sourceField: 'id', destService: 'users', destField: 'teamId' }),
       // embed(): the parent carries a server-maintained list of dest ids — figbird
       // fans every team's spotlightIssueIds into ONE batched IN(...) fetch and
@@ -109,21 +109,21 @@ export const schema = createSchema({
       // query per team — fine at 4 teams, and exactly the shape the fan-out
       // warning + embed pattern exist for at larger scales.
       recentIssues: many({ sourceField: 'id', destService: 'issues', destField: 'teamId' }),
-    },
-    users: {
+    }),
+    users: ({ one }) => ({
       team: one({ sourceField: 'teamId', destService: 'teams' }),
-    },
-    issueLabels: {
+    }),
+    issueLabels: ({ one }) => ({
       label: one({ sourceField: 'labelId', destService: 'labels' }),
-    },
-    comments: {
+    }),
+    comments: ({ one, many }) => ({
       author: one({ sourceField: 'authorId', destService: 'users' }),
       reactions: many({ sourceField: 'id', destService: 'reactions', destField: 'commentId' }),
-    },
-    reactions: {
+    }),
+    reactions: ({ one }) => ({
       user: one({ sourceField: 'userId', destService: 'users' }),
-    },
-  }),
+    }),
+  },
 })
 
 // ----- Socket.IO client + Feathers adapter -----

@@ -204,16 +204,31 @@ export interface RelationshipDef<
 export type SchemaRelationships = Record<string, Record<string, RelationshipDef<any, any>>>
 
 /**
+ * Field reference on an item: a known field name, or an array of them for compound
+ * keys. Untyped items (schema-less usage, the bare helper exports) fall back to
+ * plain strings.
+ */
+type FieldsOf<TItem> = unknown extends TItem
+  ? string | string[]
+  : (keyof TItem & string) | (keyof TItem & string)[]
+
+/**
  * Hop config — one segment of a relationship's traversal. For single-hop relations there's
  * just one of these; for two-hop `many` (junction tables) there are two.
  *
  * Fields accept a plain string for the common single-field case; arrays remain for
- * compound keys. `destField` defaults to `'id'`.
+ * compound keys. `destField` defaults to `'id'`. When the source and destination item
+ * types are known (inside createSchema's per-service relationship factories), both
+ * field ends type-check against the actual items.
  */
-export interface RelationshipHop<TDest extends string = string> {
-  sourceField: string | string[]
+export interface RelationshipHop<
+  TDest extends string = string,
+  TSourceItem = unknown,
+  TDestItem = unknown,
+> {
+  sourceField: FieldsOf<TSourceItem>
   destService: TDest
-  destField?: string | string[]
+  destField?: FieldsOf<TDestItem>
   query?: Record<string, unknown>
 }
 
@@ -309,39 +324,59 @@ export function embed<TDest extends string>(
   return { ...normalizeHop(def), cardinality: 'embedded' }
 }
 
+/** Extract the item type carried by a Service value's phantom slot. */
+type ServiceItemOf<S> =
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  S extends Service<infer TItem, any, any, any, any, any, any> ? TItem : unknown
+
 /**
- * Relationship helpers passed to the relationships factory. The factory variant is
- * generic over the service map so `destService` is constrained to `keyof TServices`.
- * Concretely: inside `createSchema({ services, relationships: ({ one }) => ({...}) })`,
- * autocompletion for `destService` only offers services that actually exist.
+ * Relationship helpers passed to a per-service relationships factory. Scoped to both
+ * the service map and the source service, so every end of every hop type-checks:
+ * `destService` is constrained to the schema's service names, `sourceField` to the
+ * source item's fields, and `destField` to the destination item's fields — including
+ * both hops of a junction `many`, where the second hop's source is the junction item.
  */
 export interface RelationshipHelpers<
   TServices = Record<string, Service<unknown, unknown, string>>,
+  TSourceItem = unknown,
 > {
   one: <TDest extends keyof TServices & string>(
-    def: RelationshipHop<TDest>,
+    def: RelationshipHop<TDest, TSourceItem, ServiceItemOf<TServices[TDest]>>,
   ) => RelationshipDef<TDest, 'one'>
   many: {
     <TDest extends keyof TServices & string>(
-      def: RelationshipHop<TDest>,
+      def: RelationshipHop<TDest, TSourceItem, ServiceItemOf<TServices[TDest]>>,
     ): RelationshipDef<TDest, 'many'>
     <TJunction extends keyof TServices & string, TDest extends keyof TServices & string>(
-      parentToJunction: RelationshipHop<TJunction>,
-      junctionToDest: RelationshipHop<TDest>,
+      parentToJunction: RelationshipHop<
+        TJunction,
+        TSourceItem,
+        ServiceItemOf<TServices[TJunction]>
+      >,
+      junctionToDest: RelationshipHop<
+        TDest,
+        ServiceItemOf<TServices[TJunction]>,
+        ServiceItemOf<TServices[TDest]>
+      >,
     ): RelationshipDef<TDest, 'many'>
   }
   embed: <TDest extends keyof TServices & string>(
-    def: RelationshipHop<TDest>,
+    def: RelationshipHop<TDest, TSourceItem, ServiceItemOf<TServices[TDest]>>,
   ) => RelationshipDef<TDest, 'embedded'>
 }
 
 /**
- * Factory function type for defining relationships.
+ * The relationships config: one factory per source service, each receiving helpers
+ * scoped to that service. Keeping factories per service (rather than one global
+ * callback) is what lets `sourceField` type-check — a global callback can't know
+ * which service a `one()` call is declared under.
  */
-export type RelationshipsFactory<TServiceMap> = (
-  helpers: RelationshipHelpers<TServiceMap>,
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-) => { [K in keyof TServiceMap]?: Record<string, RelationshipDef<any, any>> }
+export type RelationshipsConfig<TServiceMap> = {
+  [K in keyof TServiceMap]?: (
+    helpers: RelationshipHelpers<TServiceMap, ServiceItemOf<TServiceMap[K]>>,
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  ) => Record<string, RelationshipDef<any, any>>
+}
 
 // Helper type to extract all service parameters and update name
 type ExtractServiceWithName<S, N extends string> =
@@ -359,23 +394,31 @@ type ExtractServiceWithName<S, N extends string> =
 
 // Phase 2: Create a schema with services object map (preserves literal keys + typed
 // relationships so downstream hooks can infer related item types at call sites).
+/** The relationships map a set of per-service factories resolves to. */
+type ResolvedRelationships<TServiceMap, TRelFactories> = {
+  [K in keyof TRelFactories & keyof TServiceMap]: TRelFactories[K] extends (
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    ...args: any[]
+  ) => infer R
+    ? R
+    : never
+}
+
 export function createSchema<
   const TServiceMap extends Record<string, Service<unknown, unknown, string>>,
-  const TRelationships extends {
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    [K in keyof TServiceMap]?: Record<string, RelationshipDef<any, any>>
-  } = {
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    [K in keyof TServiceMap]?: Record<string, RelationshipDef<any, any>>
-  },
+  const TRelFactories extends RelationshipsConfig<TServiceMap> = {},
 >(config: {
   services: TServiceMap
-  relationships?: (helpers: RelationshipHelpers<TServiceMap>) => TRelationships
+  // The intersection is the standard contextual-typing trick: TRelFactories infers
+  // the precise per-service return types from the value, while the
+  // RelationshipsConfig member supplies the scoped helper parameter types to each
+  // callback (inference alone would leave the params implicitly `any`).
+  relationships?: TRelFactories & RelationshipsConfig<TServiceMap>
 }): {
   services: {
     readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
   }
-  relationships: TRelationships
+  relationships: ResolvedRelationships<TServiceMap, TRelFactories>
 } {
   // Assign names to services based on their keys in the map
   const serviceMap = Object.fromEntries(
@@ -387,12 +430,22 @@ export function createSchema<
     readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
   }
 
-  // Build relationships from factory function if provided
-  const relationships = (
-    config.relationships ? config.relationships({ one, many, embed }) : {}
-  ) as TRelationships
+  // Invoke each per-service factory with the (runtime-identical) helpers
+  const relationships: SchemaRelationships = {}
+  for (const [name, factory] of Object.entries(config.relationships ?? {})) {
+    if (factory) {
+      relationships[name] = (factory as (h: unknown) => SchemaRelationships[string])({
+        one,
+        many,
+        embed,
+      })
+    }
+  }
 
-  return { services: serviceMap, relationships }
+  return {
+    services: serviceMap,
+    relationships: relationships as ResolvedRelationships<TServiceMap, TRelFactories>,
+  }
 }
 
 // Type helpers to extract types from schema
