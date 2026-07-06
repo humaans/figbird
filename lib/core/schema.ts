@@ -156,7 +156,8 @@ export type ResolveRelatedService<S extends Schema, N extends string, R extends 
  * what lets the query builder infer the related item type from the schema at the call site.
  *
  * Cardinality variants:
- * - `'one'`      — single related item resolved by `parent.sourceField → dest.destField`
+ * - `'one'`      — single related item, single-hop (`parent.sourceField → dest.destField`)
+ *                  or chained through an intermediate service via `via`
  * - `'many'`     — array of related items, single-hop or two-hop (junction-table) via `via`
  * - `'embedded'` — array of related items where `parent.sourceField` is itself a list of
  *                  dest ids (a server-materialised preview field; bounded payload)
@@ -178,9 +179,10 @@ export interface RelationshipDef<
   cardinality: TCardinality
   query?: Record<string, unknown> // optional additional filter
   /**
-   * First hop for two-hop `many` relations (junction-table many-to-many). When present,
-   * `sourceField` / `destService` / `destField` describe the second hop (junction → dest)
-   * and `via` describes the first (parent → junction). Capped at two hops total.
+   * First hop for two-hop relations — junction-table `many`, or a chained `one`
+   * (parent → intermediate → destination). When present, `sourceField` /
+   * `destService` / `destField` describe the second hop (intermediate → dest) and
+   * `via` describes the first (parent → intermediate). Capped at two hops total.
    */
   via?: {
     sourceField: string[]
@@ -247,9 +249,53 @@ function normalizeHop<TDest extends string>(
 /**
  * Runtime implementation behind the scoped `one` factory helper. Only reachable
  * through a per-service relationships factory, which is what types every hop end.
+ *
+ * Two-hop form: `one(parentToIntermediate, intermediateToDest)` chains two lookups
+ * into a single declared edge (person → current employment → job role). When
+ * multiple intermediate rows match a parent, the first resolves — make the first
+ * hop selective (an FK on the parent, or a hop `query` filter) so at most one does.
  */
-function one<TDest extends string>(def: RelationshipHop<TDest>): RelationshipDef<TDest, 'one'> {
-  return { ...normalizeHop(def), cardinality: 'one' }
+function one<TDest extends string>(def: RelationshipHop<TDest>): RelationshipDef<TDest, 'one'>
+function one<TJunction extends string, TDest extends string>(
+  parentToJunction: RelationshipHop<TJunction>,
+  junctionToDest: RelationshipHop<TDest>,
+): RelationshipDef<TDest, 'one'>
+function one(
+  first: RelationshipHop<string>,
+  second?: RelationshipHop<string>,
+): RelationshipDef<string, 'one'> {
+  if (!second) {
+    return { ...normalizeHop(first), cardinality: 'one' }
+  }
+  return twoHop(first, second, 'one')
+}
+
+/**
+ * Build a two-hop relationship: `via` holds the parent → intermediate hop, the top
+ * level holds intermediate → destination. Shared by `one(hop1, hop2)` (chained
+ * lookups, e.g. person → current employment → job role) and `many(hop1, hop2)`
+ * (junction tables).
+ */
+function twoHop<TCardinality extends 'one' | 'many'>(
+  first: RelationshipHop<string>,
+  second: RelationshipHop<string>,
+  cardinality: TCardinality,
+): RelationshipDef<string, TCardinality> {
+  const junctionHop = normalizeHop(first)
+  const destHop = normalizeHop(second)
+  return {
+    sourceField: destHop.sourceField,
+    destService: destHop.destService,
+    destField: destHop.destField,
+    cardinality,
+    ...(destHop.query ? { query: destHop.query } : {}),
+    via: {
+      sourceField: junctionHop.sourceField,
+      destService: junctionHop.destService,
+      destField: junctionHop.destField,
+      ...(junctionHop.query ? { query: junctionHop.query } : {}),
+    },
+  }
 }
 
 /**
@@ -276,21 +322,7 @@ function many(
   if (!second) {
     return { ...normalizeHop(first), cardinality: 'many' }
   }
-  const junctionHop = normalizeHop(first)
-  const destHop = normalizeHop(second)
-  return {
-    sourceField: destHop.sourceField,
-    destService: destHop.destService,
-    destField: destHop.destField,
-    cardinality: 'many',
-    ...(destHop.query ? { query: destHop.query } : {}),
-    via: {
-      sourceField: junctionHop.sourceField,
-      destService: junctionHop.destService,
-      destField: junctionHop.destField,
-      ...(junctionHop.query ? { query: junctionHop.query } : {}),
-    },
-  }
+  return twoHop(first, second, 'many')
 }
 
 /**
@@ -322,9 +354,23 @@ type ServiceItemOf<S> = S extends Service<infer TDef, string> ? TDef['item'] : u
  * both hops of a junction `many`, where the second hop's source is the junction item.
  */
 export interface RelationshipHelpers<TServices = Record<string, Service>, TSourceItem = unknown> {
-  one: <TDest extends keyof TServices & string>(
-    def: RelationshipHop<TDest, TSourceItem, ServiceItemOf<TServices[TDest]>>,
-  ) => RelationshipDef<TDest, 'one'>
+  one: {
+    <TDest extends keyof TServices & string>(
+      def: RelationshipHop<TDest, TSourceItem, ServiceItemOf<TServices[TDest]>>,
+    ): RelationshipDef<TDest, 'one'>
+    <TJunction extends keyof TServices & string, TDest extends keyof TServices & string>(
+      parentToJunction: RelationshipHop<
+        TJunction,
+        TSourceItem,
+        ServiceItemOf<TServices[TJunction]>
+      >,
+      junctionToDest: RelationshipHop<
+        TDest,
+        ServiceItemOf<TServices[TJunction]>,
+        ServiceItemOf<TServices[TDest]>
+      >,
+    ): RelationshipDef<TDest, 'one'>
+  }
   many: {
     <TDest extends keyof TServices & string>(
       def: RelationshipHop<TDest, TSourceItem, ServiceItemOf<TServices[TDest]>>,
