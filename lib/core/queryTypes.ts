@@ -32,7 +32,8 @@ export interface ProcessedRealtimeEvent {
   type: EventType
   item: unknown
   previousItem: unknown | null
-  itemId: string | number | undefined
+  /** Always defined — events whose item has no resolvable id are never applied. */
+  itemId: string | number
 }
 
 export type QueryStatus = 'loading' | 'success' | 'error'
