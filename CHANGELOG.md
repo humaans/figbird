@@ -23,6 +23,13 @@ The relational rewrite — a new API centered on `q`/`useQuery` for reads and
   queries using them classify local-exact and merge realtime events instead of
   refetching — e.g. effective-dated services.
 - Hooks from `createHooks` are instance-bound — `FigbirdProvider` is now optional.
+- `useQuery(definition, args | null)`: `null` args skip the query without invoking the
+  definition's build function — the skip condition lives in the args
+  (`useQuery(issueDetail, id ? { id } : null)`), no non-null assertions needed.
+- `figbird.refetch(service?)` — manual refetch escape hatch for changes figbird can't
+  observe (custom methods on services without realtime events, out-of-band writes).
+- Fixed: retrying an error boundary after a cold query failure now cold-starts the
+  query again instead of instantly re-throwing the same settled error.
 
 Breaking:
 

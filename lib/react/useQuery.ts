@@ -75,6 +75,7 @@ export interface FigbirdLike {
     refetch(): void
     loadMore(): void
     suspensePromise(): Promise<void>
+    coldErrorDelivered(): void
     hash(): string
   }
 }
@@ -236,6 +237,20 @@ export interface UseQueryHook<S extends Schema = any> {
     definition: QueryDefinition<Args, B>,
     ...rest: ArgsAndOptions<Args, O>
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
+  // Definition, nullable args — `null` skips the query without invoking the build
+  // function, so the skip condition lives in the args: `useQuery(def, id ? { id } : null)`.
+  // Non-suspense variant:
+  <Args, B extends AnyQueryBuilder<S>>(
+    definition: QueryDefinition<Args, B>,
+    args: Args | null,
+    options: UseQueryOptions & { suspense: false },
+  ): RelationalQueryResult<QueryBuilderResult<B>>
+  // Suspense variant — data widens with `undefined` exactly like `skip`:
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+    definition: QueryDefinition<Args, B>,
+    args: Args | null,
+    options?: O,
+  ): SuspenseQueryResult<QueryBuilderResult<B> | undefined, QueryBuilderKind<B>>
 }
 
 /**
@@ -282,6 +297,13 @@ export function useQueryImpl(
       argsOrOptions,
       maybeOptions,
     )
+    // `null` args skip the query — the definition's build function is never invoked
+    // (it may dereference its args), so the condition lives in the args themselves:
+    // `useQuery(issueDetail, id ? { id } : null)`. Routed through the same code path
+    // as `skip: true` so the hook sequence is identical when args flip null <-> real.
+    if (args === null) {
+      return useQueryForBuilder(figbird, SKIPPED_BUILDER, { ...options, skip: true })
+    }
     const validatedArgs = definition.validate(args)
     const builder = definition.build(validatedArgs) as AnyQueryBuilder
     return useQueryForBuilder(figbird, builder, options ?? {})
@@ -297,6 +319,13 @@ const idlePagination: RelationalPaginationState = {
   loadMoreError: null,
   totalCount: undefined,
 }
+
+// Stand-in for null-args skips: the skip path never materializes a query, so only
+// toAST() is consulted (for the pagination widening — which the skip branch applies
+// unconditionally anyway, see below).
+const SKIPPED_BUILDER = {
+  toAST: () => ({ kind: 'find' }),
+} as unknown as AnyQueryBuilder
 
 function useQueryForBuilder<B extends AnyQueryBuilder>(
   figbird: FigbirdLike,
@@ -350,15 +379,26 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
     >
 
   if (skip || !qRef) {
-    return widen(
-      { data: undefined as unknown as T, error: null, isFetching: false, refetch },
-      idlePagination,
-    )
+    // Always the widened shape: a null-args skip can't know the definition's kind
+    // (build never ran), and inert pagination fields on a non-paginated result are
+    // hidden by the static type.
+    return {
+      data: undefined as unknown as T,
+      error: null,
+      isFetching: false,
+      refetch,
+      loadMore,
+      ...idlePagination,
+    } as SuspenseQueryResult<T, QueryBuilderKind<B>>
   }
 
   // `status: 'error'` only occurs for cold failures (no data was ever produced) —
   // a refetch failure with data present stays on the success arm with `error` set.
   if (state.status === 'error') {
+    // Deferred self-eviction: nothing committed, so nothing will ever unsubscribe
+    // this ref — releasing it here is what makes an error-boundary retry cold-start
+    // a fresh query instead of instantly re-throwing the same settled error.
+    qRef.coldErrorDelivered()
     throw state.error
   }
   if (state.status !== 'success') {

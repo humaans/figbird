@@ -3672,3 +3672,159 @@ test('chained one: realtime on intermediate and destination re-resolves the edge
 
   unmount()
 })
+
+// ============================================================================
+// Null-args skip for definitions
+// ============================================================================
+
+test('useQuery definition: null args skip without invoking build or fetching', async t => {
+  const { App, figbird, feathers } = createApp()
+  const { render, unmount, flush, $ } = dom()
+
+  let buildCalls = 0
+  const issueDetail = defineQuery(({ id }: { id: number }) => {
+    buildCalls += 1
+    return figbird.q.issues.get(id)
+  })
+
+  function Issue({ id }: { id: number | null }) {
+    const { data } = useQuery(issueDetail, id ? { id } : null)
+    return <div className='detail'>{data?.title ?? 'none'}</div>
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <Issue id={null} />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  t.is($('.detail')?.innerHTML, 'none')
+  t.is(buildCalls, 0, 'build is never invoked for null args')
+  t.is(feathers.service('issues').counts.get, 0, 'nothing fetched')
+
+  unmount()
+})
+
+test('useQuery definition: args flipping from null to real starts the query', async t => {
+  const { App, figbird } = createApp()
+  const { render, unmount, flush, $, act } = dom()
+
+  const issueDetail = defineQuery(({ id }: { id: number }) => figbird.q.issues.get(id))
+
+  let setId: (id: number | null) => void
+  function Issue() {
+    const [id, _setId] = React.useState<number | null>(null)
+    setId = _setId
+    const { data } = useQuery(issueDetail, id ? { id } : null)
+    return <div className='detail'>{data?.title ?? 'none'}</div>
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <Issue />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.is($('.detail')?.innerHTML, 'none')
+
+  await flush(() => {
+    act(() => setId(1))
+  })
+  t.is($('.detail')?.innerHTML, 'First issue')
+
+  unmount()
+})
+
+// ============================================================================
+// figbird.refetch() — manual escape hatch for eventless changes
+// ============================================================================
+
+test('figbird.refetch(service): refetches active queries after out-of-band changes', async t => {
+  const { App, figbird, feathers } = createApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function OpenIssues() {
+    const { data } = useQuery(figbird.q.issues.where({ status: 'open' }))
+    return <div className='open-count'>{data.length}</div>
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <OpenIssues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.is($('.open-count')?.innerHTML, '3')
+
+  // Out-of-band change: a custom method or another system wrote directly — no
+  // realtime event was emitted.
+  const issues = feathers.service('issues')
+  issues.data[4] = { id: 4, title: 'Silent issue', status: 'open', creatorId: 1 }
+
+  const creatorFinds = feathers.service('users').counts.find
+
+  await flush(() => {
+    figbird.refetch('issues')
+  })
+  t.is($('.open-count')?.innerHTML, '4', 'the nudged service refetched')
+  t.is(feathers.service('users').counts.find, creatorFinds, 'other services untouched')
+
+  unmount()
+})
+
+// ============================================================================
+// Cold error → error boundary retry recovers
+// ============================================================================
+
+test('suspense: remounting after a cold error refetches and recovers', async t => {
+  const { render, unmount, flush, $, act } = dom()
+  const { App, figbird, feathers } = createApp()
+
+  // Cold failure: the root find rejects.
+  const issues = feathers.service('issues')
+  const workingFind = issues.find.bind(issues)
+  issues.find = () => Promise.reject(new Error('cold failure'))
+
+  function OpenIssues() {
+    const { data } = useQuery(figbird.q.issues.where({ status: 'open' }))
+    return <div className='issues'>{data.length}</div>
+  }
+
+  let reset: () => void
+  function Retryable() {
+    const [attempt, setAttempt] = React.useState(0)
+    reset = () => setAttempt(a => a + 1)
+    return (
+      <ErrorBoundary key={attempt} fallback={err => <div className='boundary'>{err.message}</div>}>
+        <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+          <OpenIssues />
+        </React.Suspense>
+      </ErrorBoundary>
+    )
+  }
+
+  render(
+    <App>
+      <Retryable />
+    </App>,
+  )
+  await flush()
+  t.is($('.boundary')?.innerHTML, 'cold failure')
+
+  // The server recovers; the user hits "retry" (boundary remounts its subtree).
+  issues.find = workingFind
+  await flush(() => {
+    act(() => reset())
+  })
+  await flush()
+  t.is($('.issues')?.innerHTML, '3', 'retry refetched and rendered data')
+
+  unmount()
+})

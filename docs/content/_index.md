@@ -89,7 +89,7 @@ export const figbird = new Figbird({
 })
 
 // The daily-use kit, bound to this instance.
-export const { useQuery, q, m, defineQuery, prepare, prefetch, useAction, useMutating } =
+export const { useQuery, q, m, defineQuery, prepare, prefetch, refetch, useAction, useMutating } =
   createHooks(figbird)
 ```
 
@@ -312,6 +312,14 @@ const { data } = useQuery(q.issues.get(id), { skip: id == null })
 // data: Issue | undefined — the type reflects that a skipped query has no data
 ```
 
+With definitions, put the condition in the args instead — `null` skips the query
+without ever invoking the definition's build function, so no non-null assertion
+is needed to satisfy the args type:
+
+```ts
+const { data } = useQuery(issueDetail, id ? { id } : null)
+```
+
 ## Pagination
 
 `.paginate()` turns a query into an infinite-scroll accumulator. Each loaded page is its own window on the server, and `data` is the concatenation of all loaded pages:
@@ -522,9 +530,10 @@ await m.notes.call('undeclared', arg) // untyped escape hatch
 **Custom methods don't write to the CRUD cache.** Their result shape is unknown to
 figbird, so unlike the `create`/`update`/`patch`/`remove` sitting next to them on the
 handle, calling one changes no query results by itself. Realtime events from the server
-keep affected queries fresh, as with any other server-side change. They _do_ flow through
-the mutation tracker and the `mutate:*` observability events, so `useMutating` and
-devtools see them. Wrap them in `useAction` for UI state like any other write. Reserved
+keep affected queries fresh, as with any other server-side change; on services without
+realtime events, nudge manually with `figbird.refetch('service')` after the call. They
+_do_ flow through the mutation tracker and the `mutate:*` observability events, so
+`useMutating` and devtools see them. Wrap them in `useAction` for UI state like any other write. Reserved
 names always mean the built-in: a schema method named `create`/`update`/`patch`/`remove`/
 `call`/`confirmed` is shadowed by the handle; reach it via `call()`.
 
@@ -1196,20 +1205,21 @@ The core instance holding the adapter, schema, and shared query state.
 const figbird = new Figbird({ adapter, schema, eventBatchInterval? })
 ```
 
-| Member                                            | Description                                                                                                                                   |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `q`                                               | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                                                 |
-| `prepare(definition, args)`                       | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare).                           |
-| `prefetch(definition, args, opts?)`               | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).                            |
-| `m`                                               | The write proxy — `m.issues.patch(...)`, callable as `m(service)` for dynamic names — also returned bound from `createHooks`. See [m](#m).    |
-| `mutating`                                        | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                      |
-| `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                        |
-| `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                 |
-| `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                 |
-| `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts `(definition, args)`. See [Using outside React](#using-outside-react). |
-| `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                  |
-| `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                               |
-| `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.     |
+| Member                                            | Description                                                                                                                                                 |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `q`                                               | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                                                               |
+| `prepare(definition, args)`                       | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare).                                         |
+| `prefetch(definition, args, opts?)`               | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).                                          |
+| `refetch(service?)`                               | Manual refetch escape hatch for changes figbird can’t observe (custom methods without events, out-of-band writes) — also returned bound from `createHooks`. |
+| `m`                                               | The write proxy — `m.issues.patch(...)`, callable as `m(service)` for dynamic names — also returned bound from `createHooks`. See [m](#m).                  |
+| `mutating`                                        | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                    |
+| `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
+| `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
+| `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |
+| `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts `(definition, args)`. See [Using outside React](#using-outside-react).               |
+| `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                                |
+| `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                                             |
+| `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.                   |
 
 ## FeathersAdapter
 
@@ -1236,7 +1246,7 @@ Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, ski
 Binds a Figbird instance to typed React hooks:
 
 ```ts
-export const { useQuery, q, m, defineQuery, prepare, prefetch, useAction, useMutating } =
+export const { useQuery, q, m, defineQuery, prepare, prefetch, refetch, useAction, useMutating } =
   createHooks(figbird)
 ```
 
