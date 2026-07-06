@@ -875,7 +875,7 @@ test('figbird.query: unsupported query operators are auto server-maintained', as
   unsubscribe()
 })
 
-test('figbird.query: inactive server-windowed cache-first query refetches on next subscription', async t => {
+test('figbird.query: inactive server-windowed query merges provable events; next subscription reads warm', async t => {
   const { figbird, feathers } = createWindowQueryApp()
   const peopleService = feathers.service('people')
 
@@ -925,21 +925,21 @@ test('figbird.query: inactive server-windowed cache-first query refetches on nex
 
   t.is(peopleService.counts.find, initialFindCount)
 
-  let refetchUnsubscribe: () => void = () => {}
-  const refetchedData = await new Promise<Employee[]>(resolve => {
-    refetchUnsubscribe = queryRef.subscribe(state => {
-      if (state.status === 'success' && !state.isFetching) {
-        refetchUnsubscribe()
-        resolve(state.data)
-      }
-    })
-  })
-
+  // Dana sorts strictly to the front of the full window, so window maintenance
+  // merged the event into the inactive cached query — the next subscription reads
+  // the already-correct data without any refetch.
+  const snapshot = queryRef.getSnapshot()
+  t.is(snapshot?.status, 'success')
   t.deepEqual(
-    refetchedData.map(person => person.name),
+    ((snapshot?.data ?? []) as Employee[]).map(person => person.name),
     ['Dana', 'Alice'],
   )
-  t.is(peopleService.counts.find, initialFindCount + 1)
+
+  const resubscribeUnsubscribe = queryRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  resubscribeUnsubscribe()
+
+  t.is(peopleService.counts.find, initialFindCount)
 })
 
 test('figbird.query: reconnect refetches active queries after missed events', async t => {

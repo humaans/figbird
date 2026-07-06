@@ -145,6 +145,12 @@ export class Figbird<
    *   the window coalesce into one guaranteed trailing refetch. Default 2000; 0 disables.
    * @param visibility Visibility source for hidden-tab gating (defaults to `document`).
    *   Hidden tabs defer event-driven reconciliation until they become visible.
+   * @param defaultSort The backend's implicit ordering for queries without `$sort`
+   *   (e.g. `{ createdAt: -1, id: -1 }`). Window maintenance uses it to place
+   *   realtime items into unsorted windows locally instead of refetching. This is a
+   *   correctness contract like custom operators: it must mirror the order the
+   *   server actually applies — divergence shows up as misplaced rows until the
+   *   next fetch.
    */
   constructor({
     adapter,
@@ -152,12 +158,14 @@ export class Figbird<
     schema,
     reconcileCooldown,
     visibility,
+    defaultSort,
   }: {
     adapter: A
     eventBatchInterval?: number
     schema?: S
     reconcileCooldown?: number
     visibility?: VisibilitySource
+    defaultSort?: Record<string, 1 | -1>
   }) {
     this.adapter = adapter
     this.schema = schema
@@ -170,6 +178,7 @@ export class Figbird<
       mutations: this.#mutationTracker,
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
+      ...(defaultSort !== undefined ? { defaultSort } : {}),
     })
   }
 

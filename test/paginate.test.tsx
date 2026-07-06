@@ -364,7 +364,7 @@ test('useQuery + paginate: composes with .related() — relations attach to ever
   unmount()
 })
 
-test('useQuery + paginate: realtime created event triggers a refetch on the affected page', async t => {
+test('useQuery + paginate: realtime create that provably sorts into a page merges locally', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 5 })
 
@@ -406,15 +406,19 @@ test('useQuery + paginate: realtime created event triggers a refetch on the affe
     })
   })
 
-  // Page 0 must have refetched to include the new row.
-  t.true(
-    issuesService.counts.find > findCountBefore,
-    'realtime event must trigger a server-maintained refetch of the affected page',
+  // The new row sorts strictly inside page 0's window (rank 0 < rank 1), so window
+  // maintenance inserts it locally and evicts the overflow row — no refetch.
+  t.is(
+    issuesService.counts.find,
+    findCountBefore,
+    'a provable insert must merge locally without a refetch',
   )
-  t.true(
-    $('.issues')!.getAttribute('data-titles')!.startsWith('Inserted'),
-    'inserted row must appear at the top of page 0',
+  t.is(
+    $('.issues')!.getAttribute('data-titles'),
+    'Inserted,Issue 1,Issue 2',
+    'inserted row must appear at the top of page 0, evicting the overflow row',
   )
+  t.is($('.issues')!.getAttribute('data-count'), '3')
 
   unmount()
 })

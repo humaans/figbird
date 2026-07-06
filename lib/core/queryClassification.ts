@@ -5,8 +5,10 @@
  * - **local-exact** — membership/order/values are provable from local state; realtime
  *   events merge into the cached result via the matcher.
  * - **server-window** — the query is windowed (`$limit`/`$skip`/`$sort` without
- *   `allPages`); visible rows are known but unseen rows may enter or leave, so events
- *   trigger a server refetch instead of a local merge.
+ *   `allPages`); the predicate is still locally evaluable, but unseen rows may enter
+ *   or leave the window invisibly. Events whose effect on the window is provable
+ *   merge locally (see queryStore's window maintenance); anything unprovable
+ *   triggers a server refetch.
  * - **server-authoritative** — membership/order/values depend on server-only logic
  *   (`.server()`, `$select`, or operators the local matcher cannot evaluate); events
  *   always trigger a refetch.
@@ -136,8 +138,9 @@ export function hasWindowFilters(value: unknown): boolean {
 export type StoredQueryClass = QueryNodeClass | 'get'
 
 /**
- * A query the client must not merge realtime events into locally — anything
- * classified above local-exact refetches instead. Get queries always merge.
+ * A query the client must not merge realtime events into blindly. Server-window
+ * queries merge the provable subset of events and refetch for the rest;
+ * server-authoritative queries always refetch. Get queries always merge.
  */
 export function isServerMaintained(classification: StoredQueryClass): boolean {
   return classification === 'server-window' || classification === 'server-authoritative'

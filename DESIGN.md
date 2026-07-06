@@ -338,8 +338,15 @@ Unordered complete sets are the easiest to maintain.
 
 Ordered complete sets can be maintained locally if sort fields are present and deterministic.
 
-Ordered limited windows require server reconciliation. Even if the client can sort cached rows, it
-cannot know whether an uncached row belongs inside the visible window.
+Ordered limited windows are maintained locally for the provable subset of event effects and
+require server reconciliation for the rest. The visible rows are a contiguous run of the server
+result, so an event item whose sort position relative to the run's boundaries is known can be
+merged: in-place patches, underfilled windows (the complete result set), inserts that sort
+strictly inside the run (evicting the overflow row), and membership changes provably beyond the
+window (total-only). What the client cannot know — whether an uncached row slides into a full
+window after a removal, anything that shifts the page start of a skipped window, boundary ties —
+reconciles by refetch. Sort position is judged by `$sort`, falling back to the configured
+`defaultSort` (the backend's implicit order — a correctness contract like custom operators).
 
 Server-derived ordering, such as search rank or permission-aware priority, should be treated as
 server-authoritative.
@@ -353,7 +360,9 @@ Examples:
 - Entity patched and still matches local-exact query: update the item in place.
 - Entity patched and no longer matches local-exact query: remove it.
 - Entity created and matches local-exact query: insert it.
-- Entity affects server-window query: mark the window dirty and refetch/refill.
+- Entity affects server-window query with a provable window effect: merge it locally (in-place
+  patch, sorted insert with eviction, underfilled-window insert/remove, total-only adjustment).
+- Entity affects server-window query unprovably: mark the window dirty and refetch/refill.
 - Foreign key changes: remove from old relation result and add/refetch the new relation result.
 - Missing relation leaf is needed for the expressed query shape: fetch it.
 - Reconnect after possible missed events: mark active queries stale and reconcile with the server.

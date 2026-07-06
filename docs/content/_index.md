@@ -604,7 +604,7 @@ Rule of thumb: `prepare()` when you need to _await_ readiness or control the lea
 Figbird subscribes to realtime events per service (at most once per service) the moment a query against it is active. What happens when an event arrives is decided by the query's **classification**. This is the library's central idea:
 
 - **local-exact** — membership, order, and values are provable from local state. Events merge directly into the cached result: a created record that matches appears, a patched record updates in place, a removed one disappears. No network.
-- **server-window** — the query is windowed (`$limit` / `$skip` / `$sort`, or `.paginate()`). Visible rows are known, but an event may change membership invisibly (a row you can't see may now belong), so events trigger a **refetch** of the window instead of a guess.
+- **server-window** — the query is windowed (`$limit` / `$skip` / `$sort`, or `.paginate()`). The predicate is still locally evaluable, but a row you can't see may enter or leave the window invisibly. Events whose effect on the window is **provable** merge locally (see window maintenance below); anything unprovable triggers a **refetch** of the window instead of a guess.
 - **server-authoritative** — membership or values depend on logic only the server can evaluate: `$regex` and other non-local operators, `$select` projections, or an explicit `.server()`. Events always trigger a refetch.
 
 Classification is automatic and per query node; the root and each relation classify independently. Adding `.limit(30)` to a query flips it from merge to refetch. That's by design, and `figbird.explain()` will tell you exactly that:
@@ -634,6 +634,47 @@ Use `.server()` on a builder when a query _looks_ locally provable but isn't, sa
 ```ts
 q.documents.where({ visibleTo: userId }).server()
 ```
+
+### Window maintenance
+
+Server-window doesn't mean every event costs a roundtrip. The visible rows are a
+contiguous run of the server result, and the window's predicate is locally evaluable
+(anything non-local classifies server-authoritative) — so many event effects are
+provable from local state, and figbird merges those directly:
+
+- **In-place patches.** A patch to a visible row that keeps its membership and sort
+  position updates in place — editing a row in the page you're looking at never
+  refetches.
+- **Underfilled windows.** `$limit: 100` that returned 32 rows _is_ the complete
+  result set: creates insert at their sorted position, removes remove, patches move
+  rows in and out — all local until the window fills.
+- **Provable inserts.** A created row that sorts strictly inside a full window's run
+  belongs there: it's inserted at its position and the overflow row is evicted. A new
+  entry landing at the top of a recent-first list appears instantly, no refetch.
+- **Beyond-the-window changes.** A membership change provably past the window only
+  adjusts `total`.
+
+Everything unprovable — a removal from a full window (the replacement row is
+unknown), anything that shifts the page start of a `$skip` window, boundary ties —
+falls back to the refetch, which remains the correctness backstop.
+
+Sort position is judged by the query's `$sort`. For queries without one, tell
+figbird the ordering your backend applies by default:
+
+```ts
+const figbird = new Figbird({
+  adapter,
+  schema,
+  defaultSort: { createdAt: -1, id: -1 },
+})
+```
+
+Like custom operators, `defaultSort` is a correctness contract: it must mirror the
+order the server actually applies. If a query's real ordering differs, rows merge
+into the wrong position until the next fetch — fix it by specifying `$sort` on that
+query. With no `$sort` and no `defaultSort`, membership still merges where it's
+exact (visible patches keep their position, underfilled first pages append) and
+everything positional refetches.
 
 ### Teaching the client custom operators
 

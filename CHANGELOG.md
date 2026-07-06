@@ -2,43 +2,15 @@
 
 ## 0.24.0
 
-The relational rewrite — a new API centered on `q`/`useQuery` for reads and
-`m`/`useAction`/`useMutating` for writes. See the
-[docs](https://humaans.github.io/figbird) for the full story.
+The relational rewrite.
 
-- Relational queries: declare relations once in the schema, `.related()` assembles
-  typed entity graphs, kept live by realtime events. Relationships are declared per
-  source service, so `sourceField`/`destService`/`destField` all type-check against
-  the actual items. `one` and `many` both support two-hop declarations
-  (`one(parentToIntermediate, intermediateToDest)` for chained lookups like
-  person → current employment → job role; `many(hop1, hop2)` for junction tables).
-- `useQuery` is Suspense-native; query classification decides merge-vs-refetch
-  realtime behavior automatically (no per-query `realtime` config).
-- Writes through `m` are optimistic by default with global rollback; `confirmed`
-  opts out; optimistic creates require a client-generated id.
-- Query preparation for instant navigation: `defineQuery`, `prepare`, `prefetch`.
-- Observability: `figbird.events`, `figbird.explain()`, `figbird.inspect()`.
-- Custom operator registry: teach the client to evaluate app-specific query operators
-  (`new FeathersAdapter(feathers, { operators: { $asOf: asOf => item => ... } })`) so
-  queries using them classify local-exact and merge realtime events instead of
-  refetching — e.g. effective-dated services.
-- Hooks from `createHooks` are instance-bound — `FigbirdProvider` is now optional.
-- `useQuery(definition, args | null)`: `null` args skip the query without invoking the
-  definition's build function — the skip condition lives in the args
-  (`useQuery(issueDetail, id ? { id } : null)`), no non-null assertions needed.
-- `figbird.refetch(service?)` — manual refetch escape hatch for changes figbird can't
-  observe (custom methods on services without realtime events, out-of-band writes).
-- `get(id)` against a materialized service (an unfiltered `.all()` succeeded) is
-  answered locally from the entity cache — including locally-decidable
-  `.get(id).where(...)` conditions; a get whose local answer would be an error
-  (missing id, failing predicate) still asks the server. Conditional gets with
-  server-only operators now classify server-authoritative (previously they threw
-  at query creation).
-- `figbird/testing` — an in-memory Feathers-compatible client (seeded data, realtime
-  `emit`, per-method call counters, optional query-aware `find`) so app tests run
-  against real figbird instead of mocks of it. Figbird's own suite runs on it.
-- Fixed: retrying an error boundary after a cold query failure now cold-starts the
-  query again instead of instantly re-throwing the same settled error.
+Figbird already made it easy to fetch lists and records and keep them live. But joining data across services was still left to you. You either had to over-fetch whole datasets so everything was available locally, or make several fetches per screen and stitch the results together by hand.
+
+This release makes joins a first-class part of Figbird. Each screen can now ask for the minimum data it needs — a window of records and their relations, declared as a single query. Figbird keeps that query fully realtime-reactive, merging events locally whenever it can safely determine the result, and refetching when it can’t.
+
+This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
+
+See the [docs](https://humaans.github.io/figbird) for the full story. The old hooks still work — see Deprecated below — so you can migrate gradually.
 
 Breaking:
 
@@ -47,8 +19,8 @@ Breaking:
 - `figbird.query(desc)` → `figbird.queryDesc(desc)`
 - `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
 - `figbird.query(builder | definition, args?)` is now the non-React mirror of `useQuery`
-- Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
 - Constructor option `eventBatchProcessingInterval` renamed to `eventBatchInterval`.
+- Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
 - Removed orphaned exports: the `Item`/`Create`/`Update`/`Patch`/`Query`/`Methods`/
   `UntypedService` type extractors (use the `ServiceItem<S, N>` family), bare
   `one`/`many`/`embed` (reachable only via the typed relationships factories),
