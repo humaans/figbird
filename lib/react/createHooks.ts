@@ -14,7 +14,7 @@ import {
   type QueryConfig,
   type StandardSchemaV1,
 } from '../core/figbird.js'
-import type { QueryBuilder, QueryBuilderKind } from '../core/queryBuilder.js'
+import type { AnyQueryBuilder, QueryBuilderKind } from '../core/queryBuilder.js'
 import type {
   Schema,
   ServiceCreate,
@@ -95,38 +95,22 @@ type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
 interface UseQueryForSchema<S extends Schema> {
   // Builder, non-suspense — returns the tagged union, never throws
-  <
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  <B extends AnyQueryBuilder<S>>(
     query: B,
     options: UseQueryOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>>
   // Definition, non-suspense — args omittable when the definition takes none
-  <
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  <Args, B extends AnyQueryBuilder<S>>(
     definition: QueryDefinition<Args, B>,
     ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
   ): RelationalQueryResult<QueryBuilderResult<B>>
   // Builder
-  <
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-    O extends UseQueryOptions = Record<string, never>,
-  >(
+  <B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
     query: B,
     options?: O,
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
   // Definition — args omittable when the definition takes none
-  <
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-    O extends UseQueryOptions = Record<string, never>,
-  >(
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
     definition: QueryDefinition<Args, B>,
     ...rest: ArgsAndOptions<Args, O>
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
@@ -134,67 +118,30 @@ interface UseQueryForSchema<S extends Schema> {
 
 /** Schema-typed defineQuery: builders must come from this schema. Name optional. */
 interface DefineQueryForSchema<S extends Schema> {
-  <
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
-    build: () => B,
-  ): QueryDefinition<void, B>
-  <
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
-    build: (args: Args) => B,
-  ): QueryDefinition<Args, B>
-  <
-    TSchema extends StandardSchemaV1,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  <B extends AnyQueryBuilder<S>>(build: () => B): QueryDefinition<void, B>
+  <Args, B extends AnyQueryBuilder<S>>(build: (args: Args) => B): QueryDefinition<Args, B>
+  <TSchema extends StandardSchemaV1, B extends AnyQueryBuilder<S>>(
     argsSchema: TSchema,
     build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
   ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
-  <
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
-    name: string,
-    build: () => B,
-  ): QueryDefinition<void, B>
-  <
-    Args,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  <B extends AnyQueryBuilder<S>>(name: string, build: () => B): QueryDefinition<void, B>
+  <Args, B extends AnyQueryBuilder<S>>(
     name: string,
     build: (args: Args) => B,
   ): QueryDefinition<Args, B>
-  <
-    TSchema extends StandardSchemaV1,
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    B extends QueryBuilder<S, any, any, any, any, any>,
-  >(
+  <TSchema extends StandardSchemaV1, B extends AnyQueryBuilder<S>>(
     name: string,
     argsSchema: TSchema,
     build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
   ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
 }
 
-type PrepareForSchema<S extends Schema> = <
-  Args,
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<S, any, any, any, any, any>,
->(
+type PrepareForSchema<S extends Schema> = <Args, B extends AnyQueryBuilder<S>>(
   query: QueryDefinition<Args, B>,
   ...rest: ArgsAndOptions<Args, { staleTime?: number }>
 ) => PreparedQuery
 
-type PrefetchForSchema<S extends Schema> = <
-  Args,
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<S, any, any, any, any, any>,
->(
+type PrefetchForSchema<S extends Schema> = <Args, B extends AnyQueryBuilder<S>>(
   query: QueryDefinition<Args, B>,
   ...rest: ArgsAndOptions<Args, { staleTime?: number }>
 ) => void

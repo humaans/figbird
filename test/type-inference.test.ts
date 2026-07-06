@@ -96,18 +96,16 @@ test('type narrowing works correctly with multiple services', t => {
   const taskItemType = getTypeAtPosition(fixturePath, 'TaskServiceItem')
   const tasksType = getTypeAtPosition(fixturePath, 'tasks')
 
-  // Test that the key types are working correctly (Service has more type parameters now)
+  // Service<TDef, TName>: the resolved definition in one slot, keyed by the schema name
   t.true(
-    personServiceType.startsWith(
-      'import("figbird").Service<Person, Record<string, unknown>, "api/people"',
-    ),
-    `Expected personServiceType to start with Service<Person, ...>, got: ${personServiceType}`,
+    personServiceType.startsWith('import("figbird").Service<{ item: Person;') &&
+      personServiceType.includes('"api/people"'),
+    `Expected personServiceType to be Service<{ item: Person; ... }, "api/people">, got: ${personServiceType}`,
   )
   t.true(
-    taskServiceType.startsWith(
-      'import("figbird").Service<Task, Record<string, unknown>, "api/tasks"',
-    ),
-    `Expected taskServiceType to start with Service<Task, ...>, got: ${taskServiceType}`,
+    taskServiceType.startsWith('import("figbird").Service<{ item: Task;') &&
+      taskServiceType.includes('"api/tasks"'),
+    `Expected taskServiceType to be Service<{ item: Task; ... }, "api/tasks">, got: ${taskServiceType}`,
   )
 
   // Test that ServiceItem extraction is working

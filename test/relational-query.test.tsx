@@ -5,12 +5,9 @@ import {
   createSchema,
   createHooks,
   defineQuery,
-  embed,
   FeathersAdapter,
   Figbird,
   service,
-  one,
-  many,
   useFind,
   useQuery,
   type QueryBuilder,
@@ -971,7 +968,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
   const figbird = new Figbird({
     schema: exactQuerySchema,
     adapter: new FeathersAdapter(feathers),
-    eventBatchProcessingInterval: 0,
+    eventBatchInterval: 0,
   })
   const peopleService = feathers.service('people')
   const queryRef = figbird.queryDesc({
@@ -1279,11 +1276,18 @@ test('useRelationalQuery: refetch function works', async t => {
 // ============================================================================
 
 test('schema: one() helper creates correct relationship', t => {
-  const rel = one({
-    sourceField: ['creatorId'],
-    destService: 'users',
-    destField: ['id'],
+  const s = createSchema({
+    services: {
+      issues: service<{ item: Record<string, unknown> }>(),
+      users: service<{ item: Record<string, unknown> }>(),
+    },
+    relationships: {
+      issues: ({ one }) => ({
+        creator: one({ sourceField: ['creatorId'], destService: 'users', destField: ['id'] }),
+      }),
+    },
   })
+  const rel = s.relationships.issues.creator
 
   t.is(rel.cardinality, 'one')
   t.deepEqual(rel.sourceField, ['creatorId'])
@@ -1292,11 +1296,18 @@ test('schema: one() helper creates correct relationship', t => {
 })
 
 test('schema: many() helper creates correct relationship', t => {
-  const rel = many({
-    sourceField: ['id'],
-    destService: 'comments',
-    destField: ['issueId'],
+  const s = createSchema({
+    services: {
+      issues: service<{ item: Record<string, unknown> }>(),
+      comments: service<{ item: Record<string, unknown> }>(),
+    },
+    relationships: {
+      issues: ({ many }) => ({
+        comments: many({ sourceField: ['id'], destService: 'comments', destField: ['issueId'] }),
+      }),
+    },
   })
+  const rel = s.relationships.issues.comments
 
   t.is(rel.cardinality, 'many')
   t.deepEqual(rel.sourceField, ['id'])
@@ -2822,7 +2833,7 @@ test('.all(): accepts filters — complete slice, no materialization; rejects wi
   const fb = new Figbird({
     schema,
     adapter,
-    eventBatchProcessingInterval: 0,
+    eventBatchInterval: 0,
     reconcileCooldown: 0,
   })
 
@@ -3101,11 +3112,22 @@ function createEmbedApp() {
 }
 
 test('embed: helper returns cardinality "embedded"', t => {
-  const rel = embed({
-    sourceField: ['membersPreview'],
-    destService: 'people',
-    destField: ['id'],
+  const s = createSchema({
+    services: {
+      roles: service<{ item: Record<string, unknown> }>(),
+      people: service<{ item: Record<string, unknown> }>(),
+    },
+    relationships: {
+      roles: ({ embed }) => ({
+        membersPreview: embed({
+          sourceField: ['membersPreview'],
+          destService: 'people',
+          destField: ['id'],
+        }),
+      }),
+    },
   })
+  const rel = s.relationships.roles.membersPreview
   t.is(rel.cardinality, 'embedded')
   t.deepEqual(rel.sourceField, ['membersPreview'])
   t.deepEqual(rel.destField, ['id'])
@@ -3293,10 +3315,22 @@ function createJunctionApp() {
 }
 
 test('many variadic: helper records via hop and stores the dest hop at the top level', t => {
-  const rel = many(
-    { sourceField: ['id'], destService: 'roleMembers', destField: ['roleId'] },
-    { sourceField: ['userId'], destService: 'users2', destField: ['id'] },
-  )
+  const s = createSchema({
+    services: {
+      roles2: service<{ item: Record<string, unknown> }>(),
+      roleMembers: service<{ item: Record<string, unknown> }>(),
+      users2: service<{ item: Record<string, unknown> }>(),
+    },
+    relationships: {
+      roles2: ({ many }) => ({
+        members: many(
+          { sourceField: ['id'], destService: 'roleMembers', destField: ['roleId'] },
+          { sourceField: ['userId'], destService: 'users2', destField: ['id'] },
+        ),
+      }),
+    },
+  })
+  const rel = s.relationships.roles2.members
   t.is(rel.cardinality, 'many')
   t.is(rel.destService, 'users2')
   t.deepEqual(rel.sourceField, ['userId']) // junction → dest field name

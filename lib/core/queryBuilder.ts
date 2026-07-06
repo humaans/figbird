@@ -592,3 +592,11 @@ export type QueryBuilderResult<B> =
 export type QueryBuilderKind<B> =
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   B extends QueryBuilder<Schema, string, any, any, any, infer K> ? K : never
+
+/**
+ * Any builder over schema S — the loose constraint for overload-dispatch seams,
+ * where the public overloads carry the real types. Centralizes the `any` spread
+ * so call sites don't each need a lint suppression. @internal
+ */
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyQueryBuilder<S extends Schema = any> = QueryBuilder<S, any, any, any, any, any>
