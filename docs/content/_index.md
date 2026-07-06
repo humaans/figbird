@@ -874,6 +874,32 @@ query.subscribe(state => {})
 await figbird.mutateDesc({ serviceName: 'tasks', method: 'patch', id, data: { done: true } })
 ```
 
+## Testing
+
+`figbird/testing` ships an in-memory, Feathers-compatible client so component tests
+run against real figbird — schema, cache, realtime, optimistic writes — instead of
+mocks of it:
+
+```ts
+import { mockFeathers } from 'figbird/testing'
+
+const feathers = mockFeathers(
+  { issues: { data: { 1: { id: 1, title: 'Ship it', status: 'open' } } } },
+  { queryAwareFind: true }, // find honors equality, $in, and $sort filters
+)
+const figbird = new Figbird({ adapter: new FeathersAdapter(feathers), schema })
+```
+
+Render with hooks bound to this instance (or inject it via `FigbirdProvider`), then:
+
+- simulate server-side changes: `feathers.service('issues').emit('patched', {...})` —
+  they flow through the realtime pipeline like socket events
+- assert fetch behavior: `feathers.service('issues').counts.find`
+- mutations through `m` hit the mock's CRUD, which emits the realtime echo like a
+  real server would
+
+Figbird's own test suite runs on this client.
+
 ## Custom adapters
 
 Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatible adapter:
