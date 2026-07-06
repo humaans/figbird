@@ -39,6 +39,12 @@ import {
 import type { ArgsAndOptions, DefineQuery, QueryDefinition } from '../core/figbird.js'
 import type { QueryBuilderProxy } from '../core/queryBuilder.js'
 
+// NODE_ENV probe without depending on @types/node — the library targets browsers,
+// so its build must not need node globals to type-check. Emits nothing; bundlers
+// still see the same `process.env.NODE_ENV` expression, and the typeof guard at
+// the use site covers bare browsers.
+declare const process: { env?: { NODE_ENV?: string } } | undefined
+
 /**
  * Strongly-typed call signatures per service name.
  * Using a union of call signatures (one per service) gives the best inference:
