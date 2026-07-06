@@ -9,7 +9,9 @@ The relational rewrite — a new API centered on `q`/`useQuery` for reads and
 - Relational queries: declare relations once in the schema, `.related()` assembles
   typed entity graphs, kept live by realtime events. Relationships are declared per
   source service, so `sourceField`/`destService`/`destField` all type-check against
-  the actual items.
+  the actual items. `one` and `many` both support two-hop declarations
+  (`one(parentToIntermediate, intermediateToDest)` for chained lookups like
+  person → current employment → job role; `many(hop1, hop2)` for junction tables).
 - `useQuery` is Suspense-native; query classification decides merge-vs-refetch
   realtime behavior automatically (no per-query `realtime` config).
 - Writes through `m` are optimistic by default with global rollback; `confirmed`

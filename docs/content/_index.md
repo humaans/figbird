@@ -235,6 +235,24 @@ relationships: {
 }
 ```
 
+`one` chains through an intermediate service too — two lookups declared as a single
+edge, fetched in two batched queries for any number of parents:
+
+```ts
+people: ({ one }) => ({
+  // person → current employment → job role, read as person.jobRole
+  jobRole: one(
+    { sourceField: 'currentEmploymentId', destService: 'employments' },
+    { sourceField: 'jobRoleId', destService: 'jobRoles' },
+  ),
+})
+```
+
+The first hop can also point the other way — an FK on the intermediate plus a hop
+`query` that selects the one current row (`{ sourceField: 'id', destService:
+'employments', destField: 'personId', query: { isCurrent: true } }`). When multiple
+intermediate rows match a parent, the first resolves — make the first hop selective.
+
 `destField` defaults to `'id'`; fields accept arrays for compound keys. Each service's factory gets helpers scoped to it, so every field name above type-checks: `sourceField` against the source item, `destService` against the schema, `destField` against the destination item. A generated schema fails to compile at exactly the relationship that went stale.
 
 Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service's realtime events.
@@ -1134,10 +1152,17 @@ schema key to the transport-level service path. `methods` types custom Feathers 
 
 ```ts
 creator: one({ sourceField: 'creatorId', destService: 'users' })
+
+// two-hop (chained lookup) — person.jobRole resolves through the employment
+jobRole: one(
+  { sourceField: 'currentEmploymentId', destService: 'employments' },
+  { sourceField: 'jobRoleId', destService: 'jobRoles' },
+)
 ```
 
-Single related item, assembled as `T | null`. `destField` defaults to `'id'`; fields accept
-`string | string[]` for compound keys.
+Single related item, assembled as `T | null` — single-hop, or chained through an
+intermediate service (first match resolves; make the first hop selective).
+`destField` defaults to `'id'`; fields accept `string | string[]` for compound keys.
 
 ## many
 

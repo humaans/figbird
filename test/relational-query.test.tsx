@@ -3480,3 +3480,195 @@ test('junction: empty parent set (no find match) resolves with no junction fetch
 
   unmount()
 })
+
+// ============================================================================
+// Chained `one` (two-hop): parent → intermediate → destination as one edge
+// ============================================================================
+
+const chainedOneSchema = createSchema({
+  services: {
+    chainPeople: service<{
+      item: { id: number; name: string; currentEmploymentId: number | null }
+    }>(),
+    chainEmployments: service<{
+      item: { id: number; personId: number; jobRoleId: number; isCurrent: boolean }
+    }>(),
+    chainJobRoles: service<{ item: { id: number; title: string; departmentId: number } }>(),
+    chainDepartments: service<{ item: { id: number; name: string } }>(),
+  },
+  relationships: {
+    chainPeople: ({ one }) => ({
+      // FK on the parent: person points at its employment, employment at its role.
+      jobRole: one(
+        { sourceField: 'currentEmploymentId', destService: 'chainEmployments' },
+        { sourceField: 'jobRoleId', destService: 'chainJobRoles' },
+      ),
+      // FK on the intermediate + a selective hop filter picking "the one".
+      currentRole: one(
+        {
+          sourceField: 'id',
+          destService: 'chainEmployments',
+          destField: 'personId',
+          query: { isCurrent: true },
+        },
+        { sourceField: 'jobRoleId', destService: 'chainJobRoles' },
+      ),
+    }),
+    chainJobRoles: ({ one }) => ({
+      department: one({ sourceField: 'departmentId', destService: 'chainDepartments' }),
+    }),
+  },
+})
+
+function createChainedOneApp() {
+  const services = {
+    chainPeople: {
+      data: {
+        1: { id: 1, name: 'Ada', currentEmploymentId: 10 },
+        2: { id: 2, name: 'Bo', currentEmploymentId: 11 },
+        3: { id: 3, name: 'Cy', currentEmploymentId: null },
+      },
+    },
+    chainEmployments: {
+      data: {
+        10: { id: 10, personId: 1, jobRoleId: 100, isCurrent: true },
+        11: { id: 11, personId: 2, jobRoleId: 101, isCurrent: true },
+        // historical employment for Ada — must not resolve via the hop filter
+        12: { id: 12, personId: 1, jobRoleId: 102, isCurrent: false },
+      },
+    },
+    chainJobRoles: {
+      data: {
+        100: { id: 100, title: 'Engineer', departmentId: 1000 },
+        101: { id: 101, title: 'Designer', departmentId: 1000 },
+        102: { id: 102, title: 'Intern', departmentId: 1000 },
+      },
+    },
+    chainDepartments: {
+      data: {
+        1000: { id: 1000, name: 'Product' },
+      },
+    },
+  }
+  return createTestApp(chainedOneSchema, services, { queryAwareFind: true })
+}
+
+test('chained one: helper stores the via hop with cardinality one', t => {
+  const rel = chainedOneSchema.relationships.chainPeople.jobRole
+  t.is(rel.cardinality, 'one')
+  t.deepEqual(rel.sourceField, ['jobRoleId'])
+  t.is(rel.destService, 'chainJobRoles')
+  t.truthy(rel.via)
+  t.is(rel.via!.destService, 'chainEmployments')
+  t.deepEqual(rel.via!.sourceField, ['currentEmploymentId'])
+  t.deepEqual(rel.via!.destField, ['id'])
+})
+
+test('chained one: resolves through the intermediate, null when the chain breaks', async t => {
+  const { App, figbird } = createChainedOneApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function People() {
+    const { data } = useQuery(
+      figbird.q.chainPeople.related('jobRole', r => r.related('department')),
+    )
+    return (
+      <div className='chain'>
+        {data
+          .map(
+            p =>
+              `${p.name}:${p.jobRole ? `${p.jobRole.title}@${p.jobRole.department?.name}` : 'none'}`,
+          )
+          .join(',')}
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <People />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.is($('.chain')!.innerHTML, 'Ada:Engineer@Product,Bo:Designer@Product,Cy:none')
+
+  unmount()
+})
+
+test('chained one: a hop filter selects the current intermediate (FK on the child)', async t => {
+  const { App, figbird } = createChainedOneApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function People() {
+    const { data } = useQuery(figbird.q.chainPeople.related('currentRole'))
+    return (
+      <div className='current'>
+        {data.map(p => `${p.name}:${p.currentRole?.title ?? 'none'}`).join(',')}
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <People />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  // Ada's historical (isCurrent: false) employment is excluded by the hop filter.
+  t.is($('.current')!.innerHTML, 'Ada:Engineer,Bo:Designer,Cy:none')
+
+  unmount()
+})
+
+test('chained one: realtime on intermediate and destination re-resolves the edge', async t => {
+  const { App, figbird, feathers } = createChainedOneApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function People() {
+    const { data } = useQuery(figbird.q.chainPeople.related('jobRole'))
+    return (
+      <div className='live'>
+        {data.map(p => `${p.name}:${p.jobRole?.title ?? 'none'}`).join(',')}
+      </div>
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+        <People />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.is($('.live')!.innerHTML, 'Ada:Engineer,Bo:Designer,Cy:none')
+
+  // Patching the destination merges locally — no refetch of the roles fan-in.
+  const roleFinds = feathers.service('chainJobRoles').counts.find
+  await flush(() => {
+    feathers.service('chainJobRoles').emit('patched', {
+      id: 100,
+      title: 'Staff Engineer',
+      departmentId: 1000,
+    })
+  })
+  t.is($('.live')!.innerHTML, 'Ada:Staff Engineer,Bo:Designer,Cy:none')
+  t.is(feathers.service('chainJobRoles').counts.find, roleFinds)
+
+  // Re-pointing the intermediate's FK re-resolves the chain end-to-end.
+  await flush(() => {
+    feathers.service('chainEmployments').emit('patched', {
+      id: 10,
+      personId: 1,
+      jobRoleId: 102,
+      isCurrent: true,
+    })
+  })
+  t.is($('.live')!.innerHTML, 'Ada:Intern,Bo:Designer,Cy:none')
+
+  unmount()
+})

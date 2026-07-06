@@ -1739,8 +1739,8 @@ function assembleRelations(
           }
         }
       } else if (relDef.via) {
-        // Two-hop many: walk this parent's junction rows, then collect dest items
-        // keyed by the junction's outgoing FK.
+        // Two-hop: walk this parent's junction rows, then collect dest items keyed
+        // by the junction's outgoing FK.
         const parentJoinValue = getFieldValue(item, relDef.via.sourceField)
         const junctions =
           parentJoinValue === undefined ? undefined : index?.junctionsByParent?.get(parentJoinValue)
@@ -1752,6 +1752,15 @@ function assembleRelations(
             const found = index?.byKey?.get(destId)
             if (found) matchedItems.push(found)
           }
+        }
+        // A chained `one` resolves to the first (declared-selective) match, or null.
+        if (relDef.cardinality === 'one') {
+          let found: unknown = matchedItems[0] ?? null
+          if (hasNested && found) {
+            found = assembleRelations([found], relAST, schema, relationData, key)[0] ?? null
+          }
+          result[relName] = found
+          continue
         }
       } else if (relDef.cardinality === 'one') {
         const sourceValue = getFieldValue(item, relDef.sourceField)
