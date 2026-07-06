@@ -27,15 +27,24 @@ export interface ClassificationReason {
   detail?: string
 }
 
+export interface ClassifyOptions {
+  server?: boolean | undefined
+  allPages?: boolean | undefined
+  /**
+   * Operator names the app has taught the client to evaluate (the adapter's custom
+   * operator registry) — they classify as local alongside the built-ins.
+   */
+  localOperators?: ReadonlySet<string> | undefined
+}
+
 /**
  * Classify a query node by how it can be maintained. `server: true` (the `.server()`
  * escape hatch) forces server-authoritative; `allPages: true` neutralises window
- * filters because the full result set is fetched, making membership locally provable.
+ * filters because the full result set is fetched, making membership locally provable;
+ * `localOperators` extends the locally-evaluable operator set with adapter-registered
+ * custom operators.
  */
-export function classifyQueryNode(
-  query: unknown,
-  options: { server?: boolean | undefined; allPages?: boolean | undefined } = {},
-): QueryNodeClass {
+export function classifyQueryNode(query: unknown, options: ClassifyOptions = {}): QueryNodeClass {
   return explainQueryNode(query, options).class
 }
 
@@ -45,11 +54,11 @@ export function classifyQueryNode(
  */
 export function explainQueryNode(
   query: unknown,
-  { server, allPages }: { server?: boolean | undefined; allPages?: boolean | undefined } = {},
+  { server, allPages, localOperators }: ClassifyOptions = {},
 ): { class: QueryNodeClass; reasons: ClassificationReason[] } {
   const authoritative: ClassificationReason[] = []
   if (server) authoritative.push({ code: 'server-flag', detail: '.server()' })
-  collectServerOnlyReasons(query, authoritative)
+  collectServerOnlyReasons(query, authoritative, localOperators)
 
   const window: ClassificationReason[] = []
   if (!allPages) collectWindowReasons(query, window)
@@ -77,21 +86,29 @@ function collectWindowReasons(value: unknown, reasons: ClassificationReason[]): 
   }
 }
 
-function collectServerOnlyReasons(value: unknown, reasons: ClassificationReason[]): void {
+function collectServerOnlyReasons(
+  value: unknown,
+  reasons: ClassificationReason[],
+  localOperators?: ReadonlySet<string>,
+): void {
   if (!value || typeof value !== 'object') return
   if (Array.isArray(value)) {
-    for (const item of value) collectServerOnlyReasons(item, reasons)
+    for (const item of value) collectServerOnlyReasons(item, reasons, localOperators)
     return
   }
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (key.startsWith('$')) {
       if (SERVER_ONLY_QUERY_FILTERS.has(key)) {
         reasons.push({ code: 'select-projection', detail: key })
-      } else if (!SERVER_WINDOW_QUERY_FILTERS.has(key) && !LOCAL_QUERY_OPERATORS.has(key)) {
+      } else if (
+        !SERVER_WINDOW_QUERY_FILTERS.has(key) &&
+        !LOCAL_QUERY_OPERATORS.has(key) &&
+        !localOperators?.has(key)
+      ) {
         reasons.push({ code: 'server-only-operator', detail: key })
       }
     }
-    collectServerOnlyReasons(child, reasons)
+    collectServerOnlyReasons(child, reasons, localOperators)
   }
 }
 

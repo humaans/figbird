@@ -16,6 +16,10 @@ The relational rewrite — a new API centered on `q`/`useQuery` for reads and
   opts out; optimistic creates require a client-generated id.
 - Query preparation for instant navigation: `defineQuery`, `prepare`, `prefetch`.
 - Observability: `figbird.events`, `figbird.explain()`, `figbird.inspect()`.
+- Custom operator registry: teach the client to evaluate app-specific query operators
+  (`new FeathersAdapter(feathers, { operators: { $asOf: asOf => item => ... } })`) so
+  queries using them classify local-exact and merge realtime events instead of
+  refetching — e.g. effective-dated services.
 - Hooks from `createHooks` are instance-bound — `FigbirdProvider` is now optional.
 
 Breaking:
