@@ -12,6 +12,7 @@ import type {
   ElementType,
   Event,
   FindQueryConfig,
+  GetQueryConfig,
   InferMutationData,
   ItemMatcher,
   MutationDescriptor,
@@ -488,6 +489,8 @@ export class QueryStore<
     const { desc, config } = query
 
     if (desc.method === 'get') {
+      const local = this.#tryLocalGet(query)
+      if (local) return Promise.resolve(local)
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
       const local = this.#tryLocalFind(query)
@@ -497,6 +500,36 @@ export class QueryStore<
         ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
         : this.#adapter.find(desc.serviceName, desc.params as TParams)
     }
+  }
+
+  /**
+   * Answer a get locally when the service is fully materialized (an `.all()` query
+   * succeeded): the entity cache is the complete row set, so a present entity is
+   * the answer with no roundtrip — realtime events, the reconnect sweep, and
+   * complete-set fetch diffs keep it fresh, the same soundness argument local finds
+   * rely on. A *miss* still goes to the server: completeness makes local not-found
+   * sound in principle, but the miss is rare and a roundtrip there avoids
+   * manufacturing NotFound errors out of event-arrival races. Gets carrying query
+   * conditions (`.get(id).where(...)`) are server-evaluated and never answered
+   * locally; `network-only` and `.server()` reads always go out.
+   */
+  #tryLocalGet(
+    query: Query<unknown, TMeta, unknown>,
+  ): QueryResponse<unknown, TMeta | undefined> | null {
+    const desc = query.desc
+    if (desc.method !== 'get') return null
+    const service = this.#state.get(desc.serviceName)
+    if (!service?.materialized) return null
+
+    const config = query.config as GetQueryConfig<unknown, unknown>
+    if (config.server) return null
+    if (config.fetchPolicy === 'network-only') return null
+    const q = (desc.params as { query?: Record<string, unknown> } | undefined)?.query
+    if (q && Object.keys(q).length > 0) return null
+
+    const entity = service.entities.get(desc.resourceId)
+    if (entity === undefined) return null
+    return { data: entity } as QueryResponse<unknown, TMeta | undefined>
   }
 
   /**

@@ -3854,3 +3854,43 @@ test('useQuery definition: null skips zero-arg definitions too', async t => {
 
   unmount()
 })
+
+test('.all(): get(id) answers locally from the materialized service', async t => {
+  const { figbird, feathers } = createApp()
+
+  const unsubAll = figbird.query(figbird.q.issues.all()).subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const getsAfterAll = feathers.service('issues').counts.get
+
+  // Present entity — served from the entity cache, no roundtrip.
+  const ref = figbird.query(figbird.q.issues.get(1))
+  const unsub = ref.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(ref.getSnapshot().status, 'success')
+  t.is((ref.getSnapshot().data as Issue).title, 'First issue')
+  t.is(feathers.service('issues').counts.get, getsAfterAll, 'local get must not fetch')
+
+  // Realtime keeps the locally-served get fresh — still no roundtrip.
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  t.is((ref.getSnapshot().data as Issue).title, 'Renamed')
+  t.is(feathers.service('issues').counts.get, getsAfterAll)
+
+  // A miss falls through to the server (conservative on event-arrival races).
+  const missRef = figbird.query(figbird.q.issues.get(999))
+  const unsubMiss = missRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(missRef.getSnapshot().status, 'error')
+  t.is(feathers.service('issues').counts.get, getsAfterAll + 1, 'miss goes to the server')
+
+  // Conditions ride to the server too — .get(id).where(...) is server-evaluated.
+  const condRef = figbird.query(figbird.q.issues.get(2).where({ status: 'open' }))
+  const unsubCond = condRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.get, getsAfterAll + 2, 'conditional get fetches')
+
+  unsub()
+  unsubMiss()
+  unsubCond()
+  unsubAll()
+})
