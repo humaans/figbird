@@ -243,11 +243,15 @@ export function createHooks<F extends Figbird<any, any>>(
   }
 
   function useTypedFeathers() {
-    const adapter = figbird.adapter as { feathers?: FeathersClient }
+    // Resolved like every other hook: a FigbirdProvider in the tree overrides the
+    // bound instance, so SSR/test injection gets this instance's client too.
+    const bound = useBoundFigbird()
+    const adapter = bound.adapter as { feathers?: FeathersClient }
     if (!adapter?.feathers) {
       throw new Error('useFeathers must be used with a Feathers adapter')
     }
     const { feathers } = adapter
+    const schema = bound.schema
 
     return useMemo(
       () =>
@@ -256,7 +260,7 @@ export function createHooks<F extends Figbird<any, any>>(
             if (prop === 'service') {
               return <N extends ServiceNames<S>>(serviceName: N) =>
                 target.service(
-                  resolveServicePath(figbird.schema, serviceName),
+                  resolveServicePath(schema, serviceName),
                 ) as unknown as TypedServiceForSchema<S, N>
             }
 
@@ -264,7 +268,7 @@ export function createHooks<F extends Figbird<any, any>>(
             return typeof value === 'function' ? value.bind(target) : value
           },
         }) as unknown as TypedFeathersClient<S>,
-      [feathers],
+      [feathers, schema],
     )
   }
 

@@ -340,28 +340,20 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
 
   if (!suspense) return taggedResult
 
+  // Two axes only: where data comes from (skipped vs live) and whether the builder
+  // is paginated (widening the shape with the loadMore family).
   const isPaginated = query.toAST().kind === 'paginate'
+  const widen = (base: object, pagination: RelationalPaginationState) =>
+    (isPaginated ? { ...base, loadMore, ...pagination } : base) as SuspenseQueryResult<
+      T,
+      QueryBuilderKind<B>
+    >
 
   if (skip || !qRef) {
-    if (isPaginated) {
-      return {
-        data: undefined as unknown as T,
-        error: null,
-        isFetching: false,
-        refetch,
-        loadMore,
-        hasMore: false,
-        isLoadingMore: false,
-        loadMoreError: null,
-        totalCount: undefined,
-      } as SuspenseQueryResult<T, QueryBuilderKind<B>>
-    }
-    return {
-      data: undefined as unknown as T,
-      error: null,
-      isFetching: false,
-      refetch,
-    } as SuspenseQueryResult<T, QueryBuilderKind<B>>
+    return widen(
+      { data: undefined as unknown as T, error: null, isFetching: false, refetch },
+      idlePagination,
+    )
   }
 
   // `status: 'error'` only occurs for cold failures (no data was ever produced) —
@@ -373,25 +365,8 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
     throw qRef.suspensePromise()
   }
 
-  if (isPaginated) {
-    const pagination = state.pagination ?? idlePagination
-    return {
-      data: state.data,
-      error: state.error,
-      isFetching: state.isFetching,
-      refetch,
-      loadMore,
-      hasMore: pagination.hasMore,
-      isLoadingMore: pagination.isLoadingMore,
-      loadMoreError: pagination.loadMoreError,
-      totalCount: pagination.totalCount,
-    } as SuspenseQueryResult<T, QueryBuilderKind<B>>
-  }
-
-  return {
-    data: state.data,
-    error: state.error,
-    isFetching: state.isFetching,
-    refetch,
-  } as SuspenseQueryResult<T, QueryBuilderKind<B>>
+  return widen(
+    { data: state.data, error: state.error, isFetching: state.isFetching, refetch },
+    state.pagination ?? idlePagination,
+  )
 }

@@ -440,11 +440,8 @@ export type ServicePatch<S extends Schema, N extends ServiceNames<S>> =
 export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
   ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
 
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyMethods = Record<string, (...args: any[]) => any>
-
 export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends AnyMethods } }
+  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends AnyMethodsType } }
     ? M
     : Record<string, never>
 

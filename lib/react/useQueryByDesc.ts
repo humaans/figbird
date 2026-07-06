@@ -105,13 +105,26 @@ function useQueryByDesc<
  * Instance-taking implementation shared by the context-bound hooks and the
  * bound-instance hooks that `createHooks` produces. @internal
  */
+/** The slice of a Figbird instance the descriptor hooks need. @internal */
+export interface DescFigbirdLike {
+  queryDesc(
+    desc: QueryDescriptor,
+    config: QueryConfig<unknown, unknown>,
+  ): {
+    hash(): string
+    refetch(): void
+    subscribe(fn: () => void): () => void
+    getSnapshot(): unknown
+  }
+  adapter: { emptyMeta(): unknown }
+}
+
 export function useQueryByDescImpl<
   T,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery = unknown,
 >(
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  figbird: any,
+  figbird: DescFigbirdLike,
   desc: QueryDescriptor,
   config: QueryConfig<T, TQuery>,
 ): QueryResult<T, TMeta> {
@@ -159,44 +172,18 @@ export function useQueryByDescImpl<
   const queryResult = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   return useMemo(() => {
-    // Handle each case of the discriminated union explicitly
-    if (queryResult.status === 'success') {
-      const result: UntypedData = {
-        status: 'success' as const,
-        data: queryResult.data,
-        isFetching: queryResult.isFetching,
-        error: null,
-        refetch,
-      }
-      if ('meta' in queryResult) {
-        result.meta = queryResult.meta
-      }
-      return result as QueryResult<T, TMeta>
-    } else if (queryResult.status === 'error') {
-      const result: UntypedData = {
-        status: 'error' as const,
-        data: null,
-        isFetching: queryResult.isFetching,
-        error: queryResult.error,
-        refetch,
-      }
-      if ('meta' in queryResult) {
-        result.meta = queryResult.meta
-      }
-      return result as QueryResult<T, TMeta>
-    } else {
-      // status === 'loading'
-      const result: UntypedData = {
-        status: queryResult.status,
-        data: null,
-        isFetching: queryResult.isFetching,
-        error: null,
-        refetch,
-      }
-      if ('meta' in queryResult) {
-        result.meta = queryResult.meta
-      }
-      return result as QueryResult<T, TMeta>
+    // Project the store state onto the hook shape: data only on success, error only
+    // on error, meta passed through when the store carries it.
+    const result: UntypedData = {
+      status: queryResult.status,
+      data: queryResult.status === 'success' ? queryResult.data : null,
+      isFetching: queryResult.isFetching,
+      error: queryResult.status === 'error' ? queryResult.error : null,
+      refetch,
     }
+    if ('meta' in queryResult) {
+      result.meta = queryResult.meta
+    }
+    return result as QueryResult<T, TMeta>
   }, [queryResult, refetch])
 }

@@ -138,30 +138,26 @@ export class QueryStore<
     if (!this.#getQuery(queryId)) {
       this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
 
-      this.#transactOverService(
-        queryId,
-        service => {
-          service.queries.set(queryId, {
-            queryId,
+      this.#transactOverService(queryId, service => {
+        service.queries.set(queryId, {
+          queryId,
+          desc,
+          config: config as QueryConfig<unknown, unknown>,
+          pending: !config.skip,
+          dirty: false,
+          filterItem: this.#createItemFilter<unknown, unknown>(
             desc,
-            config: config as QueryConfig<unknown, unknown>,
-            pending: !config.skip,
-            dirty: false,
-            filterItem: this.#createItemFilter<unknown, unknown>(
-              desc,
-              config as QueryConfig<unknown, unknown>,
-            ) as (item: unknown) => boolean,
-            state: {
-              status: 'loading' as const,
-              data: null,
-              meta: this.#adapter.emptyMeta(),
-              isFetching: !config.skip,
-              error: null,
-            },
-          })
-        },
-        { silent: true },
-      )
+            config as QueryConfig<unknown, unknown>,
+          ) as (item: unknown) => boolean,
+          state: {
+            status: 'loading' as const,
+            data: null,
+            meta: this.#adapter.emptyMeta(),
+            isFetching: !config.skip,
+            error: null,
+          },
+        })
+      })
     }
   }
 
@@ -198,11 +194,10 @@ export class QueryStore<
 
     this.#subscribeToRealtime(queryId)
 
-    const shouldVacuumByDefault =
-      q.config.fetchPolicy === 'network-only' || Boolean(q.config.matcher)
-    return ({ vacuum = shouldVacuumByDefault }: { vacuum?: boolean } = {}) => {
+    const shouldVacuum = q.config.fetchPolicy === 'network-only' || Boolean(q.config.matcher)
+    return () => {
       removeListener()
-      if (vacuum && this.#listenerCount(queryId) === 0) {
+      if (shouldVacuum && this.#listenerCount(queryId) === 0) {
         this.#vacuum({ queryId })
       }
     }
@@ -248,16 +243,12 @@ export class QueryStore<
       this.#queue(queryId)
     } else {
       // Mark as dirty to refetch after current fetch completes
-      this.#transactOverService(
-        queryId,
-        (service, query) => {
-          service.queries.set(queryId, {
-            ...query!,
-            dirty: true,
-          })
-        },
-        { silent: true },
-      )
+      this.#transactOverService(queryId, (service, query) => {
+        service.queries.set(queryId, {
+          ...query!,
+          dirty: true,
+        })
+      })
     }
   }
 
@@ -532,9 +523,8 @@ export class QueryStore<
     // the notification (not the state write — the fetch still starts synchronously
     // and warm reads are unaffected) keeps other subscribed components from being
     // updated mid-render.
-    this.#transactOverService(
-      queryId,
-      (service, query) => {
+    this.#scheduleDeferredNotify(
+      this.#transactOverService(queryId, (service, query) => {
         if (!query) return
 
         service.queries.set(queryId, {
@@ -560,8 +550,7 @@ export class QueryStore<
                     error: null,
                   },
         })
-      },
-      { defer: true },
+      }),
     )
   }
 
@@ -574,7 +563,7 @@ export class QueryStore<
   }): void {
     let shouldRefetch = false
 
-    this.#transactOverService(queryId, (service, query) => {
+    const touched = this.#transactOverService(queryId, (service, query) => {
       if (!query) return
 
       const data = result.data
@@ -652,6 +641,7 @@ export class QueryStore<
         },
       })
     })
+    this.#notify(touched)
 
     if (shouldRefetch && this.#listenerCount(queryId) > 0) {
       this.#queue(queryId)
@@ -661,7 +651,7 @@ export class QueryStore<
   #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
     let shouldRefetch = false
 
-    this.#transactOverService(queryId, (service, query) => {
+    const touched = this.#transactOverService(queryId, (service, query) => {
       if (!query) return
 
       shouldRefetch = query.dirty
@@ -677,6 +667,7 @@ export class QueryStore<
         },
       })
     })
+    this.#notify(touched)
 
     if (shouldRefetch && this.#listenerCount(queryId) > 0) {
       this.#queue(queryId)
@@ -786,34 +777,30 @@ export class QueryStore<
           const serverMaintainedQueriesToRefetch = new Set<string>()
           const processedEvents: ProcessedRealtimeEvent[] = []
 
-          const modifiedQueries = this.#transactOverServiceByName(
-            serviceName,
-            (service, touch) => {
-              applyEventsToService({
-                service,
-                serviceName,
-                events,
-                getId,
-                isItemStale,
-                processedEvents,
-              })
+          const modifiedQueries = this.#transactOverServiceByName(serviceName, (service, touch) => {
+            applyEventsToService({
+              service,
+              serviceName,
+              events,
+              getId,
+              isItemStale,
+              processedEvents,
+            })
 
-              // Update queries only for the items actually applied to the entity
-              // cache — stale-skipped items never reach query state.
-              if (processedEvents.length > 0) {
-                updateQueriesFromEvents({
-                  service,
-                  appliedItems: processedEvents,
-                  touch,
-                  getId,
-                  itemAdded: meta => this.#adapter.itemAdded(meta),
-                  itemRemoved: meta => this.#adapter.itemRemoved(meta),
-                  serverMaintainedQueriesToRefetch,
-                })
-              }
-            },
-            { silent: true },
-          )
+            // Update queries only for the items actually applied to the entity
+            // cache — stale-skipped items never reach query state.
+            if (processedEvents.length > 0) {
+              updateQueriesFromEvents({
+                service,
+                appliedItems: processedEvents,
+                touch,
+                getId,
+                itemAdded: meta => this.#adapter.itemAdded(meta),
+                itemRemoved: meta => this.#adapter.itemRemoved(meta),
+                serverMaintainedQueriesToRefetch,
+              })
+            }
+          })
 
           for (const queryId of modifiedQueries) {
             touchedQueryIds.add(queryId)
@@ -978,18 +965,14 @@ export class QueryStore<
   }
 
   #markQueryPending(queryId: string): void {
-    this.#transactOverService(
-      queryId,
-      (service, query) => {
-        if (!query) return
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
 
-        service.queries.set(queryId, {
-          ...query,
-          pending: true,
-        })
-      },
-      { silent: true },
-    )
+      service.queries.set(queryId, {
+        ...query,
+        pending: true,
+      })
+    })
   }
 
   // Optimistic mutation support
@@ -1088,29 +1071,13 @@ export class QueryStore<
     return undefined
   }
 
-  #updateState(
-    mutate: (state: Map<string, ServiceState<TMeta>>, touch: (queryId: string) => void) => void,
-    { silent = false, defer = false } = {},
-  ): Set<string> {
-    const modifiedQueries = new Set<string>()
-
-    // Modify fn to track changes
-    const touch = (queryId: string) => modifiedQueries.add(queryId)
-
-    mutate(this.#state, touch)
-
-    if (!silent && modifiedQueries.size > 0) {
-      if (defer) {
-        this.#scheduleDeferredNotify(modifiedQueries)
-      } else {
-        for (const queryId of modifiedQueries) {
-          this.#invokeListeners(queryId)
-        }
-        this.#invokeGlobalListeners()
-      }
+  /** Notify listeners of the touched queries synchronously, then global listeners. */
+  #notify(queryIds: Set<string>): void {
+    if (queryIds.size === 0) return
+    for (const queryId of queryIds) {
+      this.#invokeListeners(queryId)
     }
-
-    return modifiedQueries
+    this.#invokeGlobalListeners()
   }
 
   /**
@@ -1142,32 +1109,29 @@ export class QueryStore<
     })
   }
 
+  /**
+   * Run `fn` over a query's service state, collecting touched query ids. Transactions
+   * never notify — notification is an explicit follow-up at the call site
+   * (`#notify` for synchronous delivery, `#scheduleDeferredNotify` for render-safe
+   * deferral), so the policy is readable where it applies.
+   */
   #transactOverService(
     queryId: string,
-    fn: (
-      service: ServiceState<TMeta>,
-      query?: Query<unknown, TMeta, unknown>,
-      touch?: (queryId: string) => void,
-    ) => void,
-    options?: { silent?: boolean; defer?: boolean },
-  ): void {
+    fn: (service: ServiceState<TMeta>, query?: Query<unknown, TMeta, unknown>) => void,
+  ): Set<string> {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
-    if (!serviceName) return
+    if (!serviceName) return new Set()
 
-    this.#transactOverServiceByName(
-      serviceName,
-      (service, touch) => {
-        fn(service, service.queries.get(queryId), touch)
-        touch(queryId)
-      },
-      options,
-    )
+    return this.#transactOverServiceByName(serviceName, (service, touch) => {
+      fn(service, service.queries.get(queryId))
+      touch(queryId)
+    })
   }
 
+  /** See #transactOverService — same contract, keyed by service name. */
   #transactOverServiceByName(
     serviceName: string,
     fn: (service: ServiceState<TMeta>, touch: (queryId: string) => void) => void,
-    { silent = false, defer = false } = {},
   ): Set<string> {
     if (!serviceName) return new Set()
 
@@ -1176,36 +1140,30 @@ export class QueryStore<
       this.getState().set(serviceName, createServiceState())
     }
 
-    return this.#updateState(
-      (state, touch) => {
-        const service = state.get(serviceName)
-        if (service) {
-          fn(service, touch)
-        }
-      },
-      { silent, defer },
-    )
+    const modifiedQueries = new Set<string>()
+    const touch = (queryId: string) => modifiedQueries.add(queryId)
+    const service = this.#state.get(serviceName)
+    if (service) {
+      fn(service, touch)
+    }
+    return modifiedQueries
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
     this.#clearReconcileState(queryId)
-    this.#transactOverService(
-      queryId,
-      (service, query) => {
-        if (query) {
-          if (query.state.data) {
-            const getId = (item: unknown) => this.#adapter.getId(item)
-            removeQueryFromItemIndex({ service, query, queryId, getId })
-          }
-          service.queries.delete(queryId)
-          this.#serviceNamesByQueryId.delete(queryId)
-          if (service.materialized?.queryId === queryId) {
-            delete service.materialized
-          }
+    this.#transactOverService(queryId, (service, query) => {
+      if (query) {
+        if (query.state.data) {
+          const getId = (item: unknown) => this.#adapter.getId(item)
+          removeQueryFromItemIndex({ service, query, queryId, getId })
         }
-      },
-      { silent: true },
-    )
+        service.queries.delete(queryId)
+        this.#serviceNamesByQueryId.delete(queryId)
+        if (service.materialized?.queryId === queryId) {
+          delete service.materialized
+        }
+      }
+    })
   }
 
   // Internal helpers

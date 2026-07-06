@@ -15,6 +15,7 @@ import {
   hasRelationalFilter,
   materializeRelationalFilterItem,
   shouldRefetchRelationalFilterQuery,
+  getFieldValue,
 } from './relationalFilters.js'
 import type { AnySchema, RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
@@ -1094,26 +1095,29 @@ export class RelationalQueryRef<
   #notifyListeners(): void {
     // Compute snapshot once and cache it
     const snapshot = this.getSnapshot()
-    // Settle the suspense promise on first success/error. After that it stays settled —
-    // subsequent transitions back to loading (e.g. a manual refetch) do not re-suspend
-    // because the keep-previous-data contract in the hook handles them without throwing.
-    if (!this.#suspenseSettled) {
-      if (snapshot.status === 'success') {
-        this.#suspenseSettled = true
-        this.#resolveSuspense?.()
-        this.#resolveSuspense = null
-        this.#rejectSuspense = null
-      } else if (snapshot.status === 'error') {
-        this.#suspenseSettled = true
-        this.#rejectSuspense?.(snapshot.error)
-        this.#resolveSuspense = null
-        this.#rejectSuspense = null
-      }
-    }
+    this.#settleSuspense(snapshot)
     // Notify all listeners with the cached snapshot
     for (const listener of this.#listeners) {
       listener(snapshot)
     }
+  }
+
+  /**
+   * Settle the suspense promise on first success/error. After that it stays settled —
+   * subsequent transitions back to loading (e.g. a manual refetch) do not re-suspend
+   * because the keep-previous-data contract in the hook handles them without throwing.
+   */
+  #settleSuspense(snapshot: RelationalQueryState<T>): void {
+    if (this.#suspenseSettled) return
+    if (snapshot.status !== 'success' && snapshot.status !== 'error') return
+    this.#suspenseSettled = true
+    if (snapshot.status === 'success') {
+      this.#resolveSuspense?.()
+    } else {
+      this.#rejectSuspense?.(snapshot.error)
+    }
+    this.#resolveSuspense = null
+    this.#rejectSuspense = null
   }
 
   /**
@@ -1135,18 +1139,7 @@ export class RelationalQueryRef<
         this.#setupRoot()
       }
       // If we've already reached a terminal state synchronously, settle immediately.
-      const snap = this.getSnapshot()
-      if (snap.status === 'success') {
-        this.#suspenseSettled = true
-        this.#resolveSuspense?.()
-        this.#resolveSuspense = null
-        this.#rejectSuspense = null
-      } else if (snap.status === 'error') {
-        this.#suspenseSettled = true
-        this.#rejectSuspense?.(snap.error)
-        this.#resolveSuspense = null
-        this.#rejectSuspense = null
-      }
+      this.#settleSuspense(this.getSnapshot())
     }
     return this.#suspensePromise
   }
@@ -1588,22 +1581,6 @@ type AssembledRelationData =
   | { kind: 'fanIn'; items: unknown[] }
   | { kind: 'junction'; items: unknown[]; junctionItems: unknown[] }
   | { kind: 'perParent'; byParent: Map<string, unknown[]> }
-
-function getFieldValue(item: unknown, fields: string[]): string | number | undefined {
-  if (fields.length === 1) {
-    const value = (item as Record<string, unknown>)[fields[0]!]
-    return typeof value === 'string' || typeof value === 'number' ? value : undefined
-  }
-
-  // Compound key — use JSON.stringify for an unambiguous encoding so that two distinct
-  // tuples cannot collide even if individual values contain separator characters.
-  // (E.g. values ['a|b', 'c'] and ['a', 'b|c'] must produce different keys.)
-  const values = fields.map(field => (item as Record<string, unknown>)[field])
-  if (values.some(v => v === undefined || v === null)) {
-    return undefined
-  }
-  return JSON.stringify(values)
-}
 
 /**
  * Dedupe + sort + stable-encode a set of key values. The encoded key is what relation
