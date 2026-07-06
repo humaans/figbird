@@ -3883,14 +3883,30 @@ test('.all(): get(id) answers locally from the materialized service', async t =>
   t.is(missRef.getSnapshot().status, 'error')
   t.is(feathers.service('issues').counts.get, getsAfterAll + 1, 'miss goes to the server')
 
-  // Conditions ride to the server too — .get(id).where(...) is server-evaluated.
+  // Locally-decidable conditions evaluate against the cached entity — a matching
+  // predicate serves locally, same matcher as finds.
+  const matchRef = figbird.query(figbird.q.issues.get(3).where({ status: 'open' }))
+  const unsubMatch = matchRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(matchRef.getSnapshot().status, 'success')
+  t.is(feathers.service('issues').counts.get, getsAfterAll + 1, 'matching condition stays local')
+
+  // A failing predicate falls through — the server owns the error shape.
   const condRef = figbird.query(figbird.q.issues.get(2).where({ status: 'open' }))
   const unsubCond = condRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
-  t.is(feathers.service('issues').counts.get, getsAfterAll + 2, 'conditional get fetches')
+  t.is(feathers.service('issues').counts.get, getsAfterAll + 2, 'failing condition fetches')
+
+  // Non-local operators always go out.
+  const regexRef = figbird.query(figbird.q.issues.get(1).where({ title: { $regex: 'First' } }))
+  const unsubRegex = regexRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.get, getsAfterAll + 3, 'server-only operator fetches')
 
   unsub()
   unsubMiss()
+  unsubMatch()
   unsubCond()
+  unsubRegex()
   unsubAll()
 })

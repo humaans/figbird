@@ -148,17 +148,24 @@ export class QueryStore<
     if (!this.#getQuery(queryId)) {
       this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
 
+      const q = (desc.params as { query?: Record<string, unknown> } | undefined)?.query
+      // Gets classify as 'get' — except when they carry conditions the client can't
+      // evaluate (.get(id).where({ $regex })): those are server-authoritative like
+      // any other non-local query, so realtime reconciles them by refetch and the
+      // merge path never tries (and fails) to build a local matcher for them.
       const classification: StoredQueryClass =
         desc.method === 'get'
-          ? 'get'
-          : classifyQueryNode(
-              (desc.params as { query?: Record<string, unknown> } | undefined)?.query,
-              {
-                server: (config as { server?: boolean }).server,
-                allPages: (config as { allPages?: boolean }).allPages,
-                localOperators: this.#localOperators,
-              },
-            )
+          ? q &&
+            Object.keys(q).length > 0 &&
+            classifyQueryNode(q, { allPages: true, localOperators: this.#localOperators }) !==
+              'local-exact'
+            ? 'server-authoritative'
+            : 'get'
+          : classifyQueryNode(q, {
+              server: (config as { server?: boolean }).server,
+              allPages: (config as { allPages?: boolean }).allPages,
+              localOperators: this.#localOperators,
+            })
 
       this.#transactOverService(queryId, service => {
         service.queries.set(queryId, {
@@ -507,11 +514,15 @@ export class QueryStore<
    * succeeded): the entity cache is the complete row set, so a present entity is
    * the answer with no roundtrip — realtime events, the reconnect sweep, and
    * complete-set fetch diffs keep it fresh, the same soundness argument local finds
-   * rely on. A *miss* still goes to the server: completeness makes local not-found
-   * sound in principle, but the miss is rare and a roundtrip there avoids
-   * manufacturing NotFound errors out of event-arrival races. Gets carrying query
-   * conditions (`.get(id).where(...)`) are server-evaluated and never answered
-   * locally; `network-only` and `.server()` reads always go out.
+   * rely on. Conditions (`.get(id).where(...)`) evaluate locally too when they're
+   * locally decidable — same matcher, same custom-operator registry as finds.
+   *
+   * Falls through to the server whenever the local answer would be an *error*: a
+   * missing entity or a present entity failing the predicate. Completeness makes a
+   * local not-found sound in principle, but those cases are rare, a roundtrip there
+   * is cheap, and the server's error carries the adapter's real error shape (which
+   * apps match on) rather than a synthesized one. Non-local conditions (`$regex`),
+   * `network-only`, and `.server()` reads always go out.
    */
   #tryLocalGet(
     query: Query<unknown, TMeta, unknown>,
@@ -524,11 +535,24 @@ export class QueryStore<
     const config = query.config as GetQueryConfig<unknown, unknown>
     if (config.server) return null
     if (config.fetchPolicy === 'network-only') return null
-    const q = (desc.params as { query?: Record<string, unknown> } | undefined)?.query
-    if (q && Object.keys(q).length > 0) return null
 
     const entity = service.entities.get(desc.resourceId)
     if (entity === undefined) return null
+
+    const q = (desc.params as { query?: Record<string, unknown> } | undefined)?.query
+    if (q && Object.keys(q).length > 0) {
+      if (
+        classifyQueryNode(q, { allPages: true, localOperators: this.#localOperators }) !==
+        'local-exact'
+      ) {
+        return null
+      }
+      const match = config.matcher
+        ? (config.matcher(q as never) as (item: unknown) => boolean)
+        : (this.#adapter.matcher(q as TQuery | undefined) as (item: unknown) => boolean)
+      if (!match(entity)) return null
+    }
+
     return { data: entity } as QueryResponse<unknown, TMeta | undefined>
   }
 

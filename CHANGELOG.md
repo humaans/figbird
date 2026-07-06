@@ -29,8 +29,11 @@ The relational rewrite — a new API centered on `q`/`useQuery` for reads and
 - `figbird.refetch(service?)` — manual refetch escape hatch for changes figbird can't
   observe (custom methods on services without realtime events, out-of-band writes).
 - `get(id)` against a materialized service (an unfiltered `.all()` succeeded) is
-  answered locally from the entity cache — no roundtrip; misses and conditional gets
-  still ask the server.
+  answered locally from the entity cache — including locally-decidable
+  `.get(id).where(...)` conditions; a get whose local answer would be an error
+  (missing id, failing predicate) still asks the server. Conditional gets with
+  server-only operators now classify server-authoritative (previously they threw
+  at query creation).
 - `figbird/testing` — an in-memory Feathers-compatible client (seeded data, realtime
   `emit`, per-method call counters, optional query-aware `find`) so app tests run
   against real figbird instead of mocks of it. Figbird's own suite runs on it.
