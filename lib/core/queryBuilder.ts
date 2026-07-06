@@ -151,19 +151,20 @@ export class QueryBuilder<
   readonly #schema: S
   readonly #hash: string
 
-  constructor(schema: S, service: string, state?: Partial<QueryBuilderState>) {
+  // Two call-site shapes only: fresh builders (no state — the defaults literal) and
+  // derivations (a complete next state). No partial mode: a call site that dropped
+  // fields would silently reset them; requiring the full state makes that a compile
+  // error instead.
+  constructor(schema: S, service: string, state?: QueryBuilderState) {
     this.#schema = schema
-    this.#state = {
+    this.#state = state ?? {
       service,
-      kind: state?.kind ?? 'find',
-      ...(state?.resourceId !== undefined ? { resourceId: state.resourceId } : {}),
-      query: state?.query ?? {},
-      cardinality: state?.cardinality ?? 'many',
-      related: state?.related ?? {},
-      server: state?.server ?? false,
-      snapshot: state?.snapshot ?? false,
-      ...(state?.pageSize !== undefined ? { pageSize: state.pageSize } : {}),
-      ...(state?.returnTotal !== undefined ? { returnTotal: state.returnTotal } : {}),
+      kind: 'find',
+      query: {},
+      cardinality: 'many',
+      related: {},
+      server: false,
+      snapshot: false,
     }
     // Compute hash on construction for efficient change detection
     this.#hash = hashObject(this.#state)
@@ -339,6 +340,7 @@ export class QueryBuilder<
     // TItem (see the TRelated type-parameter comment on the class).
   ): QueryBuilder<S, TService, TItem, {}, 'one', 'get'> {
     return new QueryBuilder(this.#schema, this.#state.service, {
+      service: this.#state.service,
       kind: 'get',
       resourceId,
       query: {},

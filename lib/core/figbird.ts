@@ -367,9 +367,9 @@ export class Figbird<
       argsOrOptions,
       maybeOptions,
     )
-    const validatedArgs = query.validate(args)
-    const builder = query.build(validatedArgs)
-    const ref = this.query(builder)
+    // query() owns definition resolution (validate → build → intern), so the
+    // "definition + args collapses to one cache entry" contract lives in one place.
+    const ref = this.query(query, args as never)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
@@ -421,9 +421,7 @@ export class Figbird<
       maybeOptions,
     )
     const staleTime = options?.staleTime ?? 30_000
-    const validatedArgs = query.validate(args)
-    const builder = query.build(validatedArgs)
-    const ref = this.query(builder)
+    const ref = this.query(query, args as never)
     const hash = ref.hash()
 
     const now = Date.now()
@@ -645,14 +643,19 @@ export class Figbird<
    * Use it to answer "why did adding `.limit(30)` change realtime behavior", to
    * assert a query's class in tests, or to power devtools.
    */
+  explain<B extends AnyQueryBuilder<S>>(builder: B): ExplainReport
+  explain<Args>(
+    query: QueryDefinition<Args, AnyQueryBuilder<S>>,
+    ...rest: ArgsAndOptions<Args, never>
+  ): ExplainReport
   explain(
-    builderOrDefinition: AnyQueryBuilder<S> | QueryDefinition<any, any>,
+    queryOrBuilder: AnyQueryBuilder<S> | QueryDefinition<unknown, AnyQueryBuilder<S>>,
     args?: unknown,
   ): ExplainReport {
-    type AnyBuilder = AnyQueryBuilder<S>
-    const builder: AnyBuilder = isQueryDefinition(builderOrDefinition)
-      ? (builderOrDefinition.build(builderOrDefinition.validate(args)) as AnyBuilder)
-      : (builderOrDefinition as AnyBuilder)
+    // Resolved without interning — explain never materializes a query.
+    const builder = isQueryDefinition(queryOrBuilder)
+      ? queryOrBuilder.build(queryOrBuilder.validate(args))
+      : queryOrBuilder
     const ast = builder.toAST()
     const nodes: ExplainNode[] = []
     this.#explainAst(ast, '(root)', true, nodes)

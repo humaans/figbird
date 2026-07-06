@@ -221,7 +221,7 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   item: unknown,
 ): unknown | null {
   if (relDef.cardinality !== 'one' || relDef.via) return null
-  const sourceValue = getComparableFieldValue(item, relDef.sourceField)
+  const sourceValue = getFieldValue(item, relDef.sourceField)
   if (sourceValue === undefined) return null
 
   const destState = state.get(resolveServicePath(schema, relDef.destService))
@@ -234,12 +234,12 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   // against destField before returning, since the map key and destField are not
   // guaranteed to be the same field.
   const direct = destState.entities.get(sourceValue)
-  if (direct !== undefined && getComparableFieldValue(direct, relDef.destField) === sourceValue) {
+  if (direct !== undefined && getFieldValue(direct, relDef.destField) === sourceValue) {
     return direct
   }
 
   for (const candidate of destState.entities.values()) {
-    if (getComparableFieldValue(candidate, relDef.destField) === sourceValue) {
+    if (getFieldValue(candidate, relDef.destField) === sourceValue) {
       return candidate
     }
   }
@@ -253,7 +253,15 @@ function cloneRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
-function getComparableFieldValue(item: unknown, fields: string[]): string | number | undefined {
+/**
+ * Read a possibly-compound key field as a comparable value. The canonical encoding for
+ * cross-module key comparisons — the relational engine keys assembly with it too.
+ *
+ * Compound keys use JSON.stringify for an unambiguous encoding so that two distinct
+ * tuples cannot collide even if individual values contain separator characters.
+ * (E.g. values ['a|b', 'c'] and ['a', 'b|c'] must produce different keys.)
+ */
+export function getFieldValue(item: unknown, fields: string[]): string | number | undefined {
   if (!item || typeof item !== 'object') return undefined
   const record = item as Record<string, unknown>
   if (fields.length === 1) {
