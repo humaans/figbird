@@ -418,11 +418,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #getUpdatedAt(item: unknown): string | Date | number | null | undefined {
     return typeof this.#updatedAtField === 'string'
       ? ((item as Record<string, unknown>)[this.#updatedAtField] as
-          | string
-          | Date
-          | number
-          | null
-          | undefined)
+          string | Date | number | null | undefined)
       : this.#updatedAtField(item)
   }
 

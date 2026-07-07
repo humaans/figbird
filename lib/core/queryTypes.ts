@@ -235,8 +235,7 @@ export interface FindQueryConfig<TItem = unknown, TQuery = unknown> extends Base
  * Discriminated union of query configurations
  */
 export type QueryConfig<TItem = unknown, TQuery = unknown> =
-  | GetQueryConfig<TItem, TQuery>
-  | FindQueryConfig<TItem, TQuery>
+  GetQueryConfig<TItem, TQuery> | FindQueryConfig<TItem, TQuery>
 
 /**
  * Combined config for get operations
@@ -260,8 +259,7 @@ export type CombinedFindConfig<TItem = unknown, TQuery = unknown> = FindDescript
  * Combined config for internal use
  */
 export type CombinedConfig<TItem = unknown, TQuery = unknown> =
-  | CombinedGetConfig<TItem, TQuery>
-  | CombinedFindConfig<TItem, TQuery>
+  CombinedGetConfig<TItem, TQuery> | CombinedFindConfig<TItem, TQuery>
 
 /**
  * Item matcher function type

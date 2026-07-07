@@ -12,9 +12,7 @@ interface MutationState<T> {
 }
 
 type MutationAction<T> =
-  | { type: 'mutating' }
-  | { type: 'success'; payload: T }
-  | { type: 'error'; payload: Error }
+  { type: 'mutating' } | { type: 'success'; payload: T } | { type: 'error'; payload: Error }
 
 export interface UseMutationResult<
   TItem,

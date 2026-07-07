@@ -14,14 +14,12 @@ type UntypedData = any
 
 export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
   (TMeta extends undefined
-    ?
-        | { status: 'loading'; data: null; isFetching: boolean; error: null }
-        | { status: 'success'; data: T; isFetching: boolean; error: null }
-        | { status: 'error'; data: null; isFetching: boolean; error: Error }
-    :
-        | { status: 'loading'; data: null; meta: TMeta; isFetching: boolean; error: null }
-        | { status: 'success'; data: T; meta: TMeta; isFetching: boolean; error: null }
-        | { status: 'error'; data: null; meta: TMeta; isFetching: boolean; error: Error })
+    ? | { status: 'loading'; data: null; isFetching: boolean; error: null }
+      | { status: 'success'; data: T; isFetching: boolean; error: null }
+      | { status: 'error'; data: null; isFetching: boolean; error: Error }
+    : | { status: 'loading'; data: null; meta: TMeta; isFetching: boolean; error: null }
+      | { status: 'success'; data: T; meta: TMeta; isFetching: boolean; error: null }
+      | { status: 'error'; data: null; meta: TMeta; isFetching: boolean; error: Error })
 
 /**
  * Hook for fetching a single item by ID.
