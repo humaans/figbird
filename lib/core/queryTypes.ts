@@ -148,6 +148,16 @@ export interface FindDescriptor {
 export type QueryDescriptor = GetDescriptor | FindDescriptor
 
 /**
+ * The one sanctioned crossing of the `params?: unknown` boundary: project the
+ * adapter-shaped params down to the `query` object figbird inspects (for
+ * classification, matching, and window maintenance).
+ */
+export function queryOfParams(params: unknown): Record<string, unknown> | undefined {
+  // `|| undefined` normalizes a runtime null (or other falsy junk) to undefined.
+  return (params as { query?: Record<string, unknown> } | undefined)?.query || undefined
+}
+
+/**
  * Helper type to extract element type from arrays
  */
 export type ElementType<T> = T extends (infer E)[] ? E : T

@@ -11,9 +11,9 @@ import {
   type Schema,
 } from '../lib/index.js'
 import {
-  installQueryAwareFind,
   mockFeathers as baseMockFeathers,
   type MockFeathers,
+  type MockFeathersOptions,
   type MockFeathersServices,
 } from '../lib/testing.js'
 
@@ -142,15 +142,17 @@ async function waitForEmissions(): Promise<void> {
 }
 
 export { matchesQuery, service, sortRows } from '../lib/testing.js'
-export { installQueryAwareFind }
 export type { TestItem } from '../lib/testing.js'
 
 /**
  * The shared in-memory client (see `figbird/testing`), with mutation-triggered
  * realtime emissions routed through `queueTask` so `dom().flush()` can await them.
  */
-export function mockFeathers(services: MockFeathersServices): MockFeathers {
-  return baseMockFeathers(services, { schedule: queueTask })
+export function mockFeathers(
+  services: MockFeathersServices,
+  options: Omit<MockFeathersOptions, 'schedule'> = {},
+): MockFeathers {
+  return baseMockFeathers(services, { ...options, schedule: queueTask })
 }
 
 /**
@@ -158,20 +160,22 @@ export function mockFeathers(services: MockFeathersServices): MockFeathers {
  * FeathersAdapter + Figbird (realtime batching disabled so events apply
  * immediately), wrapped in StrictMode + FigbirdProvider.
  *
- * Pass `queryAwareFind: true` to install the filter-honoring `find` on every
- * service in the mock.
+ * Pass `queryAwareFind: true` to make every service's `find` honor filters.
  */
 export function createTestApp<S extends Schema>(
   schema: S,
   services: MockFeathersServices,
   {
     queryAwareFind = false,
+    skipTotal = false,
     operators,
-  }: { queryAwareFind?: boolean; operators?: Record<string, CustomOperator> } = {},
+  }: {
+    queryAwareFind?: boolean
+    skipTotal?: boolean
+    operators?: Record<string, CustomOperator>
+  } = {},
 ) {
-  const serviceNames = Object.keys(services).filter(name => name !== 'skipTotal')
-  const feathers = mockFeathers(services)
-  if (queryAwareFind) installQueryAwareFind(feathers, serviceNames)
+  const feathers = mockFeathers(services, { queryAwareFind, skipTotal })
 
   const adapter = new FeathersAdapter(feathers, operators ? { operators } : {})
   const figbird = new Figbird({

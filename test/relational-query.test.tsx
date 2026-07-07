@@ -13,7 +13,7 @@ import {
   type QueryBuilder,
   type StandardSchemaV1,
 } from '../lib'
-import { createTestApp, dom, installQueryAwareFind, mockFeathers } from './helpers'
+import { createTestApp, dom, mockFeathers } from './helpers'
 
 // Tagged-union variant of useQuery — the shape the deleted useRelationalQuery had.
 function useStatusQuery<
@@ -943,27 +943,29 @@ test('figbird.query: inactive server-windowed query merges provable events; next
 })
 
 test('figbird.query: reconnect refetches active queries after missed events', async t => {
-  const feathers = mockFeathers({
-    companies: {
-      data: {
-        1: { id: 1, name: 'Acme' },
+  const feathers = mockFeathers(
+    {
+      companies: {
+        data: {
+          1: { id: 1, name: 'Acme' },
+        },
+      },
+      departments: {
+        data: {},
+      },
+      people: {
+        data: {
+          1: { id: 1, companyId: 1, name: 'Alice', status: 'active' },
+        },
+      },
+      employments: {
+        data: {},
       },
     },
-    departments: {
-      data: {},
-    },
-    people: {
-      data: {
-        1: { id: 1, companyId: 1, name: 'Alice', status: 'active' },
-      },
-    },
-    employments: {
-      data: {},
-    },
-  })
+    { queryAwareFind: true },
+  )
   const reconnectEvents = new EventEmitter()
   ;(feathers as ReturnType<typeof mockFeathers> & { io: EventEmitter }).io = reconnectEvents
-  installQueryAwareFind(feathers, ['companies', 'departments', 'people', 'employments'])
 
   const figbird = new Figbird({
     schema: exactQuerySchema,
@@ -2818,17 +2820,19 @@ test('.all(): accepts filters — complete slice, no materialization; rejects wi
   t.deepEqual(ast.query, { status: 'open', $sort: { id: -1 } })
 
   // Behavior: a small page size forces findAll to actually drain pages.
-  const feathers = mockFeathers({
-    issues: {
-      data: {
-        1: { id: 1, title: 'A', status: 'open', creatorId: 1 },
-        2: { id: 2, title: 'B', status: 'closed', creatorId: 1 },
-        3: { id: 3, title: 'C', status: 'open', creatorId: 1 },
-        4: { id: 4, title: 'D', status: 'open', creatorId: 1 },
+  const feathers = mockFeathers(
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'A', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'B', status: 'closed', creatorId: 1 },
+          3: { id: 3, title: 'C', status: 'open', creatorId: 1 },
+          4: { id: 4, title: 'D', status: 'open', creatorId: 1 },
+        },
       },
     },
-  })
-  installQueryAwareFind(feathers, ['issues'])
+    { queryAwareFind: true },
+  )
   const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
   const fb = new Figbird({
     schema,

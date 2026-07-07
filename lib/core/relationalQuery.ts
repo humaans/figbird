@@ -1,6 +1,6 @@
 import { hashObject } from './hash.js'
 import type { QueryAST } from './queryBuilder.js'
-import { hasWindowFilters } from './queryClassification.js'
+import { planRelation, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
 import type {
   ProcessedRealtimeEvent,
@@ -10,19 +10,27 @@ import type {
   ServiceState,
 } from './queryTypes.js'
 import {
+  assembleRelations,
+  getFieldValueAsList,
+  sourceSet,
+  sourceValueKey,
+  uniqueSourceValues,
+  type AssembledRelationData,
+} from './relationalAssembly.js'
+import {
   collectRelationalFilterDependencies,
   collectRelationalFilterPaths,
   hasRelationalFilter,
   materializeRelationalFilterItem,
   shouldRefetchRelationalFilterQuery,
-  getFieldValue,
 } from './relationalFilters.js'
 import type { AnySchema, RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
 
 // This module is organised top-down: the consumer-facing RelationalQueryRef first,
 // followed by its internal machinery — root sources (single query vs page
-// accumulator behind one snapshot contract) and the pure assembly pass.
+// accumulator behind one snapshot contract). The pure assembly pass lives in
+// relationalAssembly.ts.
 
 // Above this many parents, a windowed relation's per-parent queries are almost
 // certainly the wrong shape (N requests for one screen) — warn and point at embed.
@@ -530,11 +538,6 @@ export class RelationalQueryRef<
   }
 
   /**
-   * Walks the AST to verify that every relation at every parent level whose parent has
-   * resolved has been synced (i.e. entered into #relationSubs). Used to decide whether
-   * the assembled snapshot is ready to return, or whether we're still waiting on sync.
-   */
-  /**
    * Triggers a refetch for the root (for paginated queries this drops follow-up pages
    * and re-fetches from page 0).
    */
@@ -613,9 +616,9 @@ export class RelationalQueryRef<
       queryRef: this.#query(rootDesc, {
         realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
-        // .all() fetches every page; when unfiltered, success marks the service
-        // fully materialized.
-        ...(this.#ast.kind === 'all' ? { allPages: true } : {}),
+        // .all() fetches every page (rootAllPages — shared with explain()); when
+        // unfiltered, success marks the service fully materialized.
+        ...(rootAllPages(this.#ast.kind) ? { allPages: true } : {}),
         ...(this.#ast.kind !== 'get' ? matcherConfig : {}),
         ...(this.#ast.server ? { server: true } : {}),
       }),
@@ -656,12 +659,17 @@ export class RelationalQueryRef<
         if (!this.#relationSubs.has(key)) {
           this.#relationSubs.set(key, { kind: 'empty', sourceKey: '' })
         }
-      } else if (relDef.via) {
-        this.#syncJunctionRelation(parentData, relDef, relAST, key)
-      } else if (relDef.cardinality === 'many' && hasWindowFilters(relAST.query)) {
-        this.#syncWindowedManyRelation(parentData, relDef, relAST, key)
       } else {
-        this.#syncFanInRelation(parentData, relDef, relAST, key)
+        // The strategy is decided in one place (planRelation) — explain() reads
+        // the same plan, so what it reports is what runs here.
+        const { strategy } = planRelation(relDef, relAST.query)
+        if (strategy === 'junction') {
+          this.#syncJunctionRelation(parentData, relDef, relAST, key)
+        } else if (strategy === 'perParent') {
+          this.#syncWindowedManyRelation(parentData, relDef, relAST, key)
+        } else {
+          this.#syncFanInRelation(parentData, relDef, relAST, key)
+        }
       }
     }
   }
@@ -941,7 +949,7 @@ export class RelationalQueryRef<
    */
   #buildRelationQueryRef(
     destService: string,
-    relDef: { destField: string[]; query?: Record<string, unknown> },
+    relDef: { destField: string[]; query?: Record<string, unknown>; via?: unknown },
     relAST: QueryAST,
     uniqueValues: (string | number)[],
   ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
@@ -951,12 +959,10 @@ export class RelationalQueryRef<
       ...(relDef.query || {}),
     }
 
-    // Relations without explicit windowing must paginate to capture every match for
-    // the parent's IN(...) filter — otherwise the default per-page cap would silently
-    // drop entries. When the user adds `.limit()`/`.skip()`/`.orderBy()`, that windowing
-    // is the intent: respect it and let the query be server-maintained so realtime
-    // events trigger a refetch of the window instead of merging locally.
-    const hasWindowing = hasWindowFilters(relAST.query)
+    // allPages comes from the shared fetch plan (see planRelation): un-windowed
+    // relations drain every page so the IN(...) set isn't truncated; an explicit
+    // window is the consumer's intent and stays server-maintained.
+    const { allPages } = planRelation(relDef, relAST.query)
 
     return this.#query(
       {
@@ -967,7 +973,7 @@ export class RelationalQueryRef<
       {
         realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
-        ...(hasWindowing ? {} : { allPages: true }),
+        ...(allPages ? { allPages: true } : {}),
         ...(relAST.server ? { server: true } : {}),
       },
     )
@@ -1379,25 +1385,50 @@ class PagedQueryRoot<
     this.#setupPage(0)
   }
 
-  #setupPage(pageIndex: number): void {
+  /**
+   * Subscribe a page query. Each page has exactly one subscription, which also
+   * owns the pagination flags: `settle` is the one-shot hook a `loadMore()` page
+   * carries, consumed on the page's first success (clear `isLoadingMore`) or
+   * first error (report and drop the page); after that the page behaves like any
+   * other. Single ownership is what keeps `hasMore` from flickering as pages
+   * resolve in unexpected orders.
+   */
+  #setupPage(pageIndex: number, settle?: { onError: (error: Error) => void }): void {
     const queryRef = this.#makePageRef(pageIndex)
     this.#pageRefs.push(queryRef)
-    const unsub = subscribeAndSeed(
-      queryRef,
-      data => {
-        const pageData = data ?? []
-        // A page that returned fewer rows than requested is the last page. Update the
-        // sticky flag — but only when no `loadMore()` is in flight so we don't briefly
-        // toggle the UI as pages arrive in unexpected orders.
-        if (!this.#isLoadingMore) {
+    let pendingSettle = settle
+    const onState = (state: ReturnType<(typeof queryRef)['getSnapshot']>): void => {
+      if (state?.status === 'success') {
+        const pageData = (state.data ?? []) as unknown[]
+        // A page that returned fewer rows than requested is the last page. The page
+        // settling a `loadMore()` owns the flag for that load; unrelated page
+        // refetches leave it alone while a load is in flight.
+        if (pendingSettle) {
+          pendingSettle = undefined
+          this.#isLoadingMore = false
+          this.#loadMoreError = null
+          this.#hasMoreSticky = pageData.length >= this.#pageSize
+        } else if (!this.#isLoadingMore) {
           this.#hasMoreSticky = pageData.length >= this.#pageSize
         }
         this.#onRows(this.#allPagesData())
+      } else if (state?.status === 'error' && pendingSettle) {
+        const s = pendingSettle
+        pendingSettle = undefined
+        s.onError(state.error)
+      }
+    }
+    const unsub = queryRef.subscribe(
+      state => {
+        onState(state)
+        this.#onChange()
       },
-      this.#onChange,
-      this.#staleTime,
+      { staleTime: this.#staleTime },
     )
     this.#pageUnsubs.push(unsub)
+    // Seed from a warm snapshot (mirrors subscribeAndSeed) — after the unsub is
+    // registered, so a settle-on-error can pop this page's subscription.
+    onState(queryRef.getSnapshot())
   }
 
   /**
@@ -1417,34 +1448,21 @@ class PagedQueryRoot<
 
     this.#isLoadingMore = true
     this.#loadMoreError = null
-    this.#setupPage(this.#pageRefs.length)
-    // The new page's subscription will fire when it resolves, flipping isLoadingMore off
-    // and updating hasMore. Notify now so the UI flips to "loading more" synchronously.
-    this.#onChange()
-
-    // Watch the page we just created to reset the in-flight flag on settle.
-    const pageRef = this.#pageRefs[this.#pageRefs.length - 1]!
-    const onSettle = pageRef.subscribe(state => {
-      if (state.status === 'success') {
-        const data = (state.data ?? []) as unknown[]
-        this.#hasMoreSticky = data.length >= this.#pageSize
+    this.#setupPage(this.#pageRefs.length, {
+      onError: error => {
         this.#isLoadingMore = false
-        this.#loadMoreError = null
-        onSettle()
-        this.#onChange()
-      } else if (state.status === 'error') {
-        this.#isLoadingMore = false
-        this.#loadMoreError = state.error
+        this.#loadMoreError = error
         // Keep hasMore truthy so the UI can offer a retry via loadMore again. Drop the
         // failed page so a future loadMore retries the same skip rather than skipping past.
         this.#hasMoreSticky = true
         this.#pageRefs.pop()
         const popped = this.#pageUnsubs.pop()
         popped?.()
-        onSettle()
-        this.#onChange()
-      }
+      },
     })
+    // The new page's subscription notifies when it settles. Notify now so the UI
+    // flips to "loading more" synchronously.
+    this.#onChange()
   }
 
   snapshot(): RootSnapshot {
@@ -1508,6 +1526,10 @@ class PagedQueryRoot<
     this.#pageUnsubs.length = 1
     this.#pageRefs.length = 1
     this.#hasMoreSticky = true
+    // Dropping pages 1+ also drops any in-flight loadMore page (its subscription —
+    // and with it the pending settle — was just unsubscribed), so the flag must
+    // reset here or loadMore() would be blocked forever.
+    this.#isLoadingMore = false
     this.#loadMoreError = null
     this.#pageRefs[0]?.refetch()
     // Notify so subscribers see the re-evaluated `hasMore`/`isLoadingMore` even if no
@@ -1563,242 +1585,4 @@ class PagedQueryRoot<
     this.#lastAllPagesData = all
     return all
   }
-}
-
-// ---------------------------------------------------------------------------
-// Relational assembly (pure)
-// ---------------------------------------------------------------------------
-
-/**
- * Pure relational assembly. Given root rows, the query AST, the schema, and a map of
- * already-gathered relation data (one entry per dotted relation key), produce the
- * denormalized tree. This module never reads live query state — the caller gathers
- * a coherent snapshot of every relation's data first and passes it in.
- */
-
-/**
- * Resolved data for one relation key, gathered from the live sub-queries before
- * assembly runs.
- *
- * - `none` — relation has no source values (or no relationship definition).
- * - `fanIn` — single-hop relation resolved with one IN(...) query.
- * - `junction` — two-hop relation: junction rows plus destination rows.
- * - `perParent` — windowed relation resolved with one query per parent, keyed by
- *   `sourceValueKey(parentValue)`.
- */
-type AssembledRelationData =
-  | { kind: 'none' }
-  | { kind: 'fanIn'; items: unknown[] }
-  | { kind: 'junction'; items: unknown[]; junctionItems: unknown[] }
-  | { kind: 'perParent'; byParent: Map<string, unknown[]> }
-
-/**
- * Dedupe + sort + stable-encode a set of key values. The encoded key is what relation
- * subs compare to detect "same source set, nothing to re-fetch" — every sync path must
- * produce it identically or subscriptions churn.
- */
-function sourceSet(raw: (string | number)[]): { values: (string | number)[]; key: string } {
-  const values = [...new Set(raw)].sort()
-  return { values, key: JSON.stringify(values) }
-}
-
-/** Collect the deduped, sorted values of `fields` across parents, with the stable key. */
-function uniqueSourceValues(
-  parentData: unknown[],
-  fields: string[],
-): { values: (string | number)[]; key: string } {
-  return sourceSet(
-    parentData
-      .map(item => getFieldValue(item, fields))
-      .filter((v): v is string | number => v !== undefined),
-  )
-}
-
-/**
- * Read a list-of-ids field for `'embedded'` relations. The parent record is expected to
- * carry an array of `string | number` at `fields[0]`; non-array or missing values become
- * `undefined` so callers can treat them as "no edges from this parent". Compound keys are
- * not supported here — embedded relations are by definition single-key id lists.
- */
-function getFieldValueAsList(item: unknown, fields: string[]): (string | number)[] | undefined {
-  if (fields.length !== 1) return undefined
-  const value = (item as Record<string, unknown>)[fields[0]!]
-  if (!Array.isArray(value)) return undefined
-  return value.filter((v): v is string | number => typeof v === 'string' || typeof v === 'number')
-}
-
-/** Stable key for a parent source value (used by per-parent windowed relations). */
-function sourceValueKey(value: string | number): string {
-  return JSON.stringify(value)
-}
-
-interface RelationIndex {
-  byKey?: Map<string | number, unknown>
-  listByKey?: Map<string | number, unknown[]>
-  junctionsByParent?: Map<string | number, unknown[]>
-}
-
-/**
- * Build per-relation lookup indexes over the gathered relation data so per-parent
- * matching during assembly is a map lookup instead of a linear scan — O(parents +
- * relation rows) per assembly pass rather than O(parents × relation rows).
- *
- * - `byKey` maps a dest-key value to the first matching entity ('one'/'embedded'/junction dest).
- * - `listByKey` groups entities by dest-key value in result order ('many').
- * - `junctionsByParent` groups junction rows by the parent-side join value (two-hop).
- */
-function buildIndexes(
-  ast: QueryAST,
-  parentKey: string | null,
-  relationships: Record<string, RelationshipDef>,
-  relationData: Map<string, AssembledRelationData>,
-): Map<string, RelationIndex> {
-  const indexes = new Map<string, RelationIndex>()
-
-  for (const relName of Object.keys(ast.related)) {
-    const relDef = relationships[relName]
-    if (!relDef) continue
-
-    const key = parentKey ? `${parentKey}.${relName}` : relName
-    const rel = relationData.get(key)
-    // Per-parent data is already keyed by parent; 'none' has nothing to index.
-    if (!rel || rel.kind === 'none' || rel.kind === 'perParent') continue
-
-    if (rel.kind === 'junction') {
-      const byKey = firstMatchIndex(rel.items, relDef.destField)
-      const junctionsByParent = new Map<string | number, unknown[]>()
-      for (const j of rel.junctionItems) {
-        const p = getFieldValue(j, relDef.via!.destField)
-        if (p === undefined) continue
-        let list = junctionsByParent.get(p)
-        if (!list) {
-          list = []
-          junctionsByParent.set(p, list)
-        }
-        list.push(j)
-      }
-      indexes.set(relName, { byKey, junctionsByParent })
-    } else if (relDef.cardinality === 'one' || relDef.cardinality === 'embedded') {
-      indexes.set(relName, { byKey: firstMatchIndex(rel.items, relDef.destField) })
-    } else {
-      const listByKey = new Map<string | number, unknown[]>()
-      for (const entity of rel.items) {
-        const k = getFieldValue(entity, relDef.destField)
-        if (k === undefined) continue
-        let list = listByKey.get(k)
-        if (!list) {
-          list = []
-          listByKey.set(k, list)
-        }
-        list.push(entity)
-      }
-      indexes.set(relName, { listByKey })
-    }
-  }
-
-  return indexes
-}
-
-// First match wins — mirrors a linear scan's short-circuit semantics.
-function firstMatchIndex(items: unknown[], destField: string[]): Map<string | number, unknown> {
-  const byKey = new Map<string | number, unknown>()
-  for (const entity of items) {
-    const k = getFieldValue(entity, destField)
-    if (k !== undefined && !byKey.has(k)) byKey.set(k, entity)
-  }
-  return byKey
-}
-
-/**
- * Assemble the denormalized tree: for each root row, attach each declared relation's
- * matching rows (recursing into nested relations). Relations override same-named
- * fields on the parent — this is load-bearing for `embed`, where the parent's id-list
- * field expands into the materialized entities under the same key.
- */
-function assembleRelations(
-  items: unknown[],
-  ast: QueryAST,
-  schema: Schema,
-  relationData: Map<string, AssembledRelationData>,
-  parentKey: string | null = null,
-): unknown[] {
-  const relationships = schema.relationships?.[ast.service] ?? {}
-  const indexes = buildIndexes(ast, parentKey, relationships, relationData)
-
-  return items.map(item => {
-    const result = { ...(item as object) } as Record<string, unknown>
-
-    for (const [relName, relAST] of Object.entries(ast.related)) {
-      const key = parentKey ? `${parentKey}.${relName}` : relName
-      const relDef = relationships[relName]
-      if (!relDef) continue
-
-      const rel = relationData.get(key)
-      const index = indexes.get(relName)
-      const hasNested = Object.keys(relAST.related).length > 0
-
-      let matchedItems: unknown[]
-
-      if (rel?.kind === 'perParent') {
-        const sourceValue = getFieldValue(item, relDef.sourceField)
-        matchedItems =
-          sourceValue === undefined ? [] : (rel.byParent.get(sourceValueKey(sourceValue)) ?? [])
-      } else if (relDef.cardinality === 'embedded') {
-        const sourceList = getFieldValueAsList(item, relDef.sourceField)
-        matchedItems = []
-        if (sourceList) {
-          // Walk the parent's id list (preserves the server-chosen order) and look up
-          // each id against the materialised dest set.
-          for (const id of sourceList) {
-            const found = index?.byKey?.get(id)
-            if (found) matchedItems.push(found)
-          }
-        }
-      } else if (relDef.via) {
-        // Two-hop: walk this parent's junction rows, then collect dest items keyed
-        // by the junction's outgoing FK.
-        const parentJoinValue = getFieldValue(item, relDef.via.sourceField)
-        const junctions =
-          parentJoinValue === undefined ? undefined : index?.junctionsByParent?.get(parentJoinValue)
-        matchedItems = []
-        if (junctions) {
-          for (const j of junctions) {
-            const destId = getFieldValue(j, relDef.sourceField)
-            if (destId === undefined) continue
-            const found = index?.byKey?.get(destId)
-            if (found) matchedItems.push(found)
-          }
-        }
-        // A chained `one` resolves to the first (declared-selective) match, or null.
-        if (relDef.cardinality === 'one') {
-          let found: unknown = matchedItems[0] ?? null
-          if (hasNested && found) {
-            found = assembleRelations([found], relAST, schema, relationData, key)[0] ?? null
-          }
-          result[relName] = found
-          continue
-        }
-      } else if (relDef.cardinality === 'one') {
-        const sourceValue = getFieldValue(item, relDef.sourceField)
-        const found = sourceValue === undefined ? null : (index?.byKey?.get(sourceValue) ?? null)
-        result[relName] = found
-        if (hasNested && found) {
-          const assembled = assembleRelations([found], relAST, schema, relationData, key)
-          result[relName] = assembled[0] ?? null
-        }
-        continue
-      } else {
-        // Single-hop many — every entity whose dest key matches this parent.
-        const sourceValue = getFieldValue(item, relDef.sourceField)
-        matchedItems = sourceValue === undefined ? [] : (index?.listByKey?.get(sourceValue) ?? [])
-      }
-
-      if (hasNested && matchedItems.length > 0) {
-        matchedItems = assembleRelations(matchedItems, relAST, schema, relationData, key)
-      }
-      result[relName] = matchedItems
-    }
-
-    return result
-  })
 }

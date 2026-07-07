@@ -99,12 +99,12 @@ const idleState: RelationalQueryState<null> = {
  */
 function useQueryRef<B extends AnyQueryBuilder>(
   figbird: FigbirdLike,
-  query: B,
+  query: B | null,
   skip: boolean,
   staleTime?: number,
 ) {
   type T = QueryBuilderResult<B>
-  const qRef = skip ? null : figbird.query(query)
+  const qRef = skip || query === null ? null : figbird.query(query)
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
@@ -305,7 +305,7 @@ export function useQueryImpl(
     // Routed through the same code path as `skip: true` so the hook sequence is
     // identical when args flip null <-> real.
     if (args === null || argsOrOptions === null) {
-      return useQueryForBuilder(figbird, SKIPPED_BUILDER, { ...options, skip: true })
+      return useQueryForBuilder(figbird, null, { ...options, skip: true })
     }
     const validatedArgs = definition.validate(args)
     const builder = definition.build(validatedArgs) as AnyQueryBuilder
@@ -323,16 +323,11 @@ const idlePagination: RelationalPaginationState = {
   totalCount: undefined,
 }
 
-// Stand-in for null-args skips: the skip path never materializes a query, so only
-// toAST() is consulted (for the pagination widening — which the skip branch applies
-// unconditionally anyway, see below).
-const SKIPPED_BUILDER = {
-  toAST: () => ({ kind: 'find' }),
-} as unknown as AnyQueryBuilder
-
+// `query` is null for null-args definition skips — the build function never ran,
+// so there is no builder. A null query always rides the `skip: true` path.
 function useQueryForBuilder<B extends AnyQueryBuilder>(
   figbird: FigbirdLike,
-  query: B,
+  query: B | null,
   options: UseQueryOptions,
 ): unknown {
   type T = QueryBuilderResult<B>
@@ -372,16 +367,7 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
 
   if (!suspense) return taggedResult
 
-  // Two axes only: where data comes from (skipped vs live) and whether the builder
-  // is paginated (widening the shape with the loadMore family).
-  const isPaginated = query.toAST().kind === 'paginate'
-  const widen = (base: object, pagination: RelationalPaginationState) =>
-    (isPaginated ? { ...base, loadMore, ...pagination } : base) as SuspenseQueryResult<
-      T,
-      QueryBuilderKind<B>
-    >
-
-  if (skip || !qRef) {
+  if (skip || query === null || !qRef) {
     // Always the widened shape: a null-args skip can't know the definition's kind
     // (build never ran), and inert pagination fields on a non-paginated result are
     // hidden by the static type.
@@ -394,6 +380,16 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
       ...idlePagination,
     } as SuspenseQueryResult<T, QueryBuilderKind<B>>
   }
+
+  // Two axes only: where data comes from (skipped vs live) and whether the builder
+  // is paginated (widening the shape with the loadMore family). Plain expressions,
+  // not hooks — safe below the skip return.
+  const isPaginated = query.toAST().kind === 'paginate'
+  const widen = (base: object, pagination: RelationalPaginationState) =>
+    (isPaginated ? { ...base, loadMore, ...pagination } : base) as SuspenseQueryResult<
+      T,
+      QueryBuilderKind<B>
+    >
 
   // `status: 'error'` only occurs for cold failures (no data was ever produced) —
   // a refetch failure with data present stays on the success arm with `error` set.

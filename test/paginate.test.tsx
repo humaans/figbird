@@ -79,13 +79,12 @@ function createPaginateApp(opts: PaginateAppOptions = {}) {
   const { App, figbird, feathers } = createTestApp(
     paginateSchema,
     {
-      ...(opts.skipTotal ? { skipTotal: true } : {}),
       issues: { data: makeIssues(totalIssues) },
       comments: {
         data: makeComments(Array.from({ length: totalIssues }, (_, i) => i + 1)),
       },
     },
-    { queryAwareFind: true },
+    { queryAwareFind: true, ...(opts.skipTotal ? { skipTotal: true } : {}) },
   )
 
   return { App, figbird, feathers, issuesService: feathers.service('issues') }

@@ -1,4 +1,5 @@
 import { startTransition, useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import { FigbirdEventEmitter, type FigbirdEvent } from '../core/events.js'
 import type { FigbirdEvents } from '../core/figbird.js'
 import { useFigbirdMaybe } from './context.js'
 
@@ -75,17 +76,17 @@ export interface ActionEventsHost {
 // Correlates one invocation's action:start/end/error events.
 let nextActionId = 1
 
-type EmitFn = (event: {
-  kind: 'action:start' | 'action:end' | 'action:error'
-  actionId: number
-  name?: string
-  durationMs?: number
-  error?: Error
-}) => void
+// Derived from the core event union so the payloads can't drift from what
+// devtools subscribers expect.
+type ActionFigbirdEvent = Extract<FigbirdEvent, { actionId: number }>
+type EmitFn = (event: ActionFigbirdEvent) => void
 
+// The public `FigbirdEvents` surface is subscribe-only; emitting is the concrete
+// emitter's affair. A Figbird instance always carries one — the instanceof check
+// covers hand-rolled hosts (tests) that only implement subscribe.
 function emitterOf(figbird: ActionEventsHost | undefined | null): EmitFn | null {
-  const events = figbird?.events as { emit?: EmitFn } | undefined
-  return typeof events?.emit === 'function' ? events.emit.bind(events) : null
+  const events = figbird?.events
+  return events instanceof FigbirdEventEmitter ? event => events.emit(event) : null
 }
 
 /**

@@ -8,6 +8,7 @@ import type {
   Schema,
   ServiceNames,
   ServiceItem,
+  ServiceRelationships,
   ResolveRelatedItem,
   ResolveRelatedService,
 } from './schema.js'
@@ -16,12 +17,8 @@ import type {
  * Type-level: given a schema S and a service N, the set of relation names defined on
  * that service. Resolves to `never` when no relationships are declared for N.
  */
-export type RelationNames<S extends Schema, N extends string> =
-  S['relationships'] extends Record<string, Record<string, unknown>>
-    ? N extends keyof S['relationships']
-      ? keyof NonNullable<S['relationships']>[N] & string
-      : never
-    : never
+export type RelationNames<S extends Schema, N extends string> = keyof ServiceRelationships<S, N> &
+  string
 
 /**
  * Feathers-style query object
@@ -464,33 +461,32 @@ export class QueryBuilder<
     TCardinality,
     TKind
   > {
-    // Look up the relationship definition from schema
+    // Look up the relationship definition from schema. The schema is fixed at
+    // construction and typed callers can't get this wrong, so an unknown name is
+    // always a bug in an untyped caller — fail fast at the call site instead of
+    // building a plausible-but-empty relation the runtime would warn about again.
     const relationships = this.#schema.relationships ?? {}
     const serviceRelations = relationships[this.#state.service]
     const relDef = serviceRelations?.[name]
-
     if (!relDef) {
-      console.warn(
-        `Relationship "${name}" not found for service "${this.#state.service}". ` +
+      throw new Error(
+        `figbird: relationship "${name}" is not defined for service "${this.#state.service}". ` +
           `Available relationships: ${serviceRelations ? Object.keys(serviceRelations).join(', ') : 'none'}`,
       )
     }
 
     // Create a builder for the related service
-    const destService = relDef?.destService ?? name
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    const relatedBuilder = new QueryBuilder<S, string, any>(this.#schema, destService)
+    const relatedBuilder = new QueryBuilder<S, string, any>(this.#schema, relDef.destService)
 
     // Apply refinement if provided
     const refinedBuilder = refine ? refine(relatedBuilder) : relatedBuilder
 
-    // Use the relationship's cardinality or the refined builder's cardinality.
+    // Use the relationship's cardinality on the AST.
     // 'embedded' is a relation-declaration concept (parent carries a list of ids); the
     // result shape is still an array, so it maps to 'many' on the AST.
     const relatedAST = refinedBuilder.toAST()
-    if (relDef) {
-      relatedAST.cardinality = relDef.cardinality === 'one' ? 'one' : 'many'
-    }
+    relatedAST.cardinality = relDef.cardinality === 'one' ? 'one' : 'many'
 
     return new QueryBuilder(this.#schema, this.#state.service, {
       ...this.#state,
@@ -506,20 +502,6 @@ export class QueryBuilder<
       TCardinality,
       TKind
     >
-  }
-
-  /**
-   * Returns the schema this builder is associated with
-   */
-  getSchema(): S {
-    return this.#schema
-  }
-
-  /**
-   * Returns the service name for this query
-   */
-  getService(): string {
-    return this.#state.service
   }
 }
 

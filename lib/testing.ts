@@ -17,16 +17,17 @@
  * ```
  *
  * Services support CRUD (create/update/patch/remove emit the corresponding realtime
- * events), `get`/`find` with `$limit`/`$skip`, per-method call counters, an optional
- * artificial `delay`, and `skipTotal` for servers that don't count totals. Pass
- * `queryAwareFind: true` to make `find` honor equality, `$in`, and `$sort` filters —
- * the default `find` ignores filters entirely, which keeps most tests independent of
- * matching semantics.
+ * events), `get`/`find` with `$limit`/`$skip`, per-method call counters, and an
+ * optional artificial `delay`. Options: `skipTotal` for servers that don't count
+ * totals, and `queryAwareFind: true` to make `find` honor equality, `$in`, and
+ * `$sort` filters — the default `find` ignores filters entirely, which keeps most
+ * tests independent of matching semantics.
  *
  * No Node builtins are used, so this runs under any bundler or test runner.
  */
 
 import type { FeathersClient } from './adapters/feathers.js'
+import { buildComparator } from './core/sort.js'
 
 export interface TestItem {
   id?: string | number
@@ -65,7 +66,14 @@ export interface FindResult {
 }
 
 interface ServiceOptions {
+  /** Omit `total` from find envelopes, like servers that don't count. */
   skipTotal?: boolean
+  /**
+   * Make `find` honor equality, `$in`, and `$sort` filters. The default `find`
+   * ignores filters entirely, which keeps most tests independent of matching
+   * semantics.
+   */
+  queryAware?: boolean
   /**
    * How mutation-triggered realtime emits are deferred (they must not fire
    * synchronously inside the mutation promise, like a real socket wouldn't).
@@ -144,22 +152,26 @@ export class MockService {
 
   async find(params: FindParams = {}): Promise<FindResult> {
     this.counts.find++
-    const limit = (params.query?.$limit as number | undefined) || 100
-    const skip = (params.query?.$skip as number | undefined) || 0
-    const keys = Object.keys(this.data)
-    const data = keys
-      .slice(skip)
-      .slice(0, limit)
-      .map(id => this.data[id])
-      .filter((item): item is TestItem => item !== undefined)
+    const query = params.query ?? {}
+    const limit = (query.$limit as number | undefined) || 100
+    const skip = (query.$skip as number | undefined) || 0
+
+    let rows = Object.values(this.data).filter((item): item is TestItem => item !== undefined)
+    if (this.options.queryAware) {
+      rows = sortRows(
+        rows.filter(item => matchesQuery(item, query)),
+        query.$sort as Record<string, unknown> | undefined,
+      )
+    }
 
     if (this.delay) {
       await new Promise(resolve => setTimeout(resolve, this.delay))
     }
 
+    const data = rows.slice(skip, skip + limit)
     return this.options.skipTotal
       ? { limit, skip, data }
-      : { total: keys.length, limit, skip, data }
+      : { total: rows.length, limit, skip, data }
   }
 
   create(data: Partial<TestItem>, _params?: FindParams): Promise<TestItem>
@@ -242,14 +254,13 @@ export function service(
   return new MockService(name, details.data, options)
 }
 
-export interface MockFeathersServices {
-  skipTotal?: boolean
-  [serviceName: string]: ServiceDetails | boolean | undefined
-}
+export type MockFeathersServices = Record<string, ServiceDetails>
 
 export interface MockFeathersOptions {
   /** Make every service's `find` honor equality, `$in`, and `$sort` filters. */
   queryAwareFind?: boolean
+  /** Make every service omit `total` from find envelopes. */
+  skipTotal?: boolean
   /** Deferred-emission scheduler threaded to every service (see ServiceOptions). */
   schedule?: (task: () => void) => void
 }
@@ -260,36 +271,25 @@ export interface MockFeathers extends FeathersClient {
 
 /**
  * Create an in-memory Feathers-compatible client from `{ serviceName: { data } }`.
- * Top-level `skipTotal: true` makes every service omit `total` from find results.
  */
 export function mockFeathers(
   services: MockFeathersServices,
-  { queryAwareFind = false, schedule }: MockFeathersOptions = {},
+  { queryAwareFind = false, skipTotal = false, schedule }: MockFeathersOptions = {},
 ): MockFeathers {
-  const skipTotal = !!services.skipTotal
-
   const processedServices: Record<string, MockService> = {}
-  for (const name of Object.keys(services)) {
-    const details = services[name]
-    if (typeof details !== 'boolean' && details !== undefined) {
-      processedServices[name] = service(name, details, {
-        skipTotal,
-        ...(schedule ? { schedule } : {}),
-      })
-    }
+  for (const [name, details] of Object.entries(services)) {
+    processedServices[name] = service(name, details, {
+      skipTotal,
+      queryAware: queryAwareFind,
+      ...(schedule ? { schedule } : {}),
+    })
   }
 
-  const feathers = {
+  return {
     service(name: string): MockService {
       return processedServices[name]!
     },
   } as MockFeathers
-
-  if (queryAwareFind) {
-    installQueryAwareFind(feathers, Object.keys(processedServices))
-  }
-
-  return feathers
 }
 
 /** True when `item` satisfies the query's non-$ filters (`$in` and strict equality). */
@@ -310,55 +310,15 @@ export function matchesQuery(
   })
 }
 
-function compareSortableValues(a: unknown, b: unknown): number {
-  if (a === b) return 0
-  if (a === undefined || a === null) return -1
-  if (b === undefined || b === null) return 1
-  if (typeof a === 'number' && typeof b === 'number') return a - b
-  return String(a).localeCompare(String(b))
-}
-
-export function sortRows(
-  rows: Record<string, unknown>[],
-  sort: Record<string, unknown> | undefined,
-): Record<string, unknown>[] {
-  if (!sort) return rows
-  const sortEntries = Object.entries(sort)
-  return [...rows].sort((a, b) => {
-    for (const [field, direction] of sortEntries) {
-      const comparison = compareSortableValues(a[field], b[field])
-      if (comparison !== 0) {
-        return direction === -1 ? -comparison : comparison
-      }
-    }
-    return 0
-  })
-}
-
 /**
- * Replace `find` on the named services with a filter-honoring implementation:
- * equality and `$in` filters, `$sort`, and `$limit`/`$skip` windows. Respects the
- * service's `skipTotal` option.
+ * Sort rows by a `$sort` map using figbird's canonical comparator (lib/core/sort) —
+ * the mock "server" must order rows exactly like figbird's own local window
+ * maintenance, or realtime merges would appear to reorder server results.
  */
-export function installQueryAwareFind(
-  feathers: MockFeathers,
-  serviceNames: readonly string[],
-): void {
-  for (const serviceName of serviceNames) {
-    const svc = feathers.service(serviceName)
-    svc.find = async (params?: { query?: Record<string, unknown> }) => {
-      svc.counts.find++
-      const query = params?.query ?? {}
-      const limit = (query.$limit as number | undefined) ?? 100
-      const skip = (query.$skip as number | undefined) ?? 0
-      const rows = Object.values(svc.data)
-        .filter((item): item is TestItem => item !== undefined)
-        .filter(item => matchesQuery(item, query))
-      const sortedRows = sortRows(rows, query.$sort as Record<string, unknown> | undefined)
-      const data = sortedRows.slice(skip, skip + limit) as TestItem[]
-      return svc.options.skipTotal
-        ? { limit, skip, data }
-        : { total: sortedRows.length, limit, skip, data }
-    }
-  }
+export function sortRows<T extends Record<string, unknown>>(
+  rows: T[],
+  sort: Record<string, unknown> | undefined,
+): T[] {
+  if (!sort) return rows
+  return [...rows].sort(buildComparator(sort as Record<string, number>))
 }

@@ -68,7 +68,7 @@ type DerivePatch<TServiceDef extends ServiceTypeDefinition> = TServiceDef['patch
 type DeriveMethods<TServiceDef extends ServiceTypeDefinition> =
   TServiceDef['methods'] extends undefined
     ? Record<string, never>
-    : NonNullable<TServiceDef['methods']> & AnyMethodsType
+    : NonNullable<TServiceDef['methods']>
 
 type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends keyof TServiceDef
   ? Exclude<TServiceDef['query'], undefined>
@@ -99,6 +99,26 @@ export interface Schema {
 }
 
 /**
+ * Type-level lookup: the relationship map declared for service N, or `never` when
+ * the schema has none. The single spelling of the `relationships` conditional
+ * tower — `ResolveRelatedItem`, `ResolveRelatedService`, and the builder's
+ * `RelationNames` all build on it.
+ */
+export type ServiceRelationships<S extends Schema, N extends string> =
+  S['relationships'] extends Record<string, Record<string, unknown>>
+    ? N extends keyof S['relationships']
+      ? NonNullable<S['relationships']>[N]
+      : never
+    : never
+
+/** The relationship definition for relation R on service N, or `never`. */
+export type RelationshipOf<
+  S extends Schema,
+  N extends string,
+  R extends string,
+> = R extends keyof ServiceRelationships<S, N> ? ServiceRelationships<S, N>[R] : never
+
+/**
  * Type-level lookup: given schema S, service N, relation name R, and (optionally) a
  * set of nested relations already merged into the related item, resolve the final
  * assembled type wrapped in the relationship's cardinality.
@@ -116,18 +136,11 @@ export type ResolveRelatedItem<
   R extends string,
   TNested extends Record<string, unknown> = Record<string, never>,
 > =
-  S['relationships'] extends Record<string, Record<string, unknown>>
-    ? N extends keyof S['relationships']
-      ? R extends keyof NonNullable<S['relationships']>[N]
-        ? // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-          NonNullable<S['relationships']>[N][R] extends RelationshipDef<infer TDest, infer TCard>
-          ? TDest extends ServiceNames<S>
-            ? TCard extends 'one'
-              ? (ServiceItem<S, TDest> & TNested) | null
-              : Array<ServiceItem<S, TDest> & TNested>
-            : never
-          : never
-        : never
+  RelationshipOf<S, N, R> extends RelationshipDef<infer TDest, infer TCard>
+    ? TDest extends ServiceNames<S>
+      ? TCard extends 'one'
+        ? (ServiceItem<S, TDest> & TNested) | null
+        : Array<ServiceItem<S, TDest> & TNested>
       : never
     : never
 
@@ -137,15 +150,9 @@ export type ResolveRelatedItem<
  * builder (e.g. `c => c.related(...)` — `c` is a builder over the destination service).
  */
 export type ResolveRelatedService<S extends Schema, N extends string, R extends string> =
-  S['relationships'] extends Record<string, Record<string, unknown>>
-    ? N extends keyof S['relationships']
-      ? R extends keyof NonNullable<S['relationships']>[N]
-        ? // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-          NonNullable<S['relationships']>[N][R] extends RelationshipDef<infer TDest, any>
-          ? TDest & ServiceNames<S>
-          : never
-        : never
-      : never
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  RelationshipOf<S, N, R> extends RelationshipDef<infer TDest, any>
+    ? TDest & ServiceNames<S>
     : never
 
 /**

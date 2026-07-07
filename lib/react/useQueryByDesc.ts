@@ -35,16 +35,11 @@ export function useGet(
   resourceId: string | number,
   params: Record<string, UntypedData> = {},
 ): QueryResult<UntypedData> {
-  // Service path aliases are resolved centrally by figbird.queryDesc().
-  const { desc, config } = splitConfig<UntypedData, Record<string, unknown>>({
+  return useGetImpl<UntypedData, Record<string, unknown>, Record<string, unknown>>(
+    useFigbird(),
     serviceName,
-    method: 'get' as const,
     resourceId,
-    ...params,
-  })
-  return useQueryByDesc<UntypedData, Record<string, unknown>, Record<string, unknown>>(
-    desc,
-    config,
+    params,
   ) as QueryResult<UntypedData>
 }
 
@@ -59,16 +54,46 @@ export function useFind(
   serviceName: string,
   params: Record<string, UntypedData> = {},
 ): QueryResult<UntypedData[], Record<string, unknown>> {
-  // Service path aliases are resolved centrally by figbird.queryDesc().
-  const { desc, config } = splitConfig<UntypedData[], Record<string, unknown>>({
+  return useFindImpl<UntypedData[], Record<string, unknown>, Record<string, unknown>>(
+    useFigbird(),
+    serviceName,
+    params,
+  )
+}
+
+/**
+ * The single spot the legacy get call shape (`serviceName, id, params+config`) is
+ * assembled into a descriptor — shared by the root `useGet` and the `createHooks`
+ * kit (which layers types via return casts). Service path aliases are resolved
+ * centrally by figbird.queryDesc(). @internal
+ */
+export function useGetImpl<T, TMeta extends Record<string, unknown>, TQuery>(
+  figbird: DescFigbirdLike,
+  serviceName: string,
+  resourceId: string | number,
+  params: Record<string, unknown> = {},
+): QueryResult<T, TMeta> {
+  const { desc, config } = splitConfig<T, TQuery>({
+    serviceName,
+    method: 'get' as const,
+    resourceId,
+    ...params,
+  })
+  return useQueryByDescImpl<T, TMeta, TQuery>(figbird, desc, config)
+}
+
+/** Find twin of `useGetImpl`. @internal */
+export function useFindImpl<T, TMeta extends Record<string, unknown>, TQuery>(
+  figbird: DescFigbirdLike,
+  serviceName: string,
+  params: Record<string, unknown> = {},
+): QueryResult<T, TMeta> {
+  const { desc, config } = splitConfig<T, TQuery>({
     serviceName,
     method: 'find' as const,
     ...params,
   })
-  return useQueryByDesc<UntypedData[], Record<string, unknown>, Record<string, unknown>>(
-    desc,
-    config,
-  )
+  return useQueryByDescImpl<T, TMeta, TQuery>(figbird, desc, config)
 }
 
 function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
@@ -83,28 +108,6 @@ function getInitialQueryResult<T, TMeta extends Record<string, unknown>>(
   }
 }
 
-/**
-
-  Usage:
-
-  const { data, status } = useQueryByDesc({
-    serviceName: 'notes',
-    method: 'find'
-  })
-
-*/
-function useQueryByDesc<
-  T,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery = unknown,
->(desc: QueryDescriptor, config: QueryConfig<T, TQuery>): QueryResult<T, TMeta> {
-  return useQueryByDescImpl(useFigbird(), desc, config)
-}
-
-/**
- * Instance-taking implementation shared by the context-bound hooks and the
- * bound-instance hooks that `createHooks` produces. @internal
- */
 /** The slice of a Figbird instance the descriptor hooks need. @internal */
 export interface DescFigbirdLike {
   queryDesc(

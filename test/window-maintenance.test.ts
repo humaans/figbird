@@ -2,13 +2,13 @@ import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
-import { installQueryAwareFind, mockFeathers } from './helpers'
+import { mockFeathers } from './helpers'
 
 /**
  * Window maintenance: server-window finds merge realtime events locally when the
  * event's effect on the window is provable, and fall back to a refetch for the
- * rest. See mergeEventIntoWindow in lib/core/queryStore.ts for the soundness
- * argument these tests exercise branch by branch.
+ * rest. See mergeEventIntoWindow in lib/core/windowMaintenance.ts for the
+ * soundness argument these tests exercise branch by branch.
  */
 
 // A type alias (not an interface) so the implicit index signature satisfies the
@@ -35,8 +35,7 @@ const seed = (): Record<number, Note> => ({
 })
 
 function createApp({ defaultSort }: { defaultSort?: Record<string, 1 | -1> } = {}) {
-  const feathers = mockFeathers({ notes: { data: seed() } })
-  installQueryAwareFind(feathers, ['notes'])
+  const feathers = mockFeathers({ notes: { data: seed() } }, { queryAwareFind: true })
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({
     schema,

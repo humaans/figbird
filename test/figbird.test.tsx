@@ -42,18 +42,20 @@ interface CreateFeathersOptions {
 }
 
 const createFeathers = ({ skipTotal }: CreateFeathersOptions = {}) =>
-  mockFeathers({
-    skipTotal: skipTotal ?? false,
-    notes: {
-      data: {
-        1: {
-          id: 1,
-          content: 'hello',
-          updatedAt: new Date('2024-02-02').getTime(),
+  mockFeathers(
+    {
+      notes: {
+        data: {
+          1: {
+            id: 1,
+            content: 'hello',
+            updatedAt: new Date('2024-02-02').getTime(),
+          },
         },
       },
     },
-  })
+    { skipTotal: skipTotal ?? false },
+  )
 
 interface AppOptions {
   feathers?: ReturnType<typeof mockFeathers>

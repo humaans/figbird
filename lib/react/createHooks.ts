@@ -7,7 +7,6 @@ import type {
 } from '../adapters/feathers.js'
 import {
   defineQuery as baseDefineQuery,
-  splitConfig,
   type Figbird,
   type MutationsProxy,
   type PreparedQuery,
@@ -29,7 +28,7 @@ import { useFigbirdMaybe } from './context.js'
 import { useActionImpl, type UseActionHook, type UseActionResult } from './useAction.js'
 import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
 import { useMutationImpl, type UseMutationResult } from './useMutation.js'
-import { useQueryByDescImpl, type QueryResult } from './useQueryByDesc.js'
+import { useFindImpl, useGetImpl, type QueryResult } from './useQueryByDesc.js'
 import {
   useQueryImpl,
   type FigbirdLike,
@@ -198,17 +197,12 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
   ) {
-    const combinedConfig = Object.assign(
-      // Service path aliases are resolved centrally by figbird.queryDesc().
-      { serviceName: serviceName as string, method: 'get' as const, resourceId },
-      params || {},
-    )
-    const { desc, config } = splitConfig<ServiceItem<S, N>, ServiceQuery<S, N>>(combinedConfig)
     // Publicly expose get without meta by default
-    return useQueryByDescImpl<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
+    return useGetImpl<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
       useBoundFigbird(),
-      desc,
-      config,
+      serviceName as string,
+      resourceId,
+      params || {},
     ) as unknown as QueryResult<ServiceItem<S, N>>
   }
 
@@ -217,16 +211,10 @@ export function createHooks<F extends Figbird<any, any>>(
     params?: WithServiceQuery<S, N, TParams> &
       Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
   ) {
-    const combinedConfig = Object.assign(
-      // Service path aliases are resolved centrally by figbird.queryDesc().
-      { serviceName: serviceName as string, method: 'find' as const },
-      params || {},
-    )
-    const { desc, config } = splitConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>(combinedConfig)
-    return useQueryByDescImpl<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(
+    return useFindImpl<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(
       useBoundFigbird(),
-      desc,
-      config,
+      serviceName as string,
+      params || {},
     )
   }
 

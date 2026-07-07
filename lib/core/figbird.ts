@@ -1,7 +1,7 @@
 import type { Adapter, AdapterFindMeta, AdapterParams, AdapterQuery } from '../adapters/adapter.js'
-import { FigbirdEventEmitter, type FigbirdEvents } from './events.js'
+import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
-import { MutationTracker, type MutationActivity } from './mutationTracker.js'
+import type { MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
   type AnyQueryBuilder,
@@ -17,7 +17,8 @@ import {
 } from './queryDefinition.js'
 import {
   explainQueryNode,
-  hasWindowFilters,
+  planRelation,
+  rootAllPages,
   type ClassificationReason,
   type QueryNodeClass,
 } from './queryClassification.js'
@@ -28,6 +29,7 @@ import { QueryStore, type VisibilitySource } from './queryStore.js'
 export type { VisibilitySource } from './queryStore.js'
 import {
   normalizeQueryConfig,
+  queryOfParams,
   type InferQueryData,
   type MutationDescriptor,
   type QueryConfig,
@@ -122,8 +124,6 @@ export class Figbird<
   adapter: A
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
-  #events: FigbirdEventEmitter
-  #mutationTracker: MutationTracker
 
   // Cache of active RelationalQueryRef instances, keyed by AST hash. This is critical for
   // React 18 Suspense interop: on suspense retries React discards render-state (including
@@ -169,13 +169,9 @@ export class Figbird<
   }) {
     this.adapter = adapter
     this.schema = schema
-    this.#events = new FigbirdEventEmitter()
-    this.#mutationTracker = new MutationTracker()
     this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
       eventBatchInterval,
-      events: this.#events,
-      mutations: this.#mutationTracker,
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
       ...(defaultSort !== undefined ? { defaultSort } : {}),
@@ -195,7 +191,7 @@ export class Figbird<
    * ```
    */
   get events(): FigbirdEvents {
-    return this.#events
+    return this.queryStore.events
   }
 
   /**
@@ -640,7 +636,7 @@ export class Figbird<
    * shaped for `useSyncExternalStore`. `useMutating` is the React binding.
    */
   get mutating(): MutationActivity {
-    return this.#mutationTracker
+    return this.queryStore.mutations
   }
 
   /**
@@ -691,23 +687,16 @@ export class Figbird<
     localOperators: ReadonlySet<string>,
   ): void {
     const snapshot = Boolean(ast.snapshot)
-    // Mirrors the runtime: .all() drains every page, so window filters ($sort — the
-    // builder refuses $limit/$skip) don't demote the class.
+    // Root fetch shape comes from the same plan the runtime executes (rootAllPages):
+    // .all() drains every page, so window filters ($sort — the builder refuses
+    // $limit/$skip) don't demote the class; a paginate root reports server-window.
     const explained = explainQueryNode(ast.query, {
       server: ast.server,
-      allPages: ast.kind === 'all',
+      allPages: rootAllPages(ast.kind),
       localOperators,
+      snapshot,
+      paginatedRoot: isRoot && ast.kind === 'paginate',
     })
-    if (snapshot) {
-      explained.reasons = [...explained.reasons, { code: 'snapshot', detail: '.snapshot()' }]
-    }
-    if (isRoot && ast.kind === 'paginate' && explained.class === 'local-exact') {
-      explained.class = 'server-window'
-      explained.reasons = [
-        ...explained.reasons,
-        { code: 'window-filter', detail: 'paginate() — each page is a $limit/$skip window' },
-      ]
-    }
 
     nodes.push({
       path,
@@ -736,16 +725,15 @@ export class Figbird<
     for (const [relName, relAST] of Object.entries(ast.related)) {
       const relDef = relationships[relName]
       const relPath = path === '(root)' ? relName : `${path}.${relName}`
-      // Mirrors the runtime: relations without explicit windowing fetch allPages, so
-      // window filters only count when the consumer asked for a window (which the
-      // engine resolves per-parent).
-      const windowed = hasWindowFilters(relAST.query)
+      // The relation's fetch shape is read off the same plan the runtime executes
+      // (planRelation) — explain can't drift from what actually runs.
+      const plan = planRelation(relDef, relAST.query)
       const relExplained = explainQueryNode(relAST.query, {
         server: relAST.server,
-        allPages: !windowed,
+        allPages: plan.allPages,
         localOperators,
       })
-      if (windowed && relDef?.cardinality === 'many' && !relDef.via) {
+      if (plan.strategy === 'perParent') {
         relExplained.reasons = [
           ...relExplained.reasons,
           { code: 'window-filter', detail: 'per-parent window — one query per parent' },
@@ -772,7 +760,7 @@ export class Figbird<
     const rows: InspectedQuery[] = []
     for (const [serviceName, service] of this.queryStore.getState()) {
       for (const query of service.queries.values()) {
-        const q = (query.desc.params as { query?: Record<string, unknown> } | undefined)?.query
+        const q = queryOfParams(query.desc.params)
         rows.push({
           queryId: query.queryId,
           serviceName,

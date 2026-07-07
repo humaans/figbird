@@ -3,27 +3,34 @@ import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { FigbirdEventEmitter, type MutationMethod } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
+import { sortRowsLocally } from './sort.js'
 import {
-  classifyQueryNode,
-  isServerMaintained,
-  type StoredQueryClass,
-} from './queryClassification.js'
-import type {
-  ElementType,
-  Event,
-  EventType,
-  FindQueryConfig,
-  GetQueryConfig,
-  InferMutationData,
-  ItemMatcher,
-  MutationDescriptor,
-  ProcessedRealtimeEvent,
-  Query,
-  QueryConfig,
-  QueryDescriptor,
-  QueryState,
-  QueuedEvent,
-  ServiceState,
+  addQueryToItemIndex,
+  applyEventsToService,
+  createServiceState,
+  groupQueuedEvents,
+  isUnfilteredFindQuery,
+  removeQueryFromItemIndex,
+  splitWindow,
+  updateQueriesFromEvents,
+} from './windowMaintenance.js'
+import { classifyStoredQuery, type StoredQueryClass } from './queryClassification.js'
+import {
+  queryOfParams,
+  type ElementType,
+  type Event,
+  type FindQueryConfig,
+  type GetQueryConfig,
+  type InferMutationData,
+  type ItemMatcher,
+  type MutationDescriptor,
+  type ProcessedRealtimeEvent,
+  type Query,
+  type QueryConfig,
+  type QueryDescriptor,
+  type QueryState,
+  type QueuedEvent,
+  type ServiceState,
 } from './queryTypes.js'
 
 /**
@@ -35,6 +42,14 @@ export interface VisibilitySource {
   /** Notify on visibility changes. Returns an unsubscribe function. */
   onChange(listener: () => void): () => void
 }
+
+/** The realtime event type a mutation verb produces. */
+const MUTATION_EVENT_TYPE = {
+  create: 'created',
+  update: 'updated',
+  patch: 'patched',
+  remove: 'removed',
+} as const satisfies Record<MutationMethod, Event['type']>
 
 function documentVisibility(): VisibilitySource {
   return {
@@ -94,16 +109,12 @@ export class QueryStore<
   constructor({
     adapter,
     eventBatchInterval = 100,
-    events,
-    mutations,
     reconcileCooldown = 2000,
     visibility,
     defaultSort,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchInterval?: number | undefined
-    events?: FigbirdEventEmitter
-    mutations?: MutationTracker
     /**
      * Minimum interval (ms) between event-driven refetches of one query — burst
      * safety for server-window/server-authoritative reconciliation. The first
@@ -126,8 +137,8 @@ export class QueryStore<
     this.#localOperators = new Set(adapter.customOperators ?? [])
     this.#defaultSort = defaultSort
     this.#eventBatchInterval = eventBatchInterval
-    this.#events = events ?? new FigbirdEventEmitter()
-    this.#mutations = mutations ?? new MutationTracker()
+    this.#events = new FigbirdEventEmitter()
+    this.#mutations = new MutationTracker()
     this.#reconcileCooldown = reconcileCooldown
     this.#visibility = visibility ?? documentVisibility()
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
@@ -135,6 +146,16 @@ export class QueryStore<
   }
 
   // Public store API
+  /** The instance's observability event emitter — the store is its single owner. */
+  get events(): FigbirdEventEmitter {
+    return this.#events
+  }
+
+  /** The instance's in-flight mutation tracker — the store is its single owner. */
+  get mutations(): MutationTracker {
+    return this.#mutations
+  }
+
   /** Returns the entire store state map keyed by service name. */
   getState(): Map<string, ServiceState<TMeta>> {
     return this.#state
@@ -160,24 +181,11 @@ export class QueryStore<
     if (!this.#getQuery(queryId)) {
       this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
 
-      const q = (desc.params as { query?: Record<string, unknown> } | undefined)?.query
-      // Gets classify as 'get' — except when they carry conditions the client can't
-      // evaluate (.get(id).where({ $regex })): those are server-authoritative like
-      // any other non-local query, so realtime reconciles them by refetch and the
-      // merge path never tries (and fails) to build a local matcher for them.
-      const classification: StoredQueryClass =
-        desc.method === 'get'
-          ? q &&
-            Object.keys(q).length > 0 &&
-            classifyQueryNode(q, { allPages: true, localOperators: this.#localOperators }) !==
-              'local-exact'
-            ? 'server-authoritative'
-            : 'get'
-          : classifyQueryNode(q, {
-              server: (config as { server?: boolean }).server,
-              allPages: (config as { allPages?: boolean }).allPages,
-              localOperators: this.#localOperators,
-            })
+      const classification = classifyStoredQuery(desc.method, queryOfParams(desc.params), {
+        server: (config as { server?: boolean }).server,
+        allPages: (config as { allPages?: boolean }).allPages,
+        localOperators: this.#localOperators,
+      })
 
       this.#transactOverService(queryId, service => {
         service.queries.set(queryId, {
@@ -325,13 +333,6 @@ export class QueryStore<
       }
     }
 
-    const updaters: Record<string, (item: unknown) => void> = {
-      create: item => this.#processEvent(serviceName, { type: 'created', item }),
-      update: item => this.#processEvent(serviceName, { type: 'updated', item }),
-      patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
-      remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
-    }
-
     // Convert named params to args array for the adapter
     const args = this.#buildMutationArgs(desc)
 
@@ -355,7 +356,7 @@ export class QueryStore<
       {
         // Apply the cache update before ending the tracker entry, so by the time a
         // `useMutating` subscriber sees "not busy" the data is already in the cache.
-        onSuccess: item => updaters[method]?.(item),
+        onSuccess: item => this.#applyMutationEvent(serviceName, method, item),
         onError: (_error, mutationId) => {
           if (isOptimistic) {
             this.#rollbackOptimistic(serviceName, method, id, optimisticItem, restoreItem)
@@ -541,6 +542,9 @@ export class QueryStore<
   ): QueryResponse<unknown, TMeta | undefined> | null {
     const desc = query.desc
     if (desc.method !== 'get') return null
+    // Gets with non-local conditions stored as 'server-authoritative' at
+    // materialize time (see classifyStoredQuery) — never answered locally.
+    if (query.classification !== 'get') return null
     const service = this.#state.get(desc.serviceName)
     if (!service?.materialized) return null
 
@@ -551,18 +555,10 @@ export class QueryStore<
     const entity = service.entities.get(desc.resourceId)
     if (entity === undefined) return null
 
-    const q = (desc.params as { query?: Record<string, unknown> } | undefined)?.query
+    const q = queryOfParams(desc.params)
     if (q && Object.keys(q).length > 0) {
-      if (
-        classifyQueryNode(q, { allPages: true, localOperators: this.#localOperators }) !==
-        'local-exact'
-      ) {
-        return null
-      }
-      const match = config.matcher
-        ? (config.matcher(q as never) as (item: unknown) => boolean)
-        : (this.#adapter.matcher(q as TQuery | undefined) as (item: unknown) => boolean)
-      if (!match(entity)) return null
+      // classification === 'get' guarantees the conditions are locally evaluable.
+      if (!this.#resolveMatcher(config, q)(entity)) return null
     }
 
     return { data: entity } as QueryResponse<unknown, TMeta | undefined>
@@ -587,21 +583,18 @@ export class QueryStore<
     if (service.materialized.queryId === query.queryId) return null
 
     const config = query.config as FindQueryConfig<unknown, unknown>
-    if (config.server) return null
-    const q = (query.desc.params as { query?: Record<string, unknown> } | undefined)?.query
-    // allPages: true neutralizes window filters in classification — windows are
-    // computed locally below; anything else non-local still goes to the server.
-    if (
-      classifyQueryNode(q, { allPages: true, localOperators: this.#localOperators }) !==
-      'local-exact'
-    ) {
-      return null
-    }
+    // Honor the documented fetchPolicy contract ("always fetch on mount"), same
+    // as #tryLocalGet — a materialized cache doesn't override an explicit opt-out.
+    if (config.fetchPolicy === 'network-only') return null
+    // Stored classification is the single source of truth: authoritative reasons
+    // ($select, $regex, custom operators, .server()) survive allPages-neutralization,
+    // while window filters don't — windows are computed locally below. So
+    // 'server-authoritative' is exactly "not locally answerable".
+    if (query.classification === 'server-authoritative') return null
 
+    const q = queryOfParams(query.desc.params)
     const { filters, sort, limit, skip } = splitWindow(q)
-    const match = config.matcher
-      ? (config.matcher(filters) as (item: unknown) => boolean)
-      : (this.#adapter.matcher(filters as TQuery | undefined) as (item: unknown) => boolean)
+    const match = this.#resolveMatcher(config, filters)
     let rows = [...service.entities.values()].filter(match)
     const effectiveSort = sort ?? this.#defaultSort
     if (effectiveSort) rows = sortRowsLocally(rows, effectiveSort)
@@ -629,24 +622,17 @@ export class QueryStore<
           ...query,
           pending: false,
           dirty: false,
+          // error and loading states both restart as a clean loading state.
           state:
-            query.state.status === 'error'
-              ? {
+            query.state.status === 'success'
+              ? { ...query.state, isFetching: true }
+              : {
                   status: 'loading' as const,
                   data: null,
                   meta: query.state.meta,
                   isFetching: true,
                   error: null,
-                }
-              : query.state.status === 'success'
-                ? { ...query.state, isFetching: true }
-                : {
-                    status: query.state.status,
-                    data: null,
-                    meta: query.state.meta,
-                    isFetching: true,
-                    error: null,
-                  },
+                },
         })
       }),
     )
@@ -813,9 +799,10 @@ export class QueryStore<
       // Same follow-ups as the realtime event path: reconcile queries that can't
       // merge locally and surface the changes to relational-filter invalidation.
       // Unlike realtime events, diffs don't trigger `realtime: 'refetch'` queries —
-      // a refetch-on-diff that itself diffs would cycle.
+      // a refetch-on-diff that itself diffs would cycle. The set never contains
+      // queryId itself: updateQueriesFromEvents skips excludeQueryId.
       for (const id of serverMaintainedQueriesToRefetch) {
-        if (id !== queryId) this.#requestReconcile(id)
+        this.#requestReconcile(id)
       }
       for (const event of processedEvents) {
         this.#emitProcessedEvent(event)
@@ -1195,7 +1182,7 @@ export class QueryStore<
   /** Warn-free id read — presence checks on payloads that may lack ids. */
   #peekId(item: unknown): string | number | undefined {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
-    return this.#adapter.peekId ? this.#adapter.peekId(item) : undefined
+    return this.#adapter.peekId(item)
   }
 
   #resolveOptimisticItem(desc: MutationDescriptor): unknown {
@@ -1218,15 +1205,7 @@ export class QueryStore<
   }
 
   #applyMutationEvent(serviceName: string, method: MutationMethod, item: unknown): void {
-    const type =
-      method === 'create'
-        ? 'created'
-        : method === 'remove'
-          ? 'removed'
-          : method === 'update'
-            ? 'updated'
-            : 'patched'
-    this.#processEvent(serviceName, { type, item })
+    this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item })
   }
 
   #rollbackOptimistic(
@@ -1399,11 +1378,21 @@ export class QueryStore<
       return () => false
     }
 
-    const query = (desc.params as Record<string, unknown>)?.query || undefined
-    if (config.matcher) {
-      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
-    }
-    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
+    return this.#resolveMatcher(config as QueryConfig<unknown, unknown>, queryOfParams(desc.params))
+  }
+
+  /**
+   * The effective matcher for a query: the per-query `matcher` factory from config
+   * wins, else the adapter's. The casts across the typed-factory/unknown-item
+   * boundary live here and nowhere else.
+   */
+  #resolveMatcher(
+    config: QueryConfig<unknown, unknown>,
+    filters: Record<string, unknown> | undefined,
+  ): (item: unknown) => boolean {
+    return config.matcher
+      ? (config.matcher(filters as never) as (item: unknown) => boolean)
+      : (this.#adapter.matcher(filters as TQuery | undefined) as (item: unknown) => boolean)
   }
 
   /** Convert mutation descriptor to args array for adapter */
@@ -1459,596 +1448,5 @@ export class QueryStore<
 
   #listenerCount(queryId: string): number {
     return this.#listeners.get(queryId)?.size || 0
-  }
-}
-
-type ItemId = string | number
-
-function createServiceState<TMeta = Record<string, unknown>>(): ServiceState<TMeta> {
-  return {
-    entities: new Map(),
-    queries: new Map(),
-    itemQueryIndex: new Map(),
-  }
-}
-
-function getQueryItems<TMeta = Record<string, unknown>>(
-  query: Query<unknown, TMeta, unknown>,
-): unknown[] {
-  return Array.isArray(query.state.data)
-    ? query.state.data
-    : query.state.data
-      ? [query.state.data]
-      : []
-}
-
-function addQueryToItemIndex<TMeta>(
-  service: ServiceState<TMeta>,
-  itemId: ItemId,
-  queryId: string,
-): void {
-  if (!service.itemQueryIndex.has(itemId)) {
-    service.itemQueryIndex.set(itemId, new Set())
-  }
-  service.itemQueryIndex.get(itemId)!.add(queryId)
-}
-
-function removeQueryFromItemIndex<TMeta>({
-  service,
-  query,
-  queryId,
-  getId,
-}: {
-  service: ServiceState<TMeta>
-  query: Query<unknown, TMeta, unknown>
-  queryId: string
-  getId: (item: unknown) => ItemId | undefined
-}): void {
-  for (const item of getQueryItems(query)) {
-    const id = getId(item)
-    if (id !== undefined && service.itemQueryIndex.has(id)) {
-      service.itemQueryIndex.get(id)!.delete(queryId)
-    }
-  }
-}
-
-// Deliberately loose, unlike the strictly-keyed entity cache: get descriptors often
-// carry numeric ids as strings (route params) while entities use numbers. The server
-// performs the same coercion when resolving a get.
-function isSameId(a: ItemId, b: ItemId): boolean {
-  return String(a) === String(b)
-}
-
-function createItemRemovedError(itemId: ItemId): Error {
-  const error = new Error(`Item ${String(itemId)} has been removed`)
-  error.name = 'ItemRemoved'
-  return error
-}
-
-// `$sort` doesn't affect which rows are fetched, so a sorted-but-unfiltered
-// allPages query still proves the complete row set.
-function isUnfilteredFindQuery(params: unknown): boolean {
-  const q = (params as { query?: Record<string, unknown> } | undefined)?.query
-  return !q || Object.keys(q).every(key => key === '$sort')
-}
-
-/** Split window operators off a query so the rest can feed the local matcher. */
-function splitWindow(q: Record<string, unknown> | undefined): {
-  filters: Record<string, unknown> | undefined
-  sort: Record<string, number> | undefined
-  limit: number | undefined
-  skip: number
-} {
-  if (!q) return { filters: undefined, sort: undefined, limit: undefined, skip: 0 }
-  const { $sort, $limit, $skip, ...filters } = q
-  return {
-    filters: Object.keys(filters).length > 0 ? filters : undefined,
-    sort: $sort as Record<string, number> | undefined,
-    limit: $limit as number | undefined,
-    skip: ($skip as number | undefined) ?? 0,
-  }
-}
-
-function compareValues(a: unknown, b: unknown): number {
-  if (a === b) return 0
-  if (a === undefined || a === null) return -1
-  if (b === undefined || b === null) return 1
-  if (typeof a === 'number' && typeof b === 'number') return a - b
-  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0
-}
-
-function buildComparator(sort: Record<string, number>): (a: unknown, b: unknown) => number {
-  const entries = Object.entries(sort)
-  return (a, b) => {
-    for (const [field, direction] of entries) {
-      const cmp = compareValues(
-        (a as Record<string, unknown>)[field],
-        (b as Record<string, unknown>)[field],
-      )
-      if (cmp !== 0) return direction === -1 ? -cmp : cmp
-    }
-    return 0
-  }
-}
-
-function sortRowsLocally(rows: unknown[], sort: Record<string, number>): unknown[] {
-  return [...rows].sort(buildComparator(sort))
-}
-
-/** First index whose row sorts strictly after the item — ties insert after their equals. */
-function findInsertIndex(
-  rows: unknown[],
-  item: unknown,
-  cmp: (a: unknown, b: unknown) => number,
-): number {
-  let lo = 0
-  let hi = rows.length
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1
-    if (cmp(item, rows[mid]) < 0) {
-      hi = mid
-    } else {
-      lo = mid + 1
-    }
-  }
-  return lo
-}
-
-function groupQueuedEvents(events: QueuedEvent[]): Record<string, QueuedEvent[]> {
-  const eventsByService: Record<string, QueuedEvent[]> = {}
-  for (const event of events) {
-    if (!eventsByService[event.serviceName]) {
-      eventsByService[event.serviceName] = []
-    }
-    eventsByService[event.serviceName]!.push(event)
-  }
-  return eventsByService
-}
-
-function applyEventsToService<TMeta>({
-  service,
-  serviceName,
-  events,
-  getId,
-  isItemStale,
-  processedEvents,
-}: {
-  service: ServiceState<TMeta>
-  serviceName: string
-  events: QueuedEvent[]
-  getId: (item: unknown) => ItemId | undefined
-  isItemStale: (curr: unknown, next: unknown) => boolean
-  processedEvents: ProcessedRealtimeEvent[]
-}): void {
-  for (const event of events) {
-    const { type, items } = event
-    for (const item of items) {
-      if (type === 'created') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          const previousItem = service.entities.get(itemId) ?? null
-          service.entities.set(itemId, item)
-          processedEvents.push({ serviceName, type, item, previousItem, itemId })
-        }
-      } else if (type === 'updated' || type === 'patched') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          const currItem = service.entities.get(itemId)
-          if (!currItem || !isItemStale(currItem, item)) {
-            service.entities.set(itemId, item)
-            processedEvents.push({
-              serviceName,
-              type,
-              item,
-              previousItem: currItem ?? null,
-              itemId,
-            })
-          }
-        }
-      } else if (type === 'removed') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          const previousItem = service.entities.get(itemId) ?? null
-          service.entities.delete(itemId)
-          processedEvents.push({ serviceName, type, item, previousItem, itemId })
-        }
-      }
-    }
-  }
-}
-
-function updateQueriesFromEvents<TMeta>({
-  service,
-  appliedItems,
-  touch,
-  getId,
-  itemAdded,
-  itemRemoved,
-  serverMaintainedQueriesToRefetch,
-  excludeQueryId,
-  defaultSort,
-}: {
-  service: ServiceState<TMeta>
-  appliedItems: ProcessedRealtimeEvent[]
-  touch: (queryId: string) => void
-  getId: (item: unknown) => ItemId | undefined
-  itemAdded: (meta: TMeta) => TMeta
-  itemRemoved: (meta: TMeta) => TMeta
-  serverMaintainedQueriesToRefetch: Set<string>
-  /** A query whose state already reflects the applied items (e.g. the fetch they came from). */
-  excludeQueryId?: string
-  /** The backend's implicit order for queries without `$sort` — see QueryStore options. */
-  defaultSort?: Record<string, number> | undefined
-}): void {
-  for (const { type, item, previousItem, itemId } of appliedItems) {
-    if (!service.itemQueryIndex.has(itemId)) {
-      service.itemQueryIndex.set(itemId, new Set())
-    }
-    const itemQueryIndex = service.itemQueryIndex.get(itemId)!
-
-    for (const [queryId, query] of service.queries) {
-      let matches: boolean
-
-      if (queryId === excludeQueryId) {
-        continue
-      }
-
-      if (query.config.realtime !== 'merge') {
-        continue
-      }
-
-      if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
-        continue
-      }
-
-      if (isServerMaintained(query.classification)) {
-        // Server-window finds first try to merge the event locally — the window is
-        // a contiguous run of the server result, so many event effects are provable
-        // from local state (see mergeEventIntoWindow). Anything unprovable, and all
-        // server-authoritative queries, reconcile by refetch as before.
-        if (query.classification === 'server-window' && query.desc.method === 'find') {
-          const result = mergeEventIntoWindow({
-            query,
-            type,
-            item,
-            previousItem,
-            itemId,
-            hasItem: itemQueryIndex.has(queryId),
-            getId,
-            ...(defaultSort !== undefined ? { defaultSort } : {}),
-          })
-          if (result.action === 'merge' && query.state.status === 'success') {
-            service.queries.set(queryId, {
-              ...query,
-              state: {
-                ...query.state,
-                meta:
-                  result.metaOp === 'added'
-                    ? itemAdded(query.state.meta)
-                    : result.metaOp === 'removed'
-                      ? itemRemoved(query.state.meta)
-                      : query.state.meta,
-                data: result.data,
-              },
-            })
-            if (result.enteredWindow) itemQueryIndex.add(queryId)
-            if (result.leftWindow) itemQueryIndex.delete(queryId)
-            if (result.evictedId !== undefined) {
-              service.itemQueryIndex.get(result.evictedId)?.delete(queryId)
-            }
-            touch(queryId)
-          } else if (result.action === 'refetch') {
-            serverMaintainedQueriesToRefetch.add(queryId)
-          }
-          continue
-        }
-        serverMaintainedQueriesToRefetch.add(queryId)
-        continue
-      }
-
-      if (type === 'removed') {
-        matches = false
-      } else {
-        matches = query.filterItem(item)
-      }
-
-      const hasItem = itemQueryIndex.has(queryId)
-      if (hasItem && !matches) {
-        // remove
-        const query = service.queries.get(queryId)!
-        // A get query whose item was removed reaches a terminal, refetchable error
-        // state (the resource no longer exists — same as a server NotFound). It must
-        // not park in 'loading': nothing would ever complete that fetch, and
-        // relational consumers would serve the stale previous snapshot forever.
-        const nextState: QueryState<unknown, TMeta> =
-          query.desc.method === 'get' && query.state.status === 'success'
-            ? {
-                status: 'error' as const,
-                data: null,
-                meta: itemRemoved(query.state.meta),
-                isFetching: false,
-                error: createItemRemovedError(itemId),
-              }
-            : query.state.status === 'success'
-              ? {
-                  ...query.state,
-                  meta: itemRemoved(query.state.meta),
-                  data: (query.state.data as unknown[]).filter((x: unknown) => getId(x) !== itemId),
-                }
-              : query.state
-        service.queries.set(queryId, {
-          ...query,
-          state: nextState,
-        })
-        itemQueryIndex.delete(queryId)
-        touch(queryId)
-      } else if (hasItem && matches) {
-        // update
-        service.queries.set(queryId, {
-          ...query,
-          state:
-            query.state.status === 'success'
-              ? {
-                  ...query.state,
-                  data:
-                    query.desc.method === 'get'
-                      ? item
-                      : (query.state.data as unknown[]).map((x: unknown) =>
-                          getId(x) === itemId ? item : x,
-                        ),
-                }
-              : query.state,
-        })
-        touch(queryId)
-      } else if (matches && query.desc.method === 'find' && query.state.data) {
-        service.queries.set(queryId, {
-          ...query,
-          state:
-            query.state.status === 'success'
-              ? {
-                  ...query.state,
-                  meta: itemAdded(query.state.meta),
-                  data: (query.state.data as unknown[]).concat(item),
-                }
-              : query.state,
-        })
-        itemQueryIndex.add(queryId)
-        touch(queryId)
-      } else if (
-        matches &&
-        type === 'created' &&
-        query.desc.method === 'get' &&
-        isSameId(query.desc.resourceId, itemId)
-      ) {
-        // The resource behind a get query reappeared (realtime re-create, or an
-        // optimistic remove rolling back). Restore the query from the event instead
-        // of leaving it in the removed-error state until a manual refetch.
-        service.queries.set(queryId, {
-          ...query,
-          state: {
-            status: 'success' as const,
-            data: item,
-            meta: query.state.meta,
-            isFetching: false,
-            error: null,
-          },
-        })
-        itemQueryIndex.add(queryId)
-        touch(queryId)
-      }
-    }
-  }
-}
-
-type WindowMergeResult =
-  | { action: 'noop' }
-  | { action: 'refetch' }
-  | {
-      action: 'merge'
-      data: unknown[]
-      metaOp: 'added' | 'removed' | null
-      /** The event item entered the visible window — add it to the query index. */
-      enteredWindow: boolean
-      /** The event item left the visible window — drop it from the query index. */
-      leftWindow: boolean
-      /** A row evicted to make room — its query-index entry must be dropped too. */
-      evictedId?: ItemId
-    }
-
-/**
- * Try to merge one realtime event into a server-window find without a refetch.
- *
- * The soundness argument: the visible rows are a contiguous run of the server
- * result (positions `$skip .. $skip + rows.length`), and the window's predicate is
- * locally evaluable (anything non-local classifies server-authoritative). So an
- * event's effect on the window is provable whenever the item's position relative
- * to the run's boundaries is known:
- *
- * - a patch to a visible row that keeps its membership and sort position updates
- *   in place — no order knowledge needed when the sort keys didn't change;
- * - an underfilled window (`rows.length < $limit`) is the final page, so past-the-
- *   end inserts and removals of visible rows resolve like local-exact;
- * - an item sorting strictly inside the run belongs there — insert it and evict
- *   the overflow row (which slides back in on the next fetch of a later window);
- * - membership changes provably beyond the window only adjust the meta total.
- *
- * Everything unprovable returns `refetch` — the previous behavior for every event.
- * Order is judged by `$sort` when present, else the configured `defaultSort` (the
- * backend's implicit order). With neither, visible patches keep their position and
- * appends to an underfilled first page go to the end — membership stays exact,
- * order is approximate until the next fetch, which is the accepted trade.
- * Boundary ties refetch: the server's tiebreak decides membership there.
- */
-function mergeEventIntoWindow<TMeta>({
-  query,
-  type,
-  item,
-  previousItem,
-  itemId,
-  hasItem,
-  getId,
-  defaultSort,
-}: {
-  query: Query<unknown, TMeta, unknown>
-  type: EventType
-  item: unknown
-  previousItem: unknown | null
-  itemId: ItemId
-  hasItem: boolean
-  getId: (item: unknown) => ItemId | undefined
-  defaultSort?: Record<string, number> | undefined
-}): WindowMergeResult {
-  const state = query.state
-  if (state.status !== 'success' || !Array.isArray(state.data)) return { action: 'noop' }
-
-  const q = (query.desc.params as { query?: Record<string, unknown> } | undefined)?.query
-  const { sort, limit, skip } = splitWindow(q)
-  const effectiveSort = sort ?? defaultSort
-  const cmp = effectiveSort ? buildComparator(effectiveSort) : null
-  const rows = state.data as unknown[]
-  const full = limit !== undefined && rows.length >= limit
-  const matches = type !== 'removed' && query.filterItem(item)
-  const last = rows.length > 0 ? rows[rows.length - 1] : undefined
-  // Is an invisible member provably past the window? At skip 0 everything before
-  // the window is visible, so invisible ⇒ beyond; at an offset we need the
-  // comparator to prove it sorts after the last visible row.
-  const beyondWindow = (x: unknown) =>
-    skip === 0 ? true : cmp !== null && last !== undefined && cmp(x, last) > 0
-  // Prior result-set membership: judged by the cached previous entity when there is
-  // one; a removed event carries the full removed record, which serves the same
-  // purpose when the row was never cached (it lived beyond the window).
-  const wasMember =
-    previousItem != null
-      ? query.filterItem(previousItem)
-      : type === 'removed' && query.filterItem(item)
-
-  if (!hasItem) {
-    if (!matches) {
-      // Invisible before and after — only the result-set total can be affected.
-      if (!wasMember) return { action: 'noop' }
-      if (beyondWindow(previousItem ?? item)) {
-        return {
-          action: 'merge',
-          data: rows,
-          metaOp: 'removed',
-          enteredWindow: false,
-          leftWindow: false,
-        }
-      }
-      // Left the result set from before the window — the page shifts.
-      return { action: 'refetch' }
-    }
-
-    // The item belongs to the result set now. A created item is certainly new; a
-    // cached non-matching previous certainly entered; an uncached patch at an
-    // offset window may have come from anywhere, including an earlier page.
-    const metaOp =
-      type === 'created' || (previousItem != null && !wasMember) ? ('added' as const) : null
-    if (skip > 0 && previousItem == null && type !== 'created') {
-      return { action: 'refetch' }
-    }
-    if (wasMember && !beyondWindow(previousItem)) {
-      // It was in the result set before the window start — its move shifts the page.
-      return { action: 'refetch' }
-    }
-    if (full && rows.length === 0) {
-      // `$limit: 0` — a count-only window.
-      if (metaOp === null) return { action: 'noop' }
-      return { action: 'merge', data: rows, metaOp, enteredWindow: false, leftWindow: false }
-    }
-    if (!cmp) {
-      if (skip > 0 || full) return { action: 'refetch' }
-      // No order knowledge: membership is certain (underfilled first page = the
-      // complete result set), position is approximate — append.
-      return {
-        action: 'merge',
-        data: [...rows, item],
-        metaOp,
-        enteredWindow: true,
-        leftWindow: false,
-      }
-    }
-    if (rows.length === 0) {
-      if (skip > 0) return { action: 'refetch' }
-      return { action: 'merge', data: [item], metaOp, enteredWindow: true, leftWindow: false }
-    }
-    const i = findInsertIndex(rows, item, cmp)
-    if (i === 0 && skip > 0) return { action: 'refetch' } // sorts before the page
-    if (i === rows.length) {
-      if (!full) {
-        // Underfilled window = the final page: past-the-end still belongs here.
-        return {
-          action: 'merge',
-          data: [...rows, item],
-          metaOp,
-          enteredWindow: true,
-          leftWindow: false,
-        }
-      }
-      if (cmp(item, rows[rows.length - 1]!) === 0) {
-        return { action: 'refetch' } // tied with the boundary row
-      }
-      // Strictly past a full window: the total changes, the visible rows don't.
-      if (metaOp === null) return { action: 'noop' }
-      return { action: 'merge', data: rows, metaOp, enteredWindow: false, leftWindow: false }
-    }
-    const data = [...rows.slice(0, i), item, ...rows.slice(i)]
-    let evictedId: ItemId | undefined
-    if (limit !== undefined && data.length > limit) {
-      const evicted = data.pop()
-      evictedId = evicted !== undefined ? getId(evicted) : undefined
-    }
-    return {
-      action: 'merge',
-      data,
-      metaOp,
-      enteredWindow: true,
-      leftWindow: false,
-      ...(evictedId !== undefined ? { evictedId } : {}),
-    }
-  }
-
-  if (!matches) {
-    // A visible row leaves. On a full window the replacement row is unknown.
-    if (full) return { action: 'refetch' }
-    return {
-      action: 'merge',
-      data: rows.filter(row => getId(row) !== itemId),
-      metaOp: 'removed',
-      enteredWindow: false,
-      leftWindow: true,
-    }
-  }
-
-  // Visible and still matching: update in place unless its sort position moved.
-  const index = rows.findIndex(row => getId(row) === itemId)
-  if (index === -1) return { action: 'refetch' } // index/data disagree — reconcile
-  if (!cmp || cmp(rows[index]!, item) === 0) {
-    // Sort keys unchanged (or order unknown — keep the position rather than guess).
-    return {
-      action: 'merge',
-      data: rows.map(row => (getId(row) === itemId ? item : row)),
-      metaOp: null,
-      enteredWindow: false,
-      leftWindow: false,
-    }
-  }
-  // The row moved: re-place it within the contiguous run.
-  const without = rows.filter(row => getId(row) !== itemId)
-  if (without.length === 0) {
-    return { action: 'merge', data: [item], metaOp: null, enteredWindow: false, leftWindow: false }
-  }
-  const i = findInsertIndex(without, item, cmp)
-  if (i === 0 && skip > 0) return { action: 'refetch' } // may move before the page
-  if (i === without.length && full) {
-    // May move past the window while an unseen row takes its place.
-    return { action: 'refetch' }
-  }
-  return {
-    action: 'merge',
-    data: [...without.slice(0, i), item, ...without.slice(i)],
-    metaOp: null,
-    enteredWindow: false,
-    leftWindow: false,
   }
 }

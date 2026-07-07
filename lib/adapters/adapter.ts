@@ -51,11 +51,13 @@ export interface Adapter<
   getId(item: unknown): string | number | undefined
 
   /**
-   * Optional: read an item's id without warning when absent. Used by the store
-   * for id presence checks — enforcing the optimistic-create id contract and
-   * registering create ids with the mutation tracker.
+   * Read an item's id without warning (or otherwise reacting) when absent. Used
+   * by the store for id presence checks — enforcing the optimistic-create id
+   * contract and registering create ids with the mutation tracker. Required:
+   * writes are optimistic by default, and without this every optimistic create
+   * would fail the id check regardless of the data.
    */
-  peekId?(item: unknown): string | number | undefined
+  peekId(item: unknown): string | number | undefined
 
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 

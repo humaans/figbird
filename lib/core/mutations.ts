@@ -66,24 +66,13 @@ export type MethodData<TMethod> = TMethod extends (
 type ReservedHandleKeys = 'create' | 'update' | 'patch' | 'remove' | 'call' | 'confirmed'
 
 /**
- * The schema's method map is intersected with a generic `Record<string, fn>`
- * (see `DeriveMethods`), whose index signature would swallow the declared names
- * in a mapped type. This homomorphic remap drops the index signature and keeps
- * only the explicitly declared method names.
- */
-type DeclaredKeys<T> = keyof {
-  [K in keyof T as string extends K ? never : K]: 0
-} &
-  string
-
-/**
  * Custom schema methods exposed directly on the handle, typed from the schema.
  * Only declared method names exist here (undeclared ones go through `call()`),
  * and reserved names always mean the built-in: same-named custom methods are
  * excluded and shadowed at runtime.
  */
 type CustomMethods<S extends Schema, N extends ServiceNames<S>> = {
-  [M in Exclude<DeclaredKeys<ServiceMethods<S, N>>, ReservedHandleKeys>]: (
+  [M in Exclude<keyof ServiceMethods<S, N> & string, ReservedHandleKeys>]: (
     ...args: MethodArgs<ServiceMethods<S, N>[M]>
   ) => Promise<MethodData<ServiceMethods<S, N>[M]>>
 }
@@ -170,7 +159,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         data,
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
-      } as MutationDescriptor),
+      }),
     update: (id: string | number, data: unknown, options?: MutationCallOptions) =>
       host.mutate({
         serviceName,
@@ -179,7 +168,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         data,
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
-      } as MutationDescriptor),
+      }),
     patch: (id: string | number, data: unknown, options?: MutationCallOptions) =>
       host.mutate({
         serviceName,
@@ -188,7 +177,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         data,
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
-      } as MutationDescriptor),
+      }),
     remove: (id: string | number, options?: MutationCallOptions) =>
       host.mutate({
         serviceName,
@@ -197,7 +186,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         ...(options?.params !== undefined ? { params: options.params } : {}),
         // remove has no payload to synthesize — optimistic is boolean-only here
         optimistic,
-      } as MutationDescriptor),
+      }),
     call: (method: string, ...args: unknown[]) => host.call(serviceName, method, args),
   }
 
