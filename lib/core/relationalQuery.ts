@@ -93,9 +93,10 @@ export type RelationalQueryState<T> =
  *
  * - `empty` — no source values (or no relationship definition); nothing to fetch.
  * - `fanIn` — one IN(...) query covering every parent.
- * - `junction` — two-hop: a junction query, then a destination query built from the
- *   junction's rows. `dest` is null until the junction first resolves; `dest.queryRef`
- *   is null when the junction resolved to zero edges.
+ * - `junction` — the first hop of a two-hop relation: the junction query itself.
+ *   The destination is an ordinary fan-in whose "parents" are the junction rows,
+ *   stored under `` `${key}#dest` `` (missing while the junction settles, `empty`
+ *   when it resolved to zero edges) and re-synced from every junction success.
  * - `perParent` — windowed relations: one query per parent source value.
  */
 type RelationSub<S extends Schema, TParams, TMeta extends Record<string, unknown>, TQuery> =
@@ -108,16 +109,9 @@ type RelationSub<S extends Schema, TParams, TMeta extends Record<string, unknown
     }
   | {
       kind: 'junction'
-      junction: {
-        queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
-        unsub: () => void
-        sourceKey: string
-      }
-      dest: {
-        queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> | null
-        unsub: (() => void) | null
-        sourceKey: string
-      } | null
+      sourceKey: string
+      queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+      unsub: () => void
     }
   | {
       kind: 'perParent'
@@ -237,6 +231,14 @@ export class RelationalQueryRef<
   /** Returns a stable hash representing the query AST. */
   hash(): string {
     return this.#queryId
+  }
+
+  /**
+   * The builder kind this ref was interned from — how consumers (the hooks' result
+   * projection) learn a ref is paginated without reaching back into the builder.
+   */
+  kind(): QueryAST['kind'] {
+    return this.#ast.kind
   }
 
   /**
@@ -488,12 +490,14 @@ export class RelationalQueryRef<
           break
         }
         case 'junction': {
-          const js = sub.junction.queryRef.getSnapshot()
+          const js = sub.queryRef.getSnapshot()
           if (!js || js.status === 'loading') return { kind: 'loading' }
           if (js.status === 'error') return { kind: 'error', error: js.error }
           acc.dataRefs.set(`${key}#junction`, js.data as unknown[])
 
-          if (!sub.dest?.queryRef) {
+          // The destination is a fan-in over the junction rows, living at its own key.
+          const destSub = this.#relationSubs.get(`${key}#dest`)
+          if (!destSub || destSub.kind === 'empty') {
             // Dest pending (junction still settling) or resolved to zero edges —
             // no dest data yet, so no nested subs to recurse into.
             acc.dataRefs.set(key, null)
@@ -504,7 +508,8 @@ export class RelationalQueryRef<
             })
             break
           }
-          const ds = sub.dest.queryRef.getSnapshot()
+          if (destSub.kind !== 'fanIn') break
+          const ds = destSub.queryRef.getSnapshot()
           if (!ds || ds.status === 'loading') return { kind: 'loading' }
           if (ds.status === 'error') return { kind: 'error', error: ds.error }
           acc.dataRefs.set(key, ds.data as unknown[])
@@ -696,13 +701,17 @@ export class RelationalQueryRef<
 
   /**
    * Sync a single-hop fan-in relation (`one` / unwindowed `many` / `embedded`): one
-   * IN(...) query on `destField` keyed by the parents' source values.
+   * IN(...) query on `destField` keyed by the parents' source values. Also the second
+   * hop of two-hop relations: the junction sync re-enters here with the junction rows
+   * as `parentData`, the sub stored at `` `${subKey}#dest` `` but nested relations
+   * still keyed under the relation's own `nestedKey`.
    */
   #syncFanInRelation(
     parentData: unknown[],
     relDef: RelationshipDef,
     relAST: QueryAST,
-    key: string,
+    subKey: string,
+    nestedKey: string = subKey,
   ): void {
     // Collect the set of ids we need to IN(...) for this relation. For 'embedded' the
     // parent's sourceField is itself a list — flat-map across parents.
@@ -719,7 +728,7 @@ export class RelationalQueryRef<
       ;({ values, key: sourceKey } = uniqueSourceValues(parentData, relDef.sourceField))
     }
 
-    const existing = this.#relationSubs.get(key)
+    const existing = this.#relationSubs.get(subKey)
     if (
       (existing?.kind === 'fanIn' || existing?.kind === 'empty') &&
       existing.sourceKey === sourceKey
@@ -728,28 +737,28 @@ export class RelationalQueryRef<
       // nested relations in case this relation's data already resolved and its own
       // children need to be synced.
       if (existing.kind === 'fanIn') {
-        this.#syncNestedFromSnapshot(existing.queryRef, relAST, key)
+        this.#syncNestedFromSnapshot(existing.queryRef, relAST, nestedKey)
       }
       return
     }
 
     // Dispose old subscription (if source values changed or entry didn't exist)
-    if (existing) this.#disposeRelationSub(existing)
+    if (existing) this.#disposeRelationSub(existing, subKey)
 
     if (values.length === 0) {
-      this.#relationSubs.set(key, { kind: 'empty', sourceKey })
+      this.#relationSubs.set(subKey, { kind: 'empty', sourceKey })
       return
     }
 
     const queryRef = this.#buildRelationQueryRef(relDef.destService, relDef, relAST, values)
     const unsub = subscribeAndSeed(
       queryRef,
-      data => this.#syncNested(data, relAST, key),
+      data => this.#syncNested(data, relAST, nestedKey),
       () => this.#notifyListeners(),
       this.#staleTime,
     )
 
-    this.#relationSubs.set(key, { kind: 'fanIn', sourceKey, queryRef, unsub })
+    this.#relationSubs.set(subKey, { kind: 'fanIn', sourceKey, queryRef, unsub })
   }
 
   #syncWindowedManyRelation(
@@ -769,7 +778,7 @@ export class RelationalQueryRef<
       return
     }
 
-    if (existing) this.#disposeRelationSub(existing)
+    if (existing) this.#disposeRelationSub(existing, key)
 
     if (uniqueValues.length === 0) {
       this.#relationSubs.set(key, { kind: 'empty', sourceKey: newSourceKey })
@@ -856,19 +865,16 @@ export class RelationalQueryRef<
 
     const existing = this.#relationSubs.get(key)
 
-    // Same parent set: junction (and downstream dest) is already up to date. Recurse into
-    // nested relations under the dest if they exist and the dest has resolved.
-    if (
-      existing?.kind === 'junction' &&
-      existing.junction.sourceKey === junctionSourceKey &&
-      existing.dest?.queryRef
-    ) {
-      this.#syncNestedFromSnapshot(existing.dest.queryRef, relAST, key)
+    // Same parent set: the junction is already up to date. Phase 2 re-syncs from its
+    // current snapshot — the fan-in's own sourceKey check makes it a no-op when the
+    // dest set hasn't changed, and it recurses into nested relations either way.
+    if (existing?.kind === 'junction' && existing.sourceKey === junctionSourceKey) {
+      this.#syncDestFromJunction(existing.queryRef, relDef, relAST, key)
       return
     }
 
     // Dispose previous subs — both junction and dest — before rebuilding.
-    if (existing) this.#disposeRelationSub(existing)
+    if (existing) this.#disposeRelationSub(existing, key)
 
     if (uniqueParentIds.length === 0) {
       this.#relationSubs.set(key, { kind: 'empty', sourceKey: junctionSourceKey })
@@ -883,7 +889,7 @@ export class RelationalQueryRef<
         method: 'find',
         params: {
           query: {
-            [via.destField[0]!]: { $in: uniqueParentIds },
+            [via.destField]: { $in: uniqueParentIds },
             ...(via.query || {}),
           },
         },
@@ -895,48 +901,33 @@ export class RelationalQueryRef<
       },
     )
 
-    // Phase 2: build/refresh the dest sub from the junction's data.
-    const refreshDest = (junctionItems: unknown[]): void => {
-      const { values: uniqueDestIds, key: destSourceKey } = uniqueSourceValues(
-        junctionItems,
-        relDef.sourceField,
-      )
-
-      const cur = this.#relationSubs.get(key)
-      if (cur?.kind !== 'junction') return
-      if (cur.dest?.queryRef && cur.dest.sourceKey === destSourceKey) return
-
-      cur.dest?.unsub?.()
-
-      if (uniqueDestIds.length === 0) {
-        cur.dest = { queryRef: null, unsub: null, sourceKey: destSourceKey }
-        return
-      }
-
-      const destRef = this.#buildRelationQueryRef(relDef.destService, relDef, relAST, uniqueDestIds)
-      const destUnsub = subscribeAndSeed(
-        destRef,
-        data => this.#syncNested(data, relAST, key),
-        () => this.#notifyListeners(),
-        this.#staleTime,
-      )
-
-      cur.dest = { queryRef: destRef, unsub: destUnsub, sourceKey: destSourceKey }
-    }
-
-    // Seed the entry with the junction sub, then let the junction's data drive the dest.
-    const entry: RelationSub<S, TParams, TMeta, TQuery> = {
-      kind: 'junction',
-      junction: { queryRef: junctionRef, unsub: () => {}, sourceKey: junctionSourceKey },
-      dest: null,
-    }
-    this.#relationSubs.set(key, entry)
-    entry.junction.unsub = subscribeAndSeed(
+    // Phase 2 is the shared fan-in reconcile with the junction rows as parents: the
+    // dest sub lives at `${key}#dest` and its nested relations key under `key`.
+    const unsub = subscribeAndSeed(
       junctionRef,
-      refreshDest,
+      junctionItems => this.#syncFanInRelation(junctionItems, relDef, relAST, `${key}#dest`, key),
       () => this.#notifyListeners(),
       this.#staleTime,
     )
+    this.#relationSubs.set(key, {
+      kind: 'junction',
+      sourceKey: junctionSourceKey,
+      queryRef: junctionRef,
+      unsub,
+    })
+  }
+
+  /** Phase 2 from the junction's current snapshot, for an already-live junction sub. */
+  #syncDestFromJunction(
+    junctionRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
+    relDef: RelationshipDef,
+    relAST: QueryAST,
+    key: string,
+  ): void {
+    const s = junctionRef.getSnapshot()
+    if (s?.status === 'success') {
+      this.#syncFanInRelation(s.data as unknown[], relDef, relAST, `${key}#dest`, key)
+    }
   }
 
   /**
@@ -948,13 +939,13 @@ export class RelationalQueryRef<
    */
   #buildRelationQueryRef(
     destService: string,
-    relDef: { destField: string[]; query?: Record<string, unknown>; via?: unknown },
+    relDef: { destField: string; query?: Record<string, unknown>; via?: unknown },
     relAST: QueryAST,
     uniqueValues: (string | number)[],
   ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
     const query = {
       ...relAST.query,
-      [relDef.destField[0]!]: { $in: uniqueValues },
+      [relDef.destField]: { $in: uniqueValues },
       ...(relDef.query || {}),
     }
 
@@ -980,13 +971,13 @@ export class RelationalQueryRef<
 
   #buildSingleParentRelationQueryRef(
     destService: string,
-    relDef: { destField: string[]; query?: Record<string, unknown> },
+    relDef: { destField: string; query?: Record<string, unknown> },
     relAST: QueryAST,
     sourceValue: string | number,
   ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
     const query = {
       ...relAST.query,
-      [relDef.destField[0]!]: sourceValue,
+      [relDef.destField]: sourceValue,
       ...(relDef.query || {}),
     }
 
@@ -1016,17 +1007,31 @@ export class RelationalQueryRef<
     return rows
   }
 
-  #disposeRelationSub(sub: RelationSub<S, TParams, TMeta, TQuery>): void {
+  /**
+   * Tear down one relation sub. `key` is the sub's map key when known — a junction
+   * disposed by key takes its `${key}#dest` fan-in with it. (`#cleanup` iterates the
+   * whole map without keys instead: every dest entry is disposed exactly once there
+   * through its own map entry.)
+   */
+  #disposeRelationSub(sub: RelationSub<S, TParams, TMeta, TQuery>, key?: string): void {
     switch (sub.kind) {
       case 'empty':
         return
       case 'fanIn':
         sub.unsub()
         return
-      case 'junction':
-        sub.junction.unsub()
-        sub.dest?.unsub?.()
+      case 'junction': {
+        sub.unsub()
+        if (key) {
+          const destKey = `${key}#dest`
+          const dest = this.#relationSubs.get(destKey)
+          if (dest) {
+            this.#disposeRelationSub(dest, destKey)
+            this.#relationSubs.delete(destKey)
+          }
+        }
         return
+      }
       case 'perParent':
         for (const child of sub.children.values()) {
           child.unsub()
@@ -1180,6 +1185,31 @@ export class RelationalQueryRef<
     this.#suspenseSettled = false
     this.#onEvict?.()
   }
+}
+
+/**
+ * Combine several refs' cold-start promises into one aggregate suspension for a
+ * multi-query hook. Calling `suspensePromise()` on each ref materializes its root, so
+ * every fetch starts before the aggregate is thrown — the parallelism a multi-query
+ * hook exists for. If the set fails, every started ref is released once the whole set
+ * has settled, deferred a tick so a committed subscriber (or an error render that
+ * releases errored refs itself) wins the race. That defer-so-a-committer-can-cancel
+ * ordering is the same contract as `releaseColdStart`/`#scheduleCleanup` — owned here,
+ * next to that contract, so hooks don't re-encode it with their own timers.
+ */
+export function suspensePromiseAll(
+  refs: readonly { suspensePromise(): Promise<void>; releaseColdStart(): void }[],
+): Promise<unknown> {
+  const promises = refs.map(ref => ref.suspensePromise())
+  const aggregate = Promise.all(promises)
+  void aggregate.catch(() => {
+    void Promise.allSettled(promises).then(() => {
+      setTimeout(() => {
+        for (const ref of refs) ref.releaseColdStart()
+      }, 0)
+    })
+  })
+  return aggregate
 }
 
 // ---------------------------------------------------------------------------

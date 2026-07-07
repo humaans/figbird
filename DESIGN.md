@@ -606,7 +606,9 @@ see "The m Proxy, Default Optimism, And The Id Contract" below); an id-less opti
 throws. `update`/`patch` synthesize their optimistic item from the cache (`patch` merges onto the
 cached entity; an explicit item can be passed via `optimisticItem` for computed fields); a
 patch/update on an entity that is not cached applies nothing optimistically — there is nothing
-displaying it — and the server response updates the cache as usual.
+displaying it — and the server response updates the cache as usual. `remove` deletes the cached
+row immediately (restored on rollback); an uncached row isn't displayed anywhere, so there is
+nothing to apply.
 
 ### The Write-Side Split (July 2026)
 

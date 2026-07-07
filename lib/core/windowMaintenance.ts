@@ -190,6 +190,43 @@ export function applyEventsToService<TMeta>({
   }
 }
 
+/**
+ * Diff a complete-set fetch (unfiltered allPages — the service's authoritative row
+ * set) against the pre-fetch entity cache, expressing the changes as synthetic
+ * realtime events. Rows absent from the new set are deleted from the entity cache
+ * here (the fetch already upserted the present ones); creations and updates are
+ * reported by comparing cached references against the snapshot.
+ */
+export function diffCompleteSet<TMeta>({
+  service,
+  serviceName,
+  previousEntities,
+  nextItemIds,
+}: {
+  service: ServiceState<TMeta>
+  serviceName: string
+  previousEntities: Map<ItemId, unknown>
+  nextItemIds: Set<ItemId>
+}): ProcessedRealtimeEvent[] {
+  const events: ProcessedRealtimeEvent[] = []
+  for (const [itemId, previousItem] of previousEntities) {
+    if (!nextItemIds.has(itemId)) {
+      service.entities.delete(itemId)
+      events.push({ serviceName, type: 'removed', item: previousItem, previousItem, itemId })
+    }
+  }
+  for (const itemId of nextItemIds) {
+    const item = service.entities.get(itemId)!
+    const previousItem = previousEntities.get(itemId)
+    if (!previousItem) {
+      events.push({ serviceName, type: 'created', item, previousItem: null, itemId })
+    } else if (previousItem !== item) {
+      events.push({ serviceName, type: 'updated', item, previousItem, itemId })
+    }
+  }
+  return events
+}
+
 export function updateQueriesFromEvents<TMeta>({
   service,
   appliedItems,

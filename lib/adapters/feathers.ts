@@ -403,13 +403,6 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   getId(item: unknown): string | number | undefined {
-    const id = this.peekId(item)
-    if (!id) console.warn('An item has been received without any ID', item)
-    return id
-  }
-
-  /** `getId` without the missing-id warning — for presence checks. */
-  peekId(item: unknown): string | number | undefined {
     return typeof this.#idField === 'string'
       ? ((item as Record<string, unknown>)[this.#idField] as string | number | undefined)
       : this.#idField(item)
@@ -474,5 +467,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
 
   emptyMeta(): FeathersFindMeta {
     return { total: -1, limit: 0, skip: 0 }
+  }
+
+  findMeta(window: { total: number; limit: number; skip: number }): FeathersFindMeta {
+    return window
   }
 }

@@ -24,19 +24,12 @@
  */
 
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
-import type { RelationalPaginationState, RelationalQueryState } from '../core/figbird.js'
+import type { RelationalQueryState } from '../core/figbird.js'
+import { suspensePromiseAll } from '../core/relationalQuery.js'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
-import type { FigbirdLike, SuspenseQueryResult } from './useQuery.js'
-
-/** Inert pagination fields for a paginated element before its first page settles. */
-const idlePagination: RelationalPaginationState = {
-  hasMore: false,
-  isLoadingMore: false,
-  loadMoreError: null,
-  totalCount: undefined,
-}
+import { projectSuspenseResult, type FigbirdLike, type SuspenseQueryResult } from './useQuery.js'
 
 /**
  * Options for `useQueries`.
@@ -73,7 +66,7 @@ export interface UseQueriesHook<S extends Schema = any> {
  * Suspense-native hook for fetching several independent queries in parallel.
  *
  * ```tsx
- * const [person, settings] = useQueries([q.people.one(id), q.settings.one(orgId)])
+ * const [person, settings] = useQueries([q.people.get(id), q.settings.get(orgId)])
  * ```
  *
  * All cold queries suspend together; the boundary resolves when the whole set has
@@ -129,28 +122,22 @@ export function useQueriesImpl(
 
   const states = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-  // Projected unconditionally so the hook order is identical across suspensions
-  // (mirrors useQueryForBuilder's taggedResult + widen). A `.paginate()` element
-  // widens with the loadMore family, exactly like a single useQuery; the plain
-  // elements stay as-is. Rebuilt per render like the single hook's suspense
-  // projection — the data inside stays reference-stable via the ref's snapshot cache.
+  // Projected unconditionally so the hook order is identical across suspensions,
+  // through the same projection as the single hook (a `.paginate()` element widens
+  // with the loadMore family). Keyed on the pinned refs + identity-cached states,
+  // so this only recomputes when an element's state actually changed.
   const results = useMemo(
     () =>
       states.map((state, i) => {
-        const base = {
-          data: state.data,
-          error: state.error,
-          isFetching: state.isFetching,
-          refetch: () => refs[i]?.refetch(),
-        }
-        if (queries[i]?.toAST().kind !== 'paginate') return base
-        return {
-          ...base,
-          loadMore: () => refs[i]?.loadMore(),
-          ...(state.pagination ?? idlePagination),
-        }
+        const ref = refs[i]!
+        return projectSuspenseResult(
+          state,
+          ref.kind() === 'paginate',
+          () => ref.refetch(),
+          () => ref.loadMore(),
+        )
       }),
-    [states, refs, queries],
+    [states, refs],
   )
 
   // Cold errors throw to the ErrorBoundary — the first one, matching useQuery's
@@ -166,22 +153,13 @@ export function useQueriesImpl(
   }
   if (firstError) throw firstError
 
-  // suspensePromise() materializes each query's root (see RelationalQueryRef), so
-  // mapping the whole pending set starts every fetch before the throw — that
-  // parallelism is the point of this hook.
+  // suspensePromiseAll materializes each pending query's root, so the whole set
+  // starts fetching before the throw — that parallelism is the point of this hook.
+  // The failure-release choreography lives in core, next to the cleanup contract
+  // it depends on.
   const pending = refs.filter((_, i) => states[i]?.status !== 'success')
   if (pending.length > 0) {
-    const started = pending.map(ref => ({ ref, promise: ref.suspensePromise() }))
-    const promises = started.map(({ promise }) => promise)
-    const aggregate = Promise.all(promises)
-    void aggregate.catch(() => {
-      void Promise.allSettled(promises).then(() => {
-        setTimeout(() => {
-          for (const { ref } of started) ref.releaseColdStart()
-        }, 0)
-      })
-    })
-    throw aggregate
+    throw suspensePromiseAll(pending)
   }
 
   return results

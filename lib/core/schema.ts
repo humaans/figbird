@@ -180,9 +180,9 @@ export interface RelationshipDef<
    *   to the destination service).
    * - For `'embedded'`: a list-of-ids field on the parent.
    */
-  sourceField: string[] // array for compound keys support
+  sourceField: string
   destService: TDest
-  destField: string[]
+  destField: string
   cardinality: TCardinality
   query?: Record<string, unknown> // optional additional filter
   /**
@@ -192,9 +192,9 @@ export interface RelationshipDef<
    * `via` describes the first (parent → intermediate). Capped at two hops total.
    */
   via?: {
-    sourceField: string[]
+    sourceField: string
     destService: string
-    destField: string[]
+    destField: string
     query?: Record<string, unknown>
   }
 }
@@ -207,22 +207,18 @@ export interface RelationshipDef<
 export type SchemaRelationships = Record<string, Record<string, RelationshipDef<any, any>>>
 
 /**
- * Field reference on an item: a known field name, or an array of them for compound
- * keys. Untyped items (schema-less usage, the bare helper exports) fall back to
- * plain strings.
+ * Field reference on an item: a known field name. Untyped items (schema-less usage,
+ * the bare helper exports) fall back to plain strings.
  */
-type FieldsOf<TItem> = unknown extends TItem
-  ? string | string[]
-  : (keyof TItem & string) | (keyof TItem & string)[]
+type FieldsOf<TItem> = unknown extends TItem ? string : keyof TItem & string
 
 /**
  * Hop config — one segment of a relationship's traversal. For single-hop relations there's
  * just one of these; for two-hop `many` (junction tables) there are two.
  *
- * Fields accept a plain string for the common single-field case; arrays remain for
- * compound keys. `destField` defaults to `'id'`. When the source and destination item
- * types are known (inside createSchema's per-service relationship factories), both
- * field ends type-check against the actual items.
+ * `destField` defaults to `'id'`. When the source and destination item types are known
+ * (inside createSchema's per-service relationship factories), both field ends type-check
+ * against the actual items.
  */
 export interface RelationshipHop<
   TDest extends string = string,
@@ -235,21 +231,17 @@ export interface RelationshipHop<
   query?: Record<string, unknown>
 }
 
-function toFieldArray(field: string | string[]): string[] {
-  return Array.isArray(field) ? field : [field]
-}
-
-/** Normalize a hop's shorthand (string fields, defaulted destField) to the internal shape. */
+/** Normalize a hop's shorthand (defaulted destField) to the internal shape. */
 function normalizeHop<TDest extends string>(
   hop: RelationshipHop<TDest>,
 ): RelationshipHop<TDest> & {
-  sourceField: string[]
-  destField: string[]
+  sourceField: string
+  destField: string
 } {
   return {
     ...hop,
-    sourceField: toFieldArray(hop.sourceField),
-    destField: toFieldArray(hop.destField ?? 'id'),
+    sourceField: hop.sourceField,
+    destField: hop.destField ?? 'id',
   }
 }
 

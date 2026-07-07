@@ -251,7 +251,7 @@ The first hop can also point the other way — an FK on the intermediate plus a 
 'employments', destField: 'personId', query: { isCurrent: true } }`). When multiple
 intermediate rows match a parent, the first resolves — make the first hop selective.
 
-`destField` defaults to `'id'`; fields accept arrays for compound keys. Each service's factory gets helpers scoped to it, so every field name above type-checks: `sourceField` against the source item, `destService` against the schema, `destField` against the destination item. A generated schema fails to compile at exactly the relationship that went stale.
+`destField` defaults to `'id'`. Each service's factory gets helpers scoped to it, so every field name above type-checks: `sourceField` against the source item, `destService` against the schema, `destField` against the destination item. A generated schema fails to compile at exactly the relationship that went stale.
 
 Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service's realtime events.
 
@@ -1103,6 +1103,7 @@ const { data, loadMore, hasMore, isLoadingMore, loadMoreError, totalCount } = us
 // Tagged union, never suspends or throws
 const result = useQuery(builder, { suspense: false })
 // result: { status: 'idle' | 'loading' | 'success' | 'error', data, error, isFetching, refetch }
+// Paginated builders widen the success arm with the same loadMore family as above
 
 // Conditional fetching
 const { data } = useQuery(builder, { skip: id == null }) // data: T | undefined
@@ -1277,7 +1278,7 @@ jobRole: one(
 
 Single related item, assembled as `T | null` — single-hop, or chained through an
 intermediate service (first match resolves; make the first hop selective).
-`destField` defaults to `'id'`; fields accept `string | string[]` for compound keys.
+`destField` defaults to `'id'`.
 
 ## many
 

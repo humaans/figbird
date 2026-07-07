@@ -8,6 +8,7 @@ import {
   addQueryToItemIndex,
   applyEventsToService,
   createServiceState,
+  diffCompleteSet,
   groupQueuedEvents,
   isUnfilteredFindQuery,
   removeQueryFromItemIndex,
@@ -310,11 +311,13 @@ export class QueryStore<
     // `useMutating({ id })` cover the create→navigate→act-before-ack window.
     const id = method !== 'create' ? desc.id : this.#peekId(desc.data)
     const isOptimistic = optimistic !== undefined && optimistic !== false
-    const optimisticItem = isOptimistic ? this.#resolveOptimisticItem(desc) : null
     const restoreItem =
       isOptimistic && method !== 'create' && id !== undefined
         ? this.#getEntity(serviceName, id)
         : null
+    // The one decision point for "what event, if any, applies before the server ack".
+    // `null` always means "nothing displays the item — nothing to apply or roll back".
+    const plan = isOptimistic ? this.#planOptimistic(desc, restoreItem) : null
 
     // The id contract: an optimistic create must carry a client-generated id the
     // server will accept. Identity is what everything downstream is built on —
@@ -322,8 +325,8 @@ export class QueryStore<
     // an optimistic item without a real id has none. Confirmed creates
     // (non-optimistic) are the mode for server-assigned ids: await the create,
     // the server's item carries its identity.
-    if (isOptimistic && method === 'create' && optimisticItem !== null) {
-      const items: unknown[] = Array.isArray(optimisticItem) ? optimisticItem : [optimisticItem]
+    if (plan?.type === 'created') {
+      const items: unknown[] = Array.isArray(plan.item) ? plan.item : [plan.item]
       if (items.some(item => this.#peekId(item) === undefined)) {
         throw new Error(
           `figbird: optimistic creates on "${serviceName}" need a client-generated id the ` +
@@ -339,18 +342,7 @@ export class QueryStore<
     return this.#trackMutation(
       { serviceName, method, ...(id !== undefined ? { id } : {}), optimistic: isOptimistic },
       () => {
-        if (isOptimistic && optimisticItem !== null) {
-          // patch/update on an entity that is not in the cache: the merged optimistic
-          // item has no id and nothing displays it — skip silently (the server response
-          // updates the cache as usual). Applying it would just warn and no-op.
-          const skipUncached =
-            (method === 'patch' || method === 'update') &&
-            restoreItem === null &&
-            this.#peekId(optimisticItem) === undefined
-          if (!skipUncached) {
-            this.#applyMutationEvent(serviceName, method, optimisticItem)
-          }
-        }
+        if (plan) this.#processEvent(serviceName, plan)
         return this.#adapter.mutate(serviceName, method, args)
       },
       {
@@ -358,8 +350,8 @@ export class QueryStore<
         // `useMutating` subscriber sees "not busy" the data is already in the cache.
         onSuccess: item => this.#applyMutationEvent(serviceName, method, item),
         onError: (_error, mutationId) => {
-          if (isOptimistic) {
-            this.#rollbackOptimistic(serviceName, method, id, optimisticItem, restoreItem)
+          if (plan) {
+            this.#rollbackOptimistic(serviceName, method, id, plan.item, restoreItem)
             this.#events.emit({
               kind: 'mutate:rollback',
               mutationId,
@@ -600,11 +592,12 @@ export class QueryStore<
     if (effectiveSort) rows = sortRowsLocally(rows, effectiveSort)
     const total = rows.length
     const data = rows.slice(skip, limit !== undefined ? skip + limit : undefined)
-    // Synthesized find envelope, mirroring the common { total, limit, skip } shape.
+    // The adapter owns the meta envelope — the store only knows the window numbers.
+    // (Cast because QueryResponse's meta arm can't resolve for an unresolved TMeta.)
     return {
       data,
-      meta: { total, limit: limit ?? total, skip },
-    } as unknown as QueryResponse<unknown, TMeta>
+      meta: this.#adapter.findMeta({ total, limit: limit ?? total, skip }),
+    } as QueryResponse<unknown, TMeta>
   }
 
   #fetching({ queryId }: { queryId: string }): void {
@@ -671,7 +664,7 @@ export class QueryStore<
 
       const data = result.data
       const meta = (result as { meta?: TMeta }).meta
-      const getId = (item: unknown) => this.#adapter.getId(item)
+      const getId = this.#getIdWarn
       const nextItemIds = new Set<string | number>()
       const getFreshItem = (item: unknown) => {
         const itemId = getId(item)
@@ -745,39 +738,14 @@ export class QueryStore<
       // rows created or removed out-of-band would be invisible to them forever.
       // The fetched query itself is excluded: its state was just set from the result.
       if (previousEntities) {
-        for (const [itemId, previousItem] of previousEntities) {
-          if (!nextItemIds.has(itemId)) {
-            service.entities.delete(itemId)
-            processedEvents.push({
-              serviceName: query.desc.serviceName,
-              type: 'removed',
-              item: previousItem,
-              previousItem,
-              itemId,
-            })
-          }
-        }
-        for (const itemId of nextItemIds) {
-          const item = service.entities.get(itemId)!
-          const previousItem = previousEntities.get(itemId)
-          if (!previousItem) {
-            processedEvents.push({
-              serviceName: query.desc.serviceName,
-              type: 'created',
-              item,
-              previousItem: null,
-              itemId,
-            })
-          } else if (previousItem !== item) {
-            processedEvents.push({
-              serviceName: query.desc.serviceName,
-              type: 'updated',
-              item,
-              previousItem,
-              itemId,
-            })
-          }
-        }
+        processedEvents.push(
+          ...diffCompleteSet({
+            service,
+            serviceName: query.desc.serviceName,
+            previousEntities,
+            nextItemIds,
+          }),
+        )
         if (processedEvents.length > 0) {
           updateQueriesFromEvents({
             service,
@@ -873,7 +841,7 @@ export class QueryStore<
         kind: 'realtime',
         serviceName,
         type,
-        itemId: this.#adapter.getId(item),
+        itemId: this.#getIdWarn(item),
       })
     }
   }
@@ -920,7 +888,7 @@ export class QueryStore<
 
     this.#processingEventQueue = true
     try {
-      const getId = (item: unknown) => this.#adapter.getId(item)
+      const getId = this.#getIdWarn
       const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
 
       while (this.#eventQueue.length > 0) {
@@ -1175,33 +1143,49 @@ export class QueryStore<
   }
 
   /**
-   * Resolve the synthetic item to apply optimistically. Falls back to the request body
-   * (create) or a merge of `data` onto the cached item (update/patch). For remove there
-   * is no explicit item — `null` is returned and the caller treats it as a delete.
+   * Id read for event and fetch paths, where a missing id means data figbird can't
+   * track — warn so the integration bug is visible. Presence checks use #peekId.
    */
+  #getIdWarn = (item: unknown): string | number | undefined => {
+    const id = this.#adapter.getId(item)
+    if (!id) console.warn('An item has been received without any ID', item)
+    return id
+  }
+
   /** Warn-free id read — presence checks on payloads that may lack ids. */
   #peekId(item: unknown): string | number | undefined {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
-    return this.#adapter.peekId(item)
+    return this.#adapter.getId(item)
   }
 
-  #resolveOptimisticItem(desc: MutationDescriptor): unknown {
+  /**
+   * Plan the optimistic cache application for a mutation: the event to apply before
+   * the server ack, or `null` when nothing displays the item so there is nothing to
+   * apply. Create uses the request body (or the explicit optimistic item); update/
+   * patch merge `data` onto the cached row; remove deletes the cached row.
+   */
+  #planOptimistic(desc: MutationDescriptor, restoreItem: unknown): Event | null {
     const { optimistic } = desc
-    if (optimistic !== undefined && optimistic !== true && optimistic !== false) {
-      return optimistic
-    }
+    const explicit =
+      optimistic !== undefined && optimistic !== true && optimistic !== false ? optimistic : null
     if (desc.method === 'create') {
-      return desc.data
+      return { type: 'created', item: explicit ?? desc.data }
     }
     if (desc.method === 'remove') {
+      // Delete the cached row now; an uncached row isn't displayed anywhere.
+      return restoreItem ? { type: 'removed', item: restoreItem } : null
+    }
+    const restoreRecord = (
+      restoreItem && typeof restoreItem === 'object' ? restoreItem : {}
+    ) as Record<string, unknown>
+    const item = explicit ?? { ...restoreRecord, ...(desc.data as Record<string, unknown>) }
+    // patch/update on an entity that is not in the cache: the merged optimistic item
+    // has no id and nothing displays it — skip silently (the server response updates
+    // the cache as usual). Applying it would just warn and no-op.
+    if (restoreItem === null && this.#peekId(item) === undefined) {
       return null
     }
-    const cached = this.#getEntity(desc.serviceName, desc.id)
-    const cachedRecord = (cached && typeof cached === 'object' ? cached : {}) as Record<
-      string,
-      unknown
-    >
-    return { ...cachedRecord, ...(desc.data as Record<string, unknown>) }
+    return { type: MUTATION_EVENT_TYPE[desc.method], item }
   }
 
   #applyMutationEvent(serviceName: string, method: MutationMethod, item: unknown): void {
@@ -1340,7 +1324,7 @@ export class QueryStore<
     this.#transactOverService(queryId, (service, query) => {
       if (query) {
         if (query.state.data) {
-          const getId = (item: unknown) => this.#adapter.getId(item)
+          const getId = this.#getIdWarn
           removeQueryFromItemIndex({ service, query, queryId, getId })
         }
         service.queries.delete(queryId)

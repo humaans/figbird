@@ -191,26 +191,26 @@ const schema = createSchema({
   relationships: {
     issues: ({ one: oneRel, many: manyRel }) => ({
       comments: manyRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'comments',
-        destField: ['issueId'],
+        destField: 'issueId',
       }),
       creator: oneRel({
-        sourceField: ['creatorId'],
+        sourceField: 'creatorId',
         destService: 'users',
-        destField: ['id'],
+        destField: 'id',
       }),
     }),
     comments: ({ one: oneRel, many: manyRel }) => ({
       author: oneRel({
-        sourceField: ['authorId'],
+        sourceField: 'authorId',
         destService: 'users',
-        destField: ['id'],
+        destField: 'id',
       }),
       reactions: manyRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'reactions',
-        destField: ['commentId'],
+        destField: 'commentId',
       }),
     }),
   },
@@ -267,21 +267,21 @@ const exactQuerySchema = createSchema({
   relationships: {
     companies: ({ many: manyRel }) => ({
       departments: manyRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'departments',
-        destField: ['companyId'],
+        destField: 'companyId',
       }),
       people: manyRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'people',
-        destField: ['companyId'],
+        destField: 'companyId',
       }),
     }),
     people: ({ one: oneRel }) => ({
       currentEmployment: oneRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'employments',
-        destField: ['personId'],
+        destField: 'personId',
       }),
     }),
   },
@@ -295,19 +295,19 @@ const profileQuerySchema = createSchema({
   relationships: {
     people: ({ one: oneRel, many: manyRel }) => ({
       manager: oneRel({
-        sourceField: ['managerId'],
+        sourceField: 'managerId',
         destService: 'people',
-        destField: ['id'],
+        destField: 'id',
       }),
       directReports: manyRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'people',
-        destField: ['managerId'],
+        destField: 'managerId',
       }),
       currentEmployment: oneRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'employments',
-        destField: ['personId'],
+        destField: 'personId',
       }),
     }),
   },
@@ -328,16 +328,16 @@ const membershipQuerySchema = createSchema({
   relationships: {
     people: ({ many: manyRel }) => ({
       memberships: manyRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'memberships',
-        destField: ['personId'],
+        destField: 'personId',
       }),
     }),
     memberships: ({ one: oneRel }) => ({
       team: oneRel({
-        sourceField: ['teamId'],
+        sourceField: 'teamId',
         destService: 'teams',
-        destField: ['id'],
+        destField: 'id',
       }),
     }),
   },
@@ -1285,16 +1285,16 @@ test('schema: one() helper creates correct relationship', t => {
     },
     relationships: {
       issues: ({ one }) => ({
-        creator: one({ sourceField: ['creatorId'], destService: 'users', destField: ['id'] }),
+        creator: one({ sourceField: 'creatorId', destService: 'users', destField: 'id' }),
       }),
     },
   })
   const rel = s.relationships.issues.creator
 
   t.is(rel.cardinality, 'one')
-  t.deepEqual(rel.sourceField, ['creatorId'])
+  t.is(rel.sourceField, 'creatorId')
   t.is(rel.destService, 'users')
-  t.deepEqual(rel.destField, ['id'])
+  t.is(rel.destField, 'id')
 })
 
 test('schema: many() helper creates correct relationship', t => {
@@ -1305,16 +1305,16 @@ test('schema: many() helper creates correct relationship', t => {
     },
     relationships: {
       issues: ({ many }) => ({
-        comments: many({ sourceField: ['id'], destService: 'comments', destField: ['issueId'] }),
+        comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' }),
       }),
     },
   })
   const rel = s.relationships.issues.comments
 
   t.is(rel.cardinality, 'many')
-  t.deepEqual(rel.sourceField, ['id'])
+  t.is(rel.sourceField, 'id')
   t.is(rel.destService, 'comments')
-  t.deepEqual(rel.destField, ['issueId'])
+  t.is(rel.destField, 'issueId')
 })
 
 test('schema: relationships are accessible on schema', t => {
@@ -1330,15 +1330,15 @@ test('schema: relationships are accessible on schema', t => {
 test('schema: relationship properties are correct', t => {
   const issueComments = schema.relationships!.issues!.comments!
   t.is(issueComments.cardinality, 'many')
-  t.deepEqual(issueComments.sourceField, ['id'])
+  t.is(issueComments.sourceField, 'id')
   t.is(issueComments.destService, 'comments')
-  t.deepEqual(issueComments.destField, ['issueId'])
+  t.is(issueComments.destField, 'issueId')
 
   const issueCreator = schema.relationships!.issues!.creator!
   t.is(issueCreator.cardinality, 'one')
-  t.deepEqual(issueCreator.sourceField, ['creatorId'])
+  t.is(issueCreator.sourceField, 'creatorId')
   t.is(issueCreator.destService, 'users')
-  t.deepEqual(issueCreator.destField, ['id'])
+  t.is(issueCreator.destField, 'id')
 })
 
 // ============================================================================
@@ -1646,10 +1646,10 @@ test('realtime: relation-path filters match root events through cached relations
     },
     relationships: {
       documents: ({ one: oneRel }) => ({
-        person: oneRel({ sourceField: ['personId'], destService: 'people', destField: ['id'] }),
+        person: oneRel({ sourceField: 'personId', destService: 'people', destField: 'id' }),
       }),
       people: ({ one: oneRel }) => ({
-        orgUnit: oneRel({ sourceField: ['orgUnitId'], destService: 'orgUnits', destField: ['id'] }),
+        orgUnit: oneRel({ sourceField: 'orgUnitId', destService: 'orgUnits', destField: 'id' }),
       }),
     },
   })
@@ -3085,9 +3085,9 @@ const embedSchema = createSchema({
   relationships: {
     roles: ({ embed: embedRel }) => ({
       membersPreview: embedRel({
-        sourceField: ['membersPreview'],
+        sourceField: 'membersPreview',
         destService: 'people',
-        destField: ['id'],
+        destField: 'id',
       }),
     }),
   },
@@ -3124,17 +3124,17 @@ test('embed: helper returns cardinality "embedded"', t => {
     relationships: {
       roles: ({ embed }) => ({
         membersPreview: embed({
-          sourceField: ['membersPreview'],
+          sourceField: 'membersPreview',
           destService: 'people',
-          destField: ['id'],
+          destField: 'id',
         }),
       }),
     },
   })
   const rel = s.relationships.roles.membersPreview
   t.is(rel.cardinality, 'embedded')
-  t.deepEqual(rel.sourceField, ['membersPreview'])
-  t.deepEqual(rel.destField, ['id'])
+  t.is(rel.sourceField, 'membersPreview')
+  t.is(rel.destField, 'id')
 })
 
 test("embed: useQuery resolves the parent's id-list field, preserving order", async t => {
@@ -3278,11 +3278,11 @@ const junctionSchema = createSchema({
       // never sees roleMembers; figbird traverses the junction transparently.
       members: manyRel(
         {
-          sourceField: ['id'],
+          sourceField: 'id',
           destService: 'roleMembers',
-          destField: ['roleId'],
+          destField: 'roleId',
         },
-        { sourceField: ['userId'], destService: 'users2', destField: ['id'] },
+        { sourceField: 'userId', destService: 'users2', destField: 'id' },
       ),
     }),
   },
@@ -3328,8 +3328,8 @@ test('many variadic: helper records via hop and stores the dest hop at the top l
     relationships: {
       roles2: ({ many }) => ({
         members: many(
-          { sourceField: ['id'], destService: 'roleMembers', destField: ['roleId'] },
-          { sourceField: ['userId'], destService: 'users2', destField: ['id'] },
+          { sourceField: 'id', destService: 'roleMembers', destField: 'roleId' },
+          { sourceField: 'userId', destService: 'users2', destField: 'id' },
         ),
       }),
     },
@@ -3337,12 +3337,12 @@ test('many variadic: helper records via hop and stores the dest hop at the top l
   const rel = s.relationships.roles2.members
   t.is(rel.cardinality, 'many')
   t.is(rel.destService, 'users2')
-  t.deepEqual(rel.sourceField, ['userId']) // junction → dest field name
-  t.deepEqual(rel.destField, ['id'])
+  t.is(rel.sourceField, 'userId') // junction → dest field name
+  t.is(rel.destField, 'id')
   t.truthy(rel.via)
   t.is(rel.via!.destService, 'roleMembers')
-  t.deepEqual(rel.via!.sourceField, ['id'])
-  t.deepEqual(rel.via!.destField, ['roleId'])
+  t.is(rel.via!.sourceField, 'id')
+  t.is(rel.via!.destField, 'roleId')
 })
 
 test('junction: useQuery returns dest items via the junction transparently', async t => {
@@ -3560,12 +3560,12 @@ function createChainedOneApp() {
 test('chained one: helper stores the via hop with cardinality one', t => {
   const rel = chainedOneSchema.relationships.chainPeople.jobRole
   t.is(rel.cardinality, 'one')
-  t.deepEqual(rel.sourceField, ['jobRoleId'])
+  t.is(rel.sourceField, 'jobRoleId')
   t.is(rel.destService, 'chainJobRoles')
   t.truthy(rel.via)
   t.is(rel.via!.destService, 'chainEmployments')
-  t.deepEqual(rel.via!.sourceField, ['currentEmploymentId'])
-  t.deepEqual(rel.via!.destField, ['id'])
+  t.is(rel.via!.sourceField, 'currentEmploymentId')
+  t.is(rel.via!.destField, 'id')
 })
 
 test('chained one: resolves through the intermediate, null when the chain breaks', async t => {

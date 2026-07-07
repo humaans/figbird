@@ -15,14 +15,8 @@ import {
   type PreparedQuery,
   type QueryDefinition,
 } from './queryDefinition.js'
-import {
-  explainQueryNode,
-  planRelation,
-  rootAllPages,
-  type ClassificationReason,
-  type QueryNodeClass,
-} from './queryClassification.js'
-import type { QueryAST } from './queryBuilder.js'
+import { explainQuery, type ExplainReport, type QueryNodeClass } from './queryClassification.js'
+export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
 import { QueryStore, type VisibilitySource } from './queryStore.js'
 
@@ -669,87 +663,17 @@ export class Figbird<
     queryOrBuilder: AnyQueryBuilder<S> | QueryDefinition<unknown, AnyQueryBuilder<S>>,
     args?: unknown,
   ): ExplainReport {
-    // Resolved without interning — explain never materializes a query.
+    // Resolved without interning — explain never materializes a query. The walk
+    // itself lives in queryClassification.ts, next to the plans it reports on.
     const builder = isQueryDefinition(queryOrBuilder)
       ? queryOrBuilder.build(queryOrBuilder.validate(args))
       : queryOrBuilder
-    const ast = builder.toAST()
-    const nodes: ExplainNode[] = []
-    this.#explainAst(ast, '(root)', true, nodes, new Set(this.adapter.customOperators ?? []))
+    const nodes = explainQuery(
+      builder.toAST(),
+      this.schema?.relationships,
+      new Set(this.adapter.customOperators ?? []),
+    )
     return { nodes }
-  }
-
-  #explainAst(
-    ast: QueryAST,
-    path: string,
-    isRoot: boolean,
-    nodes: ExplainNode[],
-    localOperators: ReadonlySet<string>,
-  ): void {
-    const snapshot = Boolean(ast.snapshot)
-    // Root fetch shape comes from the same plan the runtime executes (rootAllPages):
-    // .all() drains every page, so window filters ($sort — the builder refuses
-    // $limit/$skip) don't demote the class; a paginate root reports server-window.
-    const explained = explainQueryNode(ast.query, {
-      server: ast.server,
-      allPages: rootAllPages(ast.kind),
-      localOperators,
-      snapshot,
-      paginatedRoot: isRoot && ast.kind === 'paginate',
-    })
-
-    nodes.push({
-      path,
-      service: ast.service,
-      kind: ast.kind,
-      class: explained.class,
-      reasons: explained.reasons,
-      realtime: snapshot ? 'manual' : explained.class === 'local-exact' ? 'merge' : 'refetch',
-    })
-
-    this.#explainRelations(ast, path, snapshot, nodes, localOperators)
-  }
-
-  /**
-   * One walk for relations at every depth. `snapshot` is the root's — `.snapshot()`
-   * freezes the root and every relation under it, so it propagates all the way down.
-   */
-  #explainRelations(
-    ast: QueryAST,
-    path: string,
-    snapshot: boolean,
-    nodes: ExplainNode[],
-    localOperators: ReadonlySet<string>,
-  ): void {
-    const relationships = this.schema?.relationships?.[ast.service] ?? {}
-    for (const [relName, relAST] of Object.entries(ast.related)) {
-      const relDef = relationships[relName]
-      const relPath = path === '(root)' ? relName : `${path}.${relName}`
-      // The relation's fetch shape is read off the same plan the runtime executes
-      // (planRelation) — explain can't drift from what actually runs.
-      const plan = planRelation(relDef, relAST.query)
-      const relExplained = explainQueryNode(relAST.query, {
-        server: relAST.server,
-        allPages: plan.allPages,
-        localOperators,
-      })
-      if (plan.strategy === 'perParent') {
-        relExplained.reasons = [
-          ...relExplained.reasons,
-          { code: 'window-filter', detail: 'per-parent window — one query per parent' },
-        ]
-      }
-      nodes.push({
-        path: relPath,
-        service: relDef?.destService ?? relName,
-        kind: 'find',
-        class: relExplained.class,
-        reasons: relExplained.reasons,
-        realtime: snapshot ? 'manual' : relExplained.class === 'local-exact' ? 'merge' : 'refetch',
-        ...(relDef?.via ? { via: relDef.via.destService } : {}),
-      })
-      this.#explainRelations(relAST, relPath, snapshot, nodes, localOperators)
-    }
   }
 
   /**
@@ -788,24 +712,6 @@ export class Figbird<
   ): () => void {
     return this.queryStore.subscribeToStateChanges(fn)
   }
-}
-
-/** One node of a `figbird.explain()` report. */
-export interface ExplainNode {
-  /** `'(root)'` or the dotted relation path (`'comments.reactions'`). */
-  path: string
-  service: string
-  kind: 'find' | 'get' | 'paginate' | 'all'
-  class: QueryNodeClass
-  reasons: ClassificationReason[]
-  /** How realtime events on this node's service are handled. */
-  realtime: 'merge' | 'refetch' | 'manual'
-  /** Junction service name for transparent two-hop relations. */
-  via?: string
-}
-
-export interface ExplainReport {
-  nodes: ExplainNode[]
 }
 
 /** One row of `figbird.inspect()` — a stable, read-only view of a live query. */

@@ -38,9 +38,9 @@ const paginateSchema = createSchema({
   relationships: {
     issues: ({ many: manyRel }) => ({
       comments: manyRel({
-        sourceField: ['id'],
+        sourceField: 'id',
         destService: 'comments',
-        destField: ['issueId'],
+        destField: 'issueId',
       }),
     }),
   },

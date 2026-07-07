@@ -290,7 +290,9 @@ interface BaseMutationDescriptor {
   /**
    * When set, apply a synthetic event to the local store before the network round-trip.
    * On success the server's response replaces the optimistic item; on failure the change
-   * is rolled back and a `mutate:rollback` event is emitted.
+   * is rolled back and a `mutate:rollback` event is emitted. `true` synthesizes the item
+   * from the request; a non-boolean value is applied as the optimistic item verbatim
+   * (typed per service by the `mutateDesc` overloads — this is the untyped base).
    */
   optimistic?: boolean | unknown
 }

@@ -122,10 +122,10 @@ export function collectRelationalFilterDependencies(
       const relDef = schema.relationships?.[currentService]?.[relName]
       if (!relDef || relDef.cardinality !== 'one' || relDef.via) break
 
-      add(currentService, relDef.sourceField)
+      add(currentService, [relDef.sourceField])
 
       const isLeaf = i === filterPath.path.length - 1
-      add(relDef.destService, isLeaf ? [...relDef.destField, filterPath.field] : relDef.destField)
+      add(relDef.destService, isLeaf ? [relDef.destField, filterPath.field] : [relDef.destField])
 
       currentService = relDef.destService
     }
@@ -257,24 +257,13 @@ function cloneRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Read a possibly-compound key field as a comparable value. The canonical encoding for
- * cross-module key comparisons — the relational engine keys assembly with it too.
- *
- * Compound keys use JSON.stringify for an unambiguous encoding so that two distinct
- * tuples cannot collide even if individual values contain separator characters.
- * (E.g. values ['a|b', 'c'] and ['a', 'b|c'] must produce different keys.)
+ * Read a key field as a comparable value. The canonical read for cross-module key
+ * comparisons — the relational engine keys assembly with it too.
  */
-export function getFieldValue(item: unknown, fields: string[]): string | number | undefined {
+export function getFieldValue(item: unknown, field: string): string | number | undefined {
   if (!item || typeof item !== 'object') return undefined
-  const record = item as Record<string, unknown>
-  if (fields.length === 1) {
-    const value = record[fields[0]!]
-    return typeof value === 'string' || typeof value === 'number' ? value : undefined
-  }
-
-  const values = fields.map(field => record[field])
-  if (values.some(value => value === undefined || value === null)) return undefined
-  return JSON.stringify(values)
+  const value = (item as Record<string, unknown>)[field]
+  return typeof value === 'string' || typeof value === 'number' ? value : undefined
 }
 
 function itemChangedFields(

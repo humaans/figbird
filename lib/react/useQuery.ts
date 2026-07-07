@@ -34,13 +34,28 @@ import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
 
 /**
+ * The `loadMore` family exposed by paginated queries — the shape both result types
+ * widen with when the builder used `.paginate(...)`.
+ */
+export interface PaginationControls {
+  loadMore: () => void
+  hasMore: boolean
+  isLoadingMore: boolean
+  loadMoreError: Error | null
+  totalCount: number | undefined
+}
+
+/**
  * State for the relational query hook.
  *
  * `error` on the success arm is non-null when the most recent refetch failed while
  * previous data is still being served — show a toast/banner, keep the screen. The
  * `error` status only occurs for cold failures (no data was ever produced).
+ *
+ * For paginated builders the success arm widens with the `loadMore` family, exactly
+ * like the suspense result — the two modes carry the same query contract.
  */
-export type RelationalQueryResult<T> =
+export type RelationalQueryResult<T, TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find'> =
   | {
       status: 'idle' | 'loading'
       data: null
@@ -48,13 +63,13 @@ export type RelationalQueryResult<T> =
       isFetching: boolean
       refetch: () => void
     }
-  | {
+  | ({
       status: 'success'
       data: T
       error: Error | null
       isFetching: boolean
       refetch: () => void
-    }
+    } & (TKind extends 'paginate' ? PaginationControls : unknown))
   | {
       status: 'error'
       data: null
@@ -63,22 +78,28 @@ export type RelationalQueryResult<T> =
       refetch: () => void
     }
 
+/** The slice of an interned RelationalQueryRef the hooks consume. @internal */
+export interface QueryRefLike<T> {
+  subscribe(
+    fn: (state: RelationalQueryState<T>) => void,
+    options?: { staleTime?: number | undefined },
+  ): () => void
+  getSnapshot(): RelationalQueryState<T>
+  refetch(): void
+  loadMore(): void
+  suspensePromise(): Promise<void>
+  releaseColdStart(): void
+  hash(): string
+  kind(): 'find' | 'get' | 'paginate' | 'all'
+}
+
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
-  query<B extends AnyQueryBuilder>(
-    builder: B,
-  ): {
-    subscribe(
-      fn: (state: RelationalQueryState<QueryBuilderResult<B>>) => void,
-      options?: { staleTime?: number | undefined },
-    ): () => void
-    getSnapshot(): RelationalQueryState<QueryBuilderResult<B>>
-    refetch(): void
-    loadMore(): void
-    suspensePromise(): Promise<void>
-    releaseColdStart(): void
-    hash(): string
-  }
+  query<B extends AnyQueryBuilder>(builder: B): QueryRefLike<QueryBuilderResult<B>>
+  query<Args, B extends AnyQueryBuilder>(
+    definition: QueryDefinition<Args, B>,
+    args: Args,
+  ): QueryRefLike<QueryBuilderResult<B>>
 }
 
 // Default idle state for skipped queries
@@ -87,42 +108,6 @@ const idleState: RelationalQueryState<null> = {
   data: null,
   error: null,
   isFetching: false,
-}
-
-/**
- * Shared subscription skeleton for both hook variants: resolve the interned
- * RelationalQueryRef for a builder and read its state via useSyncExternalStore.
- *
- * `figbird.query()` interns refs by AST hash, so the same builder shape
- * yields a reference-stable qRef across renders while subscribed — no memoization
- * here. (If the ref was evicted between renders, this picks up the freshly interned
- * instance instead of pinning the stale one.)
- */
-function useQueryRef<B extends AnyQueryBuilder>(
-  figbird: FigbirdLike,
-  query: B | null,
-  skip: boolean,
-  staleTime?: number,
-) {
-  type T = QueryBuilderResult<B>
-  const qRef = skip || query === null ? null : figbird.query(query)
-
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      if (!qRef) return () => {}
-      return qRef.subscribe(onStoreChange, { staleTime })
-    },
-    [qRef, staleTime],
-  )
-
-  const getSnapshot = useCallback((): RelationalQueryState<T> => {
-    if (!qRef) return idleState as RelationalQueryState<T>
-    return qRef.getSnapshot()
-  }, [qRef])
-
-  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-
-  return { qRef, state }
 }
 
 /**
@@ -153,27 +138,12 @@ function useQueryRef<B extends AnyQueryBuilder>(
  * was set) `totalCount`. The pagination shape is selected by the second type
  * parameter, which the hook infers from the builder's `TKind`.
  */
-export type SuspenseQueryResult<
-  T,
-  TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find',
-> = TKind extends 'paginate'
-  ? {
-      data: T
-      error: Error | null
-      isFetching: boolean
-      refetch: () => void
-      loadMore: () => void
-      hasMore: boolean
-      isLoadingMore: boolean
-      loadMoreError: Error | null
-      totalCount: number | undefined
-    }
-  : {
-      data: T
-      error: Error | null
-      isFetching: boolean
-      refetch: () => void
-    }
+export type SuspenseQueryResult<T, TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find'> = {
+  data: T
+  error: Error | null
+  isFetching: boolean
+  refetch: () => void
+} & (TKind extends 'paginate' ? PaginationControls : unknown)
 
 /**
  * Options for `useQuery`.
@@ -222,12 +192,12 @@ export interface UseQueryHook<S extends Schema = any> {
   <B extends AnyQueryBuilder<S>>(
     query: B,
     options: UseQueryOptions & { suspense: false },
-  ): RelationalQueryResult<QueryBuilderResult<B>>
+  ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
   // Definition, non-suspense — args omittable when the definition takes none
   <Args, B extends AnyQueryBuilder<S>>(
     definition: QueryDefinition<Args, B>,
     ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
-  ): RelationalQueryResult<QueryBuilderResult<B>>
+  ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
   // Builder
   <B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
     query: B,
@@ -245,7 +215,7 @@ export interface UseQueryHook<S extends Schema = any> {
     definition: QueryDefinition<Args, B>,
     args: Args | null,
     options: UseQueryOptions & { suspense: false },
-  ): RelationalQueryResult<QueryBuilderResult<B>>
+  ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
   // Suspense variant — data widens with `undefined` exactly like `skip`:
   <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
     definition: QueryDefinition<Args, B>,
@@ -277,7 +247,9 @@ export const useQuery: UseQueryHook = ((
 
 /**
  * Instance-taking dispatch shared by the context-bound `useQuery` and the
- * bound-instance hooks that `createHooks` produces. @internal
+ * bound-instance hooks that `createHooks` produces. Resolves the interned
+ * RelationalQueryRef (or null for skips) and hands it to the shared hook body.
+ * @internal
  */
 export function useQueryImpl(
   figbird: FigbirdLike,
@@ -285,65 +257,111 @@ export function useQueryImpl(
   argsOrOptions?: unknown,
   maybeOptions?: UseQueryOptions,
 ): unknown {
+  let qRef: QueryRefLike<unknown> | null = null
+  let options: UseQueryOptions
   if (isQueryDefinition(queryOrDefinition)) {
     const definition = queryOrDefinition
-    // Zero-arg definitions take options in the args slot (see ArgsAndOptions).
-    const { args, options } = splitDefinitionRest<UseQueryOptions>(
-      definition,
-      argsOrOptions,
-      maybeOptions,
-    )
     // `null` args skip the query — the definition's build function is never invoked
     // (it may dereference its args), so the condition lives in the args themselves:
-    // `useQuery(issueDetail, id ? { id } : null)`. Checked against the raw first
-    // argument too, because splitDefinitionRest folds a zero-arg definition's first
-    // slot into options — a `null` there must still mean skip, not "no options".
-    // Routed through the same code path as `skip: true` so the hook sequence is
-    // identical when args flip null <-> real.
-    if (args === null || argsOrOptions === null) {
-      return useQueryForBuilder(figbird, null, { ...options, skip: true })
+    // `useQuery(issueDetail, id ? { id } : null)`. Checked on the raw argument,
+    // before splitDefinitionRest's zero-arg option folding, so a literal `null`
+    // first slot means skip for zero-arg definitions too.
+    if (argsOrOptions === null) {
+      options = maybeOptions ?? {}
+    } else {
+      // Zero-arg definitions take options in the args slot (see ArgsAndOptions).
+      const { args, options: split } = splitDefinitionRest<UseQueryOptions>(
+        definition,
+        argsOrOptions,
+        maybeOptions,
+      )
+      options = split ?? {}
+      if (!options.skip) {
+        // figbird.query() owns definition resolution (validate → build → intern) —
+        // the hook never builds a builder itself.
+        qRef = figbird.query(definition as QueryDefinition<unknown, AnyQueryBuilder>, args)
+      }
     }
-    const validatedArgs = definition.validate(args)
-    const builder = definition.build(validatedArgs) as AnyQueryBuilder
-    return useQueryForBuilder(figbird, builder, options ?? {})
+  } else {
+    options = (argsOrOptions as UseQueryOptions | undefined) ?? {}
+    if (!options.skip) {
+      qRef = figbird.query(queryOrDefinition as AnyQueryBuilder)
+    }
   }
-  const builder = queryOrDefinition as AnyQueryBuilder
-  const options = (argsOrOptions as UseQueryOptions | undefined) ?? {}
-  return useQueryForBuilder(figbird, builder, options)
+  // Both branches end at the same single hook call, so the hook sequence is stable
+  // across renders (a call site never flips between definition and builder), and
+  // identical when args flip null <-> real or `skip` toggles.
+  return useQueryForRef(qRef, options)
 }
 
-const idlePagination: RelationalPaginationState = {
+/** Inert pagination fields for skipped or not-yet-settled paginated queries. @internal */
+export const idlePagination: RelationalPaginationState = {
   hasMore: false,
   isLoadingMore: false,
   loadMoreError: null,
   totalCount: undefined,
 }
 
-// `query` is null for null-args definition skips — the build function never ran,
-// so there is no builder. A null query always rides the `skip: true` path.
-function useQueryForBuilder<B extends AnyQueryBuilder>(
-  figbird: FigbirdLike,
-  query: B | null,
-  options: UseQueryOptions,
-): unknown {
-  type T = QueryBuilderResult<B>
-  const { skip = false, suspense = true, staleTime } = options
-  const { qRef, state } = useQueryRef(figbird, query, skip, staleTime)
+/**
+ * Project a query state onto the suspense result shape — `{ data, error, isFetching,
+ * refetch }`, widened with the `loadMore` family when the ref is paginated. Shared by
+ * `useQuery` and `useQueries` so the two projections can't drift. @internal
+ */
+export function projectSuspenseResult<T>(
+  state: RelationalQueryState<T>,
+  isPaginated: boolean,
+  refetch: () => void,
+  loadMore: () => void,
+): object {
+  const base = { data: state.data, error: state.error, isFetching: state.isFetching, refetch }
+  return isPaginated ? { ...base, loadMore, ...(state.pagination ?? idlePagination) } : base
+}
+
+/**
+ * The shared hook body. `qRef` is reference-stable across renders while subscribed
+ * because `figbird.query()` interns refs by AST hash — no memoization here. (If the
+ * ref was evicted between renders, this picks up the freshly interned instance
+ * instead of pinning the stale one.) A null `qRef` is a skipped query: `skip: true`,
+ * or a null-args definition whose build function never ran.
+ */
+function useQueryForRef<T>(qRef: QueryRefLike<T> | null, options: UseQueryOptions): unknown {
+  const { suspense = true, staleTime } = options
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (!qRef) return () => {}
+      return qRef.subscribe(onStoreChange, { staleTime })
+    },
+    [qRef, staleTime],
+  )
+  const getSnapshot = useCallback((): RelationalQueryState<T> => {
+    if (!qRef) return idleState as RelationalQueryState<T>
+    return qRef.getSnapshot()
+  }, [qRef])
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
   const loadMore = useCallback(() => qRef?.loadMore(), [qRef])
+  const isPaginated = qRef !== null && qRef.kind() === 'paginate'
 
   // The tagged-union projection is memoized unconditionally so the hook order is
   // identical in both suspense modes (the option must still be static per call site).
+  // Paginated builders widen the success arm with the loadMore family, exactly like
+  // the suspense projection below.
   const taggedResult = useMemo((): RelationalQueryResult<T> => {
     if (state.status === 'success') {
-      return {
-        status: 'success',
+      const base = {
+        status: 'success' as const,
         data: state.data,
         error: state.error,
         isFetching: state.isFetching,
         refetch,
       }
-    } else if (state.status === 'error') {
+      return (
+        isPaginated ? { ...base, loadMore, ...(state.pagination ?? idlePagination) } : base
+      ) as RelationalQueryResult<T>
+    }
+    if (state.status === 'error') {
       return {
         status: 'error',
         data: null,
@@ -359,11 +377,11 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
       isFetching: state.isFetching,
       refetch,
     }
-  }, [state, refetch])
+  }, [state, refetch, loadMore, isPaginated])
 
   if (!suspense) return taggedResult
 
-  if (skip || query === null || !qRef) {
+  if (!qRef) {
     // Always the widened shape: a null-args skip can't know the definition's kind
     // (build never ran), and inert pagination fields on a non-paginated result are
     // hidden by the static type.
@@ -374,18 +392,8 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
       refetch,
       loadMore,
       ...idlePagination,
-    } as SuspenseQueryResult<T, QueryBuilderKind<B>>
+    }
   }
-
-  // Two axes only: where data comes from (skipped vs live) and whether the builder
-  // is paginated (widening the shape with the loadMore family). Plain expressions,
-  // not hooks — safe below the skip return.
-  const isPaginated = query.toAST().kind === 'paginate'
-  const widen = (base: object, pagination: RelationalPaginationState) =>
-    (isPaginated ? { ...base, loadMore, ...pagination } : base) as SuspenseQueryResult<
-      T,
-      QueryBuilderKind<B>
-    >
 
   // `status: 'error'` only occurs for cold failures (no data was ever produced) —
   // a refetch failure with data present stays on the success arm with `error` set.
@@ -400,8 +408,5 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
     throw qRef.suspensePromise()
   }
 
-  return widen(
-    { data: state.data, error: state.error, isFetching: state.isFetching, refetch },
-    state.pagination ?? idlePagination,
-  )
+  return projectSuspenseResult(state, isPaginated, refetch, loadMore)
 }

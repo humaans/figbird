@@ -35,30 +35,25 @@ export function sourceSet(raw: (string | number)[]): { values: (string | number)
   return { values, key: JSON.stringify(values) }
 }
 
-/** Collect the deduped, sorted values of `fields` across parents, with the stable key. */
+/** Collect the deduped, sorted values of `field` across parents, with the stable key. */
 export function uniqueSourceValues(
   parentData: unknown[],
-  fields: string[],
+  field: string,
 ): { values: (string | number)[]; key: string } {
   return sourceSet(
     parentData
-      .map(item => getFieldValue(item, fields))
+      .map(item => getFieldValue(item, field))
       .filter((v): v is string | number => v !== undefined),
   )
 }
 
 /**
  * Read a list-of-ids field for `'embedded'` relations. The parent record is expected to
- * carry an array of `string | number` at `fields[0]`; non-array or missing values become
- * `undefined` so callers can treat them as "no edges from this parent". Compound keys are
- * not supported here — embedded relations are by definition single-key id lists.
+ * carry an array of `string | number` at `field`; non-array or missing values become
+ * `undefined` so callers can treat them as "no edges from this parent".
  */
-export function getFieldValueAsList(
-  item: unknown,
-  fields: string[],
-): (string | number)[] | undefined {
-  if (fields.length !== 1) return undefined
-  const value = (item as Record<string, unknown>)[fields[0]!]
+export function getFieldValueAsList(item: unknown, field: string): (string | number)[] | undefined {
+  const value = (item as Record<string, unknown>)[field]
   if (!Array.isArray(value)) return undefined
   return value.filter((v): v is string | number => typeof v === 'string' || typeof v === 'number')
 }
@@ -136,7 +131,7 @@ function buildIndexes(
 }
 
 // First match wins — mirrors a linear scan's short-circuit semantics.
-function firstMatchIndex(items: unknown[], destField: string[]): Map<string | number, unknown> {
+function firstMatchIndex(items: unknown[], destField: string): Map<string | number, unknown> {
   const byKey = new Map<string | number, unknown>()
   for (const entity of items) {
     const k = getFieldValue(entity, destField)

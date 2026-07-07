@@ -47,17 +47,12 @@ export interface Adapter<
   // reconnects after a period where realtime events may have been missed.
   subscribeToReconnect?(handler: () => void): () => void
 
-  // Required internal methods
-  getId(item: unknown): string | number | undefined
-
   /**
-   * Read an item's id without warning (or otherwise reacting) when absent. Used
-   * by the store for id presence checks — enforcing the optimistic-create id
-   * contract and registering create ids with the mutation tracker. Required:
-   * writes are optimistic by default, and without this every optimistic create
-   * would fail the id check regardless of the data.
+   * Read an item's id, or `undefined` when absent. Pure extraction — whether a
+   * missing id is noteworthy is the store's call (it warns on event/fetch paths
+   * and stays silent on presence checks), not the adapter's.
    */
-  peekId(item: unknown): string | number | undefined
+  getId(item: unknown): string | number | undefined
 
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 
@@ -79,6 +74,13 @@ export interface Adapter<
 
   // Initialize empty meta to avoid unsafe casts
   emptyMeta(): TMeta
+
+  /**
+   * Meta for a find answered locally from the cache: the store knows the window it
+   * computed (`total`/`limit`/`skip`), but only the adapter knows the meta envelope
+   * its consumers expect those numbers in.
+   */
+  findMeta(window: { total: number; limit: number; skip: number }): TMeta
 }
 
 // Helper types to extract adapter properties

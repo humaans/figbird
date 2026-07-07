@@ -146,7 +146,7 @@ export class QueryBuilder<
 > {
   readonly #state: QueryBuilderState
   readonly #schema: S
-  readonly #hash: string
+  #hash: string | null = null
 
   // Two call-site shapes only: fresh builders (no state — the defaults literal) and
   // derivations (a complete next state). No partial mode: a call site that dropped
@@ -163,15 +163,16 @@ export class QueryBuilder<
       server: false,
       snapshot: false,
     }
-    // Compute hash on construction for efficient change detection
-    this.#hash = hashObject(this.#state)
   }
 
   /**
-   * Returns the stable hash of this query (for React memoization)
+   * Returns the stable hash of this query (for React memoization). Computed lazily
+   * and cached — `#state` never mutates after construction, and chained derivations
+   * (`.where().orderBy()...`) would otherwise serialize every intermediate builder
+   * whose hash is never read.
    */
   hash(): string {
-    return this.#hash
+    return (this.#hash ??= hashObject(this.#state))
   }
 
   /**
