@@ -29,6 +29,7 @@ import { useActionImpl, type UseActionHook, type UseActionResult } from './useAc
 import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
 import { useMutationImpl, type UseMutationResult } from './useMutation.js'
 import { useFindImpl, useGetImpl, type QueryResult } from './useQueryByDesc.js'
+import { useQueriesImpl, type UseQueriesHook, type UseQueriesOptions } from './useQueries.js'
 import { useQueryImpl, type UseQueryHook, type UseQueryOptions } from './useQuery.js'
 import type { ArgsAndOptions, DefineQuery, QueryDefinition } from '../core/figbird.js'
 import type { QueryBuilderProxy } from '../core/queryBuilder.js'
@@ -145,6 +146,7 @@ export function createHooks<F extends Figbird<any, any>>(
   useMutation: UseMutationForSchema<InferSchema<F>>
   useFeathers: UseFeathersForSchema<InferSchema<F>>
   useQuery: UseQueryHook<InferSchema<F>>
+  useQueries: UseQueriesHook<InferSchema<F>>
   q: QueryBuilderProxy<InferSchema<F>>
   defineQuery: DefineQueryForSchema<InferSchema<F>>
   prepare: PrepareForSchema<InferSchema<F>>
@@ -271,6 +273,10 @@ export function createHooks<F extends Figbird<any, any>>(
     return useQueryImpl(useBoundFigbird(), queryOrDefinition, argsOrOptions, maybeOptions)
   }
 
+  function useTypedQueries(queries: readonly AnyQueryBuilder[], options?: UseQueriesOptions) {
+    return useQueriesImpl(useBoundFigbird(), queries, options)
+  }
+
   return {
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
@@ -278,6 +284,7 @@ export function createHooks<F extends Figbird<any, any>>(
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
     // The typed schema binding is enforced via QueryBuilder<S, T> on the call signatures.
     useQuery: useTypedQuery as unknown as UseQueryHook<S>,
+    useQueries: useTypedQueries as unknown as UseQueriesHook<S>,
     // The builder proxy off the bound instance — `useQuery(q.issues.where(...))` with a
     // single import. Lazy so schemaless instances only throw if actually accessed.
     get q(): QueryBuilderProxy<S> {

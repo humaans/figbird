@@ -76,7 +76,7 @@ export interface FigbirdLike {
     refetch(): void
     loadMore(): void
     suspensePromise(): Promise<void>
-    coldErrorDelivered(): void
+    releaseColdStart(): void
     hash(): string
   }
 }
@@ -393,7 +393,7 @@ function useQueryForBuilder<B extends AnyQueryBuilder>(
     // Deferred self-eviction: nothing committed, so nothing will ever unsubscribe
     // this ref — releasing it here is what makes an error-boundary retry cold-start
     // a fresh query instead of instantly re-throwing the same settled error.
-    qRef.coldErrorDelivered()
+    qRef.releaseColdStart()
     throw state.error
   }
   if (state.status !== 'success') {

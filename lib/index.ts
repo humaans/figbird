@@ -96,6 +96,9 @@ export { useFind, useGet } from './react/useQueryByDesc.js'
 // useQuery is the unified, Suspense-by-default builder hook; pass { suspense: false }
 // for the explicit tagged-union variant.
 export { useQuery } from './react/useQuery.js'
+// useQueries suspends on several independent queries at once — one boundary, all
+// fetches in parallel, no sequential waterfall.
+export { useQueries } from './react/useQueries.js'
 export { useDelayedFlag } from './react/useDelayedFlag.js'
 // The rest of the no-flash kit (see the "no-flash checklist" docs section):
 export { useDebouncedTransition } from './react/useDebouncedTransition.js'
@@ -106,6 +109,7 @@ export type {
   UseQueryHook,
   UseQueryOptions,
 } from './react/useQuery.js'
+export type { UseQueriesHook, UseQueriesOptions } from './react/useQueries.js'
 
 // Query-related types for advanced usage
 export type {

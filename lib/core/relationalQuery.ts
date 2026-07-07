@@ -1120,16 +1120,13 @@ export class RelationalQueryRef<
   }
 
   /**
-   * Called by the hook when it throws a cold error to an error boundary. A cold
-   * error never commits — the suspended component is discarded by React, so no
-   * subscriber ever attaches and the listener-count eviction can't fire. Without
-   * this, the settled-rejected ref would stay interned forever and a boundary
-   * retry would re-read the same dead ref, re-throwing instantly — retry could
-   * never succeed. Deferring by a microtask (the same trick subscribe teardown
-   * uses) lets any component that *did* commit cancel the eviction by holding a
-   * subscription; after eviction, a retry interns a fresh ref and cold-starts.
+   * Called by React hooks when a suspense-started render is abandoned before commit.
+   * No subscriber ever attaches in that path, so the listener-count eviction can't
+   * fire. Deferring by a microtask (the same trick subscribe teardown uses) lets any
+   * component that *did* commit cancel the eviction by holding a subscription; after
+   * eviction, a retry interns a fresh ref and cold-starts.
    */
-  coldErrorDelivered(): void {
+  releaseColdStart(): void {
     if (this.#suspenseSettled && this.#listeners.size === 0) {
       this.#scheduleCleanup()
     }

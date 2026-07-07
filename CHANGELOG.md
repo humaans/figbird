@@ -8,7 +8,7 @@ Figbird already made it easy to fetch lists and records and keep them live. But 
 
 This release makes joins a first-class part of Figbird. Each screen can now ask for the minimum data it needs — a window of records and their relations, declared as a single query. Figbird keeps that query fully realtime-reactive, merging events locally whenever it can safely determine the result, and refetching when it can’t.
 
-This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
+This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `useQueries` for suspending on several independent queries in parallel, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
 
 See the [docs](https://humaans.github.io/figbird) for the full story. The old hooks still work — see Deprecated below — so you can migrate gradually.
 

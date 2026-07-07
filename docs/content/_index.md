@@ -140,9 +140,7 @@ const schema = createSchema({
     tasks: service<TaskService>(),
     people: service<PersonService>({ path: 'api/people' }),
   },
-  relationships: {
-    /* per-service factories — see Relations */
-  },
+  relationships: {/* per-service factories — see Relations */},
 })
 ```
 
@@ -319,6 +317,32 @@ is needed to satisfy the args type:
 ```ts
 const { data } = useQuery(issueDetail, id ? { id } : null)
 ```
+
+### Several queries at once
+
+Under Suspense, two `useQuery` calls in one component fetch sequentially — the first
+throws its promise before the second ever runs. When one boundary needs several
+_unrelated_ roots, `useQueries` starts every fetch first and suspends once for the
+whole set:
+
+```tsx
+const [people, announcements] = useQueries([
+  q.people,
+  q.announcements.orderBy('createdAt', 'desc').limit(5),
+])
+```
+
+Each element carries the same contract as the `useQuery` suspense result for its
+builder — `data`, `error`, `isFetching`, `refetch`, and the same semantics: a cold
+error on any query throws to the error boundary, while a failed refetch surfaces on
+that element's `error` with its last good `data` still rendering. A `.paginate()`
+element widens with its own `loadMore`/`hasMore`/… family, exactly like the single
+hook; calling `loadMore()` appends that element's next page without disturbing the
+others.
+
+Reach for this only when the roots are genuinely independent — connected data belongs
+in a single builder with `.related()`. Without Suspense there is no waterfall to
+avoid: multiple `{ suspense: false }` `useQuery` calls already run in parallel.
 
 ## Pagination
 
@@ -1089,6 +1113,18 @@ Options: `skip?: boolean`, `suspense?: boolean` (must be static per call site), 
 Result fields (suspense form): `data` (guaranteed for the exact query passed), `error`
 (non-null when a refetch failed while data is showing; cold errors throw instead),
 `isFetching` (background fetch in flight on the current query), `refetch()`.
+
+## useQueries
+
+```ts
+const [issues, users] = useQueries([q.issues.where({ status: 'open' }), q.users])
+```
+
+Suspends on every cold query in the array at once — all fetches in parallel, one
+suspension for the set (see [Several queries at once](#several-queries-at-once)).
+Each element has the `useQuery` suspense result shape for its builder (`data`,
+`error`, `isFetching`, `refetch`, plus the `loadMore`/`hasMore`/… family on a
+`.paginate()` element). Suspense-only. Options: `staleTime?: number`.
 
 ## m
 
