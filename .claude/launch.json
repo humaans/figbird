@@ -8,6 +8,12 @@
       "port": 5173
     },
     {
+      "name": "demo:client-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "demo", "run", "dev:client", "--", "--port", "5273", "--strictPort"],
+      "port": 5273
+    },
+    {
       "name": "demo:server",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "demo:server"],

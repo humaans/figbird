@@ -17,6 +17,15 @@ export type AssembledRelationData =
   | { kind: 'perParent'; byParent: Map<string, unknown[]> }
 
 /**
+ * The dotted key identifying one relation node across the engine (`"comments"`,
+ * `"comments.reactions"`). Every walk — sync, gather, assembly — must key
+ * identically, or relation subscriptions and their gathered data disconnect.
+ */
+export function relationKey(parentKey: string | null, relName: string): string {
+  return parentKey ? `${parentKey}.${relName}` : relName
+}
+
+/**
  * Dedupe + sort + stable-encode a set of key values. The encoded key is what relation
  * subs compare to detect "same source set, nothing to re-fetch" — every sync path must
  * produce it identically or subscriptions churn.
@@ -86,7 +95,7 @@ function buildIndexes(
     const relDef = relationships[relName]
     if (!relDef) continue
 
-    const key = parentKey ? `${parentKey}.${relName}` : relName
+    const key = relationKey(parentKey, relName)
     const rel = relationData.get(key)
     // Per-parent data is already keyed by parent; 'none' has nothing to index.
     if (!rel || rel.kind === 'none' || rel.kind === 'perParent') continue
@@ -156,7 +165,7 @@ export function assembleRelations(
     const result = { ...(item as object) } as Record<string, unknown>
 
     for (const [relName, relAST] of Object.entries(ast.related)) {
-      const key = parentKey ? `${parentKey}.${relName}` : relName
+      const key = relationKey(parentKey, relName)
       const relDef = relationships[relName]
       if (!relDef) continue
 

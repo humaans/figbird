@@ -12,6 +12,7 @@ import type {
 import {
   assembleRelations,
   getFieldValueAsList,
+  relationKey,
   sourceSet,
   sourceValueKey,
   uniqueSourceValues,
@@ -452,7 +453,7 @@ export class RelationalQueryRef<
   ): GatherResult {
     const relationships = this.#schema.relationships?.[ast.service] ?? {}
     for (const [relName, relAST] of Object.entries(ast.related)) {
-      const key = parentKey ? `${parentKey}.${relName}` : relName
+      const key = relationKey(parentKey, relName)
       const sub = this.#relationSubs.get(key)
 
       if (!relationships[relName]) {
@@ -651,7 +652,7 @@ export class RelationalQueryRef<
     const relationships = this.#schema.relationships?.[ast.service] ?? {}
 
     for (const [relName, relAST] of Object.entries(ast.related)) {
-      const key = parentKey ? `${parentKey}.${relName}` : relName
+      const key = relationKey(parentKey, relName)
       const relDef = relationships[relName]
       if (!relDef) {
         console.warn(`Relationship "${relName}" not found for service "${ast.service}"`)
@@ -720,9 +721,7 @@ export class RelationalQueryRef<
 
     const existing = this.#relationSubs.get(key)
     if (
-      existing &&
-      existing.kind !== 'junction' &&
-      existing.kind !== 'perParent' &&
+      (existing?.kind === 'fanIn' || existing?.kind === 'empty') &&
       existing.sourceKey === sourceKey
     ) {
       // Already synced for this exact set of source values. Still need to recurse into
@@ -1039,9 +1038,9 @@ export class RelationalQueryRef<
   #subscribeToRelationalFilterInvalidations(): void {
     if (this.#ast.snapshot) return
     if (this.#processedEventUnsub) return
-    const dependencies = collectRelationalFilterDependencies(this.#schema, this.#ast)
-    if (dependencies.length === 0) return
     const paths = collectRelationalFilterPaths(this.#schema, this.#ast.service, this.#ast.query)
+    const dependencies = collectRelationalFilterDependencies(this.#schema, this.#ast, paths)
+    if (dependencies.length === 0) return
 
     for (const dependency of dependencies) {
       this.#host.queryStore.ensureRealtimeSubscription(dependency.serviceName)

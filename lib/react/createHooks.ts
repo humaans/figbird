@@ -29,12 +29,7 @@ import { useActionImpl, type UseActionHook, type UseActionResult } from './useAc
 import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
 import { useMutationImpl, type UseMutationResult } from './useMutation.js'
 import { useFindImpl, useGetImpl, type QueryResult } from './useQueryByDesc.js'
-import {
-  useQueryImpl,
-  type FigbirdLike,
-  type UseQueryHook,
-  type UseQueryOptions,
-} from './useQuery.js'
+import { useQueryImpl, type UseQueryHook, type UseQueryOptions } from './useQuery.js'
 import type { ArgsAndOptions, DefineQuery, QueryDefinition } from '../core/figbird.js'
 import type { QueryBuilderProxy } from '../core/queryBuilder.js'
 
@@ -273,12 +268,7 @@ export function createHooks<F extends Figbird<any, any>>(
     argsOrOptions?: unknown,
     maybeOptions?: UseQueryOptions,
   ) {
-    return useQueryImpl(
-      useBoundFigbird() as unknown as FigbirdLike,
-      queryOrDefinition,
-      argsOrOptions,
-      maybeOptions,
-    )
+    return useQueryImpl(useBoundFigbird(), queryOrDefinition, argsOrOptions, maybeOptions)
   }
 
   return {

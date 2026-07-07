@@ -65,13 +65,14 @@ export type RelationalQueryResult<T> =
 
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
-  query(builder: AnyQueryBuilder): {
+  query<B extends AnyQueryBuilder>(
+    builder: B,
+  ): {
     subscribe(
-      fn: (state: unknown) => void,
+      fn: (state: RelationalQueryState<QueryBuilderResult<B>>) => void,
       options?: { staleTime?: number | undefined },
     ): () => void
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    getSnapshot(): any
+    getSnapshot(): RelationalQueryState<QueryBuilderResult<B>>
     refetch(): void
     loadMore(): void
     suspensePromise(): Promise<void>
@@ -272,12 +273,7 @@ export const useQuery: UseQueryHook = ((
   argsOrOptions?: unknown,
   maybeOptions?: UseQueryOptions,
 ): unknown =>
-  useQueryImpl(
-    useFigbird() as FigbirdLike,
-    queryOrDefinition,
-    argsOrOptions,
-    maybeOptions,
-  )) as UseQueryHook
+  useQueryImpl(useFigbird(), queryOrDefinition, argsOrOptions, maybeOptions)) as UseQueryHook
 
 /**
  * Instance-taking dispatch shared by the context-bound `useQuery` and the

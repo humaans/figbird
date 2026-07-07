@@ -98,6 +98,9 @@ function dedupeRelationalPaths(paths: RelationalFilterPath[]): RelationalFilterP
 export function collectRelationalFilterDependencies(
   schema: Schema,
   ast: QueryAST,
+  // The root query's filter paths — callers already hold them (they're also the
+  // event-matching input), so they're passed in rather than re-derived here.
+  paths: RelationalFilterPath[],
 ): RelationalFilterDependency[] {
   const byService = new Map<string, Set<string>>()
   const add = (serviceName: string, fields: string[]) => {
@@ -112,7 +115,7 @@ export function collectRelationalFilterDependencies(
     }
   }
 
-  for (const filterPath of collectRelationalFilterPaths(schema, ast.service, ast.query)) {
+  for (const filterPath of paths) {
     let currentService = ast.service
     for (let i = 0; i < filterPath.path.length; i++) {
       const relName = filterPath.path[i]!

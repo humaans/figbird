@@ -71,10 +71,20 @@ export function explainQueryNode(
 ): { class: QueryNodeClass; reasons: ClassificationReason[] } {
   const authoritative: ClassificationReason[] = []
   if (server) authoritative.push({ code: 'server-flag', detail: '.server()' })
-  collectServerOnlyReasons(query, authoritative, localOperators)
 
   const window: ClassificationReason[] = []
-  if (!allPages) collectWindowReasons(query, window)
+  walkQueryKeys(query, key => {
+    if (!key.startsWith('$')) return
+    if (SERVER_ONLY_QUERY_FILTERS.has(key)) {
+      authoritative.push({ code: 'select-projection', detail: key })
+    } else if (SERVER_WINDOW_QUERY_FILTERS.has(key)) {
+      // allPages neutralizes windows: the full result set is fetched, so
+      // membership is locally provable regardless of $limit/$skip/$sort.
+      if (!allPages) window.push({ code: 'window-filter', detail: key })
+    } else if (!LOCAL_QUERY_OPERATORS.has(key) && !localOperators?.has(key)) {
+      authoritative.push({ code: 'server-only-operator', detail: key })
+    }
+  })
 
   let result: { class: QueryNodeClass; reasons: ClassificationReason[] }
   if (authoritative.length > 0) {
@@ -100,60 +110,29 @@ export function explainQueryNode(
   return result
 }
 
-function collectWindowReasons(value: unknown, reasons: ClassificationReason[]): void {
+/**
+ * The one traversal every query inspection shares: visit each object key
+ * (before its children), recursing through nested objects and arrays.
+ */
+function walkQueryKeys(value: unknown, visit: (key: string) => void): void {
   if (!value || typeof value !== 'object') return
   if (Array.isArray(value)) {
-    for (const item of value) collectWindowReasons(item, reasons)
+    for (const item of value) walkQueryKeys(item, visit)
     return
   }
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (SERVER_WINDOW_QUERY_FILTERS.has(key)) {
-      reasons.push({ code: 'window-filter', detail: key })
-    }
-    collectWindowReasons(child, reasons)
-  }
-}
-
-function collectServerOnlyReasons(
-  value: unknown,
-  reasons: ClassificationReason[],
-  localOperators?: ReadonlySet<string>,
-): void {
-  if (!value || typeof value !== 'object') return
-  if (Array.isArray(value)) {
-    for (const item of value) collectServerOnlyReasons(item, reasons, localOperators)
-    return
-  }
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key.startsWith('$')) {
-      if (SERVER_ONLY_QUERY_FILTERS.has(key)) {
-        reasons.push({ code: 'select-projection', detail: key })
-      } else if (
-        !SERVER_WINDOW_QUERY_FILTERS.has(key) &&
-        !LOCAL_QUERY_OPERATORS.has(key) &&
-        !localOperators?.has(key)
-      ) {
-        reasons.push({ code: 'server-only-operator', detail: key })
-      }
-    }
-    collectServerOnlyReasons(child, reasons, localOperators)
+    visit(key)
+    walkQueryKeys(child, visit)
   }
 }
 
 /** True when the query uses `$limit`/`$skip`/`$sort` anywhere. */
 export function hasWindowFilters(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false
-
-  if (Array.isArray(value)) {
-    return value.some(item => hasWindowFilters(item))
-  }
-
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (SERVER_WINDOW_QUERY_FILTERS.has(key)) return true
-    if (hasWindowFilters(child)) return true
-  }
-
-  return false
+  let found = false
+  walkQueryKeys(value, key => {
+    if (SERVER_WINDOW_QUERY_FILTERS.has(key)) found = true
+  })
+  return found
 }
 
 /** How a relation node is executed at runtime. */
