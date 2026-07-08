@@ -65,6 +65,15 @@ export class QueryRef<
     return this.#queryStore.subscribe<T>(this.#queryId, fn, options)
   }
 
+  /**
+   * Re-run the store's subscribe-time freshness check without adding a listener.
+   * Relational refs use this when a stricter subscriber joins an already-live tree.
+   */
+  ensureFresh(options?: { staleTime?: number | undefined }): void {
+    this.#queryStore.materialize(this)
+    this.#queryStore.ensureFresh(this.#queryId, options)
+  }
+
   /** Returns the latest known state for this query, if available. */
   getSnapshot(): QueryState<T, TMeta> | undefined {
     this.#queryStore.materialize(this)

@@ -165,11 +165,12 @@ export class RelationalQueryRef<
   // kind:'empty' entry counts, so loading detection doesn't hang on empty relations.
   #relationSubs: Map<string, RelationSub<S, TParams, TMeta, TQuery>> = new Map()
   #listeners: Set<(state: RelationalQueryState<T>) => void> = new Set()
+  #listenerStaleTimes: Map<(state: RelationalQueryState<T>) => void, number> = new Map()
   #processedEventUnsub: (() => void) | null = null
   #relationalFilterRefetchQueued = false
-  // Freshness tolerance captured from the subscriber that triggers setup — applied to
-  // every internal store subscription so warm-in-store reads within the window skip
-  // the SWR revalidation. 0 (default) revalidates as always.
+  // Strictest active subscriber freshness tolerance — applied to newly-created
+  // internal subscriptions. Existing subscriptions are prodded through ensureFresh()
+  // when each subscriber joins, so late strict readers are honored too.
   #staleTime = 0
   // Snapshot mode: the whole tree is fetched once and frozen — every internal query
   // subscribes with realtime disabled, and relational-filter invalidation is skipped.
@@ -269,17 +270,25 @@ export class RelationalQueryRef<
     fn: (state: RelationalQueryState<T>) => void,
     options?: { staleTime?: number | undefined },
   ): () => void {
+    const staleTime = options?.staleTime ?? 0
     this.#listeners.add(fn)
+    this.#listenerStaleTimes.set(fn, staleTime)
+    this.#staleTime = this.#currentStaleTime()
 
     if (!this.#root) {
-      this.#staleTime = options?.staleTime ?? 0
       this.#setupRoot()
+    } else {
+      this.#root.setStaleTime(this.#staleTime)
+      this.#ensureFresh(staleTime)
     }
 
     // Don't call fn synchronously - useSyncExternalStore will call getSnapshot() instead
 
     return () => {
       this.#listeners.delete(fn)
+      this.#listenerStaleTimes.delete(fn)
+      this.#staleTime = this.#currentStaleTime()
+      this.#root?.setStaleTime(this.#staleTime)
 
       // Clean up if no more listeners — but not synchronously. React StrictMode
       // unsubscribes and immediately resubscribes every mount; tearing down on the
@@ -289,6 +298,36 @@ export class RelationalQueryRef<
       if (this.#listeners.size === 0) {
         this.#scheduleCleanup()
       }
+    }
+  }
+
+  #currentStaleTime(): number {
+    let staleTime = Infinity
+    for (const value of this.#listenerStaleTimes.values()) {
+      staleTime = Math.min(staleTime, value)
+    }
+    return staleTime === Infinity ? 0 : staleTime
+  }
+
+  #ensureFresh(staleTime: number): void {
+    this.#root?.ensureFresh(staleTime)
+    for (const sub of this.#relationSubs.values()) {
+      this.#ensureRelationSubFresh(sub, staleTime)
+    }
+  }
+
+  #ensureRelationSubFresh(sub: RelationSub<S, TParams, TMeta, TQuery>, staleTime: number): void {
+    switch (sub.kind) {
+      case 'empty':
+        return
+      case 'fanIn':
+      case 'junction':
+        sub.queryRef.ensureFresh({ staleTime })
+        return
+      case 'perParent':
+        for (const child of sub.children.values()) {
+          child.queryRef.ensureFresh({ staleTime })
+        }
     }
   }
 
@@ -1177,6 +1216,8 @@ export class RelationalQueryRef<
     this.#lastWrappedInner = null
     this.#lastRootData = null
     this.#lastRelationData.clear()
+    this.#listenerStaleTimes.clear()
+    this.#staleTime = 0
     // Evict from the figbird-level cache so a subsequent query rebuilds a fresh ref.
     // Reset the suspense promise state too — a fresh cold-start will need a fresh promise.
     this.#suspensePromise = null
@@ -1235,6 +1276,8 @@ interface RootSnapshot {
 
 interface RootSource {
   snapshot(): RootSnapshot
+  setStaleTime(staleTime: number): void
+  ensureFresh(staleTime?: number): void
   refetch(): void
   teardown(): void
 }
@@ -1345,6 +1388,12 @@ class SingleQueryRoot<
     }
     return { phase: 'ready', rows: this.#asRows(s.data), isFetching: s.isFetching, error: null }
   }
+
+  ensureFresh(staleTime?: number): void {
+    this.#queryRef.ensureFresh({ staleTime })
+  }
+
+  setStaleTime(_staleTime: number): void {}
 
   refetch(): void {
     this.#queryRef.refetch()
@@ -1517,6 +1566,16 @@ class PagedQueryRoot<
       isFetching: pageStates.some(s => s.isFetching),
       error: null,
     }
+  }
+
+  ensureFresh(staleTime?: number): void {
+    for (const ref of this.#pageRefs) {
+      ref.ensureFresh({ staleTime })
+    }
+  }
+
+  setStaleTime(staleTime: number): void {
+    this.#staleTime = staleTime
   }
 
   /** Memoized pagination block for the relational snapshot. */

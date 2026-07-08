@@ -225,22 +225,7 @@ export class QueryStore<
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
 
-    // `staleTime` is the subscriber's freshness tolerance, not part of query identity —
-    // two readers with different tolerances share one entry, and the most demanding one
-    // naturally keeps it freshest. Default 0 revalidates on every (re)subscribe.
-    const staleTime = options.staleTime ?? 0
-    const isFresh =
-      staleTime > 0 && q.fetchedAt !== undefined && Date.now() - q.fetchedAt < staleTime
-    if (
-      q.pending ||
-      (q.state.status === 'success' &&
-        q.config.fetchPolicy === 'swr' &&
-        !q.state.isFetching &&
-        !isFresh) ||
-      (q.state.status === 'error' && !q.state.isFetching)
-    ) {
-      this.#queue(queryId)
-    }
+    this.ensureFresh(queryId, options)
 
     const removeListener = this.#addListener(queryId, fn)
 
@@ -284,6 +269,30 @@ export class QueryStore<
   /** Number of active subscribers for a query — powers figbird.inspect(). */
   getSubscriberCount(queryId: string): number {
     return this.#listenerCount(queryId)
+  }
+
+  /**
+   * Ensure a materialized query satisfies a subscriber's freshness tolerance.
+   * `staleTime` is not part of query identity: a later, stricter subscriber must be
+   * able to revalidate an already-live query without rebuilding its subscription.
+   */
+  ensureFresh(queryId: string, options: { staleTime?: number | undefined } = {}): void {
+    const q = this.#getQuery(queryId)
+    if (!q) return
+
+    const staleTime = options.staleTime ?? 0
+    const isFresh =
+      staleTime > 0 && q.fetchedAt !== undefined && Date.now() - q.fetchedAt < staleTime
+    if (
+      q.pending ||
+      (q.state.status === 'success' &&
+        q.config.fetchPolicy === 'swr' &&
+        !q.state.isFetching &&
+        !isFresh) ||
+      (q.state.status === 'error' && !q.state.isFetching)
+    ) {
+      this.#queue(queryId)
+    }
   }
 
   /** Refetch a specific query by id. */

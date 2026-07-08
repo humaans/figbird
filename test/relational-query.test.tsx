@@ -2952,6 +2952,29 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
   unsub3()
 })
 
+test('staleTime: stricter subscriber revalidates an already-live relational query', async t => {
+  const { figbird, feathers } = createApp()
+  const issueDetail = defineQuery('issueDetailStaleTime', ({ id }: { id: number }) =>
+    figbird.q.issues.get(id).related('creator'),
+  )
+
+  // A speculative read keeps the relational ref alive with a lenient freshness window.
+  figbird.prefetch(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.get, 1)
+  t.is(feathers.service('users').counts.find, 1)
+
+  // A normal subscriber has staleTime 0. Even though it joins the already-live
+  // relational ref, its stricter tolerance must propagate to the root and relation refs.
+  const ref = figbird.query(issueDetail, { id: 1 })
+  const unsub = ref.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(feathers.service('issues').counts.get, 2, 'root get must revalidate')
+  t.is(feathers.service('users').counts.find, 2, 'relation find must revalidate')
+  unsub()
+})
+
 test('prefetch: idempotent within staleTime and warms the cache for a later read', async t => {
   const { figbird, feathers } = createApp()
   const issueDetail = defineQuery('issueDetailPrefetch', ({ id }: { id: number }) =>
