@@ -52,6 +52,13 @@ const MUTATION_EVENT_TYPE = {
   remove: 'removed',
 } as const satisfies Record<MutationMethod, Event['type']>
 
+export interface QueryFetchStats {
+  fetchCount: number
+  errorCount: number
+  lastDurationMs?: number
+  totalDurationMs: number
+}
+
 function documentVisibility(): VisibilitySource {
   return {
     isHidden: () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
@@ -83,6 +90,7 @@ export class QueryStore<
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
+  #queryStats: Map<string, QueryFetchStats> = new Map()
 
   // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
   // with trailing timers, and the set of reconciliations deferred while hidden.
@@ -170,6 +178,12 @@ export class QueryStore<
   /** Returns the current state for a query by id, if present. */
   getQueryState<T>(queryId: string): QueryState<T, TMeta> | undefined {
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
+  }
+
+  getQueryStats(queryId: string): QueryFetchStats | undefined {
+    const stats = this.#queryStats.get(queryId)
+    if (!stats) return undefined
+    return { ...stats }
   }
 
   /**
@@ -349,7 +363,13 @@ export class QueryStore<
     const args = this.#buildMutationArgs(desc)
 
     return this.#trackMutation(
-      { serviceName, method, ...(id !== undefined ? { id } : {}), optimistic: isOptimistic },
+      {
+        serviceName,
+        method,
+        ...(id !== undefined ? { id } : {}),
+        optimistic: isOptimistic,
+        args,
+      },
       () => {
         if (plan) this.#processEvent(serviceName, plan)
         return this.#adapter.mutate(serviceName, method, args)
@@ -383,7 +403,7 @@ export class QueryStore<
    * are positional and opaque.
    */
   call(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
-    return this.#trackMutation({ serviceName, method, optimistic: false }, () =>
+    return this.#trackMutation({ serviceName, method, optimistic: false, args }, () =>
       this.#adapter.mutate(serviceName, method, args),
     )
   }
@@ -400,14 +420,20 @@ export class QueryStore<
    * outcome. Errors are normalized to `Error` and rethrown.
    */
   #trackMutation<T>(
-    entry: { serviceName: string; method: string; id?: string | number; optimistic: boolean },
+    entry: {
+      serviceName: string
+      method: string
+      id?: string | number
+      optimistic: boolean
+      args: readonly unknown[]
+    },
     run: () => Promise<T>,
     hooks?: {
       onSuccess?: (result: T) => void
       onError?: (error: Error, mutationId: number) => void
     },
   ): Promise<T> {
-    const { serviceName, method, id, optimistic } = entry
+    const { serviceName, method, id, optimistic, args } = entry
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
     const mutationId = this.#mutations.start({ serviceName, method, ...idField })
@@ -418,6 +444,7 @@ export class QueryStore<
       method,
       ...idField,
       optimistic,
+      args,
     })
     return run().then(
       result => {
@@ -470,9 +497,14 @@ export class QueryStore<
     }
     try {
       const result = await this.#fetch(queryId)
-      this.#fetched({ queryId, result })
+      const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
+      this.#fetched({
+        queryId,
+        result,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      })
       const q = this.#getQuery(queryId)
-      if (q && startedAt !== undefined) {
+      if (q && durationMs !== undefined) {
         const data = result.data
         const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
         this.#events.emit({
@@ -480,21 +512,26 @@ export class QueryStore<
           serviceName: q.desc.serviceName,
           method: q.desc.method,
           queryId,
-          durationMs: Date.now() - startedAt,
+          durationMs,
           itemCount,
         })
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      this.#fetchFailed({ queryId, error })
+      const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
+      this.#fetchFailed({
+        queryId,
+        error,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      })
       const q = this.#getQuery(queryId)
-      if (q && startedAt !== undefined) {
+      if (q && durationMs !== undefined) {
         this.#events.emit({
           kind: 'fetch:error',
           serviceName: q.desc.serviceName,
           method: q.desc.method,
           queryId,
-          durationMs: Date.now() - startedAt,
+          durationMs,
           error,
         })
       }
@@ -643,9 +680,11 @@ export class QueryStore<
   #fetched({
     queryId,
     result,
+    durationMs,
   }: {
     queryId: string
     result: QueryResponse<unknown, TMeta | undefined>
+    durationMs?: number
   }): void {
     let shouldRefetch = false
     const processedEvents: ProcessedRealtimeEvent[] = []
@@ -729,6 +768,10 @@ export class QueryStore<
         service.materialized = { queryId, fetchedAt: Date.now() }
       }
 
+      this.#recordFetchStats(queryId, {
+        ok: true,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      })
       service.queries.set(queryId, {
         ...query,
         fetchedAt: Date.now(),
@@ -791,7 +834,15 @@ export class QueryStore<
     }
   }
 
-  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
+  #fetchFailed({
+    queryId,
+    error,
+    durationMs,
+  }: {
+    queryId: string
+    error: Error
+    durationMs?: number
+  }): void {
     let shouldRefetch = false
 
     const touched = this.#transactOverService(queryId, (service, query) => {
@@ -799,6 +850,10 @@ export class QueryStore<
 
       shouldRefetch = query.dirty
 
+      this.#recordFetchStats(queryId, {
+        ok: false,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      })
       service.queries.set(queryId, {
         ...query!,
         state: {
@@ -815,6 +870,23 @@ export class QueryStore<
     if (shouldRefetch && this.#listenerCount(queryId) > 0) {
       this.#queue(queryId)
     }
+  }
+
+  #recordFetchStats(
+    queryId: string,
+    { ok, durationMs }: { ok: boolean; durationMs?: number },
+  ): void {
+    const current = this.#queryStats.get(queryId) ?? {
+      fetchCount: 0,
+      errorCount: 0,
+      totalDurationMs: 0,
+    }
+    this.#queryStats.set(queryId, {
+      fetchCount: current.fetchCount + 1,
+      errorCount: current.errorCount + (ok ? 0 : 1),
+      totalDurationMs: current.totalDurationMs + (durationMs ?? 0),
+      ...(durationMs !== undefined ? { lastDurationMs: durationMs } : {}),
+    })
   }
 
   // Realtime event handling
@@ -1024,6 +1096,7 @@ export class QueryStore<
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
   #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (!force && this.#listenerCount(queryId) === 0) {
       this.#markQueryPending(queryId)
       return
@@ -1032,10 +1105,26 @@ export class QueryStore<
     if (this.#visibility.isHidden()) {
       this.#deferredWhileHidden.add(queryId)
       this.#markQueryPending(queryId)
+      if (serviceName !== undefined) {
+        this.#events.emit({
+          kind: 'reconcile:deferred',
+          queryId,
+          serviceName,
+          reason: 'hidden',
+        })
+      }
       return
     }
 
     if (this.#reconcileCooldown <= 0) {
+      if (serviceName !== undefined) {
+        this.#events.emit({
+          kind: 'reconcile:scheduled',
+          queryId,
+          serviceName,
+          mode: 'leading',
+        })
+      }
       this.refetch(queryId)
       return
     }
@@ -1045,8 +1134,25 @@ export class QueryStore<
 
     if (!window || now - window.lastAt >= this.#reconcileCooldown) {
       this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
+      if (serviceName !== undefined) {
+        this.#events.emit({
+          kind: 'reconcile:scheduled',
+          queryId,
+          serviceName,
+          mode: 'leading',
+        })
+      }
       this.refetch(queryId)
       return
+    }
+
+    if (serviceName !== undefined) {
+      this.#events.emit({
+        kind: 'reconcile:deferred',
+        queryId,
+        serviceName,
+        reason: 'cooldown',
+      })
     }
 
     if (window.trailing) return // the pending trailing refetch already covers this
@@ -1068,6 +1174,14 @@ export class QueryStore<
     // Never keep a Node process alive for a pending reconciliation.
     ;(timer as { unref?: () => void }).unref?.()
     window.trailing = timer
+    if (serviceName !== undefined) {
+      this.#events.emit({
+        kind: 'reconcile:scheduled',
+        queryId,
+        serviceName,
+        mode: 'trailing',
+      })
+    }
   }
 
   /** On becoming visible, reconcile everything that deferred while hidden. */
@@ -1338,6 +1452,7 @@ export class QueryStore<
         }
         service.queries.delete(queryId)
         this.#serviceNamesByQueryId.delete(queryId)
+        this.#queryStats.delete(queryId)
         if (service.materialized?.queryId === queryId) {
           delete service.materialized
         }

@@ -14,6 +14,7 @@ export {
 export type {
   ArgsAndOptions,
   DefineQuery,
+  DevtoolsPreference,
   EventType,
   FigbirdEvent,
   FigbirdEvents,
@@ -29,6 +30,7 @@ export type {
   StandardSchemaV1,
   VisibilitySource,
 } from './core/figbird.js'
+export { DevtoolsControl } from './core/figbird.js'
 
 // schema
 export { createSchema, service } from './core/schema.js'

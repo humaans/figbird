@@ -17,8 +17,9 @@ export type MutationEventMethod = MutationMethod | (string & {})
  * Observability events emitted by a Figbird instance — the same signal a dev tool
  * panel or trace logger would want to subscribe to.
  *
- * Events are intentionally lightweight (ids, durations, no payload diffs) so that
- * subscribing is cheap even with many concurrent queries.
+ * Events are intentionally lightweight. Mutation and action starts carry their
+ * original arguments so an attached devtool can inspect the write; no result or
+ * cache diffs are emitted, and emit() drops everything when nothing is listening.
  */
 export type FigbirdEvent =
   | {
@@ -46,6 +47,28 @@ export type FigbirdEvent =
       error: Error
     }
   | {
+      kind: 'reconcile:scheduled'
+      queryId: string
+      serviceName: string
+      mode: 'leading' | 'trailing'
+    }
+  | {
+      kind: 'reconcile:deferred'
+      queryId: string
+      serviceName: string
+      reason: 'hidden' | 'cooldown'
+    }
+  | {
+      kind: 'prepare:start' | 'prefetch:start'
+      key: string
+      name?: string
+    }
+  | {
+      kind: 'prepare:end' | 'prefetch:end'
+      key: string
+      durationMs: number
+    }
+  | {
       kind: 'realtime'
       serviceName: string
       type: EventType
@@ -59,6 +82,7 @@ export type FigbirdEvent =
       method: MutationEventMethod
       id?: string | number
       optimistic: boolean
+      args?: readonly unknown[]
     }
   | {
       kind: 'mutate:end'
@@ -92,6 +116,7 @@ export type FigbirdEvent =
       actionId: number
       /** The label passed to `useAction(name, fn)` — absent for unnamed actions. */
       name?: string
+      args?: readonly unknown[]
     }
   | {
       kind: 'action:end'

@@ -207,25 +207,74 @@ export class RelationalQueryRef<
   #fanOutWarnedKeys: Set<string> = new Set()
 
   #onEvict: (() => void) | null = null
+  #name: string | undefined
 
   constructor(
     host: RelationalQueryHost<TMeta, TQuery>,
     ast: QueryAST,
     schema: S,
     onEvict?: () => void,
+    name?: string,
   ) {
     this.#host = host
     this.#ast = ast
     this.#schema = schema
     this.#queryId = `rq/${hashObject(ast)}`
     this.#onEvict = onEvict ?? null
+    this.#name = name
   }
 
   /** Returns internal details of this query reference (for debugging/testing). */
-  details(): { queryId: string; ast: QueryAST } {
+  details(): { queryId: string; ast: QueryAST; name?: string } {
     return {
       queryId: this.#queryId,
       ast: this.#ast,
+      ...(this.#name ? { name: this.#name } : {}),
+    }
+  }
+
+  /** Attach best-effort display metadata. It is never part of query identity. */
+  setDisplayName(name: string | undefined): void {
+    if (name && !this.#name) {
+      this.#name = name
+    }
+  }
+
+  /** Stable devtools projection for the store-level queries backing this ref. */
+  inspect(): {
+    key: string
+    name?: string
+    service: string
+    ast: QueryAST
+    nodes: Array<{ path: string; queryId: string }>
+  } {
+    const nodes: Array<{ path: string; queryId: string }> = []
+    for (const queryId of this.#root?.queryIds() ?? []) {
+      nodes.push({ path: '(root)', queryId })
+    }
+    for (const [path, sub] of this.#relationSubs) {
+      switch (sub.kind) {
+        case 'empty':
+          break
+        case 'fanIn':
+          nodes.push({ path: displayRelationPath(path), queryId: sub.queryRef.details().queryId })
+          break
+        case 'junction':
+          nodes.push({ path: `${path}#junction`, queryId: sub.queryRef.details().queryId })
+          break
+        case 'perParent':
+          for (const child of sub.children.values()) {
+            nodes.push({ path, queryId: child.queryRef.details().queryId })
+          }
+          break
+      }
+    }
+    return {
+      key: this.#queryId,
+      ...(this.#name ? { name: this.#name } : {}),
+      service: this.#ast.service,
+      ast: this.#ast,
+      nodes,
     }
   }
 
@@ -1228,6 +1277,10 @@ export class RelationalQueryRef<
   }
 }
 
+function displayRelationPath(path: string): string {
+  return path.endsWith('#dest') ? path.slice(0, -'#dest'.length) : path
+}
+
 /**
  * Combine several refs' cold-start promises into one aggregate suspension for a
  * multi-query hook. Calling `suspensePromise()` on each ref materializes its root, so
@@ -1280,6 +1333,7 @@ interface RootSource {
   ensureFresh(staleTime?: number): void
   refetch(): void
   teardown(): void
+  queryIds(): string[]
 }
 
 /**
@@ -1401,6 +1455,10 @@ class SingleQueryRoot<
 
   teardown(): void {
     this.#unsub()
+  }
+
+  queryIds(): string[] {
+    return [this.#queryRef.details().queryId]
   }
 }
 
@@ -1628,6 +1686,10 @@ class PagedQueryRoot<
     }
     this.#pageUnsubs.length = 0
     this.#pageRefs.length = 0
+  }
+
+  queryIds(): string[] {
+    return this.#pageRefs.map(ref => ref.details().queryId)
   }
 
   /**

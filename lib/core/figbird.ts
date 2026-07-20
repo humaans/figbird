@@ -1,10 +1,12 @@
 import type { Adapter, AdapterFindMeta, AdapterParams, AdapterQuery } from '../adapters/adapter.js'
+import { DevtoolsControl } from './devtoolsControl.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
 import type { MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
   type AnyQueryBuilder,
+  type QueryAST,
   type QueryBuilderProxy,
   type QueryBuilderResult,
 } from './queryBuilder.js'
@@ -21,6 +23,8 @@ import { QueryRef } from './queryRef.js'
 import { QueryStore, type VisibilitySource } from './queryStore.js'
 
 export type { VisibilitySource } from './queryStore.js'
+export { DevtoolsControl } from './devtoolsControl.js'
+export type { DevtoolsPreference } from './devtoolsControl.js'
 import {
   normalizeQueryConfig,
   queryOfParams,
@@ -118,6 +122,7 @@ export class Figbird<
   adapter: A
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
+  readonly devtools = new DevtoolsControl()
 
   // Cache of active RelationalQueryRef instances, keyed by AST hash. This is critical for
   // React 18 Suspense interop: on suspense retries React discards render-state (including
@@ -293,12 +298,14 @@ export class Figbird<
           'Pass schema to Figbird constructor: new Figbird({ schema, adapter })',
       )
     }
-    const builder = isQueryDefinition(queryOrBuilder)
-      ? queryOrBuilder.build(queryOrBuilder.validate(args))
-      : queryOrBuilder
+    const definition = isQueryDefinition(queryOrBuilder) ? queryOrBuilder : null
+    const builder: B = definition
+      ? definition.build(definition.validate(args))
+      : (queryOrBuilder as B)
     const hash = builder.hash()
     const cached = this.#relationalQueryCache.get(hash)
     if (cached) {
+      cached.setDisplayName(definition?.name)
       return cached as RelationalQueryRef<
         T,
         S,
@@ -323,6 +330,7 @@ export class Figbird<
           this.#relationalQueryCache.delete(hash)
         }
       },
+      definition?.name,
     )
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
@@ -368,14 +376,38 @@ export class Figbird<
     // query() owns definition resolution (validate → build → intern), so the
     // "definition + args collapses to one cache entry" contract lives in one place.
     const ref = this.query(query, args as never)
+    const key = ref.hash()
+    const startedAt = Date.now()
+    this.queryStore.events.emit({
+      kind: 'prepare:start',
+      key,
+      ...(query.name ? { name: query.name } : {}),
+    })
+    const promise = ref.suspensePromise()
+    promise.then(
+      () => {
+        this.queryStore.events.emit({
+          kind: 'prepare:end',
+          key,
+          durationMs: Date.now() - startedAt,
+        })
+      },
+      () => {
+        this.queryStore.events.emit({
+          kind: 'prepare:end',
+          key,
+          durationMs: Date.now() - startedAt,
+        })
+      },
+    )
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
     const unsub = ref.subscribe(() => {}, options ?? {})
     return {
-      key: ref.hash(),
-      promise: ref.suspensePromise(),
+      key,
+      promise,
       release: unsub,
     }
   }
@@ -430,6 +462,29 @@ export class Figbird<
       existing.release()
       this.#prefetches.delete(hash)
     }
+
+    const startedAt = Date.now()
+    this.queryStore.events.emit({
+      kind: 'prefetch:start',
+      key: hash,
+      ...(query.name ? { name: query.name } : {}),
+    })
+    ref.suspensePromise().then(
+      () => {
+        this.queryStore.events.emit({
+          kind: 'prefetch:end',
+          key: hash,
+          durationMs: Date.now() - startedAt,
+        })
+      },
+      () => {
+        this.queryStore.events.emit({
+          kind: 'prefetch:end',
+          key: hash,
+          durationMs: Date.now() - startedAt,
+        })
+      },
+    )
 
     // The pin also carries the staleTime so a warm-in-store read within the window
     // skips the SWR revalidation instead of re-fetching.
@@ -685,10 +740,12 @@ export class Figbird<
     for (const [serviceName, service] of this.queryStore.getState()) {
       for (const query of service.queries.values()) {
         const q = queryOfParams(query.desc.params)
+        const stats = this.queryStore.getQueryStats(query.queryId)
         rows.push({
           queryId: query.queryId,
           serviceName,
           method: query.desc.method,
+          ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
           query: q,
           classification: query.classification,
           status: query.state.status,
@@ -700,10 +757,24 @@ export class Figbird<
               : 0,
           fetchedAt: query.fetchedAt,
           subscriberCount: this.queryStore.getSubscriberCount(query.queryId),
+          ...(stats?.fetchCount !== undefined ? { fetchCount: stats.fetchCount } : {}),
+          ...(stats?.errorCount !== undefined ? { errorCount: stats.errorCount } : {}),
+          ...(stats?.lastDurationMs !== undefined ? { lastDurationMs: stats.lastDurationMs } : {}),
+          ...(stats?.totalDurationMs !== undefined
+            ? { totalDurationMs: stats.totalDurationMs }
+            : {}),
         })
       }
     }
     return rows
+  }
+
+  /**
+   * Read-only grouping of active relational query refs and the store-level queries
+   * each one currently owns. Entries exist while the interned ref is alive.
+   */
+  inspectRelational(): InspectedRelationalQuery[] {
+    return Array.from(this.#relationalQueryCache.values()).map(ref => ref.inspect())
   }
 
   /** Subscribe to any state changes within Figbird (across all queries/services). */
@@ -719,6 +790,7 @@ export interface InspectedQuery {
   queryId: string
   serviceName: string
   method: 'find' | 'get'
+  resourceId?: string | number
   query: Record<string, unknown> | undefined
   classification: QueryNodeClass | 'get'
   status: 'loading' | 'success' | 'error'
@@ -726,4 +798,17 @@ export interface InspectedQuery {
   itemCount: number
   fetchedAt: number | undefined
   subscriberCount: number
+  fetchCount?: number
+  errorCount?: number
+  lastDurationMs?: number
+  totalDurationMs?: number
+}
+
+/** One row of `figbird.inspectRelational()` for devtools grouping. */
+export interface InspectedRelationalQuery {
+  key: string
+  name?: string
+  service: string
+  ast: QueryAST
+  nodes: Array<{ path: string; queryId: string }>
 }

@@ -5,12 +5,13 @@
 
 import { Component, Suspense, useState, type ReactNode } from 'react'
 import { DelayedFallback } from 'figbird'
+import { FigbirdDevtools } from 'figbird/devtools'
 import { Link, Router, Routes, useRoute } from 'react-space-router'
 import { ActivityPanel } from './components/ActivityPanel'
 import { DevToolsPanel } from './components/DevTools'
 import { IssueListPane } from './components/IssueList'
 import { NewIssueModal } from './components/NewIssueModal'
-import { prepare, prefetch } from './figbird'
+import { figbird, prepare, prefetch } from './figbird'
 import { issueDetailRouteQueries } from './pages/IssueDetail/queries'
 import { TeamsPage } from './pages/Teams/screen'
 import { DetailSkeleton, SkeletonRows } from './components/ui'
@@ -162,6 +163,7 @@ export function App() {
         </Suspense>
       </Router>
       <DevToolsPanel />
+      <FigbirdDevtools figbird={figbird} enabledByDefault={import.meta.env.DEV} />
     </div>
   )
 }

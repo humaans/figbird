@@ -32,6 +32,7 @@ import {
 } from '../core/figbird.js'
 import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
+import { markQuerySubscription } from './devtoolsQueryMarker.js'
 
 /**
  * The `loadMore` family exposed by paginated queries — the shape both result types
@@ -334,6 +335,7 @@ function useQueryForRef<T>(qRef: QueryRefLike<T> | null, options: UseQueryOption
     },
     [qRef, staleTime],
   )
+  markQuerySubscription(subscribe, qRef ? [qRef.hash()] : [])
   const getSnapshot = useCallback((): RelationalQueryState<T> => {
     if (!qRef) return idleState as RelationalQueryState<T>
     return qRef.getSnapshot()

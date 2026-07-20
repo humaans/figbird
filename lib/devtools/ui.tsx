@@ -1,0 +1,493 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react'
+
+const MIN_DETAILS_WIDTH = 280
+const DEFAULT_DETAILS_WIDTH = 360
+const MAX_DETAILS_WIDTH = 720
+
+export type ColorScheme = 'light' | 'dark'
+export type DevtoolsThemeMode = 'system' | ColorScheme
+
+export interface DevtoolsColors {
+  bg: string
+  panel: string
+  panel2: string
+  toolbar: string
+  border: string
+  rowBorder: string
+  text: string
+  muted: string
+  faint: string
+  green: string
+  amber: string
+  red: string
+  blue: string
+  purple: string
+  activeButtonBg: string
+  drawerShadow: string
+}
+
+export interface DevtoolsTheme {
+  colors: DevtoolsColors
+  styles: Record<string, CSSProperties>
+}
+
+export const lightColors: DevtoolsColors = {
+  bg: '#fbfcfd',
+  panel: '#ffffff',
+  panel2: '#f3f5f7',
+  toolbar: '#f7f9fb',
+  border: '#d7dde3',
+  rowBorder: '#e8edf2',
+  text: '#18202a',
+  muted: '#687483',
+  faint: '#8b98a6',
+  green: '#087f4f',
+  amber: '#a76500',
+  red: '#cf3030',
+  blue: '#1d65d8',
+  purple: '#8a3ffc',
+  activeButtonBg: 'rgba(29,101,216,.1)',
+  drawerShadow: '0 -18px 50px rgba(29,42,58,.2)',
+}
+
+export const darkColors: DevtoolsColors = {
+  bg: '#101214',
+  panel: '#171a1d',
+  panel2: '#20252a',
+  toolbar: '#121518',
+  border: '#343b42',
+  rowBorder: 'rgba(255,255,255,.06)',
+  text: '#f2f4f5',
+  muted: '#9aa3ad',
+  faint: '#65717c',
+  green: '#63d28f',
+  amber: '#e7bd58',
+  red: '#ff7777',
+  blue: '#74a7ff',
+  purple: '#c98cff',
+  activeButtonBg: 'rgba(116,167,255,.16)',
+  drawerShadow: '0 -18px 50px rgba(0,0,0,.45)',
+}
+
+const defaultTheme: DevtoolsTheme = {
+  colors: lightColors,
+  styles: makeStyles(lightColors),
+}
+
+export const ThemeContext = createContext<DevtoolsTheme>(defaultTheme)
+
+export function makeStyles(colors: DevtoolsColors): Record<string, CSSProperties> {
+  return {
+    drawer: {
+      position: 'fixed',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      zIndex: 2147483646,
+      background: colors.bg,
+      color: colors.text,
+      borderTop: `1px solid ${colors.border}`,
+      boxShadow: colors.drawerShadow,
+      font: '12px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+    },
+    resize: {
+      height: 7,
+      cursor: 'ns-resize',
+      background: colors.panel,
+      borderBottom: `1px solid ${colors.border}`,
+    },
+    header: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      minHeight: 40,
+      padding: '0 10px',
+      borderBottom: `1px solid ${colors.border}`,
+      background: colors.panel,
+      overflowX: 'auto',
+    },
+    brand: {
+      fontWeight: 700,
+      color: colors.text,
+      marginRight: 2,
+    },
+    spacer: {
+      flex: 1,
+    },
+    body: {
+      overflow: 'hidden',
+      flex: 1,
+      minHeight: 0,
+    },
+    input: {
+      width: 210,
+      maxWidth: '44vw',
+      border: `1px solid ${colors.border}`,
+      borderRadius: 4,
+      background: colors.panel,
+      color: colors.text,
+      padding: '5px 8px',
+      font: 'inherit',
+    },
+    scroll: {
+      height: '100%',
+      overflow: 'auto',
+    },
+    table: {
+      width: '100%',
+      minWidth: 860,
+      tableLayout: 'fixed',
+      borderCollapse: 'collapse',
+    },
+    th: {
+      textAlign: 'left',
+      color: colors.muted,
+      fontWeight: 600,
+      padding: '6px 10px',
+      borderBottom: `1px solid ${colors.border}`,
+      position: 'sticky',
+      top: 0,
+      background: colors.bg,
+      zIndex: 1,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+    td: {
+      padding: '6px 10px',
+      borderBottom: `1px solid ${colors.rowBorder}`,
+      verticalAlign: 'middle',
+      overflow: 'hidden',
+    },
+    code: {
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontSize: 11,
+    },
+    details: {
+      padding: 12,
+      background: colors.panel,
+      overflow: 'auto',
+      minHeight: 0,
+      flex: 1,
+    },
+    detailsPane: {
+      minWidth: MIN_DETAILS_WIDTH,
+      display: 'flex',
+      flexDirection: 'column',
+      position: 'relative',
+      borderLeft: `1px solid ${colors.border}`,
+      background: colors.panel,
+    },
+    detailsHeader: {
+      minHeight: 34,
+      padding: '0 10px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      borderBottom: `1px solid ${colors.rowBorder}`,
+      background: colors.toolbar,
+    },
+    timeline: {
+      position: 'relative',
+      minWidth: 900,
+      padding: '6px 10px 20px',
+    },
+    lane: {
+      display: 'grid',
+      gridTemplateColumns: '220px 1fr',
+      minHeight: 32,
+      borderBottom: `1px solid ${colors.rowBorder}`,
+    },
+    laneLabel: {
+      color: colors.muted,
+      padding: '8px 10px 0 0',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+    laneTrack: {
+      position: 'relative',
+      minHeight: 32,
+    },
+    eventRow: {
+      display: 'grid',
+      gridTemplateColumns: '108px 132px minmax(104px, 160px) 1fr',
+      gap: 10,
+      padding: '5px 10px',
+      borderBottom: `1px solid ${colors.rowBorder}`,
+      alignItems: 'center',
+    },
+    writeRow: {
+      display: 'grid',
+      gridTemplateColumns: '96px 1fr 80px 90px',
+      gap: 8,
+      padding: '6px 10px',
+      borderBottom: `1px solid ${colors.rowBorder}`,
+      alignItems: 'center',
+    },
+  }
+}
+
+export function useDevtoolsTheme(): DevtoolsTheme {
+  return useContext(ThemeContext)
+}
+
+export function usePreferredColorScheme(theme: DevtoolsThemeMode): ColorScheme {
+  const [scheme, setScheme] = useState<ColorScheme>(() => resolveColorScheme(theme))
+
+  useEffect(() => {
+    if (theme !== 'system') {
+      setScheme(theme)
+      return
+    }
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      setScheme('light')
+      return
+    }
+
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const update = () => setScheme(media.matches ? 'dark' : 'light')
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [theme])
+
+  return scheme
+}
+
+function resolveColorScheme(theme: DevtoolsThemeMode): ColorScheme {
+  if (theme !== 'system') return theme
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'light'
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+export function buttonStyle(colors: DevtoolsColors, active: boolean): CSSProperties {
+  return {
+    border: `1px solid ${active ? colors.blue : colors.border}`,
+    borderRadius: 4,
+    background: active ? colors.activeButtonBg : colors.panel2,
+    color: active ? colors.text : colors.muted,
+    font: 'inherit',
+    padding: '4px 7px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }
+}
+
+export function iconButtonStyle(colors: DevtoolsColors): CSSProperties {
+  return {
+    width: 24,
+    height: 24,
+    display: 'inline-grid',
+    flexShrink: 0,
+    placeItems: 'center',
+    padding: 0,
+    border: 'none',
+    borderRadius: 3,
+    background: 'transparent',
+    color: colors.muted,
+    font: '16px/1 ui-sans-serif, system-ui, sans-serif',
+    cursor: 'pointer',
+  }
+}
+
+export function DetailsPane({
+  title,
+  subtitle,
+  width,
+  onResizeStart,
+  onClose,
+  children,
+}: {
+  title: ReactNode
+  subtitle?: ReactNode
+  width: number
+  onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
+  onClose: () => void
+  children: ReactNode
+}) {
+  const { colors, styles } = useDevtoolsTheme()
+  return (
+    <aside style={{ ...styles.detailsPane, flex: `0 0 ${width}px`, width }}>
+      <div
+        role='separator'
+        aria-label='Resize details pane'
+        aria-orientation='vertical'
+        title='Resize details pane'
+        onMouseDown={onResizeStart}
+        style={{
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: -4,
+          width: 8,
+          zIndex: 2,
+          cursor: 'col-resize',
+        }}
+      >
+        <span
+          aria-hidden='true'
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: 3,
+            width: 2,
+            height: 28,
+            marginTop: -14,
+            borderRadius: 2,
+            background: colors.border,
+          }}
+        />
+      </div>
+      <div style={styles.detailsHeader}>
+        <strong
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            minWidth: 0,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {title}
+        </strong>
+        {subtitle ? (
+          <span
+            style={{
+              color: colors.muted,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {subtitle}
+          </span>
+        ) : null}
+        <span style={styles.spacer} />
+        <button
+          type='button'
+          aria-label='Close details'
+          title='Close details'
+          style={iconButtonStyle(colors)}
+          onClick={onClose}
+        >
+          ×
+        </button>
+      </div>
+      <div style={styles.details}>{children}</div>
+    </aside>
+  )
+}
+
+export function DetailSection({ label, children }: { label: string; children: ReactNode }) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <section style={{ marginBottom: 12 }}>
+      <div
+        style={{
+          color: colors.muted,
+          fontSize: 10,
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          marginBottom: 5,
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+export function DetailStat({ label, value }: { label: string; value: string }) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <span>
+      <span style={{ color: colors.muted }}>{label}</span>{' '}
+      <strong style={{ color: colors.text }}>{value}</strong>
+    </span>
+  )
+}
+
+export function useDetailsPaneWidth(): [number, (event: ReactMouseEvent<HTMLDivElement>) => void] {
+  const [width, setWidth] = useState(DEFAULT_DETAILS_WIDTH)
+  const onResizeStart = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
+      const startX = event.clientX
+      const startWidth = width
+      const maxWidth = Math.min(MAX_DETAILS_WIDTH, ownerWindow.innerWidth * 0.65)
+      const onMove = (move: MouseEvent) => {
+        setWidth(
+          Math.max(MIN_DETAILS_WIDTH, Math.min(maxWidth, startWidth + startX - move.clientX)),
+        )
+      }
+      const onUp = () => {
+        ownerWindow.removeEventListener('mousemove', onMove)
+        ownerWindow.removeEventListener('mouseup', onUp)
+      }
+      ownerWindow.addEventListener('mousemove', onMove)
+      ownerWindow.addEventListener('mouseup', onUp)
+    },
+    [width],
+  )
+  return [width, onResizeStart]
+}
+
+export function Badge({
+  tone,
+  children,
+  title,
+}: {
+  tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
+  children: string
+  title?: string | undefined
+}) {
+  const { colors } = useDevtoolsTheme()
+  const color = toneColor(colors, tone)
+  return (
+    <span
+      title={title}
+      style={{
+        display: 'inline-block',
+        alignSelf: 'center',
+        flexShrink: 0,
+        color,
+        border: `1px solid ${color}`,
+        borderRadius: 999,
+        padding: '1px 6px',
+        fontSize: 11,
+        lineHeight: '16px',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </span>
+  )
+}
+
+export function toneColor(
+  colors: DevtoolsColors,
+  tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral',
+): string {
+  return {
+    green: colors.green,
+    amber: colors.amber,
+    red: colors.red,
+    blue: colors.blue,
+    neutral: colors.muted,
+  }[tone]
+}

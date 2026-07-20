@@ -1382,6 +1382,35 @@ returns `undefined` instead.
 
 # API: Observability
 
+## Built-in devtools
+
+Mount the devtools once near the root of the app:
+
+```tsx
+import { FigbirdDevtools } from 'figbird/devtools'
+
+function AppDevtools() {
+  return <FigbirdDevtools figbird={figbird} enabledByDefault={import.meta.env.DEV} />
+}
+```
+
+Press `Cmd+Shift+.` on macOS or `Ctrl+Shift+.` elsewhere to open or close them. The
+component does not render a launcher button.
+
+`enabledByDefault` should use the app bundler's development flag. In production the
+component stays locked and does not collect events until the app enables it:
+
+```ts
+figbird.devtools.enable()
+figbird.devtools.disable()
+```
+
+Both calls take effect immediately and store the choice in `localStorage` for that origin.
+The stored choice overrides `enabledByDefault`. Disabling the devtools also closes an open
+drawer or popout and stops collection. This is a discoverability gate, not an authorization
+boundary: the production devtools must not expose data or actions that the signed-in user
+could not otherwise access.
+
 ## figbird.explain
 
 ```ts

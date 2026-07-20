@@ -180,7 +180,7 @@ export function useActionImpl<TArgs extends unknown[], TResult>(
     const actionId = nextActionId++
     const startedAt = Date.now()
     const label = nameRef.current !== undefined ? { name: nameRef.current } : {}
-    emitRef.current?.({ kind: 'action:start', actionId, ...label })
+    emitRef.current?.({ kind: 'action:start', actionId, ...label, args })
     return new Promise<void>(resolve => {
       // The body runs as a React Action (async transition): state updates it
       // causes downstream — suspense-triggering navigations, query re-reads —

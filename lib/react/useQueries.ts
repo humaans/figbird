@@ -29,6 +29,7 @@ import { suspensePromiseAll } from '../core/relationalQuery.js'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
+import { markQuerySubscription } from './devtoolsQueryMarker.js'
 import { projectSuspenseResult, type FigbirdLike, type SuspenseQueryResult } from './useQuery.js'
 
 /**
@@ -104,6 +105,10 @@ export function useQueriesImpl(
       }
     },
     [refs, staleTime],
+  )
+  markQuerySubscription(
+    subscribe,
+    refs.map(ref => ref.hash()),
   )
 
   // useSyncExternalStore needs a stable snapshot value: rebuild the combined array
