@@ -121,13 +121,11 @@ Bottom-right corner:
   `many(issues → issueLabels, issueLabels → labels)`, so consumers just say
   `.related('labels')` and get `Label[]`; creating a junction row updates the assembled
   result via realtime.
-- **Hover prefetch** — issue rows call `prefetch()` on hover intent: idempotent and
-  self-releasing, so hover-spam costs nothing, and clicking is usually a warm,
-  synchronous render.
-- **Route-prepared Suspense detail** — `/issues/:id` fires `prepare()` in parallel with
-  the lazy screen chunk (navigation latency = `max(chunk, data)`); the keyed Suspense
-  boundary gives each issue its own cold skeleton, and warm revisits render synchronously
-  from cache.
+- **Route queries + hover prefetch** — `/issues/:id` declares its data once with `queries`.
+  The router runs those definitions through Figbird's `prepare` during navigation and
+  `prefetch` on issue-row hover, while loading the lazy screen chunk in parallel (navigation
+  latency = `max(chunk, data)`). The keyed Suspense boundary gives each issue its own cold
+  skeleton, and warm revisits render synchronously from cache.
 
 ## Data shape
 

@@ -10,7 +10,8 @@ import { ActivityPanel } from './components/ActivityPanel'
 import { DevToolsPanel } from './components/DevTools'
 import { IssueListPane } from './components/IssueList'
 import { NewIssueModal } from './components/NewIssueModal'
-import { prepareIssueDetail } from './pages/IssueDetail/prepare'
+import { prepare, prefetch } from './figbird'
+import { issueDetailRouteQueries } from './pages/IssueDetail/queries'
 import { TeamsPage } from './pages/Teams/screen'
 import { DetailSkeleton, SkeletonRows } from './components/ui'
 
@@ -26,8 +27,8 @@ function EmptyDetail() {
  * A cold `.get(id)` of a nonexistent issue enters the error state and throws
  * from `useQuery` — "this must exist" semantics. This boundary (keyed by issue
  * id alongside the Suspense boundary, so each issue gets a fresh start) renders
- * the not-found screen for that case; realtime removal of an issue you're
- * already viewing nulls the data instead and is handled inside the screen.
+ * the not-found screen for that case; realtime removal of an issue you're already
+ * viewing keeps the last data and surfaces ItemRemoved, which the screen handles.
  */
 class DetailErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null }
@@ -135,8 +136,7 @@ const routes = [
       {
         path: '/issues/:id',
         resolver: () => import('./pages/IssueDetail/screen'),
-        prepare: prepareIssueDetail,
-        navigation: { commit: 'immediate' as const },
+        queries: issueDetailRouteQueries,
       },
       // Eager route, on purpose — a small screen with no route-critical data doesn't
       // earn a chunk split. The demo shows both styles.
@@ -145,10 +145,12 @@ const routes = [
   },
 ]
 
+const routerData = { prepare, prefetch }
+
 export function App() {
   return (
     <div className='app'>
-      <Router>
+      <Router routes={routes} data={routerData} prefetchHoverDelayMs={100}>
         <Suspense
           fallback={
             <DelayedFallback delay={250}>
@@ -156,7 +158,7 @@ export function App() {
             </DelayedFallback>
           }
         >
-          <Routes routes={routes} />
+          <Routes />
         </Suspense>
       </Router>
       <DevToolsPanel />

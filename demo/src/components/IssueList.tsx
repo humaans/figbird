@@ -1,14 +1,13 @@
 /**
  * Left pane of the issues workspace: search, filter chips, and the infinite
- * paginated issue list, including the hover-prefetch machinery for issue rows.
+ * paginated issue list, including route-aware prefetching for issue rows.
  */
 
-import { Suspense, useRef, useState, useTransition } from 'react'
+import { Suspense, useState, useTransition } from 'react'
 import { Link, useRoute } from 'react-space-router'
 import { useDebouncedTransition } from 'figbird'
-import { prefetch, q, useQuery, type Issue, type Label, type Team, type User } from '../figbird'
+import { q, useQuery, type Issue, type Label, type Team, type User } from '../figbird'
 import { Explain } from './Explain'
-import { issueCommentsQuery, issueDetailQuery } from '../pages/IssueDetail/queries'
 import { StatusDot, SkeletonRows, escapeRegExp } from './ui'
 
 function useSelectedIssueId(): number | null {
@@ -18,21 +17,6 @@ function useSelectedIssueId(): number | null {
   const n = Number(idStr)
   return Number.isFinite(n) ? n : null
 }
-
-// ----- Hover prefetch -----
-
-// Warm an issue's detail + comments on hover intent — the exact queries the detail
-// screen will read, so by click time the navigation is usually a warm, synchronous
-// read. prefetch() is idempotent (fresh queries no-op) and manages its own
-// pin lifetime, so calling it on every hover costs nothing.
-function prefetchIssue(id: number): void {
-  prefetch(issueDetailQuery, { id })
-  prefetch(issueCommentsQuery, { id })
-}
-
-// Only prefetch after the pointer has rested on a row briefly — sweeping the
-// mouse across the list shouldn't fire drive-by prepares for every row passed.
-const HOVER_INTENT_MS = 100
 
 // ----- Issue list pane (search + filters + infinite pagination) -----
 
@@ -184,8 +168,8 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
           can change membership invisibly (a row you can't see may now belong), so figbird refetches
           the affected pages instead of guessing. Comment counts come from{' '}
           <code>issue.commentIds</code>, a server-maintained id list — no comments are fetched here
-          at all. Hovering a row warms its detail via <code>prefetch()</code> — idempotent and
-          self-releasing, so hover-spam costs nothing — and clicking is usually a warm read.
+          at all. Hovering a row asks the router to prefetch the route's declared queries, so the
+          lazy screen chunk and its data warm together before navigation.
         </Explain>
       </header>
       <ul className='issue-rows'>
@@ -248,31 +232,13 @@ type IssueRowData = Issue & {
 function IssueRow({ issue, highlight }: { issue: IssueRowData; highlight?: string }) {
   const selectedId = useSelectedIssueId()
   const commentCount = issue.commentIds?.length ?? 0
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const startPrefetch = () => {
-    if (hoverTimer.current !== null) return
-    hoverTimer.current = setTimeout(() => {
-      hoverTimer.current = null
-      prefetchIssue(issue.id)
-    }, HOVER_INTENT_MS)
-  }
-  const cancelPrefetch = () => {
-    if (hoverTimer.current !== null) {
-      clearTimeout(hoverTimer.current)
-      hoverTimer.current = null
-    }
-  }
 
   return (
     <li>
       <Link
         href={`/issues/${issue.id}`}
         className={`issue-row ${issue.id === selectedId ? 'selected' : ''}`}
-        onMouseEnter={startPrefetch}
-        onMouseLeave={cancelPrefetch}
-        // Keyboard focus is deliberate — prefetch immediately.
-        onFocus={() => prefetchIssue(issue.id)}
+        prefetch
       >
         <span className={`status-dot ${issue.status}`} />
         <span className='issue-row-main'>

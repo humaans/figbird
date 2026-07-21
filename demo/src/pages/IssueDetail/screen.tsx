@@ -2,8 +2,8 @@
  * Issue detail screen — the lazy chunk.
  *
  * Imported via `resolver: () => import('./screen')` so the screen code lives in
- * its own bundle. The router fires `prepareIssueDetail` (eager) and this
- * `import()` (lazy) in parallel, so total navigation latency becomes
+ * its own bundle. The router prepares the route's declared queries (eager) and
+ * this `import()` (lazy) in parallel, so total navigation latency becomes
  * `max(chunk, data)` instead of `chunk + data`.
  *
  * The toolbar is the per-action state lesson: every button is its own
@@ -50,9 +50,9 @@ export default function IssueDetailScreen() {
 
 function IssueDetailLoaded({ issueId }: { issueId: number }) {
   const navigate = useNavigate()
-  // Route prepare warmed this exact query before the chunk arrived. The Suspense
+  // The route's queries declaration warmed this exact query before the chunk arrived. The Suspense
   // boundary above (keyed by issueId) renders its skeleton if we're still cold.
-  const { data: issue, isFetching, refetch } = useQuery(issueDetailQuery, { id: issueId })
+  const { data: issue, error, isFetching, refetch } = useQuery(issueDetailQuery, { id: issueId })
 
   // Cycled through by the toolbar actions — queried rather than mirrored from the
   // server seed, so they can't silently drift when the seed changes.
@@ -101,13 +101,19 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
   // make rollback ambiguous, so the app chooses not to allow them.
   const busy = useMutating({ service: 'issues', id: issue?.id })
 
-  if (!issue) {
+  const wasRemoved = error?.name === 'ItemRemoved'
+
+  if (wasRemoved || !issue) {
     return (
       <main className='detail'>
         <div className='detail-empty'>
-          <div className='detail-empty-title'>Issue not found</div>
+          <div className='detail-empty-title'>
+            {wasRemoved ? 'Issue removed' : 'Issue not found'}
+          </div>
           <div className='detail-empty-hint'>
-            It may have been removed, or the id doesn't exist on the server.
+            {wasRemoved
+              ? 'It was deleted in another tab or by another client.'
+              : "The id doesn't exist on the server."}
           </div>
         </div>
       </main>
@@ -126,7 +132,7 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
           <span className='dim'>priority {issue.priorityScore}</span>
           <StatusDot active={isFetching || busy} />
           <Explain
-            label='Route-prepared issue graph'
+            label='Route query issue graph'
             query={`defineQuery(({ id }: { id: number }) =>
   q.issues
     .get(id) // GET /issues/:id
@@ -135,16 +141,19 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
     .related('team')
     .related('labels')) // two-hop via issueLabels
 
-// fired by the router, in parallel with
-// this screen's lazy chunk (and by rows
-// on hover, before you even click):
-prepare(issueDetailQuery, { id })`}
+// one declaration drives navigation prepare
+// and row-hover prefetch, in parallel with
+// this screen's lazy chunk:
+queries: ({ params }) => [
+  [issueDetailQuery, { id: +params.id }],
+  [issueCommentsQuery, { id: +params.id }],
+]`}
           >
             One <code>.get(id)</code> query assembles the whole graph — issue, people, team, labels
-            — from per-service caches. The route (and row hover) prepared this exact query, so warm
-            visits render synchronously inside the issue-keyed Suspense boundary. The relation
-            leaves stay live: Reassign patches the foreign key and figbird fetches and swaps in the
-            new assignee; a teammate's edits merge from socket events.
+            — from per-service caches. The router uses the same query declaration for navigation and
+            row-hover prefetch, so warm visits render synchronously inside the issue-keyed Suspense
+            boundary. The relation leaves stay live: Reassign patches the foreign key and figbird
+            fetches and swaps in the new assignee; a teammate's edits merge from socket events.
           </Explain>
         </div>
         <EditableTitle issueId={issue.id} title={issue.title} />

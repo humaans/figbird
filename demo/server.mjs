@@ -29,6 +29,7 @@
  * CORS / auth: this is a local demo — none.
  */
 
+import { NotFound } from '@feathersjs/errors'
 import { feathers } from '@feathersjs/feathers'
 import socketio from '@feathersjs/socketio'
 import { MemoryService } from '@feathersjs/memory'
@@ -558,6 +559,9 @@ app.service('comments').hooks({
   before: {
     create: [
       async context => {
+        if (!issues.store[context.data.issueId]) {
+          throw new NotFound(`Issue ${String(context.data.issueId)} does not exist`)
+        }
         context.data = {
           ...context.data,
           id: context.data.id ?? nextCommentId++,
