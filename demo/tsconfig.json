@@ -13,8 +13,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "paths": {
-      "figbird": ["../lib/index.ts"],
-      "react-space-router": ["../../react-space-router/src/index.tsx"]
+      "figbird": ["../lib/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts", "server.mjs"]
