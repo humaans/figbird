@@ -42,18 +42,19 @@ export interface QueryRecord extends InspectedQuery {
 }
 
 export interface DevtoolsEvent {
+  id: number
   at: number
   wallAt?: number
   event: FigbirdEvent
 }
 
-export interface PreparationSpan {
-  key: string
-  kind: 'prepare' | 'prefetch'
-  startAt: number
-  endAt?: number
-  name?: string
-  durationMs?: number
+export interface TimelineRealtimeEvent {
+  at: number
+  serviceName: string
+}
+
+export interface DevtoolsTimeline {
+  realtime: TimelineRealtimeEvent[]
 }
 
 export interface WriteRecord {
@@ -78,9 +79,9 @@ export interface DevtoolsSnapshot {
   queries: QueryRecord[]
   relational: InspectedRelationalQuery[]
   events: DevtoolsEvent[]
+  timeline: DevtoolsTimeline
   writes: WriteRecord[]
   inFlightWrites: number
-  preparations: PreparationSpan[]
 }
 
 export interface Collector {
@@ -107,9 +108,9 @@ const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
   queries: [],
   relational: [],
   events: [],
+  timeline: { realtime: [] },
   writes: [],
   inFlightWrites: 0,
-  preparations: [],
 }
 
 function now(): number {
@@ -244,11 +245,12 @@ class FigbirdCollector implements Collector {
   #queries: Map<string, InternalQueryRecord> = new Map()
   #relational: Map<string, InternalRelationalQuery> = new Map()
   #events: DevtoolsEvent[] = []
+  #timelineRealtime: TimelineRealtimeEvent[] = []
+  #timelineStartedAt: number | null = null
+  #nextEventId = 1
   #fetchStarts: Map<string, number> = new Map()
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
-  #preparationStarts: Map<string, PreparationSpan> = new Map()
-  #preparations: PreparationSpan[] = []
 
   constructor(figbird: FigbirdLikeForDevtools, options: Required<CollectorOptions>) {
     this.#figbird = figbird
@@ -318,9 +320,9 @@ class FigbirdCollector implements Collector {
       queries,
       relational: [...this.#relational.values()].map(record => record.inspected),
       events: [...this.#events],
+      timeline: { realtime: [...this.#timelineRealtime] },
       writes,
       inFlightWrites: this.#figbird.mutating?.getSnapshot().length ?? 0,
-      preparations: [...this.#preparations],
     }
     this.#dirty = false
     return this.#snapshot
@@ -332,17 +334,11 @@ class FigbirdCollector implements Collector {
   }
 
   clearTimeline(): void {
-    this.#events = []
-    this.#preparationStarts.clear()
-    this.#preparations = []
-    this.#fetchStarts.clear()
+    this.#timelineRealtime = []
+    this.#timelineStartedAt = now()
     for (const record of this.#queries.values()) {
       record.spans = []
-      record.realtimeSeen = 0
-      record.reconciles = 0
     }
-    this.#relational.clear()
-    this.#refreshRelational()
     this.#scheduleNotify()
   }
 
@@ -372,7 +368,11 @@ class FigbirdCollector implements Collector {
 
   #recordEvent(event: FigbirdEvent): void {
     const at = now()
-    pushCapped(this.#events, { at, wallAt: Date.now(), event }, this.#eventLimit)
+    pushCapped(
+      this.#events,
+      { id: this.#nextEventId++, at, wallAt: Date.now(), event },
+      this.#eventLimit,
+    )
 
     switch (event.kind) {
       case 'fetch:start':
@@ -404,6 +404,7 @@ class FigbirdCollector implements Collector {
         }
         break
       case 'realtime':
+        pushCapped(this.#timelineRealtime, { at, serviceName: event.serviceName }, this.#eventLimit)
         this.#realtimeByService.set(
           event.serviceName,
           (this.#realtimeByService.get(event.serviceName) ?? 0) + 1,
@@ -427,8 +428,6 @@ class FigbirdCollector implements Collector {
       case 'prefetch:start':
       case 'prepare:end':
       case 'prefetch:end':
-        this.#recordPreparation(event, at)
-        break
       case 'reconcile:deferred':
         break
     }
@@ -538,7 +537,11 @@ class FigbirdCollector implements Collector {
     durationMs: number,
   ): void {
     const record = this.#getQuery(queryId, serviceName, method)
-    const startAt = this.#fetchStarts.get(queryId) ?? at - durationMs
+    const observedStartAt = this.#fetchStarts.get(queryId) ?? at - durationMs
+    const startAt =
+      this.#timelineStartedAt === null
+        ? observedStartAt
+        : Math.max(observedStartAt, this.#timelineStartedAt)
     this.#fetchStarts.delete(queryId)
     record.fetchCount++
     record.lastDurationMs = durationMs
@@ -641,35 +644,6 @@ class FigbirdCollector implements Collector {
     for (const write of settled) {
       if (this.#writes.size <= this.#writeLimit) break
       this.#writes.delete(write.id)
-    }
-  }
-
-  #recordPreparation(
-    event: Extract<
-      FigbirdEvent,
-      { kind: 'prepare:start' | 'prefetch:start' | 'prepare:end' | 'prefetch:end' }
-    >,
-    at: number,
-  ): void {
-    const kind = event.kind.startsWith('prepare') ? 'prepare' : 'prefetch'
-    const id = `${kind}:${event.key}`
-    if (event.kind === 'prepare:start' || event.kind === 'prefetch:start') {
-      this.#preparationStarts.set(id, {
-        key: event.key,
-        kind,
-        startAt: at,
-        ...(event.name ? { name: event.name } : {}),
-      })
-      return
-    }
-    if (event.kind === 'prepare:end' || event.kind === 'prefetch:end') {
-      const span = this.#preparationStarts.get(id) ?? { key: event.key, kind, startAt: at }
-      this.#preparationStarts.delete(id)
-      pushCapped(
-        this.#preparations,
-        { ...span, endAt: at, durationMs: event.durationMs },
-        this.#eventLimit,
-      )
     }
   }
 }

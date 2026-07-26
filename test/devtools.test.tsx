@@ -109,14 +109,16 @@ function relationalGroup(
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-test('collector records fetch spans and keeps snapshot identity stable without changes', async t => {
-  const { figbird } = app()
+test('collector records fetch spans and keeps event and timeline history independent', async t => {
+  const { figbird, feathers } = app()
   const collector = createCollector(figbird)
   collector.start()
 
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsub = ref.subscribe(() => {})
 
+  await sleep(70)
+  feathers.service('notes').emit('patched', { id: 1, content: 'changed' })
   await sleep(70)
 
   const snapshot = collector.getSnapshot()
@@ -127,18 +129,30 @@ test('collector records fetch spans and keeps snapshot identity stable without c
   t.true(row?.lastDurationMs !== undefined)
   t.true(snapshot.events.length > 0)
   t.true(snapshot.events.every(event => event.wallAt !== undefined))
+  t.true(snapshot.timeline.realtime.length > 0)
   t.is(collector.getSnapshot(), snapshot)
 
   collector.clearEvents()
-  const cleared = collector.getSnapshot()
-  t.is(cleared.events.length, 0)
-  t.not(cleared, snapshot)
+  const clearedEvents = collector.getSnapshot()
+  t.is(clearedEvents.events.length, 0)
+  t.is(clearedEvents.timeline.realtime.length, snapshot.timeline.realtime.length)
+
+  feathers.service('notes').emit('patched', { id: 1, content: 'changed again' })
+  await sleep(70)
+  const beforeTimelineClear = collector.getSnapshot()
+  const beforeTimelineClearRow = beforeTimelineClear.queries.find(
+    query => query.serviceName === 'notes',
+  )
+  t.true(beforeTimelineClear.events.length > 0)
 
   collector.clearTimeline()
   const clearedTimeline = collector.getSnapshot()
   const clearedRow = clearedTimeline.queries.find(query => query.serviceName === 'notes')
-  t.is(clearedTimeline.events.length, 0)
+  t.is(clearedTimeline.events.length, beforeTimelineClear.events.length)
+  t.is(clearedTimeline.timeline.realtime.length, 0)
   t.is(clearedRow?.spans.length, 0)
+  t.is(clearedRow?.realtimeSeen, beforeTimelineClearRow?.realtimeSeen)
+  t.is(clearedRow?.reconciles, beforeTimelineClearRow?.reconciles)
 
   unsub()
   collector.stop()
@@ -279,10 +293,11 @@ test('collector bounds inactive query and settled write history', t => {
   t.is(collector.getSnapshot().queries.length, 2)
   t.is(collector.getSnapshot().relational.length, 2)
 
+  const relationalBeforeTimelineClear = collector.getSnapshot().relational.map(group => group.key)
   collector.clearTimeline()
   t.deepEqual(
     collector.getSnapshot().relational.map(group => group.key),
-    ['rq/live-3'],
+    relationalBeforeTimelineClear,
   )
 
   for (let mutationId = 1; mutationId <= 3; mutationId++) {
@@ -330,6 +345,28 @@ test('collector bounds inactive query and settled write history', t => {
   })
   t.is(collector.getSnapshot().writes.length, 2)
 
+  listeners.event?.({
+    kind: 'fetch:start',
+    queryId: 'live-3',
+    serviceName: 'notes',
+    method: 'find',
+  })
+  const timelineClearStartedAt = performance.now()
+  collector.clearTimeline()
+  listeners.event?.({
+    kind: 'fetch:end',
+    queryId: 'live-3',
+    serviceName: 'notes',
+    method: 'find',
+    durationMs: 100,
+    itemCount: 1,
+  })
+  const postClearSpan = collector
+    .getSnapshot()
+    .queries.find(query => query.queryId === 'live-3')
+    ?.spans.at(-1)
+  t.true((postClearSpan?.startAt ?? 0) >= timelineClearStartedAt)
+
   collector.stop()
 })
 
@@ -362,9 +399,9 @@ test('devtools model keeps operation identity separate from shared fetch identit
       },
     ],
     events: [],
+    timeline: { realtime: [] },
     writes: [],
     inFlightWrites: 0,
-    preparations: [],
   }
 
   const model = buildDevtoolsModel(snapshot)
@@ -373,13 +410,14 @@ test('devtools model keeps operation identity separate from shared fetch identit
     ['rq/team', 'rq/labels', 'rq/pages'],
   )
   t.deepEqual(
-    model.operations.map(operation => operation.underlying.map(item => item.owner.path)),
+    model.operations.map(operation => operation.underlying.map(item => item.path)),
     [['team'], ['labels'], []],
   )
   const pages = model.operations.find(operation => operation.key === 'rq/pages')
   t.is(pages?.rootFetches.length, 2)
-  t.is(pages?.query.itemCount, 35)
-  t.is(pages?.query.fetchCount, 3)
+  t.is(pages?.summary.itemCount, 35)
+  t.is(pages?.summary.fetchCount, 3)
+  t.false(pages ? 'queryId' in pages.summary : true)
   t.is(model.scopesByQueryId.get(root.queryId)?.length, 2)
 })
 
@@ -409,12 +447,21 @@ test('drawer renders, switches tabs, and pops out', t => {
     })
   }
 
+  const inspect = figbird.inspect.bind(figbird)
+  let inspectCalls = 0
+  figbird.inspect = () => {
+    inspectCalls++
+    return inspect()
+  }
+
   render(<FigbirdDevtools figbird={figbird} enabledByDefault={false} />)
 
   shortcut()
   t.is($('[aria-label="Figbird devtools"]'), null)
+  t.is(inspectCalls, 0)
 
   act(() => figbird.devtools.enable())
+  t.true(inspectCalls > 0)
   t.is(storedPreferences.get('figbird:devtools:enabled'), 'true')
   shortcut()
   t.truthy($('[aria-label="Figbird devtools"]'))
@@ -551,12 +598,15 @@ test('drawer shows root queries and nests relation fetches in details', t => {
       },
     ],
     events: [],
+    timeline: { realtime: [] },
     writes: [],
     inFlightWrites: 0,
-    preparations: [],
   }
+  let collectorStartCalls = 0
   const collector: Collector = {
-    start() {},
+    start() {
+      collectorStartCalls++
+    },
     stop() {},
     subscribe() {
       return () => {}
@@ -577,6 +627,7 @@ test('drawer shows root queries and nests relation fetches in details', t => {
       enabledByDefault
     />,
   )
+  t.is(collectorStartCalls, 0)
 
   const inspectedElement = window.document.createElement('div')
   inspectedElement.id = 'issue-area'

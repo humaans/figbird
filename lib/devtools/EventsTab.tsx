@@ -40,12 +40,12 @@ export function EventsTab({
         <span>Scope</span>
         <span>Details</span>
       </div>
-      {rows.map((item, index) => {
+      {rows.map(item => {
         const queryId = eventQueryId(item.event)
         const queryScopes = queryId ? scopes.get(queryId) : undefined
         const details = eventDetails(item)
         return (
-          <div key={`${item.at}:${index}`} style={styles.eventRow}>
+          <div key={item.id} style={styles.eventRow}>
             <span style={{ ...styles.code, color: colors.faint }}>
               {formatEventTimestamp(item)}
             </span>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { DevtoolsSnapshot, QueryRecord } from './collector.js'
 import { compactJson, now, pad2, pad3 } from './format.js'
-import type { DevtoolsModel } from './model.js'
+import type { DevtoolsModel, QuerySummary } from './model.js'
 import { useDevtoolsTheme } from './ui.js'
 
 export type TimelineRange = 30_000 | 120_000 | 'all'
@@ -68,20 +68,19 @@ export function TimelineTab({
   const nowPoint = useTimelineNow(range !== 'all')
   const rawLanes = useMemo(() => {
     const realtimeByService = new Map<string, number[]>()
-    for (const item of snapshot.events) {
-      if (item.event.kind !== 'realtime') continue
-      const ticks = realtimeByService.get(item.event.serviceName) ?? []
+    for (const item of snapshot.timeline.realtime) {
+      const ticks = realtimeByService.get(item.serviceName) ?? []
       ticks.push(item.at)
-      realtimeByService.set(item.event.serviceName, ticks)
+      realtimeByService.set(item.serviceName, ticks)
     }
     return model.operations
       .map(operation => ({
         operation,
-        query: operation.query,
-        ticks: realtimeByService.get(operation.query.serviceName) ?? [],
+        query: operation.summary,
+        ticks: realtimeByService.get(operation.summary.serviceName) ?? [],
       }))
       .filter(item => item.query.spans.length > 0 || item.ticks.length > 0)
-  }, [model.operations, snapshot.events])
+  }, [model.operations, snapshot.timeline.realtime])
   const bounds = timelineBounds(rawLanes, range, nowPoint)
   const lanes = bounds
     ? rawLanes
@@ -98,8 +97,8 @@ export function TimelineTab({
   lanes.sort((a, b) => {
     const latest = timelineLaneLatest(b) - timelineLaneLatest(a)
     if (latest !== 0) return latest
-    return `${a.query.serviceName}:${a.query.queryId}`.localeCompare(
-      `${b.query.serviceName}:${b.query.queryId}`,
+    return `${a.query.serviceName}:${a.operation.key}`.localeCompare(
+      `${b.query.serviceName}:${b.operation.key}`,
     )
   })
   const visibleQueries = lanes.map(item => item.query)
@@ -225,7 +224,7 @@ function TimelineAxis({
 }
 
 function timelineBounds(
-  lanes: Array<{ query: QueryRecord; ticks: number[] }>,
+  lanes: Array<{ query: QuerySummary; ticks: number[] }>,
   range: TimelineRange,
   nowPoint: number,
 ): { start: number; end: number } | null {
@@ -258,7 +257,7 @@ function timelineLaneLatest({
   return Math.max(...points)
 }
 
-function timelineQueryDetail(query: QueryRecord): string {
+function timelineQueryDetail(query: QuerySummary): string {
   if (query.method === 'get') {
     return query.resourceId === undefined ? '' : `#${query.resourceId}`
   }
@@ -403,7 +402,7 @@ function formatTimelineClock(value: number, nowPoint: number, short: boolean): s
   return short ? time : `${time}.${pad3(date.getMilliseconds())}`
 }
 
-function detectNPlusOne(queries: QueryRecord[]): string[] {
+function detectNPlusOne(queries: QuerySummary[]): string[] {
   const byService = new Map<string, number[]>()
   for (const query of queries) {
     const starts = byService.get(query.serviceName) ?? []

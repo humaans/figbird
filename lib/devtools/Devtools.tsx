@@ -27,6 +27,7 @@ import {
 
 export interface FigbirdDevtoolsProps {
   figbird: FigbirdLikeForDevtools
+  /** An externally owned, already-started collector. Primarily useful for custom hosts and tests. */
   collector?: Collector
   defaultOpen?: boolean
   /** Used only when enable() or disable() has not stored an explicit preference. */
@@ -40,21 +41,26 @@ const STORAGE_KEY = 'figbird:devtools'
 const MIN_HEIGHT = 220
 const DEFAULT_HEIGHT = 360
 
-export function FigbirdDevtools({
-  figbird,
-  collector,
-  defaultOpen = false,
-  enabledByDefault = false,
-  theme = 'system',
-}: FigbirdDevtoolsProps) {
-  const ownedCollector = useMemo(() => collector ?? createCollector(figbird), [collector, figbird])
-  const subscribeToPreference = useCallback(
+export function FigbirdDevtools(props: FigbirdDevtoolsProps) {
+  const { figbird, enabledByDefault = false } = props
+  const subscribe = useCallback(
     (listener: () => void) => figbird.devtools?.subscribe(listener) ?? (() => {}),
     [figbird.devtools],
   )
-  const getPreference = useCallback(() => figbird.devtools?.getSnapshot(), [figbird.devtools])
-  const preference = useSyncExternalStore(subscribeToPreference, getPreference, getPreference)
-  const enabled = preference ?? enabledByDefault
+  const getSnapshot = useCallback(() => figbird.devtools?.getSnapshot(), [figbird.devtools])
+  const preference = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
+  if (!(preference ?? enabledByDefault)) return null
+  return <DevtoolsSession {...props} />
+}
+
+function DevtoolsSession({
+  figbird,
+  collector,
+  defaultOpen = false,
+  theme = 'system',
+}: FigbirdDevtoolsProps) {
+  const activeCollector = useMemo(() => collector ?? createCollector(figbird), [collector, figbird])
   const colorScheme = usePreferredColorScheme(theme)
   const colors = colorScheme === 'dark' ? darkColors : lightColors
   const styles = useMemo(() => makeStyles(colors), [colors])
@@ -205,22 +211,12 @@ export function FigbirdDevtools({
   }, [popoutWindow])
 
   useEffect(() => {
-    if (!enabled) return
-    ownedCollector.start()
-    return () => {
-      if (!collector) ownedCollector.stop()
-    }
-  }, [collector, enabled, ownedCollector])
+    if (collector) return
+    activeCollector.start()
+    return () => activeCollector.stop()
+  }, [activeCollector, collector])
 
   useEffect(() => {
-    if (enabled) return
-    if (popoutWindow && !popoutWindow.closed) popoutWindow.close()
-    setPopoutWindow(null)
-    setOpen(false)
-  }, [enabled, popoutWindow])
-
-  useEffect(() => {
-    if (!enabled) return
     const onShortcut = (event: KeyboardEvent) => {
       if (!isDevtoolsShortcut(event)) return
       event.preventDefault()
@@ -233,7 +229,7 @@ export function FigbirdDevtools({
       window.removeEventListener('keydown', onShortcut)
       if (popoutWindow) popoutWindow.removeEventListener('keydown', onShortcut)
     }
-  }, [enabled, popoutWindow, toggleDevtools])
+  }, [popoutWindow, toggleDevtools])
 
   useEffect(() => {
     if (!open) return
@@ -284,8 +280,11 @@ export function FigbirdDevtools({
     writeStoredHeight(height)
   }, [height])
 
-  const subscribe = useCallback((fn: () => void) => ownedCollector.subscribe(fn), [ownedCollector])
-  const getSnapshot = useCallback(() => ownedCollector.getSnapshot(), [ownedCollector])
+  const subscribe = useCallback(
+    (fn: () => void) => activeCollector.subscribe(fn),
+    [activeCollector],
+  )
+  const getSnapshot = useCallback(() => activeCollector.getSnapshot(), [activeCollector])
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   useEffect(() => {
@@ -419,7 +418,7 @@ export function FigbirdDevtools({
                 opacity: snapshot.events.length === 0 ? 0.55 : 1,
               }}
               disabled={snapshot.events.length === 0}
-              onClick={() => ownedCollector.clearEvents()}
+              onClick={() => activeCollector.clearEvents()}
             >
               Clear
             </button>
@@ -431,7 +430,7 @@ export function FigbirdDevtools({
             <button
               type='button'
               style={buttonStyle(colors, false)}
-              onClick={() => ownedCollector.clearTimeline()}
+              onClick={() => activeCollector.clearTimeline()}
             >
               Clear
             </button>
@@ -445,7 +444,7 @@ export function FigbirdDevtools({
               opacity: snapshot.writes.length === 0 ? 0.55 : 1,
             }}
             disabled={snapshot.writes.length === 0}
-            onClick={() => ownedCollector.clearWrites()}
+            onClick={() => activeCollector.clearWrites()}
           >
             Clear
           </button>
@@ -490,8 +489,6 @@ export function FigbirdDevtools({
       </main>
     </section>
   )
-
-  if (!enabled) return null
 
   return (
     <ThemeContext.Provider value={themeValue}>

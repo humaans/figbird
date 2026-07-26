@@ -5,9 +5,10 @@ export type {
   DevtoolsEvent,
   DevtoolsSnapshot,
   FigbirdLikeForDevtools,
-  PreparationSpan,
+  DevtoolsTimeline,
   QueryRecord,
   QuerySpan,
+  TimelineRealtimeEvent,
   WriteRecord,
 } from './devtools/collector.js'
 export { FigbirdDevtools } from './devtools/Devtools.js'

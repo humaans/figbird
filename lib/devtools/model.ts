@@ -2,16 +2,12 @@ import type { QueryAST } from '../core/queryBuilder.js'
 import type { DevtoolsSnapshot, QueryRecord } from './collector.js'
 import { compactJson } from './format.js'
 
-export interface QueryOwner {
-  operationKey: string
-  label: string
-  path: string
-}
-
 export interface UnderlyingFetch {
-  owner: QueryOwner
+  path: string
   query: QueryRecord
 }
+
+export type QuerySummary = Omit<QueryRecord, 'queryId'>
 
 export interface QueryComposition {
   detail: string
@@ -29,11 +25,9 @@ export interface EventQueryScope {
 
 export interface DevtoolsOperation {
   key: string
-  kind: 'relational' | 'standalone'
-  query: QueryRecord
+  summary: QuerySummary
   rootFetches: QueryRecord[]
   underlying: UnderlyingFetch[]
-  relationalKeys: ReadonlySet<string>
   composition?: QueryComposition
 }
 
@@ -49,7 +43,6 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
   const operations: DevtoolsOperation[] = []
 
   for (const group of snapshot.relational) {
-    const label = group.name || group.service || group.key
     const rootFetches = uniqueQueries(
       group.nodes
         .filter(node => node.path === '(root)')
@@ -58,7 +51,7 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
     )
     if (rootFetches.length === 0) continue
 
-    const underlyingByOwner = new Map<string, UnderlyingFetch>()
+    const underlyingByPath = new Map<string, UnderlyingFetch>()
     for (const node of group.nodes) {
       ownedQueryIds.add(node.queryId)
       if (node.path === '(root)') {
@@ -81,17 +74,14 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
       })
       const query = queryById.get(node.queryId)
       if (!query) continue
-      const owner = { operationKey: group.key, label, path: node.path }
-      underlyingByOwner.set(`${node.path}:${node.queryId}`, { owner, query })
+      underlyingByPath.set(`${node.path}:${node.queryId}`, { path: node.path, query })
     }
 
     operations.push({
       key: group.key,
-      kind: 'relational',
-      query: aggregateRootFetches(group.key, rootFetches),
+      summary: summarizeRootFetches(rootFetches),
       rootFetches,
-      underlying: [...underlyingByOwner.values()],
-      relationalKeys: new Set([group.key]),
+      underlying: [...underlyingByPath.values()],
       composition: describeComposition(group.ast, group.name),
     })
   }
@@ -106,19 +96,17 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
     })
     operations.push({
       key: query.queryId,
-      kind: 'standalone',
-      query,
+      summary: querySummary(query),
       rootFetches: [query],
       underlying: [],
-      relationalKeys: new Set([query.queryId]),
     })
   }
 
   return { operations, scopesByQueryId }
 }
 
-function aggregateRootFetches(key: string, roots: QueryRecord[]): QueryRecord {
-  if (roots.length === 1) return roots[0]!
+function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
+  if (roots.length === 1) return querySummary(roots[0]!)
   const latest = roots.reduce((current, query) =>
     (query.fetchedAt ?? -Infinity) > (current.fetchedAt ?? -Infinity) ? query : current,
   )
@@ -128,7 +116,6 @@ function aggregateRootFetches(key: string, roots: QueryRecord[]): QueryRecord {
     .sort((a, b) => b.at - a.at)[0]
 
   return {
-    queryId: key,
     serviceName: latest.serviceName,
     method: latest.method,
     ...(latest.resourceId !== undefined ? { resourceId: latest.resourceId } : {}),
@@ -152,6 +139,10 @@ function aggregateRootFetches(key: string, roots: QueryRecord[]): QueryRecord {
     ...(latest.lastDurationMs !== undefined ? { lastDurationMs: latest.lastDurationMs } : {}),
     ...(lastError ? { lastError } : {}),
   }
+}
+
+function querySummary({ queryId: _queryId, ...summary }: QueryRecord): QuerySummary {
+  return summary
 }
 
 function uniqueQueries(queries: QueryRecord[]): QueryRecord[] {

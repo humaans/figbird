@@ -16,7 +16,7 @@ npm run dev
 
 That starts two processes:
 
-- `server` on `http://localhost:3030` — Feathers + socket.io, in-memory data (~90 issues),
+- `server` on `http://localhost:5273` — Feathers + socket.io, in-memory data (~90 issues),
   switchable latency profiles, and a simulated teammate that comments, reacts, nudges
   priorities, and closes issues every few seconds.
 - `client` on `http://localhost:5173` — Vite + React 19 + figbird, configured to resolve

@@ -696,7 +696,7 @@ setInterval(async () => {
 
 // ----- Start -----
 
-const PORT = Number(process.env.PORT) || 3030
+const PORT = Number(process.env.PORT) || 5273
 
 app.listen(PORT).then(() => {
   console.log(`[figbird-demo] server listening on http://localhost:${PORT}`)

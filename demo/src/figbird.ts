@@ -128,7 +128,7 @@ export const schema = createSchema({
 
 // ----- Socket.IO client + Feathers adapter -----
 
-const demoServerUrl = import.meta.env.VITE_DEMO_SERVER_URL ?? 'http://localhost:3030'
+const demoServerUrl = import.meta.env.VITE_DEMO_SERVER_URL ?? 'http://localhost:5273'
 
 // Exported so the dev-tools drawer can simulate a dropped connection — closing the
 // underlying engine triggers socket.io's auto-reconnect, and figbird's adapter
