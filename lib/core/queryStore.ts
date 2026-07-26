@@ -1071,11 +1071,15 @@ export class QueryStore<
    *   edge — isolated changes stay as fast as today); further events within
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
-  #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
+  #requestReconcile(
+    queryId: string,
+    { force = false, mode = 'leading' }: { force?: boolean; mode?: 'leading' | 'trailing' } = {},
+  ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     const trace = (
       event:
-        | { kind: 'reconcile:scheduled'; mode: 'leading' | 'trailing' }
+        | { kind: 'reconcile:started'; mode: 'leading' | 'trailing' }
+        | { kind: 'reconcile:queued'; mode: 'trailing' }
         | { kind: 'reconcile:deferred'; reason: 'hidden' | 'cooldown' },
     ) => {
       if (serviceName === undefined) return
@@ -1095,7 +1099,7 @@ export class QueryStore<
     }
 
     if (this.#reconcileCooldown <= 0) {
-      trace({ kind: 'reconcile:scheduled', mode: 'leading' })
+      trace({ kind: 'reconcile:started', mode })
       this.refetch(queryId)
       return
     }
@@ -1105,7 +1109,7 @@ export class QueryStore<
 
     if (!window || now - window.lastAt >= this.#reconcileCooldown) {
       this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
-      trace({ kind: 'reconcile:scheduled', mode: 'leading' })
+      trace({ kind: 'reconcile:started', mode })
       this.refetch(queryId)
       return
     }
@@ -1122,16 +1126,16 @@ export class QueryStore<
           this.#reconcileWindows.delete(queryId)
           return
         }
-        // Re-enter the gate: the window has expired so this fires leading-edge,
+        // Re-enter the gate after the window expires. The request remains trailing
         // unless the tab went hidden or the last subscriber left in the meantime.
-        this.#requestReconcile(queryId)
+        this.#requestReconcile(queryId, { mode: 'trailing' })
       },
       window.lastAt + this.#reconcileCooldown - now,
     )
     // Never keep a Node process alive for a pending reconciliation.
     ;(timer as { unref?: () => void }).unref?.()
     window.trailing = timer
-    trace({ kind: 'reconcile:scheduled', mode: 'trailing' })
+    trace({ kind: 'reconcile:queued', mode: 'trailing' })
   }
 
   /** On becoming visible, reconcile everything that deferred while hidden. */

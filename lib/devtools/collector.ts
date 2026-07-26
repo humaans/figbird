@@ -6,6 +6,7 @@ import type {
   InspectedRelationalQuery,
   MutationActivity,
 } from '../core/figbird.js'
+import { captureInspectableValue } from './capture.js'
 import { now } from './format.js'
 
 export interface FigbirdLikeForDevtools {
@@ -18,6 +19,8 @@ export interface FigbirdLikeForDevtools {
 }
 
 export interface CollectorOptions {
+  /** Transform retained parameters and write arguments before bounded capture (for redaction). */
+  captureValue?: (value: unknown) => unknown
   eventLimit?: number
   heartbeatMs?: number
   queryHistoryLimit?: number
@@ -110,15 +113,6 @@ const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
   inFlightWrites: 0,
 }
 
-function snapshotValue<T>(value: T): T {
-  if (typeof structuredClone !== 'function') return value
-  try {
-    return structuredClone(value)
-  } catch {
-    return value
-  }
-}
-
 function pushCapped<T>(items: T[], item: T, limit: number): void {
   items.push(item)
   if (items.length > limit) {
@@ -194,6 +188,7 @@ export function createCollector(
   options: CollectorOptions = {},
 ): Collector {
   return new FigbirdCollector(figbird, {
+    captureValue: options.captureValue,
     eventLimit: options.eventLimit ?? 500,
     heartbeatMs: options.heartbeatMs ?? 5_000,
     queryHistoryLimit: options.queryHistoryLimit ?? 250,
@@ -202,8 +197,18 @@ export function createCollector(
   })
 }
 
+interface ResolvedCollectorOptions {
+  captureValue: ((value: unknown) => unknown) | undefined
+  eventLimit: number
+  heartbeatMs: number
+  queryHistoryLimit: number
+  spanLimit: number
+  writeLimit: number
+}
+
 class FigbirdCollector implements Collector {
   #figbird: FigbirdLikeForDevtools
+  #captureValue: ((value: unknown) => unknown) | undefined
   #eventLimit: number
   #heartbeatMs: number
   #queryHistoryLimit: number
@@ -229,8 +234,9 @@ class FigbirdCollector implements Collector {
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
 
-  constructor(figbird: FigbirdLikeForDevtools, options: Required<CollectorOptions>) {
+  constructor(figbird: FigbirdLikeForDevtools, options: ResolvedCollectorOptions) {
     this.#figbird = figbird
+    this.#captureValue = options.captureValue
     this.#eventLimit = options.eventLimit
     this.#heartbeatMs = options.heartbeatMs
     this.#queryHistoryLimit = options.queryHistoryLimit
@@ -347,7 +353,7 @@ class FigbirdCollector implements Collector {
     const at = now()
     pushCapped(
       this.#events,
-      { id: this.#nextEventId++, at, wallAt: Date.now(), event },
+      { id: this.#nextEventId++, at, wallAt: Date.now(), event: this.#captureEvent(event) },
       this.#eventLimit,
     )
 
@@ -387,7 +393,7 @@ class FigbirdCollector implements Collector {
           (this.#realtimeByService.get(event.serviceName) ?? 0) + 1,
         )
         break
-      case 'reconcile:scheduled':
+      case 'reconcile:started':
         this.#getQuery(event.queryId, event.serviceName, 'find').reconciles++
         break
       case 'mutate:start':
@@ -405,6 +411,7 @@ class FigbirdCollector implements Collector {
       case 'prefetch:start':
       case 'prepare:end':
       case 'prefetch:end':
+      case 'reconcile:queued':
       case 'reconcile:deferred':
         break
     }
@@ -544,7 +551,7 @@ class FigbirdCollector implements Collector {
         method: event.method,
         ...(event.id !== undefined ? { itemId: event.id } : {}),
         ...('optimistic' in event ? { optimistic: event.optimistic } : {}),
-        ...('args' in event ? { args: snapshotValue(event.args) } : {}),
+        ...('args' in event ? { args: this.#captureArgs(event.args) } : {}),
       } satisfies WriteRecord)
 
     if (event.kind === 'mutate:end') {
@@ -592,7 +599,7 @@ class FigbirdCollector implements Collector {
         startedAt: at,
         startedWallAt: Date.now(),
         ...(event.name ? { name: event.name } : {}),
-        ...('args' in event ? { args: snapshotValue(event.args) } : {}),
+        ...('args' in event ? { args: this.#captureArgs(event.args) } : {}),
       } satisfies WriteRecord)
 
     if (event.kind === 'action:end' || event.kind === 'action:error') {
@@ -607,6 +614,43 @@ class FigbirdCollector implements Collector {
       return
     }
     this.#writes.set(id, base)
+  }
+
+  #captureArgs(args: readonly unknown[]): readonly unknown[] {
+    return args.map(value => captureInspectableValue(value, this.#captureValue))
+  }
+
+  #captureEvent(event: FigbirdEvent): FigbirdEvent {
+    switch (event.kind) {
+      case 'fetch:start':
+        return {
+          ...event,
+          ...(event.params === undefined
+            ? {}
+            : { params: captureInspectableValue(event.params, this.#captureValue) }),
+        }
+      case 'fetch:error':
+      case 'mutate:error':
+      case 'action:error':
+        return { ...event, error: new Error(errorMessage(event.error)) }
+      case 'mutate:start':
+        return {
+          kind: event.kind,
+          mutationId: event.mutationId,
+          serviceName: event.serviceName,
+          method: event.method,
+          optimistic: event.optimistic,
+          ...(event.id === undefined ? {} : { id: event.id }),
+        }
+      case 'action:start':
+        return {
+          kind: event.kind,
+          actionId: event.actionId,
+          ...(event.name ? { name: event.name } : {}),
+        }
+      default:
+        return { ...event }
+    }
   }
 
   #trimWrites(): void {

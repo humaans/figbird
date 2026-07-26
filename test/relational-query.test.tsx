@@ -2952,6 +2952,32 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
   unsub3()
 })
 
+test('prepare and prefetch install staleTime before materializing a warm query', async t => {
+  const { figbird, feathers } = createApp()
+  const issueDetail = defineQuery('preparedIssueStaleTime', ({ id }: { id: number }) =>
+    figbird.q.issues.get(id).related('creator'),
+  )
+
+  const first = figbird.prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  await first.promise
+  first.release()
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const second = figbird.prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  await second.promise
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(feathers.service('issues').counts.get, 1, 'fresh root must not revalidate')
+  t.is(feathers.service('users').counts.find, 1, 'fresh relation must not revalidate')
+  second.release()
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  figbird.prefetch(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.get, 1, 'prefetch must respect fresh root data')
+  t.is(feathers.service('users').counts.find, 1, 'prefetch must respect fresh relation data')
+})
+
 test('staleTime: stricter subscriber revalidates an already-live relational query', async t => {
   const { figbird, feathers } = createApp()
   const issueDetail = defineQuery('issueDetailStaleTime', ({ id }: { id: number }) =>

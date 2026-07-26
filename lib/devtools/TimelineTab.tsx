@@ -1,10 +1,45 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { DevtoolsSnapshot, QueryRecord } from './collector.js'
+import type { DevtoolsSnapshot, QueryRecord, QuerySpan } from './collector.js'
 import { compactJson, formatClock, formatMs, now } from './format.js'
-import type { DevtoolsModel, QuerySummary } from './model.js'
+import type { DevtoolsModel, EventQueryScope } from './model.js'
 import { useDevtoolsTheme } from './ui.js'
 
 export type TimelineRange = 30_000 | 120_000 | 'all'
+
+type RawTimelineLane =
+  | {
+      kind: 'query'
+      id: string
+      label: string
+      context: string
+      detail: string
+      query: QueryRecord
+    }
+  | {
+      kind: 'realtime'
+      id: string
+      label: string
+      detail: string
+      ticks: number[]
+    }
+
+type VisibleTimelineLane =
+  | {
+      kind: 'query'
+      id: string
+      label: string
+      context: string
+      detail: string
+      serviceName: string
+      bars: QuerySpan[]
+    }
+  | {
+      kind: 'realtime'
+      id: string
+      label: string
+      detail: string
+      ticks: number[]
+    }
 
 export function TimelineRangeControl({
   value,
@@ -73,37 +108,67 @@ export function TimelineTab({
       ticks.push(item.at)
       realtimeByService.set(item.serviceName, ticks)
     }
-    return model.operations
-      .map(operation => ({
-        operation,
-        query: operation.summary,
-        ticks: realtimeByService.get(operation.summary.serviceName) ?? [],
-      }))
-      .filter(item => item.query.spans.length > 0 || item.ticks.length > 0)
-  }, [model.operations, snapshot.timeline.realtime])
+    const queryLanes: RawTimelineLane[] = snapshot.queries
+      .filter(query => query.spans.length > 0)
+      .map(query => {
+        const scopes = model.scopesByQueryId.get(query.queryId)
+        return {
+          kind: 'query',
+          id: `query:${query.queryId}`,
+          label: `${query.serviceName}.${query.method}`,
+          context: timelineScopeLabel(scopes),
+          detail: timelineQueryDetail(query, scopes),
+          query,
+        }
+      })
+    const realtimeLanes: RawTimelineLane[] = [...realtimeByService].map(([serviceName, ticks]) => ({
+      kind: 'realtime',
+      id: `realtime:${serviceName}`,
+      label: `${serviceName} realtime`,
+      detail: `All retained realtime events emitted by ${serviceName}`,
+      ticks,
+    }))
+    return [...queryLanes, ...realtimeLanes]
+  }, [model.scopesByQueryId, snapshot.queries, snapshot.timeline.realtime])
   const bounds = timelineBounds(rawLanes, range, nowPoint)
-  const lanes = bounds
+  const lanes: VisibleTimelineLane[] = bounds
     ? rawLanes
         .map(lane => ({
-          operation: lane.operation,
-          query: lane.query,
-          bars: lane.query.spans.filter(
-            span => (span.endAt ?? nowPoint) >= bounds.start && span.startAt <= bounds.end,
-          ),
-          ticks: lane.ticks.filter(tick => tick >= bounds.start && tick <= bounds.end),
+          ...(lane.kind === 'query'
+            ? {
+                kind: lane.kind,
+                id: lane.id,
+                label: lane.label,
+                context: lane.context,
+                detail: lane.detail,
+                serviceName: lane.query.serviceName,
+                bars: lane.query.spans.filter(
+                  span => (span.endAt ?? nowPoint) >= bounds.start && span.startAt <= bounds.end,
+                ),
+              }
+            : {
+                kind: lane.kind,
+                id: lane.id,
+                label: lane.label,
+                detail: lane.detail,
+                ticks: lane.ticks.filter(tick => tick >= bounds.start && tick <= bounds.end),
+              }),
         }))
-        .filter(lane => lane.bars.length > 0 || lane.ticks.length > 0)
+        .filter(lane => (lane.kind === 'query' ? lane.bars.length > 0 : lane.ticks.length > 0))
     : []
   lanes.sort((a, b) => {
     const latest = timelineLaneLatest(b) - timelineLaneLatest(a)
     if (latest !== 0) return latest
-    return `${a.query.serviceName}:${a.operation.key}`.localeCompare(
-      `${b.query.serviceName}:${b.operation.key}`,
-    )
+    return a.id.localeCompare(b.id)
   })
-  const visibleQueries = lanes.map(item => item.query)
   const axisTicks = bounds ? timelineAxisTicks(bounds.start, bounds.end) : []
-  const nPlusOne = detectNPlusOne(visibleQueries)
+  const nPlusOne = detectNPlusOne(
+    lanes
+      .filter(
+        (lane): lane is Extract<VisibleTimelineLane, { kind: 'query' }> => lane.kind === 'query',
+      )
+      .map(lane => ({ serviceName: lane.serviceName, spans: lane.bars })),
+  )
 
   return (
     <section style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -117,19 +182,33 @@ export function TimelineTab({
               nowPoint={nowPoint}
               range={range}
             />
-            {lanes.map(({ operation, query, bars, ticks }) => (
-              <TimelineLane
-                key={operation.key}
-                label={`${query.serviceName}.${query.method}`}
-                detail={timelineQueryDetail(query)}
-                start={bounds.start}
-                end={bounds.end}
-                bars={bars}
-                ticks={ticks}
-                gridTicks={axisTicks}
-                nowPoint={nowPoint}
-              />
-            ))}
+            {lanes.map(lane =>
+              lane.kind === 'query' ? (
+                <TimelineLane
+                  key={lane.id}
+                  label={lane.label}
+                  context={lane.context}
+                  detail={lane.detail}
+                  start={bounds.start}
+                  end={bounds.end}
+                  bars={lane.bars}
+                  gridTicks={axisTicks}
+                  nowPoint={nowPoint}
+                />
+              ) : (
+                <TimelineLane
+                  key={lane.id}
+                  label={lane.label}
+                  detail={lane.detail}
+                  start={bounds.start}
+                  end={bounds.end}
+                  bars={[]}
+                  ticks={lane.ticks}
+                  gridTicks={axisTicks}
+                  nowPoint={nowPoint}
+                />
+              ),
+            )}
             {lanes.length === 0 ? (
               <div style={{ padding: '18px 0 18px 220px', color: colors.muted }}>
                 No activity in this time range. Choose All to inspect retained history.
@@ -224,16 +303,19 @@ function TimelineAxis({
 }
 
 function timelineBounds(
-  lanes: Array<{ query: QuerySummary; ticks: number[] }>,
+  lanes: RawTimelineLane[],
   range: TimelineRange,
   nowPoint: number,
 ): { start: number; end: number } | null {
   const points: number[] = []
   for (const lane of lanes) {
-    for (const span of lane.query.spans) {
-      points.push(span.startAt, span.endAt ?? now())
+    if (lane.kind === 'query') {
+      for (const span of lane.query.spans) {
+        points.push(span.startAt, span.endAt ?? nowPoint)
+      }
+    } else {
+      points.push(...lane.ticks)
     }
-    points.push(...lane.ticks)
   }
   if (points.length === 0) return null
   if (range !== 'all') {
@@ -245,25 +327,32 @@ function timelineBounds(
   return { start: Math.max(0, min - pad), end: max + pad }
 }
 
-function timelineLaneLatest({
-  bars,
-  ticks,
-}: {
-  bars: QueryRecord['spans']
-  ticks: number[]
-}): number {
-  const points = bars.map(span => span.endAt ?? span.startAt)
-  points.push(...ticks)
-  return Math.max(...points)
+function timelineLaneLatest(lane: VisibleTimelineLane): number {
+  return lane.kind === 'query'
+    ? Math.max(...lane.bars.map(span => span.endAt ?? span.startAt))
+    : Math.max(...lane.ticks)
 }
 
-function timelineQueryDetail(query: QuerySummary): string {
-  if (query.method === 'get') {
-    return query.resourceId === undefined ? '' : `#${query.resourceId}`
-  }
-  return query.query === undefined || Object.keys(query.query).length === 0
-    ? ''
-    : compactJson(query.query)
+function timelineQueryDetail(
+  query: QueryRecord,
+  scopes: readonly EventQueryScope[] | undefined,
+): string {
+  const scope = scopes?.map(item => item.label).join(', ')
+  const queryDetail =
+    query.method === 'get'
+      ? query.resourceId === undefined
+        ? ''
+        : `#${query.resourceId}`
+      : query.query === undefined || Object.keys(query.query).length === 0
+        ? ''
+        : compactJson(query.query)
+  return [scope, queryDetail, `query id: ${query.queryId}`].filter(Boolean).join(' · ')
+}
+
+function timelineScopeLabel(scopes: readonly EventQueryScope[] | undefined): string {
+  if (!scopes || scopes.length === 0) return 'retained'
+  if (scopes.length === 1) return scopes[0]!.label
+  return `${scopes.length} scopes`
 }
 
 function timelineAxisTicks(start: number, end: number): number[] {
@@ -311,6 +400,7 @@ function TimelineLegendItem({
 
 function TimelineLane({
   label,
+  context,
   detail,
   start,
   end,
@@ -320,6 +410,7 @@ function TimelineLane({
   nowPoint,
 }: {
   label: string
+  context?: string
   detail: string
   start: number
   end: number
@@ -334,6 +425,11 @@ function TimelineLane({
     <div style={styles.lane}>
       <div style={styles.laneLabel} title={detail ? `${label} ${detail}` : label}>
         <span style={{ color: colors.text, fontWeight: 600 }}>{label}</span>
+        {context ? (
+          <span style={{ color: colors.faint, marginLeft: 6, whiteSpace: 'nowrap' }}>
+            {context}
+          </span>
+        ) : null}
       </div>
       <div style={styles.laneTrack}>
         {gridTicks.map(tick => (
@@ -402,7 +498,9 @@ function formatTimelineClock(value: number, nowPoint: number, milliseconds: bool
   return formatClock(wallAt, { milliseconds })
 }
 
-function detectNPlusOne(queries: QuerySummary[]): string[] {
+function detectNPlusOne(
+  queries: Array<{ serviceName: string; spans: readonly QuerySpan[] }>,
+): string[] {
   const byService = new Map<string, number[]>()
   for (const query of queries) {
     const starts = byService.get(query.serviceName) ?? []
@@ -412,14 +510,14 @@ function detectNPlusOne(queries: QuerySummary[]): string[] {
   const warnings: string[] = []
   for (const [service, starts] of byService) {
     const sorted = starts.sort((a, b) => a - b)
-    for (let index = 0; index < sorted.length; index++) {
-      const cluster = sorted.filter(
-        value => value >= sorted[index]! && value - sorted[index]! <= 100,
-      )
-      if (cluster.length >= 5) {
-        warnings.push(`${service}: ${cluster.length} near-simultaneous fetches - consider embed`)
-        break
-      }
+    let left = 0
+    let largestCluster = 0
+    for (let right = 0; right < sorted.length; right++) {
+      while (sorted[right]! - sorted[left]! > 100) left++
+      largestCluster = Math.max(largestCluster, right - left + 1)
+    }
+    if (largestCluster >= 5) {
+      warnings.push(`${service}: ${largestCluster} near-simultaneous fetches - consider embed`)
     }
   }
   return warnings

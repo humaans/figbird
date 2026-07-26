@@ -1444,6 +1444,8 @@ components is safe:
 ```ts
 const unsub = figbird.events.subscribe(event => {
   // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
+  //           | 'reconcile:started' | 'reconcile:queued' | 'reconcile:deferred'
+  //           | 'prepare:start' | 'prepare:end' | 'prefetch:start' | 'prefetch:end'
   //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
   //           | 'action:start' | 'action:end' | 'action:error'
 })
@@ -1455,6 +1457,11 @@ start/end/error/rollback, and their `method` is a CRUD name or a custom method n
 (custom-method calls flow through the same lifecycle events). `action:*` events come from
 named `useAction` hooks and speak the app's vocabulary ("reassign · 340ms"), with the
 `mutate:*` rows they wrap alongside.
+
+The built-in devtools retain bounded, detached previews of fetch parameters and write
+arguments. Applications that need product-specific redaction can create and start an external
+collector with `createCollector(figbird, { captureValue })`, then pass it to
+`<FigbirdDevtools collector={collector} />`.
 
 ## useFeathers
 

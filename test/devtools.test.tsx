@@ -348,6 +348,54 @@ test('collector bounds inactive query and settled write history', t => {
   t.is(collector.getSnapshot().writes.length, 2)
 
   listeners.event?.({
+    kind: 'reconcile:queued',
+    queryId: 'live-3',
+    serviceName: 'notes',
+    mode: 'trailing',
+  })
+  listeners.event?.({
+    kind: 'reconcile:started',
+    queryId: 'live-3',
+    serviceName: 'notes',
+    mode: 'trailing',
+  })
+  t.is(
+    collector.getSnapshot().queries.find(query => query.queryId === 'live-3')?.reconciles,
+    1,
+    'queued reconciliation must not count as a refetch',
+  )
+
+  const retainedPayload: Record<string, unknown> = { content: 'captured' }
+  retainedPayload.self = retainedPayload
+  let getterReads = 0
+  Object.defineProperty(retainedPayload, 'computed', {
+    enumerable: true,
+    get() {
+      getterReads++
+      return 'do not invoke'
+    },
+  })
+  listeners.event?.({
+    kind: 'mutate:start',
+    mutationId: 7,
+    serviceName: 'notes',
+    method: 'patch',
+    optimistic: true,
+    args: [7, retainedPayload],
+  })
+  retainedPayload.content = 'changed later'
+  const retainedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
+  t.deepEqual(retainedWrite?.args, [
+    7,
+    { content: 'captured', self: '[circular]', computed: '[Getter]' },
+  ])
+  t.is(getterReads, 0)
+  const retainedEvent = collector
+    .getSnapshot()
+    .events.find(item => item.event.kind === 'mutate:start' && item.event.mutationId === 7)
+  t.false(retainedEvent ? 'args' in retainedEvent.event : true)
+
+  listeners.event?.({
     kind: 'fetch:start',
     queryId: 'live-3',
     serviceName: 'notes',
@@ -528,12 +576,28 @@ test('drawer renders, switches tabs, and pops out', t => {
   act(() => figbird.devtools.enable())
 
   unmount()
+
+  const blocked = dom()
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    get() {
+      throw new window.DOMException('Storage blocked', 'SecurityError')
+    },
+  })
+  const blockedApp = app()
+  blockedApp.figbird.devtools.enable()
+  blocked.render(
+    <FigbirdDevtools figbird={blockedApp.figbird} defaultOpen enabledByDefault={false} />,
+  )
+  t.truthy(blocked.$('[aria-label="Figbird devtools"]'))
+  blocked.unmount()
 })
 
 test('drawer shows root queries and nests relation fetches in details', t => {
   const { figbird } = app()
   const { render, unmount, click, $, $all } = dom()
   const inspectedRef = figbird.query(figbird.q.notes)
+  const timelineAt = performance.now()
   const snapshot: DevtoolsSnapshot = {
     queries: [
       {
@@ -551,7 +615,7 @@ test('drawer shows root queries and nests relation fetches in details', t => {
         errorCount: 0,
         totalDurationMs: 8,
         lastDurationMs: 8,
-        spans: [],
+        spans: [{ startAt: timelineAt - 20, endAt: timelineAt - 10, ok: true }],
         realtimeSeen: 0,
         reconciles: 0,
       },
@@ -570,7 +634,7 @@ test('drawer shows root queries and nests relation fetches in details', t => {
         errorCount: 0,
         totalDurationMs: 5,
         lastDurationMs: 5,
-        spans: [],
+        spans: [{ startAt: timelineAt - 15, endAt: timelineAt - 5, ok: true }],
         realtimeSeen: 0,
         reconciles: 0,
       },
@@ -601,7 +665,7 @@ test('drawer shows root queries and nests relation fetches in details', t => {
       },
     ],
     events: [],
-    timeline: { realtime: [] },
+    timeline: { realtime: [{ at: timelineAt - 3, serviceName: 'issues' }] },
     writes: [],
     inFlightWrites: 0,
   }
@@ -693,6 +757,14 @@ test('drawer shows root queries and nests relation fetches in details', t => {
   t.truthy(rootBreadcrumb)
   click(rootBreadcrumb!)
   t.true(($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes('Query plan'))
+
+  const timelineButton = $all('button').find(button => button.textContent === 'timeline')
+  t.truthy(timelineButton)
+  click(timelineButton!)
+  const timelineText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
+  t.true(timelineText.includes('issues.find'))
+  t.true(timelineText.includes('issueLabels.find'))
+  t.is(timelineText.match(/issues realtime/g)?.length, 1)
 
   unmount()
   inspectedElement.remove()

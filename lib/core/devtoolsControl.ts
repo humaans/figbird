@@ -14,7 +14,7 @@ export class DevtoolsControl {
   #listeningForStorage = false
 
   constructor() {
-    this.#preference = readPreference()
+    this.#preference = readPreference().preference
   }
 
   enable(): void {
@@ -47,7 +47,8 @@ export class DevtoolsControl {
   }
 
   #syncPreference(): void {
-    this.#preference = readPreference()
+    const stored = readPreference()
+    if (stored.available) this.#preference = stored.preference
   }
 
   #onStorage = (event: StorageEvent): void => {
@@ -75,12 +76,15 @@ export class DevtoolsControl {
   }
 }
 
-function readPreference(): DevtoolsPreference {
+function readPreference(): { available: boolean; preference: DevtoolsPreference } {
   try {
-    if (typeof window === 'undefined') return undefined
-    return parsePreference(window.localStorage.getItem(STORAGE_KEY))
+    if (typeof window === 'undefined') return { available: false, preference: undefined }
+    return {
+      available: true,
+      preference: parsePreference(window.localStorage.getItem(STORAGE_KEY)),
+    }
   } catch {
-    return undefined
+    return { available: false, preference: undefined }
   }
 }
 

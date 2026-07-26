@@ -47,10 +47,16 @@ export type FigbirdEvent =
       error: Error
     }
   | {
-      kind: 'reconcile:scheduled'
+      kind: 'reconcile:started'
       queryId: string
       serviceName: string
       mode: 'leading' | 'trailing'
+    }
+  | {
+      kind: 'reconcile:queued'
+      queryId: string
+      serviceName: string
+      mode: 'trailing'
     }
   | {
       kind: 'reconcile:deferred'

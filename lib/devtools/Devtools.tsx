@@ -421,15 +421,23 @@ function sameQueryCounts(a: InspectedQueryArea, b: InspectedQueryArea): boolean 
 }
 
 function readStoredHeight(): number {
-  if (typeof localStorage === 'undefined') return DEFAULT_HEIGHT
-  const raw = localStorage.getItem(STORAGE_KEY)
-  const parsed = raw ? Number(raw) : NaN
-  return Number.isFinite(parsed) ? Math.max(MIN_HEIGHT, parsed) : DEFAULT_HEIGHT
+  try {
+    if (typeof window === 'undefined') return DEFAULT_HEIGHT
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const parsed = raw ? Number(raw) : NaN
+    return Number.isFinite(parsed) ? Math.max(MIN_HEIGHT, parsed) : DEFAULT_HEIGHT
+  } catch {
+    return DEFAULT_HEIGHT
+  }
 }
 
 function writeStoredHeight(height: number): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(STORAGE_KEY, String(Math.round(height)))
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(STORAGE_KEY, String(Math.round(height)))
+  } catch {
+    // The drawer still works when storage is unavailable.
+  }
 }
 
 function TabButton({
