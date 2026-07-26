@@ -6,6 +6,7 @@ import type {
   InspectedRelationalQuery,
   MutationActivity,
 } from '../core/figbird.js'
+import { now } from './format.js'
 
 export interface FigbirdLikeForDevtools {
   devtools?: DevtoolsControl
@@ -44,7 +45,7 @@ export interface QueryRecord extends InspectedQuery {
 export interface DevtoolsEvent {
   id: number
   at: number
-  wallAt?: number
+  wallAt: number
   event: FigbirdEvent
 }
 
@@ -62,7 +63,7 @@ export interface WriteRecord {
   type: 'action' | 'mutation'
   status: 'in-flight' | 'success' | 'error' | 'rollback'
   startedAt: number
-  startedWallAt?: number
+  startedWallAt: number
   endedAt?: number
   durationMs?: number
   name?: string
@@ -111,13 +112,6 @@ const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
   timeline: { realtime: [] },
   writes: [],
   inFlightWrites: 0,
-}
-
-function now(): number {
-  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-    return performance.now()
-  }
-  return Date.now()
 }
 
 function snapshotValue<T>(value: T): T {
@@ -188,27 +182,14 @@ function makePlaceholderQueryRecord(
   )
 }
 
-function toPublicQueryRecord(record: InternalQueryRecord): QueryRecord {
+function toPublicQueryRecord({
+  lastObservedAt: _lastObservedAt,
+  serviceRealtimeBaseline: _serviceRealtimeBaseline,
+  ...record
+}: InternalQueryRecord): QueryRecord {
   return {
-    queryId: record.queryId,
-    serviceName: record.serviceName,
-    method: record.method,
-    ...(record.resourceId !== undefined ? { resourceId: record.resourceId } : {}),
-    query: record.query,
-    classification: record.classification,
-    status: record.status,
-    isFetching: record.isFetching,
-    itemCount: record.itemCount,
-    fetchedAt: record.fetchedAt,
-    subscriberCount: record.subscriberCount,
-    fetchCount: record.fetchCount,
-    errorCount: record.errorCount,
-    totalDurationMs: record.totalDurationMs,
+    ...record,
     spans: [...record.spans],
-    realtimeSeen: record.realtimeSeen,
-    reconciles: record.reconciles,
-    ...(record.lastDurationMs !== undefined ? { lastDurationMs: record.lastDurationMs } : {}),
-    ...(record.lastError ? { lastError: record.lastError } : {}),
   }
 }
 

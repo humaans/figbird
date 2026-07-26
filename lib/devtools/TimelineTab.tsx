@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { DevtoolsSnapshot, QueryRecord } from './collector.js'
-import { compactJson, now, pad2, pad3 } from './format.js'
+import { compactJson, formatClock, formatMs, now } from './format.js'
 import type { DevtoolsModel, QuerySummary } from './model.js'
 import { useDevtoolsTheme } from './ui.js'
 
@@ -211,9 +211,9 @@ function TimelineAxis({
                   color: colors.muted,
                   whiteSpace: 'nowrap',
                 }}
-                title={formatTimelineClock(tick, nowPoint, false)}
+                title={formatTimelineClock(tick, nowPoint, true)}
               >
-                {isLast && range !== 'all' ? 'now' : formatTimelineClock(tick, nowPoint, true)}
+                {isLast && range !== 'all' ? 'now' : formatTimelineClock(tick, nowPoint, false)}
               </span>
             </span>
           )
@@ -356,8 +356,8 @@ function TimelineLane({
             <span
               key={`${bar.startAt}:${index}`}
               title={[
-                `${bar.ok === false ? 'Failed fetch' : 'Fetch'} · ${Math.round(barEnd - bar.startAt)}ms`,
-                formatTimelineClock(bar.startAt, nowPoint, false),
+                `${bar.ok === false ? 'Failed fetch' : 'Fetch'} · ${formatMs(barEnd - bar.startAt)}`,
+                formatTimelineClock(bar.startAt, nowPoint, true),
               ].join('\n')}
               style={{
                 position: 'absolute',
@@ -376,7 +376,7 @@ function TimelineLane({
         {ticks.map((tick, index) => (
           <span
             key={`${tick}:${index}`}
-            title={`Realtime event\n${formatTimelineClock(tick, nowPoint, false)}`}
+            title={`Realtime event\n${formatTimelineClock(tick, nowPoint, true)}`}
             style={{
               position: 'absolute',
               top: 7,
@@ -396,10 +396,10 @@ function TimelineLane({
   )
 }
 
-function formatTimelineClock(value: number, nowPoint: number, short: boolean): string {
-  const date = new Date(Date.now() - Math.max(0, nowPoint - value))
-  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
-  return short ? time : `${time}.${pad3(date.getMilliseconds())}`
+function formatTimelineClock(value: number, nowPoint: number, milliseconds: boolean): string {
+  // Timeline positions use the monotonic clock; convert to wall time for display.
+  const wallAt = Date.now() - Math.max(0, nowPoint - value)
+  return formatClock(wallAt, { milliseconds })
 }
 
 function detectNPlusOne(queries: QuerySummary[]): string[] {

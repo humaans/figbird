@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { QueryRecord } from './collector.js'
-import { compactJson, prettyJson } from './format.js'
+import { compactJson, formatMs, prettyJson } from './format.js'
 import type { DevtoolsOperation, QuerySummary, UnderlyingFetch } from './model.js'
 import { ClassBadge, plural, queryStatus, QueryStatusDot } from './QueryPresentation.js'
 import { DetailsPane, useDevtoolsTheme, type DevtoolsColors } from './ui.js'
@@ -152,15 +152,13 @@ export function QueryDetails({
         <QueryMetric value={String(activeQuery.fetchCount)} label='fetches' borderLeft />
         <QueryMetric
           value={
-            activeQuery.lastDurationMs === undefined
-              ? '-'
-              : `${Math.round(activeQuery.lastDurationMs)}ms`
+            activeQuery.lastDurationMs === undefined ? '-' : formatMs(activeQuery.lastDurationMs)
           }
           label='last fetch'
           borderTop
         />
         <QueryMetric
-          value={activeQuery.fetchCount === 0 ? '-' : `${Math.round(average)}ms`}
+          value={activeQuery.fetchCount === 0 ? '-' : formatMs(average)}
           label='average'
           borderLeft
           borderTop
@@ -169,7 +167,7 @@ export function QueryDetails({
       {activeQuery.spans.length > 0 ? (
         <QueryDetailSection
           label='Recent fetches'
-          meta={`${Math.round(activeQuery.totalDurationMs)}ms total`}
+          meta={`${formatMs(activeQuery.totalDurationMs)} total`}
         >
           <Sparkline spans={activeQuery.spans} />
         </QueryDetailSection>
@@ -210,7 +208,7 @@ export function QueryDetails({
                     plural(item.query.itemCount, 'row', 'rows'),
                     item.query.lastDurationMs === undefined
                       ? undefined
-                      : `${Math.round(item.query.lastDurationMs)}ms`,
+                      : formatMs(item.query.lastDurationMs),
                   ]
                     .filter(Boolean)
                     .join(' · ')}
@@ -452,7 +450,7 @@ function Sparkline({ spans }: { spans: QueryRecord['spans'] }) {
         return (
           <span
             key={`${span.startAt}:${index}`}
-            title={`${Math.round(duration)}ms`}
+            title={formatMs(duration)}
             style={{
               width: 4,
               height: Math.max(3, (duration / max) * 24),

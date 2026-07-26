@@ -1,4 +1,4 @@
-import { queryKeysForSubscription } from '../react/devtoolsQueryMarker.js'
+import { queryKeyForRef } from '../core/relationalQuery.js'
 
 interface FiberLike {
   alternate?: FiberLike | null
@@ -117,9 +117,9 @@ function scanHookValue(
   visited: Set<object>,
   depth: number,
 ): void {
-  const marked = queryKeysForSubscription(value)
-  if (marked) {
-    for (const key of marked) keys.add(key)
+  const queryKey = queryKeyForRef(value)
+  if (queryKey) {
+    keys.add(queryKey)
     return
   }
   if (depth >= MAX_VALUE_DEPTH || (typeof value !== 'object' && typeof value !== 'function')) {

@@ -37,6 +37,13 @@ import { resolveServicePath } from './schema.js'
 // certainly the wrong shape (N requests for one screen) — warn and point at embed.
 const WINDOWED_RELATION_FANOUT_WARN_THRESHOLD = 10
 
+const queryKeysByRef = new WeakMap<object, string>()
+
+/** Resolves an interned relational ref to its query key. @internal */
+export function queryKeyForRef(value: unknown): string | undefined {
+  return typeof value === 'object' && value !== null ? queryKeysByRef.get(value) : undefined
+}
+
 /**
  * The narrow contract the relational engine needs from a Figbird instance. Keeping
  * this structural (rather than importing the Figbird class) avoids a circular
@@ -220,6 +227,7 @@ export class RelationalQueryRef<
     this.#ast = ast
     this.#schema = schema
     this.#queryId = `rq/${hashObject(ast)}`
+    queryKeysByRef.set(this, this.#queryId)
     this.#onEvict = onEvict ?? null
     this.#name = name
   }

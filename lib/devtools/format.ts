@@ -34,10 +34,19 @@ export function now(): number {
   return Date.now()
 }
 
-export function pad2(value: number): string {
+export function formatClock(
+  wallAt: number,
+  { milliseconds = false }: { milliseconds?: boolean } = {},
+): string {
+  const date = new Date(wallAt)
+  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
+  return milliseconds ? `${time}.${pad3(date.getMilliseconds())}` : time
+}
+
+function pad2(value: number): string {
   return value.toString().padStart(2, '0')
 }
 
-export function pad3(value: number): string {
+function pad3(value: number): string {
   return value.toString().padStart(3, '0')
 }

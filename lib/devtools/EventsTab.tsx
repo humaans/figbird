@@ -1,5 +1,5 @@
 import type { DevtoolsEvent } from './collector.js'
-import { compactJson, formatMs, pad2, pad3 } from './format.js'
+import { compactJson, formatClock, formatMs } from './format.js'
 import type { EventQueryScope } from './model.js'
 import { toneColor, useDevtoolsTheme } from './ui.js'
 
@@ -47,7 +47,7 @@ export function EventsTab({
         return (
           <div key={item.id} style={styles.eventRow}>
             <span style={{ ...styles.code, color: colors.faint }}>
-              {formatEventTimestamp(item)}
+              {formatClock(item.wallAt, { milliseconds: true })}
             </span>
             <EventKind kind={item.event.kind} />
             <EventScopeBadge scopes={queryScopes} queryId={queryId} />
@@ -113,7 +113,7 @@ function EventScopeBadge({
 
 function eventSearchText(item: DevtoolsEvent, scopes?: readonly EventQueryScope[]): string {
   return [
-    formatEventTimestamp(item),
+    formatClock(item.wallAt, { milliseconds: true }),
     item.event.kind,
     eventQueryId(item.event) ?? '',
     ...(scopes?.map(scope => scope.label) ?? []),
@@ -172,49 +172,25 @@ function eventDetails(item: DevtoolsEvent): string {
         event.itemId === undefined ? '' : `#${event.itemId}`,
       ])
     case 'mutate:start':
-      return joinEventParts([
-        `${event.serviceName}.${event.method}`,
-        `mutation ${event.mutationId}`,
-        event.id === undefined ? '' : `#${event.id}`,
-        event.optimistic ? 'optimistic' : '',
-      ])
     case 'mutate:end':
-      return joinEventParts([
-        `${event.serviceName}.${event.method}`,
-        `mutation ${event.mutationId}`,
-        event.id === undefined ? '' : `#${event.id}`,
-        event.optimistic ? 'optimistic' : '',
-        formatMs(event.durationMs),
-      ])
     case 'mutate:error':
-      return joinEventParts([
-        `${event.serviceName}.${event.method}`,
-        `mutation ${event.mutationId}`,
-        event.id === undefined ? '' : `#${event.id}`,
-        event.optimistic ? 'optimistic' : '',
-        formatMs(event.durationMs),
-        errorMessage(event.error),
-      ])
     case 'mutate:rollback':
       return joinEventParts([
         `${event.serviceName}.${event.method}`,
         `mutation ${event.mutationId}`,
         event.id === undefined ? '' : `#${event.id}`,
+        'optimistic' in event && event.optimistic ? 'optimistic' : '',
+        'durationMs' in event ? formatMs(event.durationMs) : '',
+        'error' in event ? errorMessage(event.error) : '',
       ])
     case 'action:start':
-      return joinEventParts([`action ${event.actionId}`, event.name ?? '(anonymous)'])
     case 'action:end':
-      return joinEventParts([
-        `action ${event.actionId}`,
-        event.name ?? '(anonymous)',
-        formatMs(event.durationMs),
-      ])
     case 'action:error':
       return joinEventParts([
         `action ${event.actionId}`,
         event.name ?? '(anonymous)',
-        formatMs(event.durationMs),
-        errorMessage(event.error),
+        'durationMs' in event ? formatMs(event.durationMs) : '',
+        'error' in event ? errorMessage(event.error) : '',
       ])
     default:
       return genericEventDetails(event)
@@ -269,15 +245,4 @@ function eventTone(kind: string): 'green' | 'amber' | 'red' | 'blue' | 'neutral'
   if (kind.endsWith(':start')) return 'amber'
   if (kind.endsWith(':end')) return 'green'
   return 'neutral'
-}
-
-function formatEventTimestamp(item: DevtoolsEvent): string {
-  const value = item.wallAt ?? item.at
-  if (value < 946_684_800_000) return formatOffset(value)
-  const date = new Date(value)
-  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}.${pad3(date.getMilliseconds())}`
-}
-
-function formatOffset(value: number): string {
-  return `${Math.round(value)}ms`
 }

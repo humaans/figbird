@@ -1,6 +1,6 @@
 import { useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { WriteRecord } from './collector.js'
-import { now, pad2, pad3, prettyJson } from './format.js'
+import { formatClock, formatMs, prettyJson } from './format.js'
 import {
   Badge,
   DetailSection,
@@ -151,9 +151,12 @@ function WriteRow({
         {write.optimistic ? <span style={{ color: colors.muted }}> optimistic</span> : null}
         {write.error ? <div style={{ color: colors.red }}>{write.error}</div> : null}
       </span>
-      <span>{write.durationMs === undefined ? '-' : `${Math.round(write.durationMs)}ms`}</span>
-      <span style={{ color: colors.faint }} title={formatWriteStarted(write, true)}>
-        {formatWriteStarted(write, false)}
+      <span>{write.durationMs === undefined ? '-' : formatMs(write.durationMs)}</span>
+      <span
+        style={{ color: colors.faint }}
+        title={formatClock(write.startedWallAt, { milliseconds: true })}
+      >
+        {formatClock(write.startedWallAt)}
       </span>
     </div>
   )
@@ -195,7 +198,7 @@ function WriteDetails({
         <DetailStat label='Status' value={write.status} />
         <DetailStat
           label='Duration'
-          value={write.durationMs === undefined ? '-' : `${Math.round(write.durationMs)}ms`}
+          value={write.durationMs === undefined ? '-' : formatMs(write.durationMs)}
         />
         {write.type === 'mutation' ? (
           <DetailStat label='Mode' value={write.optimistic ? 'optimistic' : 'confirmed'} />
@@ -238,11 +241,4 @@ function writePayload(write: WriteRecord): unknown {
   if (write.method === 'update' || write.method === 'patch') return args[1]
   if (write.method === 'remove') return undefined
   return args.length === 1 ? args[0] : args
-}
-
-function formatWriteStarted(write: WriteRecord, milliseconds: boolean): string {
-  const value = write.startedWallAt ?? Date.now() - Math.max(0, now() - write.startedAt)
-  const date = new Date(value)
-  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
-  return milliseconds ? `${time}.${pad3(date.getMilliseconds())}` : time
 }

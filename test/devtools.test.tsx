@@ -9,7 +9,6 @@ import type {
   QueryRecord,
 } from '../lib/devtools.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
-import { markQuerySubscription } from '../lib/react/devtoolsQueryMarker.js'
 import { createTestApp, dom } from './helpers.js'
 
 interface Note {
@@ -531,6 +530,7 @@ test('drawer renders, switches tabs, and pops out', t => {
 test('drawer shows root queries and nests relation fetches in details', t => {
   const { figbird } = app()
   const { render, unmount, click, $, $all } = dom()
+  const inspectedRef = figbird.query(figbird.q.notes)
   const snapshot: DevtoolsSnapshot = {
     queries: [
       {
@@ -574,7 +574,7 @@ test('drawer shows root queries and nests relation fetches in details', t => {
     ],
     relational: [
       {
-        key: 'rq/issues',
+        key: inspectedRef.hash(),
         service: 'issues',
         ast: {
           service: 'issues',
@@ -632,12 +632,10 @@ test('drawer shows root queries and nests relation fetches in details', t => {
   const inspectedElement = window.document.createElement('div')
   inspectedElement.id = 'issue-area'
   window.document.body.append(inspectedElement)
-  const subscription = () => {}
-  markQuerySubscription(subscription, ['rq/issues'])
   const hostFiber: Record<string, unknown> = { stateNode: inspectedElement }
   const componentFiber = {
     child: hostFiber,
-    memoizedState: { memoizedState: [subscription], next: null },
+    memoizedState: { memoizedState: [() => {}, [inspectedRef]], next: null },
   }
   hostFiber.return = componentFiber
   Object.defineProperty(inspectedElement, '__reactFiber$figbirdTest', {

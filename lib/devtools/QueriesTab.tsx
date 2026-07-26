@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react'
-import { compactJson, formatAge } from './format.js'
+import { compactJson, formatAge, formatMs } from './format.js'
 import type { DevtoolsModel, DevtoolsOperation, QuerySummary } from './model.js'
 import { QueryDetails } from './QueryDetails.js'
 import { ClassBadge, plural, QueryStatusDot } from './QueryPresentation.js'
@@ -301,13 +301,13 @@ function QueryLastTiming({ query }: { query: QuerySummary }) {
           : query.isFetching
             ? 'pending'
             : '-'
-      : `${Math.round(query.lastDurationMs)}ms`
+      : formatMs(query.lastDurationMs)
   const mutedTiming =
     query.lastDurationMs === undefined && (duration === 'cached' || duration === 'warm')
 
   return (
     <span
-      title={`total ${Math.round(query.totalDurationMs)}ms`}
+      title={`total ${formatMs(query.totalDurationMs)}`}
       style={{
         display: 'block',
         overflow: 'hidden',
