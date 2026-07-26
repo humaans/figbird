@@ -192,29 +192,15 @@ function eventDetails(item: DevtoolsEvent): string {
         'durationMs' in event ? formatMs(event.durationMs) : '',
         'error' in event ? errorMessage(event.error) : '',
       ])
-    default:
-      return genericEventDetails(event)
+    default: {
+      const exhaustive: never = event
+      return exhaustive
+    }
   }
-}
-
-function genericEventDetails(event: DevtoolsEvent['event']): string {
-  return Object.entries(event as unknown as Record<string, unknown>)
-    .filter(([key]) => key !== 'kind' && key !== 'queryId' && key !== 'error')
-    .map(([key, value]) => `${key} ${formatEventValue(value)}`)
-    .filter(Boolean)
-    .join(' · ')
 }
 
 function joinEventParts(parts: string[]): string {
   return parts.filter(Boolean).join(' · ')
-}
-
-function formatEventValue(value: unknown): string {
-  if (value instanceof Error) return value.message
-  if (value === undefined) return ''
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return compactJson(value)
 }
 
 function errorMessage(error: Error): string {

@@ -6,7 +6,6 @@ import type { MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
   type AnyQueryBuilder,
-  type QueryAST,
   type QueryBuilderProxy,
   type QueryBuilderResult,
 } from './queryBuilder.js'
@@ -34,7 +33,8 @@ import {
   type QueryDescriptor,
   type ServiceState,
 } from './queryTypes.js'
-import { RelationalQueryRef } from './relationalQuery.js'
+import { RelationalQueryRef, type InspectedRelationalQuery } from './relationalQuery.js'
+export type { InspectedRelationalQuery } from './relationalQuery.js'
 import type {
   AnySchema,
   Schema,
@@ -304,36 +304,31 @@ export class Figbird<
       : (queryOrBuilder as B)
     const hash = builder.hash()
     const cached = this.#relationalQueryCache.get(hash)
-    if (cached) {
-      cached.setDisplayName(definition?.name)
-      return cached as RelationalQueryRef<
-        T,
-        S,
-        AdapterParams<A>,
-        AdapterFindMeta<A>,
-        AdapterQuery<A>
-      >
+    let ref = cached as
+      | RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+      | undefined
+    if (!ref) {
+      const ast = builder.toAST()
+      ref = new RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
+        // Figbird structurally satisfies the engine's narrow RelationalQueryHost contract.
+        this,
+        ast,
+        this.schema,
+        // Evict only if the cache still points at THIS instance. An already-replaced
+        // instance (evicted earlier, e.g. by StrictMode's unsubscribe/resubscribe cycle)
+        // cleaning up must not delete its successor's entry — that would force every
+        // render to intern a fresh ref whose subscription tears down the previous one,
+        // evicting the current one in turn: an unsubscribe/re-intern loop.
+        () => {
+          if (this.#relationalQueryCache.get(hash) === ref) {
+            this.#relationalQueryCache.delete(hash)
+          }
+        },
+      )
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+      this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
     }
-    const ast = builder.toAST()
-    const ref = new RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
-      // Figbird structurally satisfies the engine's narrow RelationalQueryHost contract.
-      this,
-      ast,
-      this.schema,
-      // Evict only if the cache still points at THIS instance. An already-replaced
-      // instance (evicted earlier, e.g. by StrictMode's unsubscribe/resubscribe cycle)
-      // cleaning up must not delete its successor's entry — that would force every
-      // render to intern a fresh ref whose subscription tears down the previous one,
-      // evicting the current one in turn: an unsubscribe/re-intern loop.
-      () => {
-        if (this.#relationalQueryCache.get(hash) === ref) {
-          this.#relationalQueryCache.delete(hash)
-        }
-      },
-      definition?.name,
-    )
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
+    ref.setDisplayName(definition?.name)
     return ref
   }
 
@@ -377,29 +372,7 @@ export class Figbird<
     // "definition + args collapses to one cache entry" contract lives in one place.
     const ref = this.query(query, args as never)
     const key = ref.hash()
-    const startedAt = Date.now()
-    this.queryStore.events.emit({
-      kind: 'prepare:start',
-      key,
-      ...(query.name ? { name: query.name } : {}),
-    })
-    const promise = ref.suspensePromise()
-    promise.then(
-      () => {
-        this.queryStore.events.emit({
-          kind: 'prepare:end',
-          key,
-          durationMs: Date.now() - startedAt,
-        })
-      },
-      () => {
-        this.queryStore.events.emit({
-          kind: 'prepare:end',
-          key,
-          durationMs: Date.now() - startedAt,
-        })
-      },
-    )
+    const promise = this.#traceLifecycle('prepare', key, query.name, () => ref.suspensePromise())
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
@@ -463,28 +436,7 @@ export class Figbird<
       this.#prefetches.delete(hash)
     }
 
-    const startedAt = Date.now()
-    this.queryStore.events.emit({
-      kind: 'prefetch:start',
-      key: hash,
-      ...(query.name ? { name: query.name } : {}),
-    })
-    ref.suspensePromise().then(
-      () => {
-        this.queryStore.events.emit({
-          kind: 'prefetch:end',
-          key: hash,
-          durationMs: Date.now() - startedAt,
-        })
-      },
-      () => {
-        this.queryStore.events.emit({
-          kind: 'prefetch:end',
-          key: hash,
-          durationMs: Date.now() - startedAt,
-        })
-      },
-    )
+    this.#traceLifecycle('prefetch', hash, query.name, () => ref.suspensePromise())
 
     // The pin also carries the staleTime so a warm-in-store read within the window
     // skips the SWR revalidation instead of re-fetching.
@@ -496,6 +448,30 @@ export class Figbird<
     // Never keep a Node process alive for a speculative pin (browsers ignore this).
     ;(timer as { unref?: () => void }).unref?.()
     this.#prefetches.set(hash, { at: now, release, timer })
+  }
+
+  #traceLifecycle(
+    phase: 'prepare' | 'prefetch',
+    key: string,
+    name: string | undefined,
+    start: () => Promise<void>,
+  ): Promise<void> {
+    const startedAt = Date.now()
+    this.queryStore.events.emit({
+      kind: `${phase}:start`,
+      key,
+      ...(name ? { name } : {}),
+    })
+    const promise = start()
+    const end = () => {
+      this.queryStore.events.emit({
+        kind: `${phase}:end`,
+        key,
+        durationMs: Date.now() - startedAt,
+      })
+    }
+    void promise.then(end, end)
+    return promise
   }
 
   // Descriptor layer — the primitive the relational engine (and the deprecated
@@ -757,12 +733,10 @@ export class Figbird<
               : 0,
           fetchedAt: query.fetchedAt,
           subscriberCount: this.queryStore.getSubscriberCount(query.queryId),
-          ...(stats?.fetchCount !== undefined ? { fetchCount: stats.fetchCount } : {}),
-          ...(stats?.errorCount !== undefined ? { errorCount: stats.errorCount } : {}),
+          fetchCount: stats?.fetchCount ?? 0,
+          errorCount: stats?.errorCount ?? 0,
           ...(stats?.lastDurationMs !== undefined ? { lastDurationMs: stats.lastDurationMs } : {}),
-          ...(stats?.totalDurationMs !== undefined
-            ? { totalDurationMs: stats.totalDurationMs }
-            : {}),
+          totalDurationMs: stats?.totalDurationMs ?? 0,
         })
       }
     }
@@ -798,17 +772,8 @@ export interface InspectedQuery {
   itemCount: number
   fetchedAt: number | undefined
   subscriberCount: number
-  fetchCount?: number
-  errorCount?: number
+  fetchCount: number
+  errorCount: number
   lastDurationMs?: number
-  totalDurationMs?: number
-}
-
-/** One row of `figbird.inspectRelational()` for devtools grouping. */
-export interface InspectedRelationalQuery {
-  key: string
-  name?: string
-  service: string
-  ast: QueryAST
-  nodes: Array<{ path: string; queryId: string }>
+  totalDurationMs: number
 }

@@ -45,6 +45,9 @@ function inspectedQuery(queryId: string): ReturnType<FigbirdLikeForDevtools['ins
     itemCount: 1,
     fetchedAt: Date.now(),
     subscriberCount: 0,
+    fetchCount: 0,
+    errorCount: 0,
+    totalDurationMs: 0,
   }
 }
 

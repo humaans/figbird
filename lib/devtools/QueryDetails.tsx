@@ -10,7 +10,7 @@ import type { QueryRecord } from './collector.js'
 import { compactJson, formatMs, prettyJson } from './format.js'
 import type { DevtoolsOperation, QuerySummary, UnderlyingFetch } from './model.js'
 import { ClassBadge, plural, queryStatus, QueryStatusDot } from './QueryPresentation.js'
-import { DetailsPane, useDevtoolsTheme, type DevtoolsColors } from './ui.js'
+import { Badge, DetailsPane, useDevtoolsTheme, type DevtoolsColors } from './ui.js'
 
 export function QueryDetails({
   operation,
@@ -40,13 +40,16 @@ export function QueryDetails({
   const activeOperation = `${activeQuery.serviceName}.${activeQuery.method}`
   const rootQueryIdentity =
     rootFetches.length === 1 ? rootFetches[0]!.queryId : `${rootFetches.length} root query IDs`
-  const directChildren = selectedUnderlying
-    ? underlying.filter(item => {
-        const prefix = `${selectedUnderlying.path}.`
-        if (!item.path.startsWith(prefix)) return false
-        return !item.path.slice(prefix.length).includes('.')
-      })
-    : underlying
+  const directChildren =
+    selectedUnderlying?.role === 'junction'
+      ? []
+      : selectedUnderlying
+        ? underlying.filter(item => {
+            const prefix = `${selectedUnderlying.path}.`
+            if (!item.path.startsWith(prefix)) return false
+            return !item.path.slice(prefix.length).includes('.')
+          })
+        : underlying
   const breadcrumb = selectedUnderlying ? (
     <>
       <button
@@ -59,7 +62,7 @@ export function QueryDetails({
       </button>
       {selectedUnderlying.path.split('.').map((segment, index, segments) => {
         const path = segments.slice(0, index + 1).join('.')
-        const ancestor = underlying.find(item => item.path === path)
+        const ancestor = underlying.find(item => item.path === path && item.role !== 'junction')
         const current = index === segments.length - 1
         return (
           <span key={path} style={{ display: 'contents' }}>
@@ -204,6 +207,7 @@ export function QueryDetails({
                   key={underlyingFetchKey(item)}
                   path={selectedUnderlying ? (item.path.split('.').pop() ?? item.path) : item.path}
                   operation={`${item.query.serviceName}.${item.query.method}`}
+                  {...(item.role ? { role: item.role } : {})}
                   detail={[
                     plural(item.query.itemCount, 'row', 'rows'),
                     item.query.lastDurationMs === undefined
@@ -272,7 +276,7 @@ export function QueryDetails({
 }
 
 function underlyingFetchKey(item: UnderlyingFetch): string {
-  return `${item.path}:${item.query.queryId}`
+  return `${item.path}:${item.role ?? ''}:${item.query.queryId}`
 }
 
 function breadcrumbButtonStyle(colors: DevtoolsColors): CSSProperties {
@@ -351,12 +355,14 @@ function QueryPlanRow({
   operation,
   detail,
   classification,
+  role,
   onSelect,
 }: {
   path: string
   operation: string
   detail: string
   classification?: string
+  role?: 'junction'
   onSelect?: () => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
@@ -407,6 +413,7 @@ function QueryPlanRow({
           >
             {operation}
           </strong>
+          {role === 'junction' ? <Badge tone='neutral'>junction</Badge> : null}
         </div>
         <div
           title={detail}

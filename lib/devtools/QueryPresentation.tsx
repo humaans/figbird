@@ -37,9 +37,7 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
         ? colors.blue
         : status.kind === 'cached'
           ? colors.amber
-          : status.kind === 'active'
-            ? colors.green
-            : colors.muted
+          : colors.green
   return (
     <span
       title={status.label}
@@ -57,7 +55,7 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
 }
 
 export function queryStatus(query: QuerySummary): {
-  kind: 'active' | 'cached' | 'error' | 'fetching' | 'idle'
+  kind: 'active' | 'cached' | 'error' | 'fetching'
   label: string
 } {
   if (query.status === 'error') {
@@ -69,10 +67,7 @@ export function queryStatus(query: QuerySummary): {
   if (query.subscriberCount === 0) {
     return { kind: 'cached', label: statusLabel(query, 'cached') }
   }
-  if (query.subscriberCount > 0) {
-    return { kind: 'active', label: statusLabel(query, 'active') }
-  }
-  return { kind: 'idle', label: statusLabel(query, 'idle') }
+  return { kind: 'active', label: statusLabel(query, 'active') }
 }
 
 export function plural(count: number, singular: string, pluralValue: string): string {

@@ -51,17 +51,18 @@ If you're here to learn figbird, read in this order — each file teaches one id
 6. **`src/components/ActivityPanel.tsx`** — three independent realtime queries merged in the
    component.
 7. **`src/components/NewIssueModal.tsx`** — optimistic create with a client-generated id.
-8. **`src/components/DevTools.tsx`** — built entirely on public observability: `figbird.events` for
-   the log, `figbird.inspect()` for the query table.
+8. **`src/components/DemoControls.tsx`** — demo-server switches for latency, background
+   traffic, forced failures, socket reconnects, and resets. Figbird's built-in devtools
+   provide the query, timeline, event, and write views.
 
 Structure rule: `src/` root is wiring (`main`, `figbird`, `demoControl`, `App`);
 `src/components/` is the shell UI the workspace composes; `src/pages/` is routed screens.
 `src/demoControl.ts` and `server.mjs` are demo plumbing, not figbird usage — skip them
 unless you're curious how the simulation works.
 
-## The dev-tools drawer
+## Demo controls and devtools
 
-Bottom-right corner:
+The bottom-right **Demo controls** menu changes server behavior:
 
 - **Latency** — fast (default) / realistic / slow, applied server-side. Fast shows off
   warm-cache navigation and optimistic writes; drag to slow and watch delayed spinners
@@ -69,14 +70,13 @@ Bottom-right corner:
 - **Teammate** — toggles the background traffic (on by default).
 - **Fail next mutation** — arms a one-shot server failure: your next action (comment,
   boost, title edit…) fails and figbird rolls the optimistic change back everywhere at
-  once, with the `mutate → rollback` sequence visible in the log.
+  once, with the `mutate → rollback` sequence visible in Figbird's events view.
 - **Drop socket** — kills the transport; socket.io auto-reconnects and figbird refetches
   every active query (and the materialized reference sets) to reconcile anything missed.
-- **log** — every fetch, realtime event, and mutation flowing through `figbird.events`,
-  with durations.
-- **queries** — `figbird.inspect()`: every live query with figbird's classification of
-  how it is maintained (`local-exact` merges events, `server-window` refetches the
-  window, `server-authoritative` always refetches, `get`), plus subscriber counts.
+
+Figbird's built-in drawer is enabled by default in development. It exposes live queries,
+the fetch timeline, events, writes, and the element inspector without a second demo-only
+implementation.
 
 ## Where each feature lives
 

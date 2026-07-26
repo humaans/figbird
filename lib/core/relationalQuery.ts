@@ -37,13 +37,6 @@ import { resolveServicePath } from './schema.js'
 // certainly the wrong shape (N requests for one screen) — warn and point at embed.
 const WINDOWED_RELATION_FANOUT_WARN_THRESHOLD = 10
 
-const queryKeysByRef = new WeakMap<object, string>()
-
-/** Resolves an interned relational ref to its query key. @internal */
-export function queryKeyForRef(value: unknown): string | undefined {
-  return typeof value === 'object' && value !== null ? queryKeysByRef.get(value) : undefined
-}
-
 /**
  * The narrow contract the relational engine needs from a Figbird instance. Keeping
  * this structural (rather than importing the Figbird class) avoids a circular
@@ -145,6 +138,18 @@ type GatherResult =
       assembly: Map<string, AssembledRelationData>
     }
 
+export interface InspectedRelationalQuery {
+  key: string
+  name?: string
+  service: string
+  ast: QueryAST
+  nodes: Array<{
+    path: string
+    role?: 'junction'
+    queryId: string
+  }>
+}
+
 /**
  * Reference to a relational query with nested relations.
  * Manages multiple sub-queries and assembles data on-the-fly from entity caches.
@@ -221,15 +226,12 @@ export class RelationalQueryRef<
     ast: QueryAST,
     schema: S,
     onEvict?: () => void,
-    name?: string,
   ) {
     this.#host = host
     this.#ast = ast
     this.#schema = schema
     this.#queryId = `rq/${hashObject(ast)}`
-    queryKeysByRef.set(this, this.#queryId)
     this.#onEvict = onEvict ?? null
-    this.#name = name
   }
 
   /** Returns internal details of this query reference (for debugging/testing). */
@@ -249,14 +251,8 @@ export class RelationalQueryRef<
   }
 
   /** Stable devtools projection for the store-level queries backing this ref. */
-  inspect(): {
-    key: string
-    name?: string
-    service: string
-    ast: QueryAST
-    nodes: Array<{ path: string; queryId: string }>
-  } {
-    const nodes: Array<{ path: string; queryId: string }> = []
+  inspect(): InspectedRelationalQuery {
+    const nodes: InspectedRelationalQuery['nodes'] = []
     for (const queryId of this.#root?.queryIds() ?? []) {
       nodes.push({ path: '(root)', queryId })
     }
@@ -265,10 +261,13 @@ export class RelationalQueryRef<
         case 'empty':
           break
         case 'fanIn':
-          nodes.push({ path: displayRelationPath(path), queryId: sub.queryRef.details().queryId })
+          nodes.push({
+            path: path.endsWith('#dest') ? path.slice(0, -'#dest'.length) : path,
+            queryId: sub.queryRef.details().queryId,
+          })
           break
         case 'junction':
-          nodes.push({ path: `${path}#junction`, queryId: sub.queryRef.details().queryId })
+          nodes.push({ path, role: 'junction', queryId: sub.queryRef.details().queryId })
           break
         case 'perParent':
           for (const child of sub.children.values()) {
@@ -1283,10 +1282,6 @@ export class RelationalQueryRef<
     this.#suspenseSettled = false
     this.#onEvict?.()
   }
-}
-
-function displayRelationPath(path: string): string {
-  return path.endsWith('#dest') ? path.slice(0, -'#dest'.length) : path
 }
 
 /**

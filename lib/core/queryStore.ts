@@ -498,13 +498,10 @@ export class QueryStore<
     try {
       const result = await this.#fetch(queryId)
       const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
-      this.#fetched({
-        queryId,
-        result,
-        ...(durationMs !== undefined ? { durationMs } : {}),
-      })
+      this.#fetched({ queryId, result })
       const q = this.#getQuery(queryId)
       if (q && durationMs !== undefined) {
+        this.#recordFetchStats(queryId, { ok: true, durationMs })
         const data = result.data
         const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
         this.#events.emit({
@@ -519,13 +516,10 @@ export class QueryStore<
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
       const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
-      this.#fetchFailed({
-        queryId,
-        error,
-        ...(durationMs !== undefined ? { durationMs } : {}),
-      })
+      this.#fetchFailed({ queryId, error })
       const q = this.#getQuery(queryId)
       if (q && durationMs !== undefined) {
+        this.#recordFetchStats(queryId, { ok: false, durationMs })
         this.#events.emit({
           kind: 'fetch:error',
           serviceName: q.desc.serviceName,
@@ -680,11 +674,9 @@ export class QueryStore<
   #fetched({
     queryId,
     result,
-    durationMs,
   }: {
     queryId: string
     result: QueryResponse<unknown, TMeta | undefined>
-    durationMs?: number
   }): void {
     let shouldRefetch = false
     const processedEvents: ProcessedRealtimeEvent[] = []
@@ -768,10 +760,6 @@ export class QueryStore<
         service.materialized = { queryId, fetchedAt: Date.now() }
       }
 
-      this.#recordFetchStats(queryId, {
-        ok: true,
-        ...(durationMs !== undefined ? { durationMs } : {}),
-      })
       service.queries.set(queryId, {
         ...query,
         fetchedAt: Date.now(),
@@ -834,15 +822,7 @@ export class QueryStore<
     }
   }
 
-  #fetchFailed({
-    queryId,
-    error,
-    durationMs,
-  }: {
-    queryId: string
-    error: Error
-    durationMs?: number
-  }): void {
+  #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
     let shouldRefetch = false
 
     const touched = this.#transactOverService(queryId, (service, query) => {
@@ -850,10 +830,6 @@ export class QueryStore<
 
       shouldRefetch = query.dirty
 
-      this.#recordFetchStats(queryId, {
-        ok: false,
-        ...(durationMs !== undefined ? { durationMs } : {}),
-      })
       service.queries.set(queryId, {
         ...query!,
         state: {
@@ -874,7 +850,7 @@ export class QueryStore<
 
   #recordFetchStats(
     queryId: string,
-    { ok, durationMs }: { ok: boolean; durationMs?: number },
+    { ok, durationMs }: { ok: boolean; durationMs: number },
   ): void {
     const current = this.#queryStats.get(queryId) ?? {
       fetchCount: 0,
@@ -884,8 +860,8 @@ export class QueryStore<
     this.#queryStats.set(queryId, {
       fetchCount: current.fetchCount + 1,
       errorCount: current.errorCount + (ok ? 0 : 1),
-      totalDurationMs: current.totalDurationMs + (durationMs ?? 0),
-      ...(durationMs !== undefined ? { lastDurationMs: durationMs } : {}),
+      totalDurationMs: current.totalDurationMs + durationMs,
+      lastDurationMs: durationMs,
     })
   }
 
@@ -1097,6 +1073,15 @@ export class QueryStore<
    */
   #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const trace = (
+      event:
+        | { kind: 'reconcile:scheduled'; mode: 'leading' | 'trailing' }
+        | { kind: 'reconcile:deferred'; reason: 'hidden' | 'cooldown' },
+    ) => {
+      if (serviceName === undefined) return
+      this.#events.emit({ ...event, queryId, serviceName })
+    }
+
     if (!force && this.#listenerCount(queryId) === 0) {
       this.#markQueryPending(queryId)
       return
@@ -1105,26 +1090,12 @@ export class QueryStore<
     if (this.#visibility.isHidden()) {
       this.#deferredWhileHidden.add(queryId)
       this.#markQueryPending(queryId)
-      if (serviceName !== undefined) {
-        this.#events.emit({
-          kind: 'reconcile:deferred',
-          queryId,
-          serviceName,
-          reason: 'hidden',
-        })
-      }
+      trace({ kind: 'reconcile:deferred', reason: 'hidden' })
       return
     }
 
     if (this.#reconcileCooldown <= 0) {
-      if (serviceName !== undefined) {
-        this.#events.emit({
-          kind: 'reconcile:scheduled',
-          queryId,
-          serviceName,
-          mode: 'leading',
-        })
-      }
+      trace({ kind: 'reconcile:scheduled', mode: 'leading' })
       this.refetch(queryId)
       return
     }
@@ -1134,26 +1105,12 @@ export class QueryStore<
 
     if (!window || now - window.lastAt >= this.#reconcileCooldown) {
       this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
-      if (serviceName !== undefined) {
-        this.#events.emit({
-          kind: 'reconcile:scheduled',
-          queryId,
-          serviceName,
-          mode: 'leading',
-        })
-      }
+      trace({ kind: 'reconcile:scheduled', mode: 'leading' })
       this.refetch(queryId)
       return
     }
 
-    if (serviceName !== undefined) {
-      this.#events.emit({
-        kind: 'reconcile:deferred',
-        queryId,
-        serviceName,
-        reason: 'cooldown',
-      })
-    }
+    trace({ kind: 'reconcile:deferred', reason: 'cooldown' })
 
     if (window.trailing) return // the pending trailing refetch already covers this
 
@@ -1174,14 +1131,7 @@ export class QueryStore<
     // Never keep a Node process alive for a pending reconciliation.
     ;(timer as { unref?: () => void }).unref?.()
     window.trailing = timer
-    if (serviceName !== undefined) {
-      this.#events.emit({
-        kind: 'reconcile:scheduled',
-        queryId,
-        serviceName,
-        mode: 'trailing',
-      })
-    }
+    trace({ kind: 'reconcile:scheduled', mode: 'trailing' })
   }
 
   /** On becoming visible, reconcile everything that deferred while hidden. */

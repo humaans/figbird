@@ -1,4 +1,5 @@
-import { queryKeyForRef } from '../core/relationalQuery.js'
+import { useEffect } from 'react'
+import { RelationalQueryRef } from '../core/relationalQuery.js'
 
 interface FiberLike {
   alternate?: FiberLike | null
@@ -23,6 +24,103 @@ export interface InspectedQueryArea {
 
 const MAX_FIBERS = 20_000
 const MAX_VALUE_DEPTH = 4
+
+export function useElementPicker(
+  active: boolean,
+  accent: string,
+  onPick: (area: InspectedQueryArea | null) => void,
+): void {
+  useEffect(() => {
+    if (!active) return
+    const appDocument = window.document
+    const overlay = appDocument.createElement('div')
+    const label = appDocument.createElement('div')
+    let hovered: Element | null = null
+    const previousCursor = appDocument.documentElement.style.cursor
+
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      zIndex: '2147483647',
+      pointerEvents: 'none',
+      border: `2px solid ${accent}`,
+      background: 'rgba(29, 101, 216, .10)',
+      boxSizing: 'border-box',
+      display: 'none',
+    })
+    Object.assign(label.style, {
+      position: 'absolute',
+      left: '-2px',
+      bottom: '100%',
+      maxWidth: '320px',
+      padding: '3px 6px',
+      background: accent,
+      color: '#fff',
+      font: '11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    })
+    overlay.append(label)
+    appDocument.body.append(overlay)
+    appDocument.documentElement.style.cursor = 'crosshair'
+
+    const updateOverlay = () => {
+      if (!hovered || !hovered.isConnected) {
+        overlay.style.display = 'none'
+        return
+      }
+      const rect = hovered.getBoundingClientRect()
+      Object.assign(overlay.style, {
+        display: 'block',
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+      })
+    }
+    const selectableTarget = (event: Event): Element | null => {
+      const target = event.target
+      if (!(target instanceof window.Element) || target.closest('[data-figbird-devtools]')) {
+        return null
+      }
+      return target
+    }
+    const onPointerMove = (event: PointerEvent) => {
+      hovered = selectableTarget(event)
+      if (hovered) label.textContent = describeElement(hovered)
+      updateOverlay()
+    }
+    const onClick = (event: MouseEvent) => {
+      const target = selectableTarget(event)
+      if (!target) return
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      onPick(inspectQueryArea(target))
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      onPick(null)
+    }
+
+    appDocument.addEventListener('pointermove', onPointerMove, true)
+    appDocument.addEventListener('click', onClick, true)
+    appDocument.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('scroll', updateOverlay, true)
+    window.addEventListener('resize', updateOverlay)
+    return () => {
+      appDocument.removeEventListener('pointermove', onPointerMove, true)
+      appDocument.removeEventListener('click', onClick, true)
+      appDocument.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('scroll', updateOverlay, true)
+      window.removeEventListener('resize', updateOverlay)
+      appDocument.documentElement.style.cursor = previousCursor
+      overlay.remove()
+    }
+  }, [accent, active, onPick])
+}
 
 export function inspectQueryArea(element: Element): InspectedQueryArea {
   const fiber = elementFiber(element)
@@ -117,9 +215,8 @@ function scanHookValue(
   visited: Set<object>,
   depth: number,
 ): void {
-  const queryKey = queryKeyForRef(value)
-  if (queryKey) {
-    keys.add(queryKey)
+  if (value instanceof RelationalQueryRef) {
+    keys.add(value.details().queryId)
     return
   }
   if (depth >= MAX_VALUE_DEPTH || (typeof value !== 'object' && typeof value !== 'function')) {

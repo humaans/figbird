@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { createCollector, type Collector, type FigbirdLikeForDevtools } from './collector.js'
-import { describeElement, inspectQueryArea, type InspectedQueryArea } from './inspector.js'
+import { inspectQueryArea, useElementPicker, type InspectedQueryArea } from './inspector.js'
 import { QueriesTab } from './QueriesTab.js'
 import { TimelineRangeControl, TimelineTab, type TimelineRange } from './TimelineTab.js'
 import { EventsTab } from './EventsTab.js'
@@ -22,6 +22,7 @@ import {
   lightColors,
   makeStyles,
   useDevtoolsTheme,
+  usePopoutDocument,
   usePreferredColorScheme,
 } from './ui.js'
 
@@ -82,96 +83,12 @@ function DevtoolsSession({
     if (popoutWindow) window.focus()
   }, [popoutWindow])
 
-  useEffect(() => {
-    if (!inspecting) return
-    const appDocument = window.document
-    const overlay = appDocument.createElement('div')
-    const label = appDocument.createElement('div')
-    let hovered: Element | null = null
-    const previousCursor = appDocument.documentElement.style.cursor
-
-    Object.assign(overlay.style, {
-      position: 'fixed',
-      zIndex: '2147483647',
-      pointerEvents: 'none',
-      border: `2px solid ${colors.blue}`,
-      background: 'rgba(29, 101, 216, .10)',
-      boxSizing: 'border-box',
-      display: 'none',
-    })
-    Object.assign(label.style, {
-      position: 'absolute',
-      left: '-2px',
-      bottom: '100%',
-      maxWidth: '320px',
-      padding: '3px 6px',
-      background: colors.blue,
-      color: '#fff',
-      font: '11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-    })
-    overlay.append(label)
-    appDocument.body.append(overlay)
-    appDocument.documentElement.style.cursor = 'crosshair'
-
-    const updateOverlay = () => {
-      if (!hovered || !hovered.isConnected) {
-        overlay.style.display = 'none'
-        return
-      }
-      const rect = hovered.getBoundingClientRect()
-      Object.assign(overlay.style, {
-        display: 'block',
-        left: `${rect.left}px`,
-        top: `${rect.top}px`,
-        width: `${rect.width}px`,
-        height: `${rect.height}px`,
-      })
-    }
-    const selectableTarget = (event: Event): Element | null => {
-      const target = event.target
-      if (!(target instanceof window.Element) || target.closest('[data-figbird-devtools]'))
-        return null
-      return target
-    }
-    const onPointerMove = (event: PointerEvent) => {
-      hovered = selectableTarget(event)
-      if (hovered) label.textContent = describeElement(hovered)
-      updateOverlay()
-    }
-    const onClick = (event: MouseEvent) => {
-      const target = selectableTarget(event)
-      if (!target) return
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      setInspectedArea(inspectQueryArea(target))
-      setInspecting(false)
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      event.stopPropagation()
-      setInspecting(false)
-    }
-
-    appDocument.addEventListener('pointermove', onPointerMove, true)
-    appDocument.addEventListener('click', onClick, true)
-    appDocument.addEventListener('keydown', onKeyDown, true)
-    window.addEventListener('scroll', updateOverlay, true)
-    window.addEventListener('resize', updateOverlay)
-    return () => {
-      appDocument.removeEventListener('pointermove', onPointerMove, true)
-      appDocument.removeEventListener('click', onClick, true)
-      appDocument.removeEventListener('keydown', onKeyDown, true)
-      window.removeEventListener('scroll', updateOverlay, true)
-      window.removeEventListener('resize', updateOverlay)
-      appDocument.documentElement.style.cursor = previousCursor
-      overlay.remove()
-    }
-  }, [colors.blue, inspecting])
+  const finishInspecting = useCallback((area: InspectedQueryArea | null) => {
+    if (area) setInspectedArea(area)
+    setInspecting(false)
+  }, [])
+  useElementPicker(inspecting, colors.blue, finishInspecting)
+  usePopoutDocument(popoutWindow, colorScheme, colors)
 
   const closeDevtools = useCallback(() => {
     if (popoutWindow && !popoutWindow.closed) popoutWindow.close()
@@ -254,29 +171,6 @@ function DevtoolsSession({
   }, [popoutWindow])
 
   useEffect(() => {
-    if (!popoutWindow) return
-    const { document } = popoutWindow
-    document.title = 'Figbird devtools'
-    let viewport = document.querySelector('meta[name="viewport"]')
-    if (!viewport) {
-      viewport = document.createElement('meta')
-      viewport.setAttribute('name', 'viewport')
-      document.head.append(viewport)
-    }
-    viewport.setAttribute('content', 'width=device-width, initial-scale=1')
-    document.documentElement.style.background = colors.bg
-    document.documentElement.style.colorScheme = colorScheme
-    document.documentElement.style.fontSize = '11px'
-    document.documentElement.style.setProperty('text-size-adjust', 'none')
-    document.documentElement.style.setProperty('-webkit-text-size-adjust', 'none')
-    document.body.style.margin = '0'
-    document.body.style.overflow = 'hidden'
-    document.body.style.background = colors.bg
-    document.body.style.color = colors.text
-    document.body.style.fontSize = '11px'
-  }, [colorScheme, colors.bg, colors.text, popoutWindow])
-
-  useEffect(() => {
     writeStoredHeight(height)
   }, [height])
 
@@ -316,6 +210,26 @@ function DevtoolsSession({
   }
 
   const model = useMemo(() => buildDevtoolsModel(snapshot), [snapshot])
+  const timelineEmpty =
+    snapshot.timeline.realtime.length === 0 &&
+    snapshot.queries.every(query => query.spans.length === 0)
+  const clearAction =
+    tab === 'events'
+      ? {
+          disabled: snapshot.events.length === 0,
+          run: () => activeCollector.clearEvents(),
+        }
+      : tab === 'timeline'
+        ? {
+            disabled: timelineEmpty,
+            run: () => activeCollector.clearTimeline(),
+          }
+        : tab === 'writes'
+          ? {
+              disabled: snapshot.writes.length === 0,
+              run: () => activeCollector.clearWrites(),
+            }
+          : null
 
   const drawer = (
     <section
@@ -404,50 +318,18 @@ function DevtoolsSession({
           </>
         ) : null}
         {tab === 'events' ? (
-          <>
-            <input
-              style={styles.input}
-              value={eventFilter}
-              onChange={event => setEventFilter(event.currentTarget.value)}
-              placeholder='Filter events'
-            />
-            <button
-              type='button'
-              style={{
-                ...buttonStyle(colors, false),
-                opacity: snapshot.events.length === 0 ? 0.55 : 1,
-              }}
-              disabled={snapshot.events.length === 0}
-              onClick={() => activeCollector.clearEvents()}
-            >
-              Clear
-            </button>
-          </>
+          <input
+            style={styles.input}
+            value={eventFilter}
+            onChange={event => setEventFilter(event.currentTarget.value)}
+            placeholder='Filter events'
+          />
         ) : null}
         {tab === 'timeline' ? (
-          <>
-            <TimelineRangeControl value={timelineRange} onChange={setTimelineRange} />
-            <button
-              type='button'
-              style={buttonStyle(colors, false)}
-              onClick={() => activeCollector.clearTimeline()}
-            >
-              Clear
-            </button>
-          </>
+          <TimelineRangeControl value={timelineRange} onChange={setTimelineRange} />
         ) : null}
-        {tab === 'writes' ? (
-          <button
-            type='button'
-            style={{
-              ...buttonStyle(colors, false),
-              opacity: snapshot.writes.length === 0 ? 0.55 : 1,
-            }}
-            disabled={snapshot.writes.length === 0}
-            onClick={() => activeCollector.clearWrites()}
-          >
-            Clear
-          </button>
+        {clearAction ? (
+          <ClearButton disabled={clearAction.disabled} onClick={clearAction.run} />
         ) : null}
         <span style={styles.spacer} />
         <button
@@ -494,6 +376,23 @@ function DevtoolsSession({
     <ThemeContext.Provider value={themeValue}>
       {open ? (popoutWindow ? createPortal(drawer, popoutWindow.document.body) : drawer) : null}
     </ThemeContext.Provider>
+  )
+}
+
+function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <button
+      type='button'
+      style={{
+        ...buttonStyle(colors, false),
+        opacity: disabled ? 0.55 : 1,
+      }}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      Clear
+    </button>
   )
 }
 

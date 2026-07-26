@@ -37,7 +37,7 @@ export interface DevtoolsColors {
 
 export interface DevtoolsTheme {
   colors: DevtoolsColors
-  styles: Record<string, CSSProperties>
+  styles: ReturnType<typeof makeStyles>
 }
 
 export const lightColors: DevtoolsColors = {
@@ -85,7 +85,7 @@ const defaultTheme: DevtoolsTheme = {
 
 export const ThemeContext = createContext<DevtoolsTheme>(defaultTheme)
 
-export function makeStyles(colors: DevtoolsColors): Record<string, CSSProperties> {
+export function makeStyles(colors: DevtoolsColors) {
   return {
     drawer: {
       position: 'fixed',
@@ -236,7 +236,7 @@ export function makeStyles(colors: DevtoolsColors): Record<string, CSSProperties
       borderBottom: `1px solid ${colors.rowBorder}`,
       alignItems: 'center',
     },
-  }
+  } satisfies Record<string, CSSProperties>
 }
 
 export function useDevtoolsTheme(): DevtoolsTheme {
@@ -264,6 +264,35 @@ export function usePreferredColorScheme(theme: DevtoolsThemeMode): ColorScheme {
   }, [theme])
 
   return scheme
+}
+
+export function usePopoutDocument(
+  popoutWindow: Window | null,
+  colorScheme: ColorScheme,
+  colors: DevtoolsColors,
+): void {
+  useEffect(() => {
+    if (!popoutWindow) return
+    const { document } = popoutWindow
+    document.title = 'Figbird devtools'
+    let viewport = document.querySelector('meta[name="viewport"]')
+    if (!viewport) {
+      viewport = document.createElement('meta')
+      viewport.setAttribute('name', 'viewport')
+      document.head.append(viewport)
+    }
+    viewport.setAttribute('content', 'width=device-width, initial-scale=1')
+    document.documentElement.style.background = colors.bg
+    document.documentElement.style.colorScheme = colorScheme
+    document.documentElement.style.fontSize = '11px'
+    document.documentElement.style.setProperty('text-size-adjust', 'none')
+    document.documentElement.style.setProperty('-webkit-text-size-adjust', 'none')
+    document.body.style.margin = '0'
+    document.body.style.overflow = 'hidden'
+    document.body.style.background = colors.bg
+    document.body.style.color = colors.text
+    document.body.style.fontSize = '11px'
+  }, [colorScheme, colors, popoutWindow])
 }
 
 function resolveColorScheme(theme: DevtoolsThemeMode): ColorScheme {

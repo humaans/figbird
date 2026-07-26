@@ -4,6 +4,7 @@ import { compactJson } from './format.js'
 
 export interface UnderlyingFetch {
   path: string
+  role?: 'junction'
   query: QueryRecord
 }
 
@@ -64,17 +65,22 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
         continue
       }
 
+      const roleLabel = node.role === 'junction' ? `${node.path} junction` : node.path
       addScope(scopesByQueryId, node.queryId, {
         kind: 'nested',
         operationKey: group.key,
-        label: `nested: ${node.path}`,
+        label: `nested: ${roleLabel}`,
         title: group.name
-          ? `nested relation ${node.path} for ${group.name}`
-          : `nested relation ${node.path}`,
+          ? `nested relation ${roleLabel} for ${group.name}`
+          : `nested relation ${roleLabel}`,
       })
       const query = queryById.get(node.queryId)
       if (!query) continue
-      underlyingByPath.set(`${node.path}:${node.queryId}`, { path: node.path, query })
+      underlyingByPath.set(`${node.path}:${node.role ?? ''}:${node.queryId}`, {
+        path: node.path,
+        ...(node.role ? { role: node.role } : {}),
+        query,
+      })
     }
 
     operations.push({

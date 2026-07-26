@@ -32,10 +32,6 @@ export interface QuerySpan {
 }
 
 export interface QueryRecord extends InspectedQuery {
-  fetchCount: number
-  errorCount: number
-  lastDurationMs?: number
-  totalDurationMs: number
   spans: QuerySpan[]
   realtimeSeen: number
   reconciles: number
@@ -145,9 +141,6 @@ function makeQueryRecord(
 ): InternalQueryRecord {
   return {
     ...row,
-    fetchCount: row.fetchCount ?? 0,
-    errorCount: row.errorCount ?? 0,
-    totalDurationMs: row.totalDurationMs ?? 0,
     spans: [],
     realtimeSeen: 0,
     reconciles: 0,
@@ -176,6 +169,9 @@ function makePlaceholderQueryRecord(
       itemCount: 0,
       fetchedAt: undefined,
       subscriberCount: 0,
+      fetchCount: 0,
+      errorCount: 0,
+      totalDurationMs: 0,
     },
     serviceRealtimeBaseline,
     now(),
@@ -245,7 +241,7 @@ class FigbirdCollector implements Collector {
   start(): void {
     if (this.#started) return
     this.#started = true
-    this.#refreshQueries(true)
+    this.#refreshQueries()
     this.#eventUnsub = this.#figbird.events.subscribe(event => {
       this.#recordEvent(event)
       this.#scheduleNotify()
@@ -414,7 +410,7 @@ class FigbirdCollector implements Collector {
     }
   }
 
-  #refreshQueries(hydrateStats = false): void {
+  #refreshQueries(): void {
     const observedAt = now()
     const observedQueryIds = new Set<string>()
     for (const row of this.#figbird.inspect()) {
@@ -442,13 +438,13 @@ class FigbirdCollector implements Collector {
       record.itemCount = row.itemCount
       record.fetchedAt = row.fetchedAt
       record.subscriberCount = row.subscriberCount
-      if (!existing || hydrateStats) {
-        record.fetchCount = Math.max(record.fetchCount, row.fetchCount ?? 0)
-        record.errorCount = Math.max(record.errorCount, row.errorCount ?? 0)
-        record.totalDurationMs = Math.max(record.totalDurationMs, row.totalDurationMs ?? 0)
-        if (row.lastDurationMs !== undefined) {
-          record.lastDurationMs = row.lastDurationMs
-        }
+      record.fetchCount = row.fetchCount
+      record.errorCount = row.errorCount
+      record.totalDurationMs = row.totalDurationMs
+      if (row.lastDurationMs === undefined) {
+        delete record.lastDurationMs
+      } else {
+        record.lastDurationMs = row.lastDurationMs
       }
       this.#queries.set(row.queryId, record)
     }
@@ -524,10 +520,6 @@ class FigbirdCollector implements Collector {
         ? observedStartAt
         : Math.max(observedStartAt, this.#timelineStartedAt)
     this.#fetchStarts.delete(queryId)
-    record.fetchCount++
-    record.lastDurationMs = durationMs
-    record.totalDurationMs += durationMs
-    if (!ok) record.errorCount++
     pushCapped(record.spans, { startAt, endAt: at, ok }, this.#spanLimit)
   }
 

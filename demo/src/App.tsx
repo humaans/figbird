@@ -1,6 +1,6 @@
 /**
  * Layout and routing shell. Feature panes live in their own modules:
- * IssueList, ActivityPanel, NewIssueModal, DevTools, and pages/.
+ * IssueList, ActivityPanel, NewIssueModal, DemoControls, and pages/.
  */
 
 import { Component, Suspense, useState, type ReactNode } from 'react'
@@ -8,7 +8,7 @@ import { DelayedFallback } from 'figbird'
 import { FigbirdDevtools } from 'figbird/devtools'
 import { Link, Router, Routes, useRoute } from 'react-space-router'
 import { ActivityPanel } from './components/ActivityPanel'
-import { DevToolsPanel } from './components/DevTools'
+import { DemoControls } from './components/DemoControls'
 import { IssueListPane } from './components/IssueList'
 import { NewIssueModal } from './components/NewIssueModal'
 import { figbird, prepare, prefetch } from './figbird'
@@ -162,7 +162,7 @@ export function App() {
           <Routes />
         </Suspense>
       </Router>
-      <DevToolsPanel />
+      <DemoControls />
       <FigbirdDevtools figbird={figbird} enabledByDefault={import.meta.env.DEV} />
     </div>
   )

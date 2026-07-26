@@ -25,10 +25,6 @@ export class DevtoolsControl {
     this.#setPreference(false)
   }
 
-  isEnabled(defaultEnabled = false): boolean {
-    return this.#preference ?? defaultEnabled
-  }
-
   getSnapshot = (): DevtoolsPreference => this.#preference
 
   subscribe = (listener: () => void): (() => void) => {
