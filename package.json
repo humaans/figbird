@@ -44,8 +44,8 @@
     "demo": "npm --prefix demo install && npm --prefix demo run dev",
     "demo:server": "npm --prefix demo run dev:server",
     "demo:client": "npm --prefix demo run dev:client",
-    "release": "np",
-    "release:beta": "np --tag=beta",
+    "release": "np --no-publish && npm publish",
+    "release:next": "np --tag=next --any-branch --no-publish && npm publish --tag=next",
     "docs:build": "hugo -s docs",
     "docs:watch": "hugo server -s docs",
     "docs:release": "hugo -s docs && gh-pages -d docs/public"
