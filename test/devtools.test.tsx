@@ -2,13 +2,13 @@ import test from 'ava'
 import { JSDOM } from 'jsdom'
 import { createSchema, service, type FigbirdEvent } from '../lib/index.js'
 import { FigbirdEventEmitter } from '../lib/core/events.js'
-import { createCollector, FigbirdDevtools } from '../lib/devtools.js'
-import type {
-  Collector,
-  DevtoolsSnapshot,
-  FigbirdLikeForDevtools,
-  QueryRecord,
-} from '../lib/devtools.js'
+import { FigbirdDevtools } from '../lib/devtools.js'
+import {
+  createCollector,
+  type DevtoolsSnapshot,
+  type FigbirdLikeForDevtools,
+  type QueryRecord,
+} from '../lib/devtools/collector.js'
 import { inspectQueryArea } from '../lib/devtools/inspector.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
 import { createTestApp, dom } from './helpers.js'
@@ -85,6 +85,16 @@ function queryRecord(
     reconciles: 0,
     ...overrides,
   }
+}
+
+function inspectedRow(record: QueryRecord): ReturnType<FigbirdLikeForDevtools['inspect']>[number] {
+  const result: Partial<QueryRecord> = { ...record }
+  delete result.present
+  delete result.spans
+  delete result.realtimeSeen
+  delete result.reconciles
+  delete result.lastError
+  return result as ReturnType<FigbirdLikeForDevtools['inspect']>[number]
 }
 
 function relationalGroup(
@@ -307,7 +317,7 @@ test('collector marks optimistic mutation failures as rolled back writes', async
 test('collector bounds inactive query and settled write history', t => {
   let rows: ReturnType<FigbirdLikeForDevtools['inspect']> = []
   let relational: DevtoolsSnapshot['relational'] = []
-  const sensitiveQuery = { secret: 'keep me private' }
+  const capturedQuery = { value: 'captured' }
   const listeners: {
     state?: () => void
     event?: (event: FigbirdEvent) => void
@@ -331,7 +341,6 @@ test('collector bounds inactive query and settled write history', t => {
     },
   }
   const collector = createCollector(figbird, {
-    captureValue: value => (value === sensitiveQuery ? { secret: '[redacted]' } : value),
     heartbeatMs: 0,
     queryHistoryLimit: 2,
     writeLimit: 2,
@@ -375,7 +384,7 @@ test('collector bounds inactive query and settled write history', t => {
 
   const generationOne = inspectedQuery('live-3', {
     generation: 1,
-    query: sensitiveQuery,
+    query: capturedQuery,
     subscriberCount: 1,
     fetchCount: 2,
     totalDurationMs: 20,
@@ -399,20 +408,20 @@ test('collector bounds inactive query and settled write history', t => {
     })
   }
   const generationPlan = relationalGroup('rq/live-3', 'live-3', 'child', 'child-live-3')
-  generationPlan.ast.query = sensitiveQuery
+  generationPlan.ast.query = capturedQuery
   rows = [generationOne]
   relational = [generationPlan]
   listeners.state?.()
   const capturedGeneration = collector
     .getSnapshot()
     .queries.find(query => query.queryId === 'live-3')
-  t.deepEqual(capturedGeneration?.query, { secret: '[redacted]' })
+  t.deepEqual(capturedGeneration?.query, { value: 'captured' })
   t.deepEqual(
     collector.getSnapshot().relational.find(group => group.key === 'rq/live-3')?.ast.query,
-    { secret: '[redacted]' },
+    { value: 'captured' },
   )
 
-  sensitiveQuery.secret = 'changed after capture'
+  capturedQuery.value = 'changed later'
   rows = []
   relational = []
   listeners.state?.()
@@ -523,42 +532,17 @@ test('collector bounds inactive query and settled write history', t => {
   t.is(collector.getSnapshot().writes.length, 2)
 
   listeners.event?.({
-    kind: 'reconcile:queued',
-    queryId: 'live-3',
-    serviceName: 'notes',
-    mode: 'trailing',
-  })
-  listeners.event?.({
     kind: 'reconcile:started',
     queryId: 'live-3',
     serviceName: 'notes',
-    mode: 'trailing',
   })
   t.is(
     collector.getSnapshot().queries.find(query => query.queryId === 'live-3')?.reconciles,
     1,
-    'queued reconciliation must not count as a refetch',
+    'started reconciliation counts as a refetch',
   )
 
-  const retainedPayload: Record<string, unknown> = { content: 'captured' }
-  retainedPayload.self = retainedPayload
-  let getterReads = 0
-  Object.defineProperty(retainedPayload, 'computed', {
-    enumerable: true,
-    get() {
-      getterReads++
-      return 'do not invoke'
-    },
-  })
-  let iteratorReads = 0
-  const iteratorSafeArray = ['safe']
-  Object.defineProperty(iteratorSafeArray, Symbol.iterator, {
-    get() {
-      iteratorReads++
-      throw new Error('do not invoke')
-    },
-  })
-  retainedPayload.list = iteratorSafeArray
+  const retainedPayload = { content: 'captured' }
   listeners.event?.({
     kind: 'mutate:start',
     mutationId: 7,
@@ -569,38 +553,11 @@ test('collector bounds inactive query and settled write history', t => {
   })
   retainedPayload.content = 'changed later'
   const retainedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
-  t.deepEqual(retainedWrite?.args, [
-    7,
-    {
-      content: 'captured',
-      self: '[circular]',
-      computed: '[Getter]',
-      list: ['safe'],
-    },
-  ])
-  t.is(getterReads, 0)
-  t.is(iteratorReads, 0)
+  t.deepEqual(retainedWrite?.args, [7, { content: 'captured' }])
   const retainedEvent = collector
     .getSnapshot()
     .events.find(item => item.event.kind === 'mutate:start' && item.event.mutationId === 7)
   t.false(retainedEvent ? 'args' in retainedEvent.event : true)
-
-  const largePayload: Record<string, unknown> = {}
-  for (let index = 0; index < 1_100; index++) largePayload[`field-${index}`] = index
-  listeners.event?.({
-    kind: 'mutate:start',
-    mutationId: 8,
-    serviceName: 'notes',
-    method: 'patch',
-    optimistic: false,
-    args: [largePayload],
-  })
-  const capturedLargePayload = collector
-    .getSnapshot()
-    .writes.find(write => write.id === 'mutation:8')?.args?.[0] as
-    | Record<string, unknown>
-    | undefined
-  t.true(capturedLargePayload?.['[truncated]'] === true)
 
   listeners.event?.({
     kind: 'fetch:start',
@@ -802,9 +759,9 @@ test('drawer renders, switches tabs, and pops out', t => {
   blocked.unmount()
 })
 
-test('drawer shows root queries and nests relation fetches in details', t => {
+test('drawer shows root queries and nests relation fetches in details', async t => {
   const { figbird } = app()
-  const { render, unmount, click, $, $all } = dom()
+  const { render, unmount, click, $, $all, act } = dom()
   const inspectedRef = figbird.query(figbird.q.notes)
   const timelineAt = performance.now()
   const snapshot: DevtoolsSnapshot = {
@@ -882,32 +839,58 @@ test('drawer shows root queries and nests relation fetches in details', t => {
     writes: [],
     inFlightWrites: 0,
   }
-  let collectorStartCalls = 0
-  const collector: Collector = {
-    start() {
-      collectorStartCalls++
-    },
-    stop() {},
-    subscribe() {
-      return () => {}
-    },
-    getSnapshot() {
-      return snapshot
-    },
-    clearEvents() {},
-    clearTimeline() {},
-    clearWrites() {},
+  const events = new FigbirdEventEmitter()
+  const inspectedRows = snapshot.queries.map(inspectedRow)
+  const inspectedFigbird: FigbirdLikeForDevtools = {
+    devtools: figbird.devtools,
+    events,
+    inspect: () => inspectedRows,
+    inspectRelational: () => snapshot.relational,
   }
 
-  render(
-    <FigbirdDevtools
-      figbird={figbird as FigbirdLikeForDevtools}
-      collector={collector}
-      defaultOpen
-      enabledByDefault
-    />,
-  )
-  t.is(collectorStartCalls, 0)
+  render(<FigbirdDevtools figbird={inspectedFigbird} defaultOpen enabledByDefault />)
+  await act(async () => {
+    events.emit({
+      kind: 'fetch:start',
+      queryId: 'root',
+      generation: 1,
+      serviceName: 'issues',
+      method: 'find',
+    })
+    events.emit({
+      kind: 'fetch:end',
+      queryId: 'root',
+      generation: 1,
+      serviceName: 'issues',
+      method: 'find',
+      durationMs: 8,
+      itemCount: 1,
+    })
+    events.emit({
+      kind: 'fetch:start',
+      queryId: 'labels',
+      generation: 1,
+      serviceName: 'issueLabels',
+      method: 'find',
+    })
+    events.emit({
+      kind: 'fetch:end',
+      queryId: 'labels',
+      generation: 1,
+      serviceName: 'issueLabels',
+      method: 'find',
+      durationMs: 5,
+      itemCount: 2,
+    })
+    events.emit({
+      kind: 'realtime',
+      serviceName: 'issues',
+      type: 'patched',
+      itemId: 76,
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+  })
 
   const inspectedElement = window.document.createElement('div')
   inspectedElement.id = 'issue-area'

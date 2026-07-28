@@ -371,18 +371,14 @@ export class Figbird<
     // query() owns definition resolution (validate → build → intern), so the
     // "definition + args collapses to one cache entry" contract lives in one place.
     const ref = this.query(query, args as never)
-    const key = ref.hash()
-    const finishTrace = this.#beginLifecycleTrace('prepare', key, query.name)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
     const unsub = ref.subscribe(() => {}, options ?? {})
-    const promise = ref.suspensePromise()
-    finishTrace(promise)
     return {
-      key,
-      promise,
+      key: ref.hash(),
+      promise: ref.suspensePromise(),
       release: unsub,
     }
   }
@@ -440,9 +436,7 @@ export class Figbird<
 
     // The pin also carries the staleTime so a warm-in-store read within the window
     // skips the SWR revalidation instead of re-fetching.
-    const finishTrace = this.#beginLifecycleTrace('prefetch', hash, query.name)
     const release = ref.subscribe(() => {}, { staleTime })
-    finishTrace(ref.suspensePromise())
     const timer = setTimeout(() => {
       this.#prefetches.delete(hash)
       release()
@@ -450,29 +444,6 @@ export class Figbird<
     // Never keep a Node process alive for a speculative pin (browsers ignore this).
     ;(timer as { unref?: () => void }).unref?.()
     this.#prefetches.set(hash, { at: now, release, timer })
-  }
-
-  #beginLifecycleTrace(
-    phase: 'prepare' | 'prefetch',
-    key: string,
-    name: string | undefined,
-  ): (promise: Promise<void>) => void {
-    const startedAt = Date.now()
-    this.queryStore.events.emit({
-      kind: `${phase}:start`,
-      key,
-      ...(name ? { name } : {}),
-    })
-    return promise => {
-      const end = () => {
-        this.queryStore.events.emit({
-          kind: `${phase}:end`,
-          key,
-          durationMs: Date.now() - startedAt,
-        })
-      }
-      void promise.then(end, end)
-    }
   }
 
   // Descriptor layer — the primitive the relational engine (and the deprecated

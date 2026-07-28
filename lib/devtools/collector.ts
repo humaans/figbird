@@ -6,8 +6,6 @@ import type {
   InspectedRelationalQuery,
   MutationActivity,
 } from '../core/figbird.js'
-import type { QueryAST } from '../core/queryBuilder.js'
-import { captureInspectableValue } from './capture.js'
 import { now } from './format.js'
 
 export interface FigbirdLikeForDevtools {
@@ -19,9 +17,7 @@ export interface FigbirdLikeForDevtools {
   subscribeToStateChanges?(fn: (state: unknown) => void): () => void
 }
 
-export interface CollectorOptions {
-  /** Transform retained parameters and write arguments before bounded capture (for redaction). */
-  captureValue?: (value: unknown) => unknown
+interface CollectorOptions {
   eventLimit?: number
   heartbeatMs?: number
   queryHistoryLimit?: number
@@ -161,6 +157,15 @@ function errorMessage(error: unknown): string {
   return String(error)
 }
 
+function snapshotValue<T>(value: T): T {
+  if (typeof structuredClone !== 'function') return value
+  try {
+    return structuredClone(value)
+  } catch {
+    return value
+  }
+}
+
 function makeQueryRecord(
   row: InspectedQuery,
   serviceRealtimeBaseline: number,
@@ -267,7 +272,6 @@ export function createCollector(
   options: CollectorOptions = {},
 ): Collector {
   return new FigbirdCollector(figbird, {
-    captureValue: options.captureValue,
     eventLimit: options.eventLimit ?? 500,
     heartbeatMs: options.heartbeatMs ?? 5_000,
     queryHistoryLimit: options.queryHistoryLimit ?? 250,
@@ -277,7 +281,6 @@ export function createCollector(
 }
 
 interface ResolvedCollectorOptions {
-  captureValue: ((value: unknown) => unknown) | undefined
   eventLimit: number
   heartbeatMs: number
   queryHistoryLimit: number
@@ -291,7 +294,6 @@ type FetchTerminalEvent = Extract<FetchEvent, { kind: 'fetch:end' | 'fetch:error
 
 class FigbirdCollector implements Collector {
   #figbird: FigbirdLikeForDevtools
-  #captureValue: ((value: unknown) => unknown) | undefined
   #eventLimit: number
   #heartbeatMs: number
   #queryHistoryLimit: number
@@ -315,12 +317,9 @@ class FigbirdCollector implements Collector {
   #nextEventId = 1
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
-  #capturedAsts = new WeakMap<QueryAST, QueryAST>()
-  #capturedQueries = new WeakMap<object, Record<string, unknown>>()
 
   constructor(figbird: FigbirdLikeForDevtools, options: ResolvedCollectorOptions) {
     this.#figbird = figbird
-    this.#captureValue = options.captureValue
     this.#eventLimit = options.eventLimit
     this.#heartbeatMs = options.heartbeatMs
     this.#queryHistoryLimit = options.queryHistoryLimit
@@ -469,13 +468,6 @@ class FigbirdCollector implements Collector {
       case 'action:error':
         this.#recordAction(event, at)
         break
-      case 'prepare:start':
-      case 'prefetch:start':
-      case 'prepare:end':
-      case 'prefetch:end':
-      case 'reconcile:queued':
-      case 'reconcile:deferred':
-        break
     }
   }
 
@@ -486,7 +478,7 @@ class FigbirdCollector implements Collector {
       observedQueryIds.add(row.queryId)
       const serviceRealtime = this.#realtimeByService.get(row.serviceName) ?? 0
       const existing = this.#queries.get(row.queryId)
-      const capturedRow = { ...row, query: this.#captureQuery(row.query) }
+      const capturedRow = { ...row, query: snapshotValue(row.query) }
       const capturedState = queryState(capturedRow)
       const record = existing ?? makeQueryRecord(capturedRow, serviceRealtime, observedAt)
 
@@ -526,7 +518,7 @@ class FigbirdCollector implements Collector {
     for (const inspected of current) {
       observedKeys.add(inspected.key)
       this.#relational.set(inspected.key, {
-        inspected: this.#captureRelational(inspected),
+        inspected: snapshotValue(inspected),
         lastObservedAt: observedAt,
       })
     }
@@ -634,42 +626,6 @@ class FigbirdCollector implements Collector {
     if (currentMatches) record.current = settled
   }
 
-  #captureQuery(query: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-    if (query === undefined) return undefined
-    const cached = this.#capturedQueries.get(query)
-    if (cached) return cached
-    const captured = captureInspectableValue(query, this.#captureValue)
-    const result =
-      typeof captured === 'object' && captured !== null && !Array.isArray(captured)
-        ? (captured as Record<string, unknown>)
-        : { '[preview]': captured }
-    this.#capturedQueries.set(query, result)
-    return result
-  }
-
-  #captureAst(ast: QueryAST): QueryAST {
-    const cached = this.#capturedAsts.get(ast)
-    if (cached) return cached
-    const related = Object.fromEntries(
-      Object.entries(ast.related).map(([name, child]) => [name, this.#captureAst(child)]),
-    )
-    const captured = {
-      ...ast,
-      query: this.#captureQuery(ast.query) ?? {},
-      related,
-    }
-    this.#capturedAsts.set(ast, captured)
-    return captured
-  }
-
-  #captureRelational(inspected: InspectedRelationalQuery): InspectedRelationalQuery {
-    return {
-      ...inspected,
-      ast: this.#captureAst(inspected.ast),
-      nodes: inspected.nodes.map(node => ({ ...node })),
-    }
-  }
-
   #recordMutation(
     event: Extract<
       FigbirdEvent,
@@ -757,7 +713,7 @@ class FigbirdCollector implements Collector {
   }
 
   #captureArgs(args: readonly unknown[]): readonly unknown[] {
-    return args.map(value => captureInspectableValue(value, this.#captureValue))
+    return snapshotValue(args)
   }
 
   #captureEvent(event: FigbirdEvent): FigbirdEvent {
@@ -765,9 +721,7 @@ class FigbirdCollector implements Collector {
       case 'fetch:start':
         return {
           ...event,
-          ...(event.params === undefined
-            ? {}
-            : { params: captureInspectableValue(event.params, this.#captureValue) }),
+          ...(event.params === undefined ? {} : { params: snapshotValue(event.params) }),
         }
       case 'fetch:error':
       case 'mutate:error':

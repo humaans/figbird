@@ -127,8 +127,6 @@ function eventQueryId(event: DevtoolsEvent['event']): string | undefined {
     case 'fetch:end':
     case 'fetch:error':
     case 'reconcile:started':
-    case 'reconcile:queued':
-    case 'reconcile:deferred':
       return event.queryId
     default:
       return undefined
@@ -157,16 +155,7 @@ function eventDetails(item: DevtoolsEvent): string {
         errorMessage(event.error),
       ])
     case 'reconcile:started':
-    case 'reconcile:queued':
-      return joinEventParts([event.serviceName, event.mode])
-    case 'reconcile:deferred':
-      return joinEventParts([event.serviceName, event.reason])
-    case 'prepare:start':
-    case 'prefetch:start':
-      return event.name ?? event.key
-    case 'prepare:end':
-    case 'prefetch:end':
-      return joinEventParts([event.key, formatMs(event.durationMs)])
+      return event.serviceName
     case 'realtime':
       return joinEventParts([
         event.serviceName,

@@ -1106,21 +1106,7 @@ export class QueryStore<
    *   edge — isolated changes stay as fast as today); further events within
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
-  #requestReconcile(
-    queryId: string,
-    { force = false, mode = 'leading' }: { force?: boolean; mode?: 'leading' | 'trailing' } = {},
-  ): void {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
-    const trace = (
-      event:
-        | { kind: 'reconcile:started'; mode: 'leading' | 'trailing' }
-        | { kind: 'reconcile:queued'; mode: 'trailing' }
-        | { kind: 'reconcile:deferred'; reason: 'hidden' | 'cooldown' },
-    ) => {
-      if (serviceName === undefined) return
-      this.#events.emit({ ...event, queryId, serviceName })
-    }
-
+  #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
     if (!force && this.#listenerCount(queryId) === 0) {
       this.#markQueryPending(queryId)
       return
@@ -1129,12 +1115,11 @@ export class QueryStore<
     if (this.#visibility.isHidden()) {
       this.#deferredWhileHidden.add(queryId)
       this.#markQueryPending(queryId)
-      trace({ kind: 'reconcile:deferred', reason: 'hidden' })
       return
     }
 
     if (this.#reconcileCooldown <= 0) {
-      trace({ kind: 'reconcile:started', mode })
+      this.#emitReconcileStarted(queryId)
       this.refetch(queryId)
       return
     }
@@ -1144,12 +1129,10 @@ export class QueryStore<
 
     if (!window || now - window.lastAt >= this.#reconcileCooldown) {
       this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
-      trace({ kind: 'reconcile:started', mode })
+      this.#emitReconcileStarted(queryId)
       this.refetch(queryId)
       return
     }
-
-    trace({ kind: 'reconcile:deferred', reason: 'cooldown' })
 
     if (window.trailing) return // the pending trailing refetch already covers this
 
@@ -1161,16 +1144,22 @@ export class QueryStore<
           this.#reconcileWindows.delete(queryId)
           return
         }
-        // Re-enter the gate after the window expires. The request remains trailing
-        // unless the tab went hidden or the last subscriber left in the meantime.
-        this.#requestReconcile(queryId, { mode: 'trailing' })
+        // Re-enter the gate after the window expires unless the tab went hidden or
+        // the last subscriber left in the meantime.
+        this.#requestReconcile(queryId)
       },
       window.lastAt + this.#reconcileCooldown - now,
     )
     // Never keep a Node process alive for a pending reconciliation.
     ;(timer as { unref?: () => void }).unref?.()
     window.trailing = timer
-    trace({ kind: 'reconcile:queued', mode: 'trailing' })
+  }
+
+  #emitReconcileStarted(queryId: string): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (serviceName !== undefined) {
+      this.#events.emit({ kind: 'reconcile:started', queryId, serviceName })
+    }
   }
 
   /** On becoming visible, reconcile everything that deferred while hidden. */

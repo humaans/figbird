@@ -7,7 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { createCollector, type Collector, type FigbirdLikeForDevtools } from './collector.js'
+import { createCollector, type FigbirdLikeForDevtools } from './collector.js'
 import { inspectQueryArea, useElementPicker, type InspectedQueryArea } from './inspector.js'
 import { QueriesTab } from './QueriesTab.js'
 import { TimelineRangeControl, TimelineTab, type TimelineRange } from './TimelineTab.js'
@@ -28,8 +28,6 @@ import {
 
 export interface FigbirdDevtoolsProps {
   figbird: FigbirdLikeForDevtools
-  /** An externally owned, already-started collector. Primarily useful for custom hosts and tests. */
-  collector?: Collector
   defaultOpen?: boolean
   /** Used only when enable() or disable() has not stored an explicit preference. */
   enabledByDefault?: boolean
@@ -55,13 +53,8 @@ export function FigbirdDevtools(props: FigbirdDevtoolsProps) {
   return <DevtoolsSession {...props} />
 }
 
-function DevtoolsSession({
-  figbird,
-  collector,
-  defaultOpen = false,
-  theme = 'system',
-}: FigbirdDevtoolsProps) {
-  const activeCollector = useMemo(() => collector ?? createCollector(figbird), [collector, figbird])
+function DevtoolsSession({ figbird, defaultOpen = false, theme = 'system' }: FigbirdDevtoolsProps) {
+  const activeCollector = useMemo(() => createCollector(figbird), [figbird])
   const colorScheme = usePreferredColorScheme(theme)
   const colors = colorScheme === 'dark' ? darkColors : lightColors
   const styles = useMemo(() => makeStyles(colors), [colors])
@@ -128,10 +121,9 @@ function DevtoolsSession({
   }, [popoutWindow])
 
   useEffect(() => {
-    if (collector) return
     activeCollector.start()
     return () => activeCollector.stop()
-  }, [activeCollector, collector])
+  }, [activeCollector])
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {

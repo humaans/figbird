@@ -162,14 +162,6 @@ export function TimelineTab({
     return a.id.localeCompare(b.id)
   })
   const axisTicks = bounds ? timelineAxisTicks(bounds.start, bounds.end) : []
-  const nPlusOne = detectNPlusOne(
-    lanes
-      .filter(
-        (lane): lane is Extract<VisibleTimelineLane, { kind: 'query' }> => lane.kind === 'query',
-      )
-      .map(lane => ({ serviceName: lane.serviceName, spans: lane.bars })),
-  )
-
   return (
     <section style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={styles.scroll}>
@@ -212,13 +204,6 @@ export function TimelineTab({
             {lanes.length === 0 ? (
               <div style={{ padding: '18px 0 18px 220px', color: colors.muted }}>
                 No activity in this time range. Choose All to inspect retained history.
-              </div>
-            ) : null}
-            {nPlusOne.length > 0 ? (
-              <div style={{ color: colors.amber, padding: '10px 0 0 220px' }}>
-                {nPlusOne.map(item => (
-                  <div key={item}>{item}</div>
-                ))}
               </div>
             ) : null}
           </div>
@@ -496,29 +481,4 @@ function formatTimelineClock(value: number, nowPoint: number, milliseconds: bool
   // Timeline positions use the monotonic clock; convert to wall time for display.
   const wallAt = Date.now() - Math.max(0, nowPoint - value)
   return formatClock(wallAt, { milliseconds })
-}
-
-function detectNPlusOne(
-  queries: Array<{ serviceName: string; spans: readonly QuerySpan[] }>,
-): string[] {
-  const byService = new Map<string, number[]>()
-  for (const query of queries) {
-    const starts = byService.get(query.serviceName) ?? []
-    for (const span of query.spans) starts.push(span.startAt)
-    byService.set(query.serviceName, starts)
-  }
-  const warnings: string[] = []
-  for (const [service, starts] of byService) {
-    const sorted = starts.sort((a, b) => a - b)
-    let left = 0
-    let largestCluster = 0
-    for (let right = 0; right < sorted.length; right++) {
-      while (sorted[right]! - sorted[left]! > 100) left++
-      largestCluster = Math.max(largestCluster, right - left + 1)
-    }
-    if (largestCluster >= 5) {
-      warnings.push(`${service}: ${largestCluster} near-simultaneous fetches - consider embed`)
-    }
-  }
-  return warnings
 }

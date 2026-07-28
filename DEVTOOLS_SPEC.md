@@ -99,7 +99,7 @@ is mounted on them).
 Static per-node classification report: `{ nodes: [{ path ('(root)' or dotted
 relation path), service, kind, class, reasons: [{ code, detail }], realtime
 ('merge'|'refetch'|'manual'), via? }] }`. Use it for the row-expansion "why" panel
-when the devtools has access to the original builder/definition (see Gap G3 —
+when the devtools has access to the original builder/definition (see Gap G2 —
 `inspect()` rows alone don't carry the builder).
 
 ### 4. `figbird.mutating` — synchronous in-flight mutation tracker
@@ -114,40 +114,21 @@ The Phase-1 panel works on the foundations alone. These unlock the rest; add the
 core with tests, following the existing event patterns in `lib/core/events.ts` and
 emit sites in `lib/core/queryStore.ts` / `lib/core/figbird.ts`.
 
-**G1. Reconcile visibility.** The reconcile gate (`#requestReconcile` in
-`queryStore.ts`) decides refetch-now / coalesce-into-trailing / defer-while-hidden —
-invisible today. Add events:
+**G1. Reconcile visibility.** Emit an event when the reconcile gate actually starts
+a refetch:
 
 ```ts
 {
-  kind: 'reconcile:scheduled'
+  kind: 'reconcile:started'
   queryId: string
   serviceName: string
-  mode: 'leading' | 'trailing'
-}
-{
-  kind: 'reconcile:deferred'
-  queryId: string
-  serviceName: string
-  reason: 'hidden' | 'cooldown'
 }
 ```
 
-This powers the "events received vs refetches triggered" counters and makes burst
-coalescing legible ("50 events → 2 refetches").
+This powers the "events received vs refetches triggered" counters without exposing
+the reconcile gate's internal scheduling.
 
-**G2. Preparation spans.** `figbird.prepare`/`prefetch` (in `figbird.ts`) emit
-nothing. Add:
-
-```ts
-{ kind: 'prepare:start' | 'prefetch:start'; key: string /* ref hash */; name?: string /* definition name */ }
-{ kind: 'prepare:end'   | 'prefetch:end';   key: string; durationMs: number }
-```
-
-End = the ref's `suspensePromise()` settling. These render as spans on the waterfall
-so "did the router warm this before the screen read it" is visible.
-
-**G3. Relational grouping.** `inspect()` lists flat store-level queries; the devtools
+**G2. Relational grouping.** `inspect()` lists flat store-level queries; the devtools
 wants them grouped under the relational query that owns them ("issues + creator +
 comments.author" as one expandable row). Add a registry on the Figbird instance:
 `figbird.inspectRelational(): Array<{ key: string /* rq/hash */, name?: string,
@@ -184,14 +165,12 @@ lib/devtools/collector.ts   — framework-agnostic; subscribes to figbird.events
                               snapshots inspect(), accumulates per-query records
 lib/devtools/Devtools.tsx   — <FigbirdDevtools figbird={figbird} /> drawer, renders
                               collector state via useSyncExternalStore
-lib/devtools.ts             — public entrypoint re-exporting both
+lib/devtools.ts             — public entrypoint for the React devtools component
 ```
 
 ### Collector
 
 ```ts
-export function createCollector(figbird: FigbirdLikeForDevtools): Collector
-
 interface Collector {
   start(): void // subscribe to events (idempotent)
   stop(): void // unsubscribe, keep accumulated state
@@ -200,13 +179,10 @@ interface Collector {
 }
 ```
 
-- **History starts when the collector starts.** Attaching late misses earlier events
-  — acceptable; the drawer mounts the collector on first open by default, and apps
-  that want full history call `createCollector(figbird).start()` at boot and pass
-  the collector to the drawer. Document both modes.
+- **History starts when the devtools are enabled.** Opening and closing the drawer
+  does not interrupt collection.
 - **Ring buffers:** raw event log capped at 500 entries, per-query span history at
-  50; per-query counters are plain numbers and never truncate. Caps are constructor
-  options.
+  50; per-query counters are plain numbers and never truncate.
 - **Change notification throttling:** coalesce notifications to at most one per
   animation frame (fall back to 50ms timeout outside browsers). Never notify
   synchronously from the event listener.
@@ -241,7 +217,7 @@ interface QueryRecord {
 
 interface DevtoolsSnapshot {
   queries: QueryRecord[] // active first (subscriberCount desc), then by service
-  relational: RelationalGroup[] // from G3 ([] until it lands)
+  relational: RelationalGroup[] // from G2 ([] until it lands)
   events: FigbirdEventWithTimestamp[] // ring buffer, newest last
   writes: WriteRecord[] // mutations grouped by mutationId, actions by actionId
   inFlightWrites: number // from figbird.mutating
@@ -262,7 +238,7 @@ Four tabs:
 
 ### Tab 1 — Queries (the screen-centric default)
 
-Table, one row per query (or per relational group once G3 lands, expandable to its
+Table, one row per query (or per relational group once G2 lands, expandable to its
 node rows). Columns:
 
 | column   | content                                                                                    |
@@ -279,26 +255,20 @@ node rows). Columns:
 | age      | `now - fetchedAt`, live-updating coarse ("3s", "2m")                                       |
 
 Row expansion: full query JSON, per-node classification with `reasons` (via
-`explain()` on the AST once G3 lands), span history sparkline, last error.
+`explain()` on the AST once G2 lands), span history sparkline, last error.
 
 Filters above the table: text filter on service/query; toggle "active only"
 (default **on** — that's the screen-centric view); toggle "include cached".
 
 ### Tab 2 — Timeline (waterfall)
 
-Horizontal time axis, one lane per query (grouped under relational parents once G3
+Horizontal time axis, one lane per query (grouped under relational parents once G2
 lands; until then grouped by service). Each fetch span is a bar (`startAt→endAt`),
-green ok / red error; `prepare`/`prefetch` spans (G2) render in a distinct hatched
-style above the query lanes. Realtime events draw as ticks on their service's lane.
+green ok / red error. Realtime events draw as ticks on their service's lane.
 
 Behaviors:
 
 - window: last 30s by default; pause button freezes the view; zoom via wheel.
-- **N+1 highlighting:** when ≥5 spans on the same service start within 100ms of each
-  other with near-identical query shapes (same keys, different values), tint the
-  cluster and label it "N per-parent queries — consider `embed`" (this mirrors the
-  core's windowed-relation fan-out warning; see `WINDOWED_RELATION_FANOUT_WARN_THRESHOLD`
-  in `relationalQuery.ts`).
 - clicking a span selects the query in Tab 1.
 
 ### Tab 3 — Events
@@ -353,7 +323,7 @@ coverage needs no React:
 4. ring buffer caps hold; snapshot identity is stable across no-op notifications.
 5. one React smoke test: drawer renders, tab switch works, no console errors.
 
-Core instrumentation PRs (G1–G3) each carry their own event-emission tests following
+Core instrumentation PRs (G1–G2) each carry their own event-emission tests following
 the existing patterns in `test/` (see `test/reconcile.test.tsx` for reconcile-gate
 test infrastructure and `test/helpers.ts` for the app factory).
 
@@ -362,9 +332,8 @@ test infrastructure and `test/helpers.ts` for the app factory).
 1. **Collector + Queries tab** on existing foundations (no core changes). Ship
    behind `figbird/devtools`.
 2. **Events + Writes tabs** (still no core changes).
-3. **G1 + G2 core events**, then the **Timeline tab** with prepare/prefetch spans
-   and N+1 highlighting.
-4. **G3 relational grouping**, expandable relational rows, explain-powered "why"
+3. **G1 core events**, then the **Timeline tab** with fetch spans and realtime ticks.
+4. **G2 relational grouping**, expandable relational rows, explain-powered "why"
    panel.
 5. Polish: height persistence, filters, keyboard, docs page (`docs/content/_index.md`
    gets a Devtools section under Observability), CHANGELOG entry.

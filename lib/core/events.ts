@@ -53,29 +53,6 @@ export type FigbirdEvent =
       kind: 'reconcile:started'
       queryId: string
       serviceName: string
-      mode: 'leading' | 'trailing'
-    }
-  | {
-      kind: 'reconcile:queued'
-      queryId: string
-      serviceName: string
-      mode: 'trailing'
-    }
-  | {
-      kind: 'reconcile:deferred'
-      queryId: string
-      serviceName: string
-      reason: 'hidden' | 'cooldown'
-    }
-  | {
-      kind: 'prepare:start' | 'prefetch:start'
-      key: string
-      name?: string
-    }
-  | {
-      kind: 'prepare:end' | 'prefetch:end'
-      key: string
-      durationMs: number
     }
   | {
       kind: 'realtime'
