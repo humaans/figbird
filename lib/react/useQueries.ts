@@ -105,7 +105,6 @@ export function useQueriesImpl(
     },
     [refs, staleTime],
   )
-
   // useSyncExternalStore needs a stable snapshot value: rebuild the combined array
   // only when some element's state changed (element states are identity-cached by
   // RelationalQueryRef, so reference comparison is exact).

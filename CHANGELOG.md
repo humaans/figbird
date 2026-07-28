@@ -1,5 +1,16 @@
 # Figbird Changelog
 
+## Unreleased
+
+- Add built-in query, timeline, event, and write inspection through the new
+  `figbird/devtools` entrypoint. Devtools can inspect queries mounted under a selected
+  page element, open in a separate window, and follow the system color scheme.
+- Add `figbird.devtools.enable()` and `disable()` so production apps can keep the
+  devtools shortcut behind a persisted opt-in.
+- Add reconciliation lifecycle events to `figbird.events`.
+- Include mutation and action arguments on their start events so attached devtools and
+  trace subscribers can inspect write payloads.
+
 ## 0.24.0
 
 The relational rewrite.

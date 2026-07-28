@@ -1043,9 +1043,9 @@ button.primary:hover:not(:disabled) {
   text-decoration: underline;
 }
 
-/* ----- Floating dev tools panel ----- */
+/* ----- Demo server controls ----- */
 
-.devtools {
+.demo-controls {
   position: fixed;
   right: 16px;
   bottom: 16px;
@@ -1057,7 +1057,7 @@ button.primary:hover:not(:disabled) {
   font-size: 12px;
 }
 
-.devtools-toggle {
+.demo-controls-toggle {
   background: var(--text);
   color: var(--surface);
   border: 0;
@@ -1070,114 +1070,31 @@ button.primary:hover:not(:disabled) {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 
-.devtools-toggle:hover {
+.demo-controls-toggle:hover {
   opacity: 0.9;
 }
 
-.devtools-panel {
-  width: 640px;
+.demo-controls-panel {
+  width: max-content;
   max-width: 92vw;
-  height: 520px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
-  overflow: hidden;
-}
-
-.devtools-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
 }
 
-.devtools-head .link {
+.demo-controls-panel .link {
   font-size: 11.5px;
 }
 
-.devtools-head .link.selected {
+.demo-controls-panel .link.selected {
   color: var(--text);
   font-weight: 600;
-}
-
-.devtools-log {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  flex: 1;
-  overflow-y: auto;
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
-    monospace;
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-.devtools-row {
-  display: grid;
-  grid-template-columns: 96px 64px minmax(0, 1fr) auto;
-  gap: 8px;
-  padding: 4px 10px;
-  border-bottom: 1px solid #f4f4f4;
-  align-items: baseline;
-}
-
-.devtools-row.error {
-  background: #fff5f5;
-}
-
-.devtools-row.rollback {
-  background: #fff8e6;
-}
-
-.devtools-row.start {
-  color: var(--text-muted);
-}
-
-.devtools-ts {
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.devtools-tag {
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-size: 10.5px;
-}
-
-.tag-fetch {
-  color: #1d4ed8;
-}
-
-.tag-realtime {
-  color: #059669;
-}
-
-.tag-mutate {
-  color: #b45309;
-}
-
-.tag-action {
-  color: #7c3aed;
-}
-
-.devtools-text {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.devtools-duration {
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ----- Workspace evolution: list controls, chips, teams, sidebar activity, explain, queries ----- */
@@ -1420,51 +1337,6 @@ button.primary:hover:not(:disabled) {
   font-weight: 600;
   color: var(--text);
   margin-bottom: 3px;
-}
-
-/* ----- Dev tools: sub header + queries view ----- */
-
-.devtools-head.sub {
-  border-top: 1px solid var(--border);
-}
-
-.q-badge {
-  flex: none;
-  font-size: 10px;
-  border-radius: 4px;
-  padding: 0 6px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.q-badge.local-exact {
-  background: #f0fdf4;
-  color: #15803d;
-}
-
-.q-badge.server-window {
-  background: #fff7ed;
-  color: #c2410c;
-}
-
-.q-badge.server-authoritative {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-
-.q-badge.get {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
-
-.q-query {
-  color: var(--text-dim);
-}
-
-.q-meta {
-  flex: none;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
 }
 
 /* The list pane hosts sticky controls + a scrolling body (overrides the base rule). */
@@ -1729,7 +1601,7 @@ button.primary:hover:not(:disabled) {
   white-space: pre;
 }
 
-.devtools .link.armed {
+.demo-controls .link.armed {
   color: var(--danger);
   font-weight: 600;
 }
