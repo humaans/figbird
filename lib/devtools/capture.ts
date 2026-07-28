@@ -1,9 +1,11 @@
 const MAX_DEPTH = 6
+const MAX_PROPERTIES = 1_000
 const MAX_VALUES = 1_000
 const MAX_STRING_LENGTH = 10_000
 
 interface CaptureState {
   chars: number
+  properties: number
   seen: WeakSet<object>
   values: number
 }
@@ -25,7 +27,7 @@ export function captureInspectableValue(
     }
   }
   try {
-    return capture(transformed, { chars: 0, seen: new WeakSet(), values: 0 }, 0)
+    return capture(transformed, { chars: 0, properties: 0, seen: new WeakSet(), values: 0 }, 0)
   } catch {
     return `[uninspectable ${objectNameForUnknown(transformed)}]`
   }
@@ -69,19 +71,30 @@ function capture(value: unknown, state: CaptureState, depth: number): unknown {
 
   if (Array.isArray(value)) {
     const result: unknown[] = []
-    for (const item of value) {
-      if (state.values >= MAX_VALUES) {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    const length =
+      lengthDescriptor && 'value' in lengthDescriptor && typeof lengthDescriptor.value === 'number'
+        ? lengthDescriptor.value
+        : 0
+    for (let index = 0; index < length; index++) {
+      if (state.values >= MAX_VALUES || !takeProperty(state)) {
         result.push('[truncated]')
         break
       }
-      result.push(capture(item, state, depth + 1))
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (descriptor && 'value' in descriptor) {
+        result.push(capture(descriptor.value, state, depth + 1))
+      } else {
+        state.values++
+        result.push(descriptor?.get ? '[Getter]' : undefined)
+      }
     }
     return result
   }
 
   if (value instanceof Map) {
     const entries: unknown[] = []
-    for (const [key, item] of value) {
+    for (const [key, item] of Map.prototype.entries.call(value)) {
       if (state.values >= MAX_VALUES) {
         entries.push('[truncated]')
         break
@@ -93,7 +106,7 @@ function capture(value: unknown, state: CaptureState, depth: number): unknown {
 
   if (value instanceof Set) {
     const values: unknown[] = []
-    for (const item of value) {
+    for (const item of Set.prototype.values.call(value)) {
       if (state.values >= MAX_VALUES) {
         values.push('[truncated]')
         break
@@ -103,29 +116,37 @@ function capture(value: unknown, state: CaptureState, depth: number): unknown {
     return { type: 'Set', values }
   }
 
-  let descriptors: PropertyDescriptorMap
-  try {
-    descriptors = Object.getOwnPropertyDescriptors(value)
-  } catch {
-    return `[uninspectable ${objectName(value)}]`
-  }
-
   const result: Record<string, unknown> = {}
-  for (const [rawKey, descriptor] of Object.entries(descriptors)) {
-    if (!descriptor.enumerable) continue
-    if (state.values >= MAX_VALUES) {
-      result['[truncated]'] = true
-      break
+  try {
+    for (const rawKey in value) {
+      if (!takeProperty(state)) {
+        result['[truncated]'] = true
+        break
+      }
+      if (!Object.prototype.hasOwnProperty.call(value, rawKey)) continue
+      if (state.values >= MAX_VALUES) {
+        result['[truncated]'] = true
+        break
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, rawKey)
+      if (!descriptor?.enumerable) continue
+      const key = rawKey.length > 200 ? `${rawKey.slice(0, 200)}...` : rawKey
+      if ('value' in descriptor) {
+        result[key] = capture(descriptor.value, state, depth + 1)
+      } else {
+        state.values++
+        result[key] = descriptor.get ? '[Getter]' : '[Accessor]'
+      }
     }
-    const key = rawKey.length > 200 ? `${rawKey.slice(0, 200)}...` : rawKey
-    result[key] =
-      'value' in descriptor
-        ? capture(descriptor.value, state, depth + 1)
-        : descriptor.get
-          ? '[Getter]'
-          : '[Accessor]'
+  } catch {
+    result['[uninspectable]'] = objectName(value)
   }
   return result
+}
+
+function takeProperty(state: CaptureState): boolean {
+  state.properties++
+  return state.properties <= MAX_PROPERTIES
 }
 
 function captureString(value: string, state: CaptureState): string {

@@ -35,9 +35,11 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
       ? colors.red
       : status.kind === 'fetching'
         ? colors.blue
-        : status.kind === 'cached'
-          ? colors.amber
-          : colors.green
+        : status.kind === 'retained'
+          ? colors.faint
+          : status.kind === 'cached'
+            ? colors.amber
+            : colors.green
   return (
     <span
       title={status.label}
@@ -55,9 +57,12 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
 }
 
 export function queryStatus(query: QuerySummary): {
-  kind: 'active' | 'cached' | 'error' | 'fetching'
+  kind: 'active' | 'cached' | 'error' | 'fetching' | 'retained'
   label: string
 } {
+  if (!query.present) {
+    return { kind: 'retained', label: statusLabel(query, 'retained history') }
+  }
   if (query.status === 'error') {
     return { kind: 'error', label: statusLabel(query, 'error') }
   }

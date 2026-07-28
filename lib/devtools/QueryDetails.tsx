@@ -131,6 +131,7 @@ export function QueryDetails({
       </div>
       {activeQuery.lastError ? (
         <div
+          title={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
           style={{
             color: colors.red,
             background: colors.panel2,
@@ -139,6 +140,7 @@ export function QueryDetails({
             marginBottom: 10,
           }}
         >
+          <div style={{ fontWeight: 650, marginBottom: 2 }}>Last fetch error</div>
           {activeQuery.lastError.message}
         </div>
       ) : null}

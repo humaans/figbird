@@ -1,6 +1,7 @@
 import test from 'ava'
 import { JSDOM } from 'jsdom'
 import { createSchema, service, type FigbirdEvent } from '../lib/index.js'
+import { FigbirdEventEmitter } from '../lib/core/events.js'
 import { createCollector, FigbirdDevtools } from '../lib/devtools.js'
 import type {
   Collector,
@@ -8,6 +9,7 @@ import type {
   FigbirdLikeForDevtools,
   QueryRecord,
 } from '../lib/devtools.js'
+import { inspectQueryArea } from '../lib/devtools/inspector.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
 import { createTestApp, dom } from './helpers.js'
 
@@ -33,9 +35,13 @@ function app() {
   })
 }
 
-function inspectedQuery(queryId: string): ReturnType<FigbirdLikeForDevtools['inspect']>[number] {
+function inspectedQuery(
+  queryId: string,
+  overrides: Partial<ReturnType<FigbirdLikeForDevtools['inspect']>[number]> = {},
+): ReturnType<FigbirdLikeForDevtools['inspect']>[number] {
   return {
     queryId,
+    generation: 1,
     serviceName: 'notes',
     method: 'find',
     query: {},
@@ -48,6 +54,7 @@ function inspectedQuery(queryId: string): ReturnType<FigbirdLikeForDevtools['ins
     fetchCount: 0,
     errorCount: 0,
     totalDurationMs: 0,
+    ...overrides,
   }
 }
 
@@ -58,6 +65,8 @@ function queryRecord(
 ): QueryRecord {
   return {
     queryId,
+    generation: 1,
+    present: true,
     serviceName,
     method: 'find',
     query: {},
@@ -157,7 +166,67 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.is(clearedRow?.reconciles, beforeTimelineClearRow?.reconciles)
 
   unsub()
+
+  feathers.service('notes').setDelay(30)
+  const abandoned = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { content: 'slow' } } },
+    { fetchPolicy: 'network-only' },
+  )
+  const abandonedQueryId = abandoned.details().queryId
+  const abandon = abandoned.subscribe(() => {})
+  abandon()
+  await sleep(70)
+
+  const abandonedEvents = collector
+    .getSnapshot()
+    .events.filter(
+      item =>
+        'queryId' in item.event &&
+        item.event.queryId === abandonedQueryId &&
+        item.event.kind.startsWith('fetch:'),
+    )
+  t.deepEqual(
+    abandonedEvents.map(item => item.event.kind),
+    ['fetch:start', 'fetch:end'],
+  )
+  const abandonedRow = collector
+    .getSnapshot()
+    .queries.find(query => query.queryId === abandonedQueryId)
+  t.false(abandonedRow?.present ?? true)
+  t.is(abandonedRow?.fetchCount, 1)
+  t.is(abandonedRow?.spans.length, 1)
+
   collector.stop()
+
+  const emitter = new FigbirdEventEmitter()
+  const unsubscribeExistingListener = emitter.subscribe(() => {})
+  emitter.emit({
+    kind: 'fetch:end',
+    queryId: 'already-finished',
+    generation: 1,
+    serviceName: 'notes',
+    method: 'find',
+    durationMs: 10,
+    itemCount: 1,
+  })
+  const lateCollector = createCollector(
+    {
+      events: emitter,
+      inspect: () => [
+        inspectedQuery('already-finished', {
+          fetchCount: 1,
+          lastDurationMs: 10,
+          totalDurationMs: 10,
+        }),
+      ],
+    },
+    { heartbeatMs: 0 },
+  )
+  lateCollector.start()
+  await Promise.resolve()
+  t.is(lateCollector.getSnapshot().queries[0]?.fetchCount, 1)
+  lateCollector.stop()
+  unsubscribeExistingListener()
 })
 
 test('collector heartbeat refreshes snapshots without events', async t => {
@@ -238,6 +307,7 @@ test('collector marks optimistic mutation failures as rolled back writes', async
 test('collector bounds inactive query and settled write history', t => {
   let rows: ReturnType<FigbirdLikeForDevtools['inspect']> = []
   let relational: DevtoolsSnapshot['relational'] = []
+  const sensitiveQuery = { secret: 'keep me private' }
   const listeners: {
     state?: () => void
     event?: (event: FigbirdEvent) => void
@@ -261,6 +331,7 @@ test('collector bounds inactive query and settled write history', t => {
     },
   }
   const collector = createCollector(figbird, {
+    captureValue: value => (value === sensitiveQuery ? { secret: '[redacted]' } : value),
     heartbeatMs: 0,
     queryHistoryLimit: 2,
     writeLimit: 2,
@@ -301,6 +372,110 @@ test('collector bounds inactive query and settled write history', t => {
     collector.getSnapshot().relational.map(group => group.key),
     relationalBeforeTimelineClear,
   )
+
+  const generationOne = inspectedQuery('live-3', {
+    generation: 1,
+    query: sensitiveQuery,
+    subscriberCount: 1,
+    fetchCount: 2,
+    totalDurationMs: 20,
+  })
+  for (const durationMs of [8, 12]) {
+    listeners.event?.({
+      kind: 'fetch:start',
+      queryId: 'live-3',
+      generation: 1,
+      serviceName: 'notes',
+      method: 'find',
+    })
+    listeners.event?.({
+      kind: 'fetch:end',
+      queryId: 'live-3',
+      generation: 1,
+      serviceName: 'notes',
+      method: 'find',
+      durationMs,
+      itemCount: 1,
+    })
+  }
+  const generationPlan = relationalGroup('rq/live-3', 'live-3', 'child', 'child-live-3')
+  generationPlan.ast.query = sensitiveQuery
+  rows = [generationOne]
+  relational = [generationPlan]
+  listeners.state?.()
+  const capturedGeneration = collector
+    .getSnapshot()
+    .queries.find(query => query.queryId === 'live-3')
+  t.deepEqual(capturedGeneration?.query, { secret: '[redacted]' })
+  t.deepEqual(
+    collector.getSnapshot().relational.find(group => group.key === 'rq/live-3')?.ast.query,
+    { secret: '[redacted]' },
+  )
+
+  sensitiveQuery.secret = 'changed after capture'
+  rows = []
+  relational = []
+  listeners.state?.()
+  const retainedGeneration = collector
+    .getSnapshot()
+    .queries.find(query => query.queryId === 'live-3')
+  t.false(retainedGeneration?.present ?? true)
+  t.is(retainedGeneration?.subscriberCount, 0)
+
+  listeners.event?.({
+    kind: 'realtime',
+    serviceName: 'notes',
+    type: 'patched',
+    itemId: 1,
+  })
+  collector.getSnapshot()
+
+  rows = [
+    inspectedQuery('live-3', {
+      generation: 2,
+      subscriberCount: 1,
+      fetchCount: 1,
+      totalDurationMs: 7,
+    }),
+  ]
+  listeners.event?.({
+    kind: 'fetch:start',
+    queryId: 'live-3',
+    generation: 2,
+    serviceName: 'notes',
+    method: 'find',
+  })
+  listeners.state?.()
+  listeners.event?.({
+    kind: 'fetch:end',
+    queryId: 'live-3',
+    generation: 2,
+    serviceName: 'notes',
+    method: 'find',
+    durationMs: 7,
+    itemCount: 1,
+  })
+  const recreatedGeneration = collector
+    .getSnapshot()
+    .queries.find(query => query.queryId === 'live-3')
+  t.true(recreatedGeneration?.present ?? false)
+  t.is(recreatedGeneration?.fetchCount, 3)
+  t.is(recreatedGeneration?.totalDurationMs, 27)
+  t.is(recreatedGeneration?.realtimeSeen, 0)
+
+  listeners.event?.({
+    kind: 'fetch:error',
+    queryId: 'live-3',
+    generation: 1,
+    serviceName: 'notes',
+    method: 'find',
+    durationMs: 11,
+    error: new Error('old generation failed'),
+  })
+  const afterStaleError = collector.getSnapshot().queries.find(query => query.queryId === 'live-3')
+  t.is(afterStaleError?.generation, 2)
+  t.is(afterStaleError?.status, 'success')
+  t.is(afterStaleError?.lastError?.generation, 1)
 
   for (let mutationId = 1; mutationId <= 3; mutationId++) {
     listeners.event?.({
@@ -375,6 +550,15 @@ test('collector bounds inactive query and settled write history', t => {
       return 'do not invoke'
     },
   })
+  let iteratorReads = 0
+  const iteratorSafeArray = ['safe']
+  Object.defineProperty(iteratorSafeArray, Symbol.iterator, {
+    get() {
+      iteratorReads++
+      throw new Error('do not invoke')
+    },
+  })
+  retainedPayload.list = iteratorSafeArray
   listeners.event?.({
     kind: 'mutate:start',
     mutationId: 7,
@@ -387,17 +571,41 @@ test('collector bounds inactive query and settled write history', t => {
   const retainedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
   t.deepEqual(retainedWrite?.args, [
     7,
-    { content: 'captured', self: '[circular]', computed: '[Getter]' },
+    {
+      content: 'captured',
+      self: '[circular]',
+      computed: '[Getter]',
+      list: ['safe'],
+    },
   ])
   t.is(getterReads, 0)
+  t.is(iteratorReads, 0)
   const retainedEvent = collector
     .getSnapshot()
     .events.find(item => item.event.kind === 'mutate:start' && item.event.mutationId === 7)
   t.false(retainedEvent ? 'args' in retainedEvent.event : true)
 
+  const largePayload: Record<string, unknown> = {}
+  for (let index = 0; index < 1_100; index++) largePayload[`field-${index}`] = index
+  listeners.event?.({
+    kind: 'mutate:start',
+    mutationId: 8,
+    serviceName: 'notes',
+    method: 'patch',
+    optimistic: false,
+    args: [largePayload],
+  })
+  const capturedLargePayload = collector
+    .getSnapshot()
+    .writes.find(write => write.id === 'mutation:8')?.args?.[0] as
+    | Record<string, unknown>
+    | undefined
+  t.true(capturedLargePayload?.['[truncated]'] === true)
+
   listeners.event?.({
     kind: 'fetch:start',
     queryId: 'live-3',
+    generation: 2,
     serviceName: 'notes',
     method: 'find',
   })
@@ -406,6 +614,7 @@ test('collector bounds inactive query and settled write history', t => {
   listeners.event?.({
     kind: 'fetch:end',
     queryId: 'live-3',
+    generation: 2,
     serviceName: 'notes',
     method: 'find',
     durationMs: 100,
@@ -602,6 +811,8 @@ test('drawer shows root queries and nests relation fetches in details', t => {
     queries: [
       {
         queryId: 'root',
+        generation: 1,
+        present: true,
         serviceName: 'issues',
         method: 'find',
         query: {},
@@ -621,6 +832,8 @@ test('drawer shows root queries and nests relation fetches in details', t => {
       },
       {
         queryId: 'labels',
+        generation: 1,
+        present: true,
         serviceName: 'issueLabels',
         method: 'find',
         query: { issueId: { $in: [76] } },
@@ -702,7 +915,19 @@ test('drawer shows root queries and nests relation fetches in details', t => {
   const hostFiber: Record<string, unknown> = { stateNode: inspectedElement }
   const componentFiber = {
     child: hostFiber,
-    memoizedState: { memoizedState: [() => {}, [inspectedRef]], next: null },
+    memoizedState: {
+      memoizedState: (() => {
+        const value = { refs: [inspectedRef] }
+        Object.defineProperty(value, 'computed', {
+          enumerable: true,
+          get() {
+            throw new Error('inspector must not invoke hook getters')
+          },
+        })
+        return value
+      })(),
+      next: null,
+    },
   }
   hostFiber.return = componentFiber
   Object.defineProperty(inspectedElement, '__reactFiber$figbirdTest', {
@@ -766,6 +991,26 @@ test('drawer shows root queries and nests relation fetches in details', t => {
   t.true(timelineText.includes('issueLabels.find'))
   t.is(timelineText.match(/issues realtime/g)?.length, 1)
 
+  const largeElement = window.document.createElement('div')
+  const largeHostFiber: Record<string, unknown> = { stateNode: largeElement }
+  const largeComponentFiber = {
+    child: largeHostFiber,
+    memoizedState: {
+      memoizedState: new Array(25_000),
+      next: null,
+    },
+  }
+  largeHostFiber.return = largeComponentFiber
+  Object.defineProperty(largeElement, '__reactFiber$figbirdLargeTest', {
+    value: largeHostFiber,
+    enumerable: true,
+  })
+  window.document.body.append(largeElement)
+  const partialInspection = inspectQueryArea(largeElement)
+  t.true(partialInspection.supported)
+  t.true(partialInspection.truncated)
+
   unmount()
   inspectedElement.remove()
+  largeElement.remove()
 })

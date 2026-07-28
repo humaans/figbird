@@ -8,7 +8,7 @@ export interface UnderlyingFetch {
   query: QueryRecord
 }
 
-export type QuerySummary = Omit<QueryRecord, 'queryId'>
+export type QuerySummary = Omit<QueryRecord, 'generation' | 'queryId'>
 
 export interface QueryComposition {
   detail: string
@@ -122,6 +122,7 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
     .sort((a, b) => b.at - a.at)[0]
 
   return {
+    present: roots.some(query => query.present),
     serviceName: latest.serviceName,
     method: latest.method,
     ...(latest.resourceId !== undefined ? { resourceId: latest.resourceId } : {}),
@@ -147,7 +148,11 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
   }
 }
 
-function querySummary({ queryId: _queryId, ...summary }: QueryRecord): QuerySummary {
+function querySummary({
+  generation: _generation,
+  queryId: _queryId,
+  ...summary
+}: QueryRecord): QuerySummary {
   return summary
 }
 

@@ -6,6 +6,7 @@ import type {
   InspectedRelationalQuery,
   MutationActivity,
 } from '../core/figbird.js'
+import type { QueryAST } from '../core/queryBuilder.js'
 import { captureInspectableValue } from './capture.js'
 import { now } from './format.js'
 
@@ -34,11 +35,24 @@ export interface QuerySpan {
   ok?: boolean
 }
 
-export interface QueryRecord extends InspectedQuery {
+export interface QueryRecord extends Omit<
+  InspectedQuery,
+  'errorCount' | 'fetchCount' | 'lastDurationMs' | 'totalDurationMs'
+> {
+  /** False when this row is retained history rather than a live store entry. */
+  present: boolean
+  /** Session total, seeded from the store when collection starts. */
+  fetchCount: number
+  /** Session total, seeded from the store when collection starts. */
+  errorCount: number
+  /** Duration of the most recently completed fetch observed in this session. */
+  lastDurationMs?: number
+  /** Session total, seeded from the store when collection starts. */
+  totalDurationMs: number
   spans: QuerySpan[]
   realtimeSeen: number
   reconciles: number
-  lastError?: { message: string; at: number }
+  lastError?: { message: string; at: number; generation: number }
 }
 
 export interface DevtoolsEvent {
@@ -94,8 +108,27 @@ export interface Collector {
   clearWrites(): void
 }
 
-interface InternalQueryRecord extends QueryRecord {
+type CapturedQueryState = Omit<
+  InspectedQuery,
+  'errorCount' | 'fetchCount' | 'lastDurationMs' | 'totalDurationMs'
+>
+
+interface QueryMetrics {
+  errorCount: number
+  fetchCount: number
+  lastDurationMs?: number
+  lastError?: QueryRecord['lastError']
+  reconciles: number
+  realtimeSeen: number
+  spans: QuerySpan[]
+  totalDurationMs: number
+}
+
+interface InternalQueryRecord {
+  current: CapturedQueryState | null
   lastObservedAt: number
+  lastKnown: CapturedQueryState
+  metrics: QueryMetrics
   serviceRealtimeBaseline: number
 }
 
@@ -133,53 +166,99 @@ function makeQueryRecord(
   serviceRealtimeBaseline: number,
   observedAt: number,
 ): InternalQueryRecord {
+  const state = queryState(row)
   return {
-    ...row,
-    spans: [],
-    realtimeSeen: 0,
-    reconciles: 0,
+    current: state,
     lastObservedAt: observedAt,
+    lastKnown: state,
+    metrics: {
+      fetchCount: row.fetchCount,
+      errorCount: row.errorCount,
+      ...(row.lastDurationMs !== undefined ? { lastDurationMs: row.lastDurationMs } : {}),
+      totalDurationMs: row.totalDurationMs,
+      spans: [],
+      realtimeSeen: 0,
+      reconciles: 0,
+    },
     serviceRealtimeBaseline,
   }
 }
 
-function makePlaceholderQueryRecord(
+function makePlaceholderQueryState(
   queryId: string,
   serviceName: string,
   method: 'find' | 'get',
-  serviceRealtimeBaseline: number,
+  generation: number,
   resourceId?: string | number,
+): CapturedQueryState {
+  return {
+    queryId,
+    generation,
+    serviceName,
+    method,
+    ...(resourceId !== undefined ? { resourceId } : {}),
+    query: undefined,
+    classification: method === 'get' ? 'get' : 'server-authoritative',
+    status: 'loading',
+    isFetching: true,
+    itemCount: 0,
+    fetchedAt: undefined,
+    subscriberCount: 0,
+  }
+}
+
+function makePlaceholderQueryRecord(
+  state: CapturedQueryState,
+  serviceRealtimeBaseline: number,
+  observedAt: number,
+  present: boolean,
 ): InternalQueryRecord {
-  return makeQueryRecord(
-    {
-      queryId,
-      serviceName,
-      method,
-      ...(resourceId !== undefined ? { resourceId } : {}),
-      query: undefined,
-      classification: method === 'get' ? 'get' : 'server-authoritative',
-      status: 'loading',
-      isFetching: true,
-      itemCount: 0,
-      fetchedAt: undefined,
-      subscriberCount: 0,
+  return {
+    current: present ? state : null,
+    lastKnown: state,
+    lastObservedAt: observedAt,
+    metrics: {
       fetchCount: 0,
       errorCount: 0,
       totalDurationMs: 0,
+      spans: [],
+      realtimeSeen: 0,
+      reconciles: 0,
     },
     serviceRealtimeBaseline,
-    now(),
-  )
+  }
 }
 
-function toPublicQueryRecord({
-  lastObservedAt: _lastObservedAt,
-  serviceRealtimeBaseline: _serviceRealtimeBaseline,
-  ...record
-}: InternalQueryRecord): QueryRecord {
+function queryState({
+  errorCount: _errorCount,
+  fetchCount: _fetchCount,
+  lastDurationMs: _lastDurationMs,
+  totalDurationMs: _totalDurationMs,
+  ...state
+}: InspectedQuery): CapturedQueryState {
+  return state
+}
+
+function toPublicQueryRecord(record: InternalQueryRecord): QueryRecord {
+  const state =
+    record.current ??
+    ({
+      ...record.lastKnown,
+      isFetching: false,
+      subscriberCount: 0,
+    } satisfies CapturedQueryState)
+  const { metrics } = record
   return {
-    ...record,
-    spans: [...record.spans],
+    ...state,
+    present: record.current !== null,
+    fetchCount: metrics.fetchCount,
+    errorCount: metrics.errorCount,
+    ...(metrics.lastDurationMs !== undefined ? { lastDurationMs: metrics.lastDurationMs } : {}),
+    totalDurationMs: metrics.totalDurationMs,
+    spans: [...metrics.spans],
+    realtimeSeen: metrics.realtimeSeen,
+    reconciles: metrics.reconciles,
+    ...(metrics.lastError ? { lastError: metrics.lastError } : {}),
   }
 }
 
@@ -206,6 +285,10 @@ interface ResolvedCollectorOptions {
   writeLimit: number
 }
 
+type FetchEvent = Extract<FigbirdEvent, { kind: 'fetch:start' | 'fetch:end' | 'fetch:error' }>
+
+type FetchTerminalEvent = Extract<FetchEvent, { kind: 'fetch:end' | 'fetch:error' }>
+
 class FigbirdCollector implements Collector {
   #figbird: FigbirdLikeForDevtools
   #captureValue: ((value: unknown) => unknown) | undefined
@@ -230,9 +313,10 @@ class FigbirdCollector implements Collector {
   #timelineRealtime: TimelineRealtimeEvent[] = []
   #timelineStartedAt: number | null = null
   #nextEventId = 1
-  #fetchStarts: Map<string, number> = new Map()
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
+  #capturedAsts = new WeakMap<QueryAST, QueryAST>()
+  #capturedQueries = new WeakMap<object, Record<string, unknown>>()
 
   constructor(figbird: FigbirdLikeForDevtools, options: ResolvedCollectorOptions) {
     this.#figbird = figbird
@@ -320,7 +404,7 @@ class FigbirdCollector implements Collector {
     this.#timelineRealtime = []
     this.#timelineStartedAt = now()
     for (const record of this.#queries.values()) {
-      record.spans = []
+      record.metrics.spans = []
     }
     this.#scheduleNotify()
   }
@@ -342,11 +426,7 @@ class FigbirdCollector implements Collector {
         listener()
       }
     }
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(flush)
-    } else {
-      setTimeout(flush, 50)
-    }
+    queueMicrotask(flush)
   }
 
   #recordEvent(event: FigbirdEvent): void {
@@ -359,32 +439,11 @@ class FigbirdCollector implements Collector {
 
     switch (event.kind) {
       case 'fetch:start':
-        this.#fetchStarts.set(event.queryId, at)
-        this.#getQuery(event.queryId, event.serviceName, event.method, event.resourceId)
+        this.#recordFetchStart(event, at)
         break
       case 'fetch:end':
-        this.#finishFetch(
-          event.queryId,
-          event.serviceName,
-          event.method,
-          at,
-          true,
-          event.durationMs,
-        )
-        break
       case 'fetch:error':
-        this.#finishFetch(
-          event.queryId,
-          event.serviceName,
-          event.method,
-          at,
-          false,
-          event.durationMs,
-        )
-        this.#getQuery(event.queryId, event.serviceName, event.method).lastError = {
-          message: errorMessage(event.error),
-          at,
-        }
+        this.#finishFetch(event, at)
         break
       case 'realtime':
         pushCapped(this.#timelineRealtime, { at, serviceName: event.serviceName }, this.#eventLimit)
@@ -394,7 +453,10 @@ class FigbirdCollector implements Collector {
         )
         break
       case 'reconcile:started':
-        this.#getQuery(event.queryId, event.serviceName, 'find').reconciles++
+        {
+          const record = this.#queries.get(event.queryId)
+          if (record) record.metrics.reconciles++
+        }
         break
       case 'mutate:start':
       case 'mutate:end':
@@ -424,36 +486,24 @@ class FigbirdCollector implements Collector {
       observedQueryIds.add(row.queryId)
       const serviceRealtime = this.#realtimeByService.get(row.serviceName) ?? 0
       const existing = this.#queries.get(row.queryId)
-      const record = existing ?? makeQueryRecord(row, serviceRealtime, observedAt)
+      const capturedRow = { ...row, query: this.#captureQuery(row.query) }
+      const capturedState = queryState(capturedRow)
+      const record = existing ?? makeQueryRecord(capturedRow, serviceRealtime, observedAt)
 
-      if (row.subscriberCount > 0) {
-        record.realtimeSeen += Math.max(0, serviceRealtime - record.serviceRealtimeBaseline)
+      if (existing && existing.lastKnown.generation === row.generation && row.subscriberCount > 0) {
+        record.metrics.realtimeSeen += Math.max(0, serviceRealtime - record.serviceRealtimeBaseline)
       }
+      record.current = capturedState
+      record.lastKnown = capturedState
       record.lastObservedAt = observedAt
       record.serviceRealtimeBaseline = serviceRealtime
-      record.serviceName = row.serviceName
-      record.method = row.method
-      if (row.resourceId === undefined) {
-        delete record.resourceId
-      } else {
-        record.resourceId = row.resourceId
-      }
-      record.query = row.query
-      record.classification = row.classification
-      record.status = row.status
-      record.isFetching = row.isFetching
-      record.itemCount = row.itemCount
-      record.fetchedAt = row.fetchedAt
-      record.subscriberCount = row.subscriberCount
-      record.fetchCount = row.fetchCount
-      record.errorCount = row.errorCount
-      record.totalDurationMs = row.totalDurationMs
-      if (row.lastDurationMs === undefined) {
-        delete record.lastDurationMs
-      } else {
-        record.lastDurationMs = row.lastDurationMs
-      }
       this.#queries.set(row.queryId, record)
+    }
+    for (const record of this.#queries.values()) {
+      if (observedQueryIds.has(record.lastKnown.queryId)) continue
+      record.current = null
+      record.serviceRealtimeBaseline =
+        this.#realtimeByService.get(record.lastKnown.serviceName) ?? 0
     }
     this.#trimQueries(observedQueryIds)
   }
@@ -461,13 +511,11 @@ class FigbirdCollector implements Collector {
   #trimQueries(observedQueryIds: ReadonlySet<string>): void {
     if (this.#queries.size <= this.#queryHistoryLimit) return
     const removable = [...this.#queries.values()]
-      .filter(
-        record => !observedQueryIds.has(record.queryId) && !this.#fetchStarts.has(record.queryId),
-      )
+      .filter(record => !observedQueryIds.has(record.lastKnown.queryId))
       .sort((a, b) => a.lastObservedAt - b.lastObservedAt)
     for (const record of removable) {
       if (this.#queries.size <= this.#queryHistoryLimit) break
-      this.#queries.delete(record.queryId)
+      this.#queries.delete(record.lastKnown.queryId)
     }
   }
 
@@ -477,7 +525,10 @@ class FigbirdCollector implements Collector {
     const observedKeys = new Set<string>()
     for (const inspected of current) {
       observedKeys.add(inspected.key)
-      this.#relational.set(inspected.key, { inspected, lastObservedAt: observedAt })
+      this.#relational.set(inspected.key, {
+        inspected: this.#captureRelational(inspected),
+        lastObservedAt: observedAt,
+      })
     }
     if (this.#relational.size <= this.#queryHistoryLimit) return
     const removable = [...this.#relational.values()]
@@ -489,45 +540,134 @@ class FigbirdCollector implements Collector {
     }
   }
 
-  #getQuery(
-    queryId: string,
-    serviceName: string,
-    method: 'find' | 'get',
-    resourceId?: string | number,
-  ): InternalQueryRecord {
-    const serviceRealtime = this.#realtimeByService.get(serviceName) ?? 0
-    const existing = this.#queries.get(queryId)
+  #recordFetchStart(event: Extract<FetchEvent, { kind: 'fetch:start' }>, at: number): void {
+    const record = this.#ensureFetchRecord(event, at, true)
+    if (record.current?.generation !== event.generation) return
+    const current = {
+      ...record.current,
+      status: record.current.status === 'success' ? ('success' as const) : ('loading' as const),
+      isFetching: true,
+    }
+    record.current = current
+    record.lastKnown = current
+  }
+
+  #ensureFetchRecord(event: FetchEvent, at: number, present: boolean): InternalQueryRecord {
+    const existing = this.#queries.get(event.queryId)
     if (existing) {
-      if (resourceId !== undefined) existing.resourceId = resourceId
+      existing.lastObservedAt = at
+      if (
+        event.generation > existing.lastKnown.generation &&
+        (present || existing.current === null)
+      ) {
+        const state = makePlaceholderQueryState(
+          event.queryId,
+          event.serviceName,
+          event.method,
+          event.generation,
+          'resourceId' in event ? event.resourceId : undefined,
+        )
+        existing.current = present ? state : null
+        existing.lastKnown = state
+        existing.serviceRealtimeBaseline = this.#realtimeByService.get(event.serviceName) ?? 0
+      } else if (
+        present &&
+        event.generation === existing.lastKnown.generation &&
+        existing.current === null
+      ) {
+        existing.current = existing.lastKnown
+      }
       return existing
     }
-    const record = makePlaceholderQueryRecord(
-      queryId,
-      serviceName,
-      method,
-      serviceRealtime,
-      resourceId,
+    const state = makePlaceholderQueryState(
+      event.queryId,
+      event.serviceName,
+      event.method,
+      event.generation,
+      'resourceId' in event ? event.resourceId : undefined,
     )
-    this.#queries.set(queryId, record)
+    const record = makePlaceholderQueryRecord(
+      state,
+      this.#realtimeByService.get(event.serviceName) ?? 0,
+      at,
+      present,
+    )
+    this.#queries.set(event.queryId, record)
     return record
   }
 
-  #finishFetch(
-    queryId: string,
-    serviceName: string,
-    method: 'find' | 'get',
-    at: number,
-    ok: boolean,
-    durationMs: number,
-  ): void {
-    const record = this.#getQuery(queryId, serviceName, method)
-    const observedStartAt = this.#fetchStarts.get(queryId) ?? at - durationMs
+  #finishFetch(event: FetchTerminalEvent, at: number): void {
+    const record = this.#ensureFetchRecord(event, at, false)
+    const { metrics } = record
+    const ok = event.kind === 'fetch:end'
+    metrics.fetchCount++
+    metrics.totalDurationMs += event.durationMs
+    metrics.lastDurationMs = event.durationMs
+    if (!ok) {
+      metrics.errorCount++
+      metrics.lastError = {
+        message: errorMessage(event.error),
+        at,
+        generation: event.generation,
+      }
+    }
+
+    const observedStartAt = at - event.durationMs
     const startAt =
       this.#timelineStartedAt === null
         ? observedStartAt
         : Math.max(observedStartAt, this.#timelineStartedAt)
-    this.#fetchStarts.delete(queryId)
-    pushCapped(record.spans, { startAt, endAt: at, ok }, this.#spanLimit)
+    pushCapped(metrics.spans, { startAt, endAt: at, ok }, this.#spanLimit)
+
+    const currentMatches = record.current?.generation === event.generation
+    const retainedMatches =
+      record.current === null && record.lastKnown.generation === event.generation
+    if (!currentMatches && !retainedMatches) return
+    const state = currentMatches ? record.current! : record.lastKnown
+    const settled: CapturedQueryState = {
+      ...state,
+      status: ok ? 'success' : 'error',
+      isFetching: false,
+      ...(event.kind === 'fetch:end' ? { itemCount: event.itemCount } : {}),
+    }
+    record.lastKnown = settled
+    if (currentMatches) record.current = settled
+  }
+
+  #captureQuery(query: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+    if (query === undefined) return undefined
+    const cached = this.#capturedQueries.get(query)
+    if (cached) return cached
+    const captured = captureInspectableValue(query, this.#captureValue)
+    const result =
+      typeof captured === 'object' && captured !== null && !Array.isArray(captured)
+        ? (captured as Record<string, unknown>)
+        : { '[preview]': captured }
+    this.#capturedQueries.set(query, result)
+    return result
+  }
+
+  #captureAst(ast: QueryAST): QueryAST {
+    const cached = this.#capturedAsts.get(ast)
+    if (cached) return cached
+    const related = Object.fromEntries(
+      Object.entries(ast.related).map(([name, child]) => [name, this.#captureAst(child)]),
+    )
+    const captured = {
+      ...ast,
+      query: this.#captureQuery(ast.query) ?? {},
+      related,
+    }
+    this.#capturedAsts.set(ast, captured)
+    return captured
+  }
+
+  #captureRelational(inspected: InspectedRelationalQuery): InspectedRelationalQuery {
+    return {
+      ...inspected,
+      ast: this.#captureAst(inspected.ast),
+      nodes: inspected.nodes.map(node => ({ ...node })),
+    }
   }
 
   #recordMutation(

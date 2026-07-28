@@ -27,6 +27,7 @@ export type FigbirdEvent =
       serviceName: string
       method: 'find' | 'get'
       queryId: string
+      generation: number
       resourceId?: string | number
       params?: unknown
     }
@@ -35,6 +36,7 @@ export type FigbirdEvent =
       serviceName: string
       method: 'find' | 'get'
       queryId: string
+      generation: number
       durationMs: number
       itemCount: number
     }
@@ -43,6 +45,7 @@ export type FigbirdEvent =
       serviceName: string
       method: 'find' | 'get'
       queryId: string
+      generation: number
       durationMs: number
       error: Error
     }
@@ -148,7 +151,10 @@ export interface FigbirdEvents {
 
 export class FigbirdEventEmitter implements FigbirdEvents {
   #listeners: Set<(event: FigbirdEvent) => void> = new Set()
-  #queue: FigbirdEvent[] = []
+  #queue: Array<{
+    event: FigbirdEvent
+    recipients: Array<(event: FigbirdEvent) => void>
+  }> = []
   #flushScheduled = false
 
   /**
@@ -157,21 +163,23 @@ export class FigbirdEventEmitter implements FigbirdEvents {
    * fetch during render) — delivering to listeners at that moment forces every
    * React-bound subscriber to defer manually or hit "setState during render".
    * Event payloads capture their facts (timestamps, durations) at emit time, so
-   * deferred delivery distorts nothing.
+   * deferred delivery distorts nothing. Recipients are also captured at emit time:
+   * subscribing before the microtask flush must not replay already-emitted events.
    */
   emit(event: FigbirdEvent): void {
     if (this.#listeners.size === 0) return
-    this.#queue.push(event)
+    this.#queue.push({ event, recipients: [...this.#listeners] })
     if (this.#flushScheduled) return
     this.#flushScheduled = true
     queueMicrotask(() => {
       this.#flushScheduled = false
       const events = this.#queue
       this.#queue = []
-      for (const event of events) {
-        for (const fn of this.#listeners) {
+      for (const { event: queuedEvent, recipients } of events) {
+        for (const fn of recipients) {
+          if (!this.#listeners.has(fn)) continue
           try {
-            fn(event)
+            fn(queuedEvent)
           } catch {
             // Listener errors must never break the store loop.
           }

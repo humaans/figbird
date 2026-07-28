@@ -15,7 +15,7 @@ const QUERY_COLUMNS = [
     label: 'query',
     width: '18%',
     description:
-      'Root query operation. The dot shows its state: green active, amber cached, blue fetching, or red error.',
+      'Root query operation. The dot shows its state: green active, amber cached, blue fetching, red error, or gray retained history.',
   },
   {
     label: 'shape',

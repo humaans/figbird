@@ -90,7 +90,9 @@ export class QueryStore<
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
+  #queryGenerations: Map<string, number> = new Map()
   #queryStats: Map<string, QueryFetchStats> = new Map()
+  #nextQueryGeneration = 1
 
   // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
   // with trailing timers, and the set of reconciliations deferred while hidden.
@@ -186,6 +188,10 @@ export class QueryStore<
     return { ...stats }
   }
 
+  getQueryGeneration(queryId: string): number | undefined {
+    return this.#queryGenerations.get(queryId)
+  }
+
   /**
    * Ensures that backing state exists for the given QueryRef by creating
    * service/query structures on first use.
@@ -195,6 +201,7 @@ export class QueryStore<
 
     if (!this.#getQuery(queryId)) {
       this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
+      this.#queryGenerations.set(queryId, this.#nextQueryGeneration++)
 
       const classification = classifyStoredQuery(desc.method, queryOfParams(desc.params), {
         server: (config as { server?: boolean }).server,
@@ -484,31 +491,51 @@ export class QueryStore<
   async #queue(queryId: string): Promise<void> {
     this.#fetching({ queryId })
     const query = this.#getQuery(queryId)
+    const generation = this.#queryGenerations.get(queryId)
     const startedAt = query ? Date.now() : undefined
-    if (query) {
+    const trace =
+      query && generation !== undefined
+        ? {
+            generation,
+            serviceName: query.desc.serviceName,
+            method: query.desc.method,
+            ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
+            params: query.desc.params,
+          }
+        : null
+    if (trace) {
       this.#events.emit({
         kind: 'fetch:start',
-        serviceName: query.desc.serviceName,
-        method: query.desc.method,
+        serviceName: trace.serviceName,
+        method: trace.method,
         queryId,
-        ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
-        params: query.desc.params,
+        generation: trace.generation,
+        ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
+        params: trace.params,
       })
     }
     try {
       const result = await this.#fetch(queryId)
       const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
-      this.#fetched({ queryId, result })
-      const q = this.#getQuery(queryId)
-      if (q && durationMs !== undefined) {
+      const current = this.#getQuery(queryId)
+      if (
+        trace &&
+        durationMs !== undefined &&
+        current &&
+        this.#queryGenerations.get(queryId) === trace.generation
+      ) {
+        this.#fetched({ queryId, result })
         this.#recordFetchStats(queryId, { ok: true, durationMs })
+      }
+      if (trace && durationMs !== undefined) {
         const data = result.data
         const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
         this.#events.emit({
           kind: 'fetch:end',
-          serviceName: q.desc.serviceName,
-          method: q.desc.method,
+          serviceName: trace.serviceName,
+          method: trace.method,
           queryId,
+          generation: trace.generation,
           durationMs,
           itemCount,
         })
@@ -516,15 +543,23 @@ export class QueryStore<
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
       const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
-      this.#fetchFailed({ queryId, error })
-      const q = this.#getQuery(queryId)
-      if (q && durationMs !== undefined) {
+      const current = this.#getQuery(queryId)
+      if (
+        trace &&
+        durationMs !== undefined &&
+        current &&
+        this.#queryGenerations.get(queryId) === trace.generation
+      ) {
+        this.#fetchFailed({ queryId, error })
         this.#recordFetchStats(queryId, { ok: false, durationMs })
+      }
+      if (trace && durationMs !== undefined) {
         this.#events.emit({
           kind: 'fetch:error',
-          serviceName: q.desc.serviceName,
-          method: q.desc.method,
+          serviceName: trace.serviceName,
+          method: trace.method,
           queryId,
+          generation: trace.generation,
           durationMs,
           error,
         })
@@ -1406,6 +1441,7 @@ export class QueryStore<
         }
         service.queries.delete(queryId)
         this.#serviceNamesByQueryId.delete(queryId)
+        this.#queryGenerations.delete(queryId)
         this.#queryStats.delete(queryId)
         if (service.materialized?.queryId === queryId) {
           delete service.materialized

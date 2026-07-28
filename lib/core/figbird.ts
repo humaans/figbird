@@ -718,8 +718,11 @@ export class Figbird<
       for (const query of service.queries.values()) {
         const q = queryOfParams(query.desc.params)
         const stats = this.queryStore.getQueryStats(query.queryId)
+        const generation = this.queryStore.getQueryGeneration(query.queryId)
+        if (generation === undefined) continue
         rows.push({
           queryId: query.queryId,
+          generation,
           serviceName,
           method: query.desc.method,
           ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
@@ -763,6 +766,8 @@ export class Figbird<
 /** One row of `figbird.inspect()` — a stable, read-only view of a live query. */
 export interface InspectedQuery {
   queryId: string
+  /** Store-entry generation for this stable logical query id. */
+  generation: number
   serviceName: string
   method: 'find' | 'get'
   resourceId?: string | number

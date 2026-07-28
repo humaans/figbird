@@ -294,12 +294,18 @@ function DevtoolsSession({
                 onClick={() => setInspectedArea(null)}
                 title={
                   inspectedArea.supported
-                    ? `Clear area filter: ${inspectedArea.queryCounts.size} query roots mounted in ${inspectedArea.label}`
+                    ? inspectedArea.truncated
+                      ? `Clear partial area filter: inspection reached its safety limit after finding ${inspectedArea.queryCounts.size} query roots in ${inspectedArea.label}`
+                      : `Clear area filter: ${inspectedArea.queryCounts.size} query roots mounted in ${inspectedArea.label}`
                     : 'React component ownership is unavailable for this element'
                 }
                 style={{
                   ...buttonStyle(colors, true),
-                  color: inspectedArea.supported ? colors.blue : colors.red,
+                  color: !inspectedArea.supported
+                    ? colors.red
+                    : inspectedArea.truncated
+                      ? colors.amber
+                      : colors.blue,
                   maxWidth: 145,
                   display: 'flex',
                   minWidth: 0,
@@ -311,7 +317,10 @@ function DevtoolsSession({
                   {inspectedArea.label}
                 </span>
                 <span style={{ flexShrink: 0 }}>
-                  · {inspectedArea.supported ? inspectedArea.queryCounts.size : 'unavailable'}
+                  ·{' '}
+                  {inspectedArea.supported
+                    ? `${inspectedArea.queryCounts.size}${inspectedArea.truncated ? '+' : ''}`
+                    : 'unavailable'}
                 </span>
               </button>
             ) : null}
@@ -410,6 +419,7 @@ function sameQueryCounts(a: InspectedQueryArea, b: InspectedQueryArea): boolean 
   if (
     a.label !== b.label ||
     a.supported !== b.supported ||
+    a.truncated !== b.truncated ||
     a.queryCounts.size !== b.queryCounts.size
   ) {
     return false

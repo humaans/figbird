@@ -20,10 +20,19 @@ export interface InspectedQueryArea {
   label: string
   queryCounts: ReadonlyMap<string, number>
   supported: boolean
+  /** True when the safety budget stopped inspection before the whole area was scanned. */
+  truncated: boolean
 }
 
 const MAX_FIBERS = 20_000
+const MAX_HOOK_VALUES = 20_000
 const MAX_VALUE_DEPTH = 4
+
+interface InspectionBudget {
+  fibers: number
+  hookValues: number
+  truncated: boolean
+}
 
 export function useElementPicker(
   active: boolean,
@@ -126,16 +135,28 @@ export function inspectQueryArea(element: Element): InspectedQueryArea {
   const fiber = elementFiber(element)
   const counts = new Map<string, number>()
   if (!fiber) {
-    return { element, label: describeElement(element), queryCounts: counts, supported: false }
+    return {
+      element,
+      label: describeElement(element),
+      queryCounts: counts,
+      supported: false,
+      truncated: false,
+    }
   }
 
+  const budget: InspectionBudget = {
+    fibers: MAX_FIBERS,
+    hookValues: MAX_HOOK_VALUES,
+    truncated: false,
+  }
   const visited = new Set<FiberLike>()
   const stack = [fiber]
-  while (stack.length > 0 && visited.size < MAX_FIBERS) {
+  while (stack.length > 0 && takeFiber(budget)) {
     const current = stack.pop()!
     if (visited.has(current)) continue
     visited.add(current)
-    addFiberQueries(current, counts)
+    addFiberQueries(current, counts, budget)
+    if (budget.truncated) break
     if (current.sibling && current !== fiber) stack.push(current.sibling)
     if (current.child) stack.push(current.child)
   }
@@ -145,16 +166,16 @@ export function inspectQueryArea(element: Element): InspectedQueryArea {
   // (usually text inside a row), fall back to the nearest query-owning component.
   let foundQueries = counts.size > 0
   let ancestor = fiber.return
-  while (ancestor) {
-    if (fiberOutputIsInside(ancestor, element)) {
-      addFiberQueries(ancestor, counts)
+  while (ancestor && !budget.truncated) {
+    if (fiberOutputIsInside(ancestor, element, budget)) {
+      addFiberQueries(ancestor, counts, budget)
       foundQueries = counts.size > 0
       ancestor = ancestor.return
       continue
     }
     if (foundQueries) break
     const nearestOwner = new Map<string, number>()
-    addFiberQueries(ancestor, nearestOwner)
+    addFiberQueries(ancestor, nearestOwner, budget)
     if (nearestOwner.size > 0) {
       for (const [key, count] of nearestOwner) counts.set(key, (counts.get(key) ?? 0) + count)
       break
@@ -162,7 +183,13 @@ export function inspectQueryArea(element: Element): InspectedQueryArea {
     ancestor = ancestor.return
   }
 
-  return { element, label: describeElement(element), queryCounts: counts, supported: true }
+  return {
+    element,
+    label: describeElement(element),
+    queryCounts: counts,
+    supported: true,
+    truncated: budget.truncated,
+  }
 }
 
 export function describeElement(element: Element): string {
@@ -184,21 +211,25 @@ function isFiber(value: unknown): value is FiberLike {
   return typeof value === 'object' && value !== null
 }
 
-function addFiberQueries(fiber: FiberLike, counts: Map<string, number>): void {
-  let keys = queryKeysInHooks(fiber.memoizedState)
+function addFiberQueries(
+  fiber: FiberLike,
+  counts: Map<string, number>,
+  budget: InspectionBudget,
+): void {
+  let keys = queryKeysInHooks(fiber.memoizedState, budget)
   if (keys.size === 0 && fiber.alternate) {
-    keys = queryKeysInHooks(fiber.alternate.memoizedState)
+    keys = queryKeysInHooks(fiber.alternate.memoizedState, budget)
   }
   for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1)
 }
 
-function queryKeysInHooks(value: unknown): Set<string> {
+function queryKeysInHooks(value: unknown, budget: InspectionBudget): Set<string> {
   const keys = new Set<string>()
   const visited = new Set<object>()
   let hook = isHook(value) ? value : null
   let hooksSeen = 0
-  while (hook && hooksSeen < 1_000) {
-    scanHookValue(hook.memoizedState, keys, visited, 0)
+  while (hook && hooksSeen < 1_000 && !budget.truncated) {
+    scanHookValue(hook.memoizedState, keys, visited, budget, 0)
     hook = isHook(hook.next) ? hook.next : null
     hooksSeen += 1
   }
@@ -213,8 +244,10 @@ function scanHookValue(
   value: unknown,
   keys: Set<string>,
   visited: Set<object>,
+  budget: InspectionBudget,
   depth: number,
 ): void {
+  if (!takeHookValue(budget)) return
   if (value instanceof RelationalQueryRef) {
     keys.add(value.details().queryId)
     return
@@ -225,22 +258,49 @@ function scanHookValue(
   if (value === null || visited.has(value)) return
   visited.add(value)
 
-  if (Array.isArray(value)) {
-    for (const item of value) scanHookValue(item, keys, visited, depth + 1)
-    return
-  }
-  for (const item of Object.values(value)) {
-    scanHookValue(item, keys, visited, depth + 1)
+  try {
+    if (Array.isArray(value)) {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+      const length =
+        lengthDescriptor &&
+        'value' in lengthDescriptor &&
+        typeof lengthDescriptor.value === 'number'
+          ? lengthDescriptor.value
+          : 0
+      for (let index = 0; index < length; index++) {
+        if (!takeHookValue(budget)) return
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+        if (descriptor && 'value' in descriptor) {
+          scanHookValue(descriptor.value, keys, visited, budget, depth + 1)
+        }
+      }
+      return
+    }
+
+    for (const key in value) {
+      if (!takeHookValue(budget)) return
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (descriptor?.enumerable && 'value' in descriptor) {
+        scanHookValue(descriptor.value, keys, visited, budget, depth + 1)
+      }
+    }
+  } catch {
+    // Proxies and host objects may reject reflection; inspection remains best effort.
   }
 }
 
-function fiberOutputIsInside(fiber: FiberLike, selected: Element): boolean {
+function fiberOutputIsInside(
+  fiber: FiberLike,
+  selected: Element,
+  budget: InspectionBudget,
+): boolean {
   const ElementConstructor = selected.ownerDocument.defaultView?.Element
   if (!ElementConstructor) return false
   const stack = [fiber]
   const visited = new Set<FiberLike>()
   let foundHost = false
-  while (stack.length > 0 && visited.size < MAX_FIBERS) {
+  while (stack.length > 0 && takeFiber(budget)) {
     const current = stack.pop()!
     if (visited.has(current)) continue
     visited.add(current)
@@ -254,4 +314,22 @@ function fiberOutputIsInside(fiber: FiberLike, selected: Element): boolean {
     if (current.child) stack.push(current.child)
   }
   return foundHost
+}
+
+function takeFiber(budget: InspectionBudget): boolean {
+  if (budget.fibers > 0) {
+    budget.fibers--
+    return true
+  }
+  budget.truncated = true
+  return false
+}
+
+function takeHookValue(budget: InspectionBudget): boolean {
+  if (budget.hookValues > 0) {
+    budget.hookValues--
+    return true
+  }
+  budget.truncated = true
+  return false
 }
