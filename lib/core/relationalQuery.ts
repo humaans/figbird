@@ -1,4 +1,5 @@
 import { hashObject } from './hash.js'
+import type { MatcherContext } from '../adapters/adapter.js'
 import type { QueryAST } from './queryBuilder.js'
 import { planRelation, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
@@ -44,7 +45,11 @@ const WINDOWED_RELATION_FANOUT_WARN_THRESHOLD = 10
  */
 export interface RelationalQueryHost<TMeta extends Record<string, unknown>, TQuery> {
   adapter: {
-    matcher(query: TQuery | undefined, options?: unknown): (item: unknown) => boolean
+    matcher(
+      query: TQuery | undefined,
+      options?: unknown,
+      context?: MatcherContext,
+    ): (item: unknown) => boolean
   }
   queryStore: {
     subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
@@ -1175,7 +1180,9 @@ export class RelationalQueryRef<
 
   #createRelationalMatcher(ast: QueryAST): (query: unknown) => (item: unknown) => boolean {
     return query => {
-      const match = this.#host.adapter.matcher(query as TQuery | undefined)
+      const match = this.#host.adapter.matcher(query as TQuery | undefined, undefined, {
+        serviceName: resolveServicePath(this.#schema, ast.service),
+      })
       const paths = collectRelationalFilterPaths(this.#schema, ast.service, query)
       return item => {
         if (paths.length === 0) return match(item)

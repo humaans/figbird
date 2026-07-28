@@ -7,7 +7,7 @@ import {
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
-  type CustomOperator,
+  type CustomOperatorRegistration,
   type Schema,
 } from '../lib/index.js'
 import {
@@ -172,7 +172,7 @@ export function createTestApp<S extends Schema>(
   }: {
     queryAwareFind?: boolean
     skipTotal?: boolean
-    operators?: Record<string, CustomOperator>
+    operators?: Record<string, CustomOperatorRegistration>
   } = {},
 ) {
   const feathers = mockFeathers(services, { queryAwareFind, skipTotal })

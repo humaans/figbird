@@ -1,4 +1,4 @@
-import type { Adapter, EventHandlers, QueryResponse } from './adapter.js'
+import type { Adapter, EventHandlers, MatcherContext, QueryResponse } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type {
   Schema,
@@ -166,12 +166,26 @@ export type TypedFeathersClient<S extends Schema> = {
 
 /**
  * A custom query operator implementation: receives the operand from the query
- * (`{ $asOf: '2026-07-06' }` → `'2026-07-06'`) and returns an item predicate.
- * Registered operators are matched at the top level of the query.
+ * (`{ $asOf: '2026-07-06' }` → `'2026-07-06'`) and the resolved service path,
+ * then returns an item predicate. Registered operators are matched at the top level
+ * of the query.
  */
-export type CustomOperator = (operand: unknown) => (item: unknown) => boolean
+export interface CustomOperatorContext {
+  serviceName: string
+}
 
-interface FeathersAdapterOptions {
+export type CustomOperator = (
+  operand: unknown,
+  context: CustomOperatorContext,
+) => (item: unknown) => boolean
+
+export type CustomOperatorRegistration =
+  | CustomOperator
+  | {
+      byService: Record<string, CustomOperator>
+    }
+
+export interface FeathersAdapterOptions {
   idField?: IdFieldType
   updatedAtField?: UpdatedAtFieldType
   defaultPageSize?: number
@@ -187,9 +201,14 @@ interface FeathersAdapterOptions {
    * @example
    * operators: {
    *   $asOf: asOf => item => isEffectiveOn(item, asOf),
+   *   $visibleAt: {
+   *     byService: {
+   *       'api/posts': visibleAt => item => isVisibleAt(item, visibleAt),
+   *     },
+   *   },
    * }
    */
-  operators?: Record<string, CustomOperator>
+  operators?: Record<string, CustomOperatorRegistration>
 }
 
 /**
@@ -214,11 +233,23 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #updatedAtField: UpdatedAtFieldType
   #defaultPageSize: number | undefined
   #defaultPageSizeWhenFetchingAll: number | undefined
-  #operators: Record<string, CustomOperator>
+  #operators: Record<string, CustomOperatorRegistration>
 
-  /** Names of the registered custom operators — consumed by query classification. */
+  /** Names of custom operators registered for every service. */
   get customOperators(): readonly string[] {
-    return Object.keys(this.#operators)
+    return Object.entries(this.#operators)
+      .filter(([, registration]) => typeof registration === 'function')
+      .map(([name]) => name)
+  }
+
+  /** Names of global and service-scoped custom operators available on a service. */
+  customOperatorsFor(serviceName: string): readonly string[] {
+    return Object.entries(this.#operators)
+      .filter(
+        ([, registration]) =>
+          typeof registration === 'function' || registration.byService[serviceName] !== undefined,
+      )
+      .map(([name]) => name)
   }
 
   /**
@@ -428,23 +459,44 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     return nextMs < currMs
   }
 
-  matcher(query: TQuery | undefined, options?: PrepareQueryOptions): (item: unknown) => boolean {
+  #operatorFor(name: string, context: MatcherContext | undefined): CustomOperator | undefined {
+    if (!Object.hasOwn(this.#operators, name)) return undefined
+
+    const registration = this.#operators[name]!
+    if (typeof registration === 'function') return registration
+    if (!context) {
+      throw new Error(
+        `figbird: custom operator "${name}" is service-scoped, but matcher() was called ` +
+          'without a serviceName context.',
+      )
+    }
+    return registration.byService[context.serviceName]
+  }
+
+  matcher(
+    query: TQuery | undefined,
+    options?: PrepareQueryOptions,
+    context?: MatcherContext,
+  ): (item: unknown) => boolean {
     // Registered custom operators are peeled off the top level of the query and
     // composed as predicates around the sift-based matcher for the rest.
     const q = query as Record<string, unknown> | undefined
-    const present = q ? Object.keys(this.#operators).filter(name => name in q) : []
-    if (present.length === 0) {
-      // Cast to Query type - the matcher function will validate and clean the query internally
-      return matcher(query as Query | undefined, options)
+    const rest: Record<string, unknown> = {}
+    const predicates: Array<(item: unknown) => boolean> = []
+    const operatorContext = { serviceName: context?.serviceName ?? '' }
+
+    for (const [name, operand] of Object.entries(q ?? {})) {
+      const handler = this.#operatorFor(name, context)
+      if (handler) {
+        predicates.push(handler(operand, operatorContext))
+      } else {
+        rest[name] = operand
+      }
     }
 
-    const rest: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(q as Record<string, unknown>)) {
-      if (this.#operators[key] === undefined) rest[key] = value
-    }
-    const predicates = present.map(name =>
-      this.#operators[name]!((q as Record<string, unknown>)[name]),
-    )
+    // Cast to Query type - the matcher function will validate and clean the query internally
+    if (predicates.length === 0) return matcher(query as Query | undefined, options)
+
     const base = matcher(rest as Query, options)
     return item => base(item) && predicates.every(predicate => predicate(item))
   }

@@ -1,4 +1,10 @@
-import type { Adapter, AdapterFindMeta, AdapterParams, AdapterQuery } from '../adapters/adapter.js'
+import {
+  locallySupportedOperators,
+  type Adapter,
+  type AdapterFindMeta,
+  type AdapterParams,
+  type AdapterQuery,
+} from '../adapters/adapter.js'
 import { DevtoolsControl } from './devtoolsControl.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
@@ -649,9 +655,9 @@ export class Figbird<
   }
 
   /**
-   * Static analysis of a query: one entry per node (root + each relation, dotted
-   * paths for nesting) with figbird's classification of how that node is maintained
-   * and the structured reasons why. No fetching happens — callable anywhere.
+   * Static analysis of a query: one entry per executed node (root, relations, and
+   * junction hops) with figbird's classification of how that node is maintained and
+   * the structured reasons why. No fetching happens — callable anywhere.
    *
    * Use it to answer "why did adding `.limit(30)` change realtime behavior", to
    * assert a query's class in tests, or to power devtools.
@@ -670,10 +676,8 @@ export class Figbird<
     const builder = isQueryDefinition(queryOrBuilder)
       ? queryOrBuilder.build(queryOrBuilder.validate(args))
       : queryOrBuilder
-    const nodes = explainQuery(
-      builder.toAST(),
-      this.schema?.relationships,
-      new Set(this.adapter.customOperators ?? []),
+    const nodes = explainQuery(builder.toAST(), this.schema?.relationships, serviceName =>
+      locallySupportedOperators(this.adapter, resolveServicePath(this.schema, serviceName)),
     )
     return { nodes }
   }

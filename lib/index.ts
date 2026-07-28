@@ -68,7 +68,12 @@ export type { RelationalQueryState } from './core/figbird.js'
 
 // adapters
 export { FeathersAdapter } from './adapters/feathers.js'
-export type { CustomOperator } from './adapters/feathers.js'
+export type {
+  CustomOperator,
+  CustomOperatorContext,
+  CustomOperatorRegistration,
+  FeathersAdapterOptions,
+} from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
 // Adapter interface and types
@@ -78,6 +83,7 @@ export type {
   AdapterParams,
   AdapterQuery,
   EventHandlers,
+  MatcherContext,
 } from './adapters/adapter.js'
 
 // react hooks

@@ -17,6 +17,11 @@ export interface EventHandlers {
   removed: (item: unknown) => void
 }
 
+/** Service context supplied when the adapter evaluates a query locally. */
+export interface MatcherContext {
+  serviceName: string
+}
+
 /**
  * Unified adapter interface
  * The adapter is service-agnostic and works with unknown items
@@ -57,16 +62,23 @@ export interface Adapter<
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 
   // Matcher is typed with TQuery but works with unknown items
-  matcher(query: TQuery | undefined, options?: unknown): (item: unknown) => boolean
+  matcher(
+    query: TQuery | undefined,
+    options?: unknown,
+    context?: MatcherContext,
+  ): (item: unknown) => boolean
 
   /**
    * Optional: names of custom query operators the app has taught this adapter to
-   * evaluate client-side (e.g. `$asOf` on effective-dated services). Queries using
-   * these classify as locally maintainable — realtime events merge instead of
-   * refetching — so the adapter's `matcher` MUST evaluate them with exactly the
-   * server's membership semantics.
+   * evaluate on every service.
    */
   customOperators?: readonly string[]
+
+  /**
+   * Optional service-aware custom operator lookup. The returned names include
+   * globally supported operators and operators supported for this service.
+   */
+  customOperatorsFor?(serviceName: string): readonly string[]
 
   // Meta transformation methods
   itemAdded(meta: TMeta): TMeta
@@ -81,6 +93,17 @@ export interface Adapter<
    * its consumers expect those numbers in.
    */
   findMeta(window: { total: number; limit: number; skip: number }): TMeta
+}
+
+/**
+ * Resolve the operators an adapter can evaluate for one service, including the
+ * legacy global-only contract.
+ */
+export function locallySupportedOperators(
+  adapter: Pick<Adapter, 'customOperators' | 'customOperatorsFor'>,
+  serviceName: string,
+): ReadonlySet<string> {
+  return new Set(adapter.customOperatorsFor?.(serviceName) ?? adapter.customOperators ?? [])
 }
 
 // Helper types to extract adapter properties

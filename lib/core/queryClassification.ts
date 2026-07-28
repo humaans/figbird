@@ -256,10 +256,12 @@ export function isServerMaintained(classification: StoredQueryClass): boolean {
 
 /** One node of a `figbird.explain()` report. */
 export interface ExplainNode {
-  /** `'(root)'` or the dotted relation path (`'comments.reactions'`). */
+  /** Root, dotted relation, or internal junction path (`'members#junction'`). */
   path: string
   service: string
   kind: 'find' | 'get' | 'paginate' | 'all'
+  /** Present for an internal junction-service query in a two-hop relation. */
+  role?: 'junction'
   class: QueryNodeClass
   reasons: ClassificationReason[]
   /** How realtime events on this node's service are handled. */
@@ -278,19 +280,19 @@ function nodeRealtime(snapshot: boolean, cls: QueryNodeClass): ExplainNode['real
 }
 
 /**
- * Walk a query AST into a flat explain report: one node per query node (root +
- * each relation, dotted paths for nesting), each carrying its classification and
- * the structured reasons. Reads the same plans the runtime executes
+ * Walk a query AST into a flat explain report: one node per executed query (root,
+ * relations, and junction hops), each carrying its classification and structured
+ * reasons. Reads the same plans the runtime executes
  * (`rootAllPages`, `planRelation`, `explainQueryNode`) so the report provably
  * can't drift from what actually runs. `figbird.explain()` is the public wrapper.
  */
 export function explainQuery(
   ast: QueryAST,
   relationships: SchemaRelationships | undefined,
-  localOperators: ReadonlySet<string>,
+  localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
 ): ExplainNode[] {
   const nodes: ExplainNode[] = []
-  explainAst(ast, '(root)', true, nodes, relationships, localOperators)
+  explainAst(ast, '(root)', true, nodes, relationships, localOperatorsFor)
   return nodes
 }
 
@@ -300,7 +302,7 @@ function explainAst(
   isRoot: boolean,
   nodes: ExplainNode[],
   relationships: SchemaRelationships | undefined,
-  localOperators: ReadonlySet<string>,
+  localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
 ): void {
   const snapshot = Boolean(ast.snapshot)
   // Root fetch shape comes from the same plan the runtime executes (rootAllPages):
@@ -309,7 +311,7 @@ function explainAst(
   const explained = explainQueryNode(ast.query, {
     server: ast.server,
     allPages: rootAllPages(ast.kind),
-    localOperators,
+    localOperators: localOperatorsFor(ast.service),
     snapshot,
     paginatedRoot: isRoot && ast.kind === 'paginate',
   })
@@ -323,7 +325,7 @@ function explainAst(
     realtime: nodeRealtime(snapshot, explained.class),
   })
 
-  explainRelations(ast, path, snapshot, nodes, relationships, localOperators)
+  explainRelations(ast, path, snapshot, nodes, relationships, localOperatorsFor)
 }
 
 /**
@@ -336,19 +338,24 @@ function explainRelations(
   snapshot: boolean,
   nodes: ExplainNode[],
   relationships: SchemaRelationships | undefined,
-  localOperators: ReadonlySet<string>,
+  localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
 ): void {
   const serviceRelationships = relationships?.[ast.service] ?? {}
   for (const [relName, relAST] of Object.entries(ast.related)) {
     const relDef = serviceRelationships[relName]
     const relPath = path === '(root)' ? relName : `${path}.${relName}`
+    const destService = relDef?.destService ?? relAST.service
     // The relation's fetch shape is read off the same plan the runtime executes
     // (planRelation) — explain can't drift from what actually runs.
     const plan = planRelation(relDef, relAST.query)
-    const relExplained = explainQueryNode(relAST.query, {
+    const relQuery = {
+      ...relAST.query,
+      ...(relDef?.query ?? {}),
+    }
+    const relExplained = explainQueryNode(relQuery, {
       server: relAST.server,
       allPages: plan.allPages,
-      localOperators,
+      localOperators: localOperatorsFor(destService),
     })
     if (plan.strategy === 'perParent') {
       relExplained.reasons = [
@@ -356,15 +363,32 @@ function explainRelations(
         { code: 'window-filter', detail: 'per-parent window — one query per parent' },
       ]
     }
+    if (relDef?.via) {
+      const junctionService = relDef.via.destService
+      const junctionExplained = explainQueryNode(relDef.via.query, {
+        allPages: true,
+        localOperators: localOperatorsFor(junctionService),
+      })
+      nodes.push({
+        path: `${relPath}#junction`,
+        service: junctionService,
+        kind: 'find',
+        role: 'junction',
+        class: junctionExplained.class,
+        reasons: junctionExplained.reasons,
+        realtime: nodeRealtime(snapshot, junctionExplained.class),
+      })
+    }
+
     nodes.push({
       path: relPath,
-      service: relDef?.destService ?? relName,
+      service: destService,
       kind: 'find',
       class: relExplained.class,
       reasons: relExplained.reasons,
       realtime: nodeRealtime(snapshot, relExplained.class),
       ...(relDef?.via ? { via: relDef.via.destService } : {}),
     })
-    explainRelations(relAST, relPath, snapshot, nodes, relationships, localOperators)
+    explainRelations(relAST, relPath, snapshot, nodes, relationships, localOperatorsFor)
   }
 }

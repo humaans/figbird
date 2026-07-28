@@ -1,4 +1,4 @@
-import type { Adapter, QueryResponse } from '../adapters/adapter.js'
+import { locallySupportedOperators, type Adapter, type QueryResponse } from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { FigbirdEventEmitter, type MutationMethod } from './events.js'
@@ -104,9 +104,6 @@ export class QueryStore<
   > = new Map()
   #deferredWhileHidden: Set<string> = new Set()
 
-  // Custom operator names the adapter evaluates locally — extends classification's
-  // locally-evaluable operator set (see FeathersAdapterOptions.operators).
-  #localOperators: ReadonlySet<string>
   #defaultSort: Record<string, number> | undefined
 
   #eventQueue: QueuedEvent[] = []
@@ -145,7 +142,6 @@ export class QueryStore<
     defaultSort?: Record<string, number>
   }) {
     this.#adapter = adapter
-    this.#localOperators = new Set(adapter.customOperators ?? [])
     this.#defaultSort = defaultSort
     this.#eventBatchInterval = eventBatchInterval
     this.#events = new FigbirdEventEmitter()
@@ -206,7 +202,7 @@ export class QueryStore<
       const classification = classifyStoredQuery(desc.method, queryOfParams(desc.params), {
         server: (config as { server?: boolean }).server,
         allPages: (config as { allPages?: boolean }).allPages,
-        localOperators: this.#localOperators,
+        localOperators: locallySupportedOperators(this.#adapter, desc.serviceName),
       })
 
       this.#transactOverService(queryId, service => {
@@ -625,7 +621,7 @@ export class QueryStore<
     const q = queryOfParams(desc.params)
     if (q && Object.keys(q).length > 0) {
       // classification === 'get' guarantees the conditions are locally evaluable.
-      if (!this.#resolveMatcher(config, q)(entity)) return null
+      if (!this.#resolveMatcher(desc.serviceName, config, q)(entity)) return null
     }
 
     return { data: entity } as QueryResponse<unknown, TMeta | undefined>
@@ -661,7 +657,7 @@ export class QueryStore<
 
     const q = queryOfParams(query.desc.params)
     const { filters, sort, limit, skip } = splitWindow(q)
-    const match = this.#resolveMatcher(config, filters)
+    const match = this.#resolveMatcher(query.desc.serviceName, config, filters)
     let rows = [...service.entities.values()].filter(match)
     const effectiveSort = sort ?? this.#defaultSort
     if (effectiveSort) rows = sortRowsLocally(rows, effectiveSort)
@@ -1465,7 +1461,11 @@ export class QueryStore<
       return () => false
     }
 
-    return this.#resolveMatcher(config as QueryConfig<unknown, unknown>, queryOfParams(desc.params))
+    return this.#resolveMatcher(
+      desc.serviceName,
+      config as QueryConfig<unknown, unknown>,
+      queryOfParams(desc.params),
+    )
   }
 
   /**
@@ -1474,12 +1474,15 @@ export class QueryStore<
    * boundary live here and nowhere else.
    */
   #resolveMatcher(
+    serviceName: string,
     config: QueryConfig<unknown, unknown>,
     filters: Record<string, unknown> | undefined,
   ): (item: unknown) => boolean {
     return config.matcher
       ? (config.matcher(filters as never) as (item: unknown) => boolean)
-      : (this.#adapter.matcher(filters as TQuery | undefined) as (item: unknown) => boolean)
+      : (this.#adapter.matcher(filters as TQuery | undefined, undefined, {
+          serviceName,
+        }) as (item: unknown) => boolean)
   }
 
   /** Convert mutation descriptor to args array for adapter */
