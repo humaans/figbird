@@ -305,8 +305,7 @@ export class Figbird<
     const hash = builder.hash()
     const cached = this.#relationalQueryCache.get(hash)
     let ref = cached as
-      | RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
-      | undefined
+      RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>> | undefined
     if (!ref) {
       const ast = builder.toAST()
       ref = new RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
