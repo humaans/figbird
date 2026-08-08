@@ -10,6 +10,7 @@
  */
 
 import { isServerMaintained } from './queryClassification.js'
+import { ItemRemovedError } from './errors.js'
 import { buildComparator } from './sort.js'
 import {
   queryOfParams,
@@ -65,9 +66,22 @@ export function removeQueryFromItemIndex<TMeta>({
 }): void {
   for (const item of getQueryItems(query)) {
     const id = getId(item)
-    if (id !== undefined && service.itemQueryIndex.has(id)) {
-      service.itemQueryIndex.get(id)!.delete(queryId)
+    if (id !== undefined) {
+      removeQueryFromItemIndexById(service, id, queryId)
     }
+  }
+}
+
+export function removeQueryFromItemIndexById<TMeta>(
+  service: ServiceState<TMeta>,
+  itemId: ItemId,
+  queryId: string,
+): void {
+  const queryIds = service.itemQueryIndex.get(itemId)
+  if (!queryIds) return
+  queryIds.delete(queryId)
+  if (queryIds.size === 0) {
+    service.itemQueryIndex.delete(itemId)
   }
 }
 
@@ -76,12 +90,6 @@ export function removeQueryFromItemIndex<TMeta>({
 // performs the same coercion when resolving a get.
 function isSameId(a: ItemId, b: ItemId): boolean {
   return String(a) === String(b)
-}
-
-function createItemRemovedError(itemId: ItemId): Error {
-  const error = new Error(`Item ${String(itemId)} has been removed`)
-  error.name = 'ItemRemoved'
-  return error
 }
 
 // `$sort` doesn't affect which rows are fetched, so a sorted-but-unfiltered
@@ -202,20 +210,25 @@ export function diffCompleteSet<TMeta>({
   serviceName,
   previousEntities,
   nextItemIds,
+  ignoredItemIds,
 }: {
   service: ServiceState<TMeta>
   serviceName: string
   previousEntities: Map<ItemId, unknown>
   nextItemIds: Set<ItemId>
+  /** Items changed by events during the fetch; those events already own their diff. */
+  ignoredItemIds?: ReadonlySet<ItemId>
 }): ProcessedRealtimeEvent[] {
   const events: ProcessedRealtimeEvent[] = []
   for (const [itemId, previousItem] of previousEntities) {
+    if (ignoredItemIds?.has(itemId)) continue
     if (!nextItemIds.has(itemId)) {
       service.entities.delete(itemId)
       events.push({ serviceName, type: 'removed', item: previousItem, previousItem, itemId })
     }
   }
   for (const itemId of nextItemIds) {
+    if (ignoredItemIds?.has(itemId)) continue
     const item = service.entities.get(itemId)!
     const previousItem = previousEntities.get(itemId)
     if (!previousItem) {
@@ -225,6 +238,172 @@ export function diffCompleteSet<TMeta>({
     }
   }
   return events
+}
+
+interface QueryEventContext<TMeta> {
+  service: ServiceState<TMeta>
+  touch: (queryId: string) => void
+  getId: (item: unknown) => ItemId | undefined
+  itemAdded: (meta: TMeta) => TMeta
+  itemRemoved: (meta: TMeta) => TMeta
+  defaultSort: Record<string, number> | undefined
+}
+
+type QueryEventApplication = 'applied' | 'reconcile' | 'ignored'
+
+function applyVisibleEventEffect<TMeta>(
+  context: QueryEventContext<TMeta>,
+  queryId: string,
+  event: ProcessedRealtimeEvent,
+  effect: 'remove' | 'replace',
+): boolean {
+  const { service, touch, getId, itemRemoved } = context
+  const query = service.queries.get(queryId)
+  if (!query) return false
+
+  const { itemId } = event
+  if (query.desc.method === 'get' && !isSameId(query.desc.resourceId, itemId)) {
+    return false
+  }
+
+  const hasItem = service.itemQueryIndex.get(itemId)?.has(queryId) ?? false
+  if (effect === 'remove') {
+    if (!hasItem || query.state.status !== 'success') return false
+    const nextState: QueryState<unknown, TMeta> =
+      query.desc.method === 'get'
+        ? {
+            status: 'error',
+            data: null,
+            meta: itemRemoved(query.state.meta),
+            isFetching: false,
+            error: new ItemRemovedError(itemId),
+          }
+        : {
+            ...query.state,
+            meta: itemRemoved(query.state.meta),
+            data: (query.state.data as unknown[]).filter(item => getId(item) !== itemId),
+          }
+    service.queries.set(queryId, { ...query, state: nextState })
+    removeQueryFromItemIndexById(service, itemId, queryId)
+    touch(queryId)
+    return true
+  }
+
+  const item = service.entities.get(itemId) ?? event.item
+  if (query.desc.method === 'get') {
+    service.queries.set(queryId, {
+      ...query,
+      state: {
+        status: 'success',
+        data: item,
+        meta: query.state.meta,
+        isFetching: false,
+        error: null,
+      },
+    })
+    addQueryToItemIndex(service, itemId, queryId)
+    touch(queryId)
+    return true
+  }
+
+  if (!hasItem || query.state.status !== 'success') return false
+  service.queries.set(queryId, {
+    ...query,
+    state: {
+      ...query.state,
+      data: (query.state.data as unknown[]).map(current =>
+        getId(current) === itemId ? item : current,
+      ),
+    },
+  })
+  touch(queryId)
+  return true
+}
+
+function applyMergeEventToQuery<TMeta>(
+  context: QueryEventContext<TMeta>,
+  queryId: string,
+  event: ProcessedRealtimeEvent,
+): QueryEventApplication {
+  const { service, touch, getId, itemAdded, itemRemoved, defaultSort } = context
+  const query = service.queries.get(queryId)
+  if (!query) return 'ignored'
+
+  const { type, item, previousItem, itemId } = event
+  if (isServerMaintained(query.classification)) {
+    // Server windows merge every provable effect locally. An unprovable effect,
+    // and every server-authoritative query, reconciles from the server.
+    if (query.classification !== 'server-window' || query.desc.method !== 'find') {
+      return 'reconcile'
+    }
+    const result = mergeEventIntoWindow({
+      query,
+      type,
+      item,
+      previousItem,
+      itemId,
+      hasItem: service.itemQueryIndex.get(itemId)?.has(queryId) ?? false,
+      getId,
+      ...(defaultSort !== undefined ? { defaultSort } : {}),
+    })
+    if (result.action === 'refetch') return 'reconcile'
+    if (result.action === 'noop' || query.state.status !== 'success') return 'ignored'
+
+    service.queries.set(queryId, {
+      ...query,
+      state: {
+        ...query.state,
+        meta:
+          result.metaOp === 'added'
+            ? itemAdded(query.state.meta)
+            : result.metaOp === 'removed'
+              ? itemRemoved(query.state.meta)
+              : query.state.meta,
+        data: result.data,
+      },
+    })
+    if (result.enteredWindow) addQueryToItemIndex(service, itemId, queryId)
+    if (result.leftWindow) removeQueryFromItemIndexById(service, itemId, queryId)
+    if (result.evictedId !== undefined) {
+      removeQueryFromItemIndexById(service, result.evictedId, queryId)
+    }
+    touch(queryId)
+    return 'applied'
+  }
+
+  const matches = type !== 'removed' && query.filterItem(item)
+  const hasItem = service.itemQueryIndex.get(itemId)?.has(queryId) ?? false
+  if (hasItem) {
+    return applyVisibleEventEffect(context, queryId, event, matches ? 'replace' : 'remove')
+      ? 'applied'
+      : 'ignored'
+  }
+
+  if (matches && query.desc.method === 'find' && query.state.status === 'success') {
+    service.queries.set(queryId, {
+      ...query,
+      state: {
+        ...query.state,
+        meta: itemAdded(query.state.meta),
+        data: (query.state.data as unknown[]).concat(item),
+      },
+    })
+    addQueryToItemIndex(service, itemId, queryId)
+    touch(queryId)
+    return 'applied'
+  }
+
+  if (
+    matches &&
+    type === 'created' &&
+    query.desc.method === 'get' &&
+    isSameId(query.desc.resourceId, itemId)
+  ) {
+    // Restore a get query when its resource reappears after a removal or rollback.
+    return applyVisibleEventEffect(context, queryId, event, 'replace') ? 'applied' : 'ignored'
+  }
+
+  return 'ignored'
 }
 
 export function updateQueriesFromEvents<TMeta>({
@@ -239,7 +418,7 @@ export function updateQueriesFromEvents<TMeta>({
   defaultSort,
 }: {
   service: ServiceState<TMeta>
-  appliedItems: ProcessedRealtimeEvent[]
+  appliedItems: readonly ProcessedRealtimeEvent[]
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
@@ -250,163 +429,75 @@ export function updateQueriesFromEvents<TMeta>({
   /** The backend's implicit order for queries without `$sort` — see QueryStore options. */
   defaultSort?: Record<string, number> | undefined
 }): void {
-  for (const { type, item, previousItem, itemId } of appliedItems) {
-    if (!service.itemQueryIndex.has(itemId)) {
-      service.itemQueryIndex.set(itemId, new Set())
-    }
-    const itemQueryIndex = service.itemQueryIndex.get(itemId)!
-
+  const context: QueryEventContext<TMeta> = {
+    service,
+    touch,
+    getId,
+    itemAdded,
+    itemRemoved,
+    defaultSort,
+  }
+  for (const event of appliedItems) {
     for (const [queryId, query] of service.queries) {
-      let matches: boolean
-
-      if (queryId === excludeQueryId) {
-        continue
-      }
-
-      if (query.config.realtime !== 'merge') {
-        continue
-      }
-
-      if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
-        continue
-      }
-
-      if (isServerMaintained(query.classification)) {
-        // Server-window finds first try to merge the event locally — the window is
-        // a contiguous run of the server result, so many event effects are provable
-        // from local state (see mergeEventIntoWindow). Anything unprovable, and all
-        // server-authoritative queries, reconcile by refetch as before.
-        if (query.classification === 'server-window' && query.desc.method === 'find') {
-          const result = mergeEventIntoWindow({
-            query,
-            type,
-            item,
-            previousItem,
-            itemId,
-            hasItem: itemQueryIndex.has(queryId),
-            getId,
-            ...(defaultSort !== undefined ? { defaultSort } : {}),
-          })
-          if (result.action === 'merge' && query.state.status === 'success') {
-            service.queries.set(queryId, {
-              ...query,
-              state: {
-                ...query.state,
-                meta:
-                  result.metaOp === 'added'
-                    ? itemAdded(query.state.meta)
-                    : result.metaOp === 'removed'
-                      ? itemRemoved(query.state.meta)
-                      : query.state.meta,
-                data: result.data,
-              },
-            })
-            if (result.enteredWindow) itemQueryIndex.add(queryId)
-            if (result.leftWindow) itemQueryIndex.delete(queryId)
-            if (result.evictedId !== undefined) {
-              service.itemQueryIndex.get(result.evictedId)?.delete(queryId)
-            }
-            touch(queryId)
-          } else if (result.action === 'refetch') {
-            serverMaintainedQueriesToRefetch.add(queryId)
-          }
-          continue
-        }
+      if (queryId === excludeQueryId || query.config.realtime !== 'merge') continue
+      if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') continue
+      if (applyMergeEventToQuery(context, queryId, event) === 'reconcile') {
         serverMaintainedQueriesToRefetch.add(queryId)
-        continue
-      }
-
-      if (type === 'removed') {
-        matches = false
-      } else {
-        matches = query.filterItem(item)
-      }
-
-      const hasItem = itemQueryIndex.has(queryId)
-      if (hasItem && !matches) {
-        // remove
-        const query = service.queries.get(queryId)!
-        // A get query whose item was removed reaches a terminal, refetchable error
-        // state (the resource no longer exists — same as a server NotFound). It must
-        // not park in 'loading': nothing would ever complete that fetch, and
-        // relational consumers would serve the stale previous snapshot forever.
-        const nextState: QueryState<unknown, TMeta> =
-          query.desc.method === 'get' && query.state.status === 'success'
-            ? {
-                status: 'error' as const,
-                data: null,
-                meta: itemRemoved(query.state.meta),
-                isFetching: false,
-                error: createItemRemovedError(itemId),
-              }
-            : query.state.status === 'success'
-              ? {
-                  ...query.state,
-                  meta: itemRemoved(query.state.meta),
-                  data: (query.state.data as unknown[]).filter((x: unknown) => getId(x) !== itemId),
-                }
-              : query.state
-        service.queries.set(queryId, {
-          ...query,
-          state: nextState,
-        })
-        itemQueryIndex.delete(queryId)
-        touch(queryId)
-      } else if (hasItem && matches) {
-        // update
-        service.queries.set(queryId, {
-          ...query,
-          state:
-            query.state.status === 'success'
-              ? {
-                  ...query.state,
-                  data:
-                    query.desc.method === 'get'
-                      ? item
-                      : (query.state.data as unknown[]).map((x: unknown) =>
-                          getId(x) === itemId ? item : x,
-                        ),
-                }
-              : query.state,
-        })
-        touch(queryId)
-      } else if (matches && query.desc.method === 'find' && query.state.data) {
-        service.queries.set(queryId, {
-          ...query,
-          state:
-            query.state.status === 'success'
-              ? {
-                  ...query.state,
-                  meta: itemAdded(query.state.meta),
-                  data: (query.state.data as unknown[]).concat(item),
-                }
-              : query.state,
-        })
-        itemQueryIndex.add(queryId)
-        touch(queryId)
-      } else if (
-        matches &&
-        type === 'created' &&
-        query.desc.method === 'get' &&
-        isSameId(query.desc.resourceId, itemId)
-      ) {
-        // The resource behind a get query reappeared (realtime re-create, or an
-        // optimistic remove rolling back). Restore the query from the event instead
-        // of leaving it in the removed-error state until a manual refetch.
-        service.queries.set(queryId, {
-          ...query,
-          state: {
-            status: 'success' as const,
-            data: item,
-            meta: query.state.meta,
-            isFetching: false,
-            error: null,
-          },
-        })
-        itemQueryIndex.add(queryId)
-        touch(queryId)
       }
     }
+  }
+}
+
+/** Replay in-flight events over one fetched query without changing disabled snapshots. */
+export function replayFetchedQueryFromEvents<TMeta>({
+  service,
+  queryId,
+  events,
+  touch,
+  getId,
+  itemAdded,
+  itemRemoved,
+  defaultSort,
+}: {
+  service: ServiceState<TMeta>
+  queryId: string
+  events: readonly ProcessedRealtimeEvent[]
+  touch: (queryId: string) => void
+  getId: (item: unknown) => ItemId | undefined
+  itemAdded: (meta: TMeta) => TMeta
+  itemRemoved: (meta: TMeta) => TMeta
+  defaultSort?: Record<string, number> | undefined
+}): void {
+  const context: QueryEventContext<TMeta> = {
+    service,
+    touch,
+    getId,
+    itemAdded,
+    itemRemoved,
+    defaultSort,
+  }
+  for (const event of events) {
+    const query = service.queries.get(queryId)
+    if (!query || query.config.realtime === 'disabled') return
+
+    const canMerge =
+      query.config.realtime === 'merge' &&
+      !(query.desc.method === 'find' && query.config.fetchPolicy === 'network-only')
+    const needsVisibleFallback =
+      query.config.realtime === 'refetch' ||
+      query.config.fetchPolicy === 'network-only' ||
+      isServerMaintained(query.classification)
+    if (canMerge) {
+      const result = applyMergeEventToQuery(context, queryId, event)
+      if (result === 'applied' || !needsVisibleFallback) continue
+    }
+
+    applyVisibleEventEffect(
+      context,
+      queryId,
+      event,
+      event.type === 'removed' ? 'remove' : 'replace',
+    )
   }
 }
 

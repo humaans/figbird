@@ -7,6 +7,8 @@ import {
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
+  ItemRemovedError,
+  isItemRemovedError,
   service,
   useFeathers,
 } from '../lib'
@@ -176,6 +178,57 @@ test('useGet', async t => {
   t.is(noteData!.id, 1, 'useGet returns an object, not an array')
 
   unmount()
+})
+
+test('useGet surfaces ItemRemovedError after a realtime removal', async t => {
+  const { render, unmount, flush } = dom()
+  const { App, useGet, feathers } = app()
+  const result: { status: QueryStatus; data: Note | null; error: Error | null } = {
+    status: 'loading',
+    data: null,
+    error: null,
+  }
+
+  function NoteDetail() {
+    const note = useGet('notes', 1)
+    result.status = note.status
+    result.data = note.data
+    result.error = note.error
+    return null
+  }
+
+  render(
+    <App>
+      <NoteDetail />
+    </App>,
+  )
+  await flush()
+  t.is(result.status, 'success')
+  t.is(result.data?.id, 1)
+
+  await flush(async () => {
+    await feathers.service('notes').remove(1)
+  })
+
+  t.is(result.status, 'error')
+  t.is(result.data, null)
+  t.true(result.error instanceof ItemRemovedError)
+  t.true(isItemRemovedError(result.error))
+  if (isItemRemovedError(result.error)) {
+    t.is(result.error.itemId, 1)
+  }
+  unmount()
+})
+
+test('isItemRemovedError recognizes an error from another package instance or realm', t => {
+  t.true(
+    isItemRemovedError({
+      name: 'ItemRemovedError',
+      message: 'Item 1 has been removed',
+      itemId: 1,
+    }),
+  )
+  t.false(isItemRemovedError({ name: 'ItemRemovedError', itemId: 1 }))
 })
 
 test('useGet updates after realtime patch', async t => {
@@ -1755,7 +1808,6 @@ test('items get updated in cache even if not currently relevant to any query', a
   t.deepEqual(serialize(figbird.getState().get('notes')?.itemQueryIndex), {
     1: ['q/MaxUYlLuVfc='],
     2: ['q/MaxUYlLuVfc='],
-    3: [],
   })
 
   unmount()

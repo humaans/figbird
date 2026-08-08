@@ -231,6 +231,7 @@ test('hidden tabs: a reconnect while hidden defers the refetch-all until visible
     adapter,
     eventBatchInterval: 0,
     reconcileCooldown: 0,
+    reconnectJitter: 0,
     visibility: visibility.source,
   })
   const notes = feathers.service('notes')
@@ -259,6 +260,35 @@ test('hidden tabs: a reconnect while hidden defers the refetch-all until visible
   unsub()
 })
 
+test('reconnect jitter delays and coalesces a visible-tab sweep', async t => {
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'hello' } } },
+  })
+  const io = new EventEmitter()
+  ;(feathers as unknown as { io: EventEmitter }).io = io
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+    reconnectJitter: [40, 40],
+  })
+  const notes = feathers.service('notes')
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsub = ref.subscribe(() => {})
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  io.emit('reconnect')
+  await sleep(25)
+  t.is(notes.counts.find, baseline, 'the sweep stays inside the configured delay')
+
+  await sleep(35)
+  t.is(notes.counts.find, baseline + 1, 'two reconnects coalesce into one sweep')
+  unsub()
+})
+
 test('reconcileCooldown: 0 preserves per-event refetching exactly', async t => {
   const { figbird, feathers } = createApp({ reconcileCooldown: 0 })
   const notes = feathers.service('notes')
@@ -273,4 +303,42 @@ test('reconcileCooldown: 0 preserves per-event refetching exactly', async t => {
   t.is(notes.counts.find, baseline + 3, 'every event reconciles when the gate is disabled')
 
   unsub()
+})
+
+test('a throwing subscriber cannot block other listeners or reconcile follow-ups', async t => {
+  const { figbird, feathers } = createApp({ reconcileCooldown: 0 })
+  const notes = feathers.service('notes')
+  const localRef = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const windowRef = figbird.queryDesc({
+    serviceName: 'notes',
+    method: 'find',
+    params: { query: { $sort: { id: 1 }, $limit: 1, $skip: 1 } },
+  })
+  let armed = false
+  let safeNotifications = 0
+  const originalConsoleError = console.error
+  console.error = () => {}
+  t.teardown(() => {
+    console.error = originalConsoleError
+  })
+
+  const unsubThrowing = localRef.subscribe(() => {
+    if (armed) throw new Error('subscriber failed')
+  })
+  const unsubSafe = localRef.subscribe(() => {
+    if (armed) safeNotifications++
+  })
+  const unsubWindow = windowRef.subscribe(() => {})
+  await sleep(20)
+  const baseline = notes.counts.find
+  armed = true
+
+  serverCreate(notes, { id: 0, content: 'before the window' })
+  await sleep(20)
+
+  t.true(safeNotifications > 0, 'later listeners still run')
+  t.is(notes.counts.find, baseline + 1, 'the server-window reconcile still runs')
+  unsubThrowing()
+  unsubSafe()
+  unsubWindow()
 })

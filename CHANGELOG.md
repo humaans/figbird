@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Rebase fetch responses over realtime and mutation events that land while the fetch
+  is in flight, then schedule one trailing reconciliation. This prevents stale
+  responses from deleting created rows, resurrecting removed rows, or replacing a
+  newer window merge. The event journal is bounded; an overrun response is discarded
+  and reconciled instead of retaining events without limit.
+- Expose `ItemRemovedError` and `isItemRemovedError`. Both `useGet` and relational
+  `useQuery` now report a realtime removal through the error state.
+- Keep `realtime: 'disabled'` query results fixed to their fetched snapshot when an
+  event races the fetch, while still protecting the shared entity cache from the
+  stale response.
+- Isolate subscriber exceptions so one listener cannot block later listeners or
+  event-driven reconciliation.
+- Coalesce `figbird.refetch(service)` calls made during an active fetch into one
+  follow-up fetch.
+- Require an explicit `$sort` or constructor `defaultSort` before answering a find
+  from a materialized service; otherwise the query goes to the server for its
+  implicit order.
+- Add reconnect sweep jitter (default `[0, 3000]` ms, `reconnectJitter: 0` to disable)
+  and coalesce reconnects while a sweep is pending.
+- Emit automatic JSX-runtime imports in package builds, so consumers no longer need
+  a global React shim.
+- Add `matcherKey` for deliberate sharing of equivalent custom-matcher queries.
+- Keep item-query indexes incremental and deduplicate missing-id warnings per service.
 - Add built-in query, timeline, event, and write inspection through the new
   `figbird/devtools` entrypoint. Devtools can inspect queries mounted under a selected
   page element, open in a separate window, and follow the system color scheme.

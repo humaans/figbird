@@ -304,3 +304,37 @@ test('matcher with undefined query works correctly', async t => {
   t.true(undefinedQueryHandled, 'Matcher handled undefined query correctly')
   unsubscribe()
 })
+
+test('matcherKey explicitly shares a custom-matcher query', async t => {
+  const schema = createSchema({
+    services: {
+      todos: service<{ item: Todo; query: TodoQuery }>(),
+    },
+  })
+  const feathers = mockFeathers({
+    todos: {
+      data: {
+        '1': { id: '1', title: 'Task 1', completed: false, priority: 1, tags: [] },
+      },
+    },
+  })
+  const figbird = new Figbird({ schema, adapter: new FeathersAdapter(feathers) })
+  const matcher = (query: TodoQuery | undefined) => (item: Todo) =>
+    query?.completed === undefined || item.completed === query.completed
+  const desc = {
+    serviceName: 'todos',
+    method: 'find' as const,
+    params: { query: { completed: false } },
+  }
+  const first = figbird.queryDesc(desc, { matcher, matcherKey: 'incomplete-todos' })
+  const second = figbird.queryDesc(desc, { matcher, matcherKey: 'incomplete-todos' })
+
+  t.is(first.hash(), second.hash())
+  const unsubFirst = first.subscribe(() => {})
+  const unsubSecond = second.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 20))
+  t.is(feathers.service('todos').counts.find, 1)
+
+  unsubFirst()
+  unsubSecond()
+})

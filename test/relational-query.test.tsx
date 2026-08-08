@@ -971,6 +971,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
     schema: exactQuerySchema,
     adapter: new FeathersAdapter(feathers),
     eventBatchInterval: 0,
+    reconnectJitter: 0,
   })
   const peopleService = feathers.service('people')
   const queryRef = figbird.queryDesc({
@@ -2071,7 +2072,7 @@ test('suspense: refetch failure keeps previous data, exposes error, clears on re
   unmount()
 })
 
-test('suspense: root item removed while on screen keeps data and surfaces ItemRemoved', async t => {
+test('suspense: root item removed while on screen keeps data and surfaces ItemRemovedError', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -2104,7 +2105,7 @@ test('suspense: root item removed while on screen keeps data and surfaces ItemRe
 
   t.falsy($('.fallback'))
   t.is($('.title')!.innerHTML, 'First issue')
-  t.is($('.issue-detail')!.getAttribute('data-error'), 'ItemRemoved')
+  t.is($('.issue-detail')!.getAttribute('data-error'), 'ItemRemovedError')
 
   unmount()
 })
@@ -2765,7 +2766,7 @@ test('createHooks: bound hooks and q work without a FigbirdProvider', async t =>
   unmount()
 })
 
-test('.all(): materializes the service; subset and windowed reads answer locally', async t => {
+test('.all(): materialized reads stay local only when their ordering is knowable', async t => {
   const { figbird, feathers } = createApp()
 
   // Preload the complete set ($sort doesn't affect completeness, so it still materializes).
@@ -2774,13 +2775,21 @@ test('.all(): materializes the service; subset and windowed reads answer locally
   const findsAfterAll = feathers.service('issues').counts.find
   t.true(findsAfterAll >= 1)
 
-  // Filtered subset — answered from the materialized cache, no fetch.
-  const openRef = figbird.query(figbird.q.issues.where({ status: 'open' }))
+  // Without an explicit/default sort, the materialized cache cannot know the
+  // server's implicit ordering and must fall through to the network.
+  const unsortedRef = figbird.query(figbird.q.issues.where({ status: 'open' }))
+  const unsubUnsorted = unsortedRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.find, findsAfterAll + 1)
+
+  // A sorted subset has a knowable order and is answered from the cache.
+  const findsAfterUnsorted = feathers.service('issues').counts.find
+  const openRef = figbird.query(figbird.q.issues.where({ status: 'open' }).orderBy('id'))
   const unsubOpen = openRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(openRef.getSnapshot().status, 'success')
   t.is((openRef.getSnapshot().data as Issue[]).length, 2)
-  t.is(feathers.service('issues').counts.find, findsAfterAll, 'subset read must not fetch')
+  t.is(feathers.service('issues').counts.find, findsAfterUnsorted, 'sorted subset stays local')
 
   // Windowed subset — sorted and sliced locally.
   const winRef = figbird.query(figbird.q.issues.orderBy('id', 'desc').limit(2))
@@ -2790,7 +2799,7 @@ test('.all(): materializes the service; subset and windowed reads answer locally
     (winRef.getSnapshot().data as Issue[]).map(issue => issue.id),
     [3, 2],
   )
-  t.is(feathers.service('issues').counts.find, findsAfterAll, 'window computed locally')
+  t.is(feathers.service('issues').counts.find, findsAfterUnsorted, 'window computed locally')
 
   // Realtime maintains the set; the windowed subset recomputes locally — still no fetch.
   await feathers.service('issues').create({ id: 9, title: 'Newest', status: 'open', creatorId: 1 })
@@ -2799,8 +2808,13 @@ test('.all(): materializes the service; subset and windowed reads answer locally
     (winRef.getSnapshot().data as Issue[]).map(issue => issue.id),
     [9, 3],
   )
-  t.is(feathers.service('issues').counts.find, findsAfterAll, 'realtime maintenance stays local')
+  t.is(
+    feathers.service('issues').counts.find,
+    findsAfterUnsorted,
+    'realtime maintenance stays local',
+  )
 
+  unsubUnsorted()
   unsubOpen()
   unsubWin()
   unsubAll()

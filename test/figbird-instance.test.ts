@@ -2,6 +2,7 @@ import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
+import type { FindResult } from '../lib/testing'
 import { mockFeathers } from './helpers'
 
 interface Note {
@@ -317,4 +318,47 @@ test('figbird.mutate with remove', async t => {
   })
 
   t.deepEqual(result, [])
+})
+
+test('figbird.refetch coalesces an in-flight query into one follow-up fetch', async t => {
+  const feathers = mockFeathers({ notes: { data: {} } })
+  const notes = feathers.service('notes')
+  const pending: Array<(result: FindResult) => void> = []
+  let findCalls = 0
+  notes.find = () => {
+    findCalls++
+    return new Promise<FindResult>(resolve => pending.push(resolve))
+  }
+
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    reconnectJitter: 0,
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsub = ref.subscribe(() => {})
+  t.is(findCalls, 1)
+
+  figbird.refetch('notes')
+  t.is(findCalls, 1, 'no duplicate fetch starts in the current generation')
+
+  pending.shift()!({
+    data: [{ id: 1, content: 'stale' }],
+    total: 1,
+    limit: 100,
+    skip: 0,
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(findCalls, 2, 'one dirty follow-up starts after the first fetch settles')
+
+  pending.shift()!({
+    data: [{ id: 1, content: 'latest' }],
+    total: 1,
+    limit: 100,
+    skip: 0,
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  t.deepEqual(ref.getSnapshot()?.data, [{ id: 1, content: 'latest' }])
+  unsub()
 })

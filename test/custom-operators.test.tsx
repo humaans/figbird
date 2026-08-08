@@ -404,7 +404,7 @@ test('materialized services evaluate scoped operators with their canonical path'
 
   const roles = feathers.service('api/job-roles')
   const findsAfterMaterialize = roles.counts.find
-  const current = figbird.query(figbird.q.jobRoles.where({ $asOf: 'current' }))
+  const current = figbird.query(figbird.q.jobRoles.where({ $asOf: 'current' }).orderBy('id'))
   const unsubCurrent = current.subscribe(() => {})
   await current.suspensePromise()
   await flush()

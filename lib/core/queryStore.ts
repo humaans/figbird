@@ -1,9 +1,11 @@
 import { locallySupportedOperators, type Adapter, type QueryResponse } from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
+import { isEphemeralQuery } from './queryIdentity.js'
 import { FigbirdEventEmitter, type MutationMethod } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
 import { sortRowsLocally } from './sort.js'
+import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchRebase.js'
 import {
   addQueryToItemIndex,
   applyEventsToService,
@@ -11,11 +13,16 @@ import {
   diffCompleteSet,
   groupQueuedEvents,
   isUnfilteredFindQuery,
+  replayFetchedQueryFromEvents,
   removeQueryFromItemIndex,
   splitWindow,
   updateQueriesFromEvents,
 } from './windowMaintenance.js'
-import { classifyStoredQuery, type StoredQueryClass } from './queryClassification.js'
+import {
+  classifyStoredQuery,
+  isServerMaintained,
+  type StoredQueryClass,
+} from './queryClassification.js'
 import {
   queryOfParams,
   type ElementType,
@@ -43,6 +50,11 @@ export interface VisibilitySource {
   /** Notify on visibility changes. Returns an unsubscribe function. */
   onChange(listener: () => void): () => void
 }
+
+/** Random reconnect delay in ms. A number means `[0, number]`; `0` disables jitter. */
+export type ReconnectJitter = number | readonly [number, number]
+
+type ItemId = string | number
 
 /** The realtime event type a mutation verb produces. */
 const MUTATION_EVENT_TYPE = {
@@ -94,6 +106,8 @@ export class QueryStore<
   #queryStats: Map<string, QueryFetchStats> = new Map()
   #nextQueryGeneration = 1
 
+  #fetchEventJournal = new FetchEventJournal()
+
   // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
   // with trailing timers, and the set of reconciliations deferred while hidden.
   #reconcileCooldown: number
@@ -105,6 +119,9 @@ export class QueryStore<
   #deferredWhileHidden: Set<string> = new Set()
 
   #defaultSort: Record<string, number> | undefined
+  #reconnectJitter: readonly [number, number]
+  #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
+  #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
@@ -118,6 +135,7 @@ export class QueryStore<
     adapter,
     eventBatchInterval = 100,
     reconcileCooldown = 2000,
+    reconnectJitter = [0, 3000],
     visibility,
     defaultSort,
   }: {
@@ -130,6 +148,8 @@ export class QueryStore<
      * window coalesce into one guaranteed trailing refetch. `0` disables.
      */
     reconcileCooldown?: number
+    /** Random delay before reconnect sweeps. A number means `[0, number]`; `0` disables. */
+    reconnectJitter?: ReconnectJitter
     /** Visibility source for hidden-tab gating. Defaults to `document`. */
     visibility?: VisibilitySource
     /**
@@ -147,9 +167,10 @@ export class QueryStore<
     this.#events = new FigbirdEventEmitter()
     this.#mutations = new MutationTracker()
     this.#reconcileCooldown = reconcileCooldown
+    this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
-    this.#adapter.subscribeToReconnect?.(() => this.#refetchActiveQueries())
+    this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep())
   }
 
   // Public store API
@@ -248,7 +269,7 @@ export class QueryStore<
 
     this.#subscribeToRealtime(queryId)
 
-    const shouldVacuum = q.config.fetchPolicy === 'network-only' || Boolean(q.config.matcher)
+    const shouldVacuum = isEphemeralQuery(q.config)
     return () => {
       removeListener()
       if (shouldVacuum && this.#listenerCount(queryId) === 0) {
@@ -499,6 +520,7 @@ export class QueryStore<
             params: query.desc.params,
           }
         : null
+    const journalCursor = trace ? this.#fetchEventJournal.begin(trace.serviceName) : null
     if (trace) {
       this.#events.emit({
         kind: 'fetch:start',
@@ -520,7 +542,14 @@ export class QueryStore<
         current &&
         this.#queryGenerations.get(queryId) === trace.generation
       ) {
-        this.#fetched({ queryId, result })
+        const journal = journalCursor
+          ? this.#fetchEventJournal.read(journalCursor)
+          : { events: [], overflowed: false }
+        if (journal.overflowed) {
+          this.#discardFetchedResponse(queryId)
+        } else {
+          this.#fetched({ queryId, result, journalEvents: journal.events })
+        }
         this.#recordFetchStats(queryId, { ok: true, durationMs })
       }
       if (trace && durationMs !== undefined) {
@@ -559,6 +588,10 @@ export class QueryStore<
           durationMs,
           error,
         })
+      }
+    } finally {
+      if (journalCursor) {
+        this.#fetchEventJournal.end(journalCursor)
       }
     }
   }
@@ -657,10 +690,14 @@ export class QueryStore<
 
     const q = queryOfParams(query.desc.params)
     const { filters, sort, limit, skip } = splitWindow(q)
+    const effectiveSort = sort ?? this.#defaultSort
+    // A complete entity set proves membership, but it does not reveal the
+    // backend's implicit order. Without an explicit or configured sort, serving
+    // insertion order from the cache would be permanently approximate.
+    if (!effectiveSort) return null
     const match = this.#resolveMatcher(query.desc.serviceName, config, filters)
     let rows = [...service.entities.values()].filter(match)
-    const effectiveSort = sort ?? this.#defaultSort
-    if (effectiveSort) rows = sortRowsLocally(rows, effectiveSort)
+    rows = sortRowsLocally(rows, effectiveSort)
     const total = rows.length
     const data = rows.slice(skip, limit !== undefined ? skip + limit : undefined)
     // The adapter owns the meta envelope — the store only knows the window numbers.
@@ -705,11 +742,14 @@ export class QueryStore<
   #fetched({
     queryId,
     result,
+    journalEvents,
   }: {
     queryId: string
     result: QueryResponse<unknown, TMeta | undefined>
+    journalEvents: readonly ProcessedRealtimeEvent[]
   }): void {
     let shouldRefetch = false
+    let hadEffectiveJournalEvents = false
     const processedEvents: ProcessedRealtimeEvent[] = []
     const serverMaintainedQueriesToRefetch = new Set<string>()
 
@@ -718,6 +758,19 @@ export class QueryStore<
       const query = service.queries.get(queryId)
       if (!query) return
       touch(queryId)
+
+      const getId = this.#getIdReader(query.desc.serviceName)
+      const data = result.data
+      const responseItems = Array.isArray(data) ? data : data == null ? [] : [data]
+      const rebasePlan = planFetchRebase({
+        responseItems,
+        journalEvents,
+        getId,
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+      })
+      const effectiveJournalEvents = rebasePlan.events
+      hadEffectiveJournalEvents = effectiveJournalEvents.length > 0
+      const journaledItemIds = rebasePlan.itemIds
 
       // A complete-set fetch (unfiltered allPages — the materialization condition)
       // is authoritative for the whole service: snapshot the entity cache before
@@ -733,50 +786,49 @@ export class QueryStore<
       const previousEntities =
         isCompleteSet && !findConfig.server ? new Map(service.entities) : null
 
-      const data = result.data
       const meta = (result as { meta?: TMeta }).meta
-      const getId = this.#getIdWarn
-      const nextItemIds = new Set<string | number>()
-      const getFreshItem = (item: unknown) => {
-        const itemId = getId(item)
-        if (itemId === undefined) {
-          return item
-        }
+      const rebasedResponse = rebaseResponseData({
+        data,
+        preserveSnapshot: query.config.realtime === 'disabled',
+        latestEventById: rebasePlan.latestEventById,
+        entities: service.entities,
+        getId,
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+        canKeepCurrentItem: item =>
+          !(
+            query.desc.method === 'find' &&
+            query.config.realtime === 'merge' &&
+            !isServerMaintained(query.classification) &&
+            !query.filterItem(item)
+          ),
+      })
+      const nextItemIds = new Set(rebasedResponse.itemIds)
 
-        const currItem = service.entities.get(itemId)
-        if (!currItem || !this.#adapter.isItemStale(currItem, item)) {
-          return item
-        }
+      // Replace this query's index entries directly from its previous and next
+      // rows. This avoids scanning every id ever seen on the service per fetch.
+      removeQueryFromItemIndex({ service, query, queryId, getId })
 
-        if (query.desc.method === 'find' && !query.filterItem(currItem)) {
-          return undefined
-        }
-
-        return currItem
-      }
-      const freshData = Array.isArray(data)
-        ? data.reduce<unknown[]>((acc, item) => {
-            const freshItem = getFreshItem(item)
-            if (freshItem !== undefined) {
-              acc.push(freshItem)
-            }
-            return acc
-          }, [])
-        : getFreshItem(data)
-      const freshItems = Array.isArray(freshData) ? freshData : [freshData]
-
-      for (const item of freshItems) {
+      for (const item of rebasedResponse.items) {
         const itemId = getId(item)
         if (itemId !== undefined) {
-          nextItemIds.add(itemId)
-          service.entities.set(itemId, item)
+          if (!journaledItemIds.has(itemId)) {
+            const currentItem = service.entities.get(itemId)
+            if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
+              service.entities.set(itemId, item)
+            }
+          }
           addQueryToItemIndex(service, itemId, queryId)
         }
       }
 
-      for (const [itemId, queryIds] of service.itemQueryIndex) {
-        if (!nextItemIds.has(itemId)) {
-          queryIds.delete(queryId)
+      // `nextItemIds` is also the complete-set diff input. Rebase its membership
+      // to the last in-flight event so a stale root response cannot delete a
+      // created row or resurrect a removed one service-wide.
+      for (const [itemId, event] of rebasePlan.latestEventById) {
+        if (event.type === 'removed') {
+          nextItemIds.delete(itemId)
+        } else if (isCompleteSet) {
+          nextItemIds.add(itemId)
         }
       }
 
@@ -796,7 +848,7 @@ export class QueryStore<
         fetchedAt: Date.now(),
         state: {
           status: 'success' as const,
-          data: freshData,
+          data: rebasedResponse.data,
           meta: meta || this.#adapter.emptyMeta(),
           isFetching: false,
           error: null,
@@ -815,6 +867,7 @@ export class QueryStore<
             serviceName: query.desc.serviceName,
             previousEntities,
             nextItemIds,
+            ignoredItemIds: journaledItemIds,
           }),
         )
         if (processedEvents.length > 0) {
@@ -831,6 +884,19 @@ export class QueryStore<
           })
         }
       }
+
+      if (effectiveJournalEvents.length > 0 && query.config.realtime !== 'disabled') {
+        replayFetchedQueryFromEvents({
+          service,
+          queryId,
+          events: effectiveJournalEvents,
+          touch,
+          getId,
+          itemAdded: meta => this.#adapter.itemAdded(meta),
+          itemRemoved: meta => this.#adapter.itemRemoved(meta),
+          defaultSort: this.#defaultSort,
+        })
+      }
     })
     this.#notify(touched)
 
@@ -838,18 +904,30 @@ export class QueryStore<
       // Same follow-ups as the realtime event path: reconcile queries that can't
       // merge locally and surface the changes to relational-filter invalidation.
       // Unlike realtime events, diffs don't trigger `realtime: 'refetch'` queries —
-      // a refetch-on-diff that itself diffs would cycle. The set never contains
-      // queryId itself: updateQueriesFromEvents skips excludeQueryId.
-      for (const id of serverMaintainedQueriesToRefetch) {
-        this.#requestReconcile(id)
-      }
+      // a refetch-on-diff that itself diffs would cycle.
       for (const event of processedEvents) {
         this.#emitProcessedEvent(event)
       }
     }
 
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+    const query = this.#getQuery(queryId)
+    const service = serviceName === undefined ? undefined : this.#state.get(serviceName)
+    const isMaterializedRoot = service?.materialized?.queryId === queryId
+    const shouldRunFollowup = this.#listenerCount(queryId) > 0 || isMaterializedRoot
+
+    if (shouldRefetch && shouldRunFollowup) {
+      serverMaintainedQueriesToRefetch.delete(queryId)
       this.#queue(queryId)
+    } else if (hadEffectiveJournalEvents && query?.config.realtime !== 'disabled') {
+      // Even exact replay cannot prove every server-maintained membership/order
+      // edge. One gated trailing reconciliation guarantees convergence.
+      serverMaintainedQueriesToRefetch.add(queryId)
+    }
+
+    for (const id of serverMaintainedQueriesToRefetch) {
+      this.#requestReconcile(id, {
+        force: id === service?.materialized?.queryId,
+      })
     }
   }
 
@@ -874,9 +952,31 @@ export class QueryStore<
     })
     this.#notify(touched)
 
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const isMaterializedRoot =
+      serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
+    if (shouldRefetch && (this.#listenerCount(queryId) > 0 || isMaterializedRoot)) {
       this.#queue(queryId)
     }
+  }
+
+  /** Discard an unsafe response and reconcile from a fresh journal cursor. */
+  #discardFetchedResponse(queryId: string): void {
+    const touched = this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+      service.queries.set(queryId, {
+        ...query,
+        state: { ...query.state, isFetching: false },
+      })
+    })
+
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const isMaterializedRoot =
+      serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
+    this.#requestReconcile(queryId, { force: isMaterializedRoot })
+    // An immediate reconciliation has already restored isFetching=true; hidden
+    // or inactive queries expose the settled state and remain pending instead.
+    this.#notify(touched)
   }
 
   #recordFetchStats(
@@ -929,7 +1029,7 @@ export class QueryStore<
         kind: 'realtime',
         serviceName,
         type,
-        itemId: this.#getIdWarn(item),
+        itemId: this.#getIdWarn(serviceName, item),
       })
     }
   }
@@ -976,7 +1076,6 @@ export class QueryStore<
 
     this.#processingEventQueue = true
     try {
-      const getId = this.#getIdWarn
       const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
 
       while (this.#eventQueue.length > 0) {
@@ -996,6 +1095,7 @@ export class QueryStore<
         // after A's events but before B's, and non-React subscribers would observe
         // the intermediate state.
         for (const [serviceName, events] of Object.entries(eventsByService)) {
+          const getId = this.#getIdReader(serviceName)
           const serverMaintainedQueriesToRefetch = new Set<string>()
           const processedEvents: ProcessedRealtimeEvent[] = []
 
@@ -1024,6 +1124,10 @@ export class QueryStore<
               })
             }
           })
+
+          // Record only events that actually changed the entity cache. The fetch
+          // rebase replays these over any response snapshot dispatched earlier.
+          this.#fetchEventJournal.record(processedEvents)
 
           for (const queryId of modifiedQueries) {
             touchedQueryIds.add(queryId)
@@ -1195,7 +1299,9 @@ export class QueryStore<
         const active = this.#listenerCount(query.queryId) > 0
         const isMaterializedRoot = query.queryId === service.materialized?.queryId
         if (active || isMaterializedRoot) {
-          this.#queue(query.queryId)
+          // `refetch()` marks an in-flight query dirty, guaranteeing exactly one
+          // follow-up instead of dispatching a second fetch in the same generation.
+          this.refetch(query.queryId)
         } else {
           this.#markQueryPending(query.queryId)
         }
@@ -1223,6 +1329,32 @@ export class QueryStore<
     }
   }
 
+  #scheduleReconnectSweep(): void {
+    if (this.#reconnectSweepTimer) return
+    const [min, max] = this.#reconnectJitter
+    const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
+    if (delay === 0) {
+      this.#refetchActiveQueries()
+      return
+    }
+
+    const timer = setTimeout(() => {
+      this.#reconnectSweepTimer = null
+      this.#refetchActiveQueries()
+    }, delay)
+    ;(timer as { unref?: () => void }).unref?.()
+    this.#reconnectSweepTimer = timer
+  }
+
+  #normalizeReconnectJitter(value: ReconnectJitter): readonly [number, number] {
+    if (typeof value === 'number') {
+      return [0, Math.max(0, value)]
+    }
+    const first = Math.max(0, value[0])
+    const second = Math.max(0, value[1])
+    return first <= second ? [first, second] : [second, first]
+  }
+
   #markQueryPending(queryId: string): void {
     this.#transactOverService(queryId, (service, query) => {
       if (!query) return
@@ -1243,10 +1375,17 @@ export class QueryStore<
    * Id read for event and fetch paths, where a missing id means data figbird can't
    * track — warn so the integration bug is visible. Presence checks use #peekId.
    */
-  #getIdWarn = (item: unknown): string | number | undefined => {
+  #getIdWarn(serviceName: string, item: unknown): string | number | undefined {
     const id = this.#adapter.getId(item)
-    if (!id) console.warn('An item has been received without any ID', item)
+    if (id === undefined && !this.#warnedMissingIdServices.has(serviceName)) {
+      this.#warnedMissingIdServices.add(serviceName)
+      console.warn(`An item has been received without any ID from "${serviceName}"`, item)
+    }
     return id
+  }
+
+  #getIdReader(serviceName: string): (item: unknown) => ItemId | undefined {
+    return item => this.#getIdWarn(serviceName, item)
   }
 
   /** Warn-free id read — presence checks on payloads that may lack ids. */
@@ -1421,7 +1560,7 @@ export class QueryStore<
     this.#transactOverService(queryId, (service, query) => {
       if (query) {
         if (query.state.data) {
-          const getId = this.#getIdWarn
+          const getId = this.#getIdReader(query.desc.serviceName)
           removeQueryFromItemIndex({ service, query, queryId, getId })
         }
         service.queries.delete(queryId)
@@ -1519,7 +1658,13 @@ export class QueryStore<
     if (listeners) {
       const state = this.getQueryState(queryId)
       if (state) {
-        listeners.forEach(listener => listener(state))
+        for (const listener of listeners) {
+          try {
+            listener(state)
+          } catch (error) {
+            this.#reportListenerError('query', error)
+          }
+        }
       }
     }
   }
@@ -1533,7 +1678,21 @@ export class QueryStore<
 
   #invokeGlobalListeners(): void {
     const state = this.getState()
-    this.#globalListeners.forEach(listener => listener(state))
+    for (const listener of this.#globalListeners) {
+      try {
+        listener(state)
+      } catch (error) {
+        this.#reportListenerError('global', error)
+      }
+    }
+  }
+
+  #reportListenerError(kind: 'query' | 'global', error: unknown): void {
+    try {
+      console.error(`figbird: ${kind} listener threw`, error)
+    } catch {
+      // Error reporting must never re-enter or abort the store's update loop.
+    }
   }
 
   #listenerCount(queryId: string): number {

@@ -25,9 +25,9 @@ import {
 import { explainQuery, type ExplainReport, type QueryNodeClass } from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
-import { QueryStore, type VisibilitySource } from './queryStore.js'
+import { QueryStore, type ReconnectJitter, type VisibilitySource } from './queryStore.js'
 
-export type { VisibilitySource } from './queryStore.js'
+export type { ReconnectJitter, VisibilitySource } from './queryStore.js'
 export { DevtoolsControl } from './devtoolsControl.js'
 export type { DevtoolsPreference } from './devtoolsControl.js'
 import {
@@ -148,6 +148,8 @@ export class Figbird<
    * @param reconcileCooldown Burst safety: minimum interval (ms) between event-driven
    *   refetches of one query. First event refetches immediately; further events within
    *   the window coalesce into one guaranteed trailing refetch. Default 2000; 0 disables.
+   * @param reconnectJitter Random delay before a reconnect sweep, which staggers visible
+   *   clients after a server restart. Defaults to [0, 3000]; 0 restores immediate sweeps.
    * @param visibility Visibility source for hidden-tab gating (defaults to `document`).
    *   Hidden tabs defer event-driven reconciliation until they become visible.
    * @param defaultSort The backend's implicit ordering for queries without `$sort`
@@ -162,6 +164,7 @@ export class Figbird<
     eventBatchInterval,
     schema,
     reconcileCooldown,
+    reconnectJitter,
     visibility,
     defaultSort,
   }: {
@@ -169,6 +172,7 @@ export class Figbird<
     eventBatchInterval?: number
     schema?: S
     reconcileCooldown?: number
+    reconnectJitter?: ReconnectJitter
     visibility?: VisibilitySource
     defaultSort?: Record<string, 1 | -1>
   }) {
@@ -178,6 +182,7 @@ export class Figbird<
       adapter,
       eventBatchInterval,
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
+      ...(reconnectJitter !== undefined ? { reconnectJitter } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
       ...(defaultSort !== undefined ? { defaultSort } : {}),
     })

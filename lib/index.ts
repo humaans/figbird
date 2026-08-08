@@ -27,10 +27,12 @@ export type {
   MutationsProxy,
   PreparedQuery,
   QueryDefinition,
+  ReconnectJitter,
   StandardSchemaV1,
   VisibilitySource,
 } from './core/figbird.js'
 export { DevtoolsControl } from './core/figbird.js'
+export { ItemRemovedError, isItemRemovedError } from './core/errors.js'
 
 // schema
 export { createSchema, service } from './core/schema.js'

@@ -9,6 +9,14 @@ export type QueryIdentityConfig = {
 
 let nextIsolatedQueryIdentity = 0
 
+/** Results that belong to one consumer and are removed with its last subscription. */
+export function isEphemeralQuery<TItem, TQuery>(config: QueryConfig<TItem, TQuery>): boolean {
+  return (
+    config.fetchPolicy === 'network-only' ||
+    (config.matcher !== undefined && config.matcherKey === undefined)
+  )
+}
+
 export function createQueryId<TItem, TQuery>(
   desc: QueryDescriptor,
   config: QueryConfig<TItem, TQuery>,
@@ -37,6 +45,10 @@ function getQueryIdentityScope<TItem, TQuery>(
   ]
   if (internalScope !== undefined) {
     return internalScope
+  }
+
+  if (config.matcher && config.matcherKey !== undefined) {
+    return `matcher/${config.matcherKey}`
   }
 
   if (config.matcher) {

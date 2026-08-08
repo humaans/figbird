@@ -204,6 +204,13 @@ interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
   matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
 
   /**
+   * Explicit cache-sharing key for custom matchers. Queries with the same
+   * descriptor and matcherKey share one result; the key must therefore identify
+   * equivalent matcher behavior. Without it, matcher queries stay hook-isolated.
+   */
+  matcherKey?: string
+
+  /**
    * Treat this query as server-maintained. Realtime events from the query's service
    * refetch active subscribers and mark inactive cached queries pending.
    * Use this for server-authoritative projections, virtual fields, search, or
@@ -366,7 +373,7 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
   config: QueryConfig<TItem, TQuery>
 } {
   // Extract common properties
-  const { serviceName, method, skip, realtime, fetchPolicy, matcher, server, ...rest } =
+  const { serviceName, method, skip, realtime, fetchPolicy, matcher, matcherKey, server, ...rest } =
     combinedConfig
 
   if (method === 'get') {
@@ -384,6 +391,7 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(realtime !== undefined && { realtime }),
       ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
+      ...(matcherKey !== undefined && { matcherKey }),
       ...(server !== undefined && { server }),
     }
 
@@ -402,6 +410,7 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(realtime !== undefined && { realtime }),
       ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
+      ...(matcherKey !== undefined && { matcherKey }),
       ...(allPages !== undefined && { allPages }),
       ...(server !== undefined && { server }),
     }

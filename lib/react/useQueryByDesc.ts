@@ -1,7 +1,11 @@
 import { useCallback, useId, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { QueryState } from '../core/figbird.js'
 import { splitConfig, type QueryConfig, type QueryDescriptor } from '../core/figbird.js'
-import { queryIdentityKey, type QueryIdentityConfig } from '../core/queryIdentity.js'
+import {
+  isEphemeralQuery,
+  queryIdentityKey,
+  type QueryIdentityConfig,
+} from '../core/queryIdentity.js'
 import { useFigbird } from './context.js'
 
 type BaseQueryResult = {
@@ -139,7 +143,7 @@ export function useQueryByDescImpl<
   // the q.subscribe and q.getSnapshot stable and avoid unsubbing and resubbing
   // you don't need to do this outside React where you can more easily create a
   // stable reference to a query and use it for as long as you want
-  const shouldScopeToHook = config.fetchPolicy === 'network-only' || config.matcher
+  const shouldScopeToHook = isEphemeralQuery(config)
   const queryConfig = shouldScopeToHook
     ? ({
         ...config,

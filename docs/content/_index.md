@@ -186,9 +186,10 @@ function IssueList({ status }: { status: string }) {
 
 `.get(id)` is the resource-endpoint fetch (`GET /issues/:id`) with "this must exist"
 semantics: a cold fetch of a missing row enters the error state, while realtime removal
-of a row you're viewing nulls the data, which is why the type is `T | null`. Chaining
-`.where()` after it sends the conditions along as `params.query`. For "the first match of
-a filter, if any", use `.where(...).limit(1)` and destructure the array.
+of a row you're viewing enters the error state with `ItemRemovedError` and null data. Use
+`isItemRemovedError(error)` when that case needs separate handling. Chaining `.where()`
+after it sends the conditions along as `params.query`. For "the first match of a filter,
+if any", use `.where(...).limit(1)` and destructure the array.
 
 ## Relations
 
@@ -754,6 +755,9 @@ is no per-query throttle config) via two built-in guards on event-driven refetch
   through network blips stops replaying refetch storms. Local-exact merges keep flowing
   while hidden (they're free); only network reconciliation pauses. Inject a custom
   `visibility` source in the constructor for non-browser environments.
+- **Reconnects are staggered.** Visible clients wait a random `reconnectJitter`
+  before sweeping active queries, defaulting to `[0, 3000]` ms. Reconnects during
+  the wait coalesce into one sweep. Set `reconnectJitter: 0` for immediate sweeps.
 
 Manual `refetch()`, first fetches, and SWR revalidation are user/loader intent and are
 never gated.
@@ -799,9 +803,11 @@ Completeness makes realtime cheap: an event either matches the filter and belong
 the set or it doesn't, so the slice is maintained by local merges with no refetching.
 
 Unfiltered, it doubles as the reference-data preload (locations, currencies, roles). On success
-the service is **fully materialized**: every later read the client can evaluate — finds with
-filters, sorted and limited windows, and `get(id)` — is answered locally from the cache with
-**no network roundtrip**, and realtime events maintain the set. (`.get(id).where(...)`
+the service is **fully materialized**: later reads the client can evaluate — finds with
+filters and a known order, sorted and limited windows, and `get(id)` — are answered locally
+from the cache with **no network roundtrip**, and realtime events maintain the set.
+An unsorted find still goes to the server unless the instance has a `defaultSort`; a complete
+row set cannot reveal the server's implicit order. (`.get(id).where(...)`
 conditions evaluate locally too when the matcher can decide them; a `get` whose local
 answer would be an error — missing id, failing predicate — still asks the server, which
 owns the error shape.) Typically paired with preparation at the app shell:
@@ -826,6 +832,7 @@ A few properties worth knowing:
   separate queries that fetch on their own
 - it may chain `.related()` to preload joined reference sets
 - the materialized set reconciles on reconnect, even with no subscribers
+- finds without `$sort` use the network unless the instance declares `defaultSort`
 - server-only predicates (`$regex`, `$select`, `.server()`) still go to the server
 
 Whether a set warrants `.all()` is your judgment call. Reach for it only where the
@@ -1311,7 +1318,7 @@ order.
 The core instance holding the adapter, schema, and shared query state.
 
 ```ts
-const figbird = new Figbird({ adapter, schema, eventBatchInterval? })
+const figbird = new Figbird({ adapter, schema, eventBatchInterval?, reconnectJitter? })
 ```
 
 | Member                                            | Description                                                                                                                                                 |
@@ -1517,6 +1524,8 @@ automatically, via `swr` + classification-driven realtime):
   hook-scoped results)
 - `allPages` — fetch all pages (`parallel` + `parallelLimit` control concurrency)
 - `matcher` — custom `(query) => (item) => boolean` for realtime merging
+- `matcherKey` — opt into sharing equivalent custom-matcher queries across hooks;
+  without it, matcher queries remain hook-scoped
 
 ## useGet
 
@@ -1527,3 +1536,5 @@ const { data, status, isFetching, error, refetch } = useGet(serviceName, id, par
 ```
 
 Same Figbird params as `useFind` (minus pagination). No `meta` by default.
+Realtime removal enters the error state with `ItemRemovedError`, matching
+`useQuery(q.service.get(id))`; use `isItemRemovedError(error)` to identify it.

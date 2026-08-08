@@ -36,7 +36,12 @@ test('useFind refetches when params change right after refetch()', async t => {
   }
 
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter, eventBatchInterval: 0, reconcileCooldown: 0 })
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+  })
 
   let refetch: () => void
   let setFk: (fk: string) => void
@@ -103,7 +108,13 @@ test('materialized service: refetch() then params change still yields fresh data
   }
 
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter, eventBatchInterval: 0, reconcileCooldown: 0 })
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+    defaultSort: { id: 1 },
+  })
 
   let refetch: () => void
   let refetchAll: () => void
