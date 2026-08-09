@@ -1,22 +1,5 @@
 # Figbird Changelog
 
-## Unreleased
-
-- Prevent fetches and overlapping refetches from overwriting newer realtime or
-  mutation data. Queries with `realtime: 'disabled'` remain fixed snapshots.
-- `useGet` and `useQuery` now return `ItemRemovedError` when the item being viewed is
-  removed. Use `isItemRemovedError()` to handle this case.
-- Materialized finds use the network when neither `$sort` nor `defaultSort` defines a
-  reliable order.
-- Add `reconnectJitter` to stagger reconnect refetches. It defaults to `[0, 3000]` ms;
-  set it to `0` for immediate refetches.
-- Add `matcherKey` for explicitly sharing queries that use equivalent custom matchers.
-- Built packages no longer require a global React shim.
-- Prevent errors in one subscriber from interrupting other query updates.
-- Add opt-in `figbird/devtools` for inspecting queries, fetches, realtime events, and
-  writes, with additional lifecycle and payload details available through
-  `figbird.events`.
-
 ## 0.24.0
 
 The relational rewrite.
@@ -26,6 +9,22 @@ Figbird already made it easy to fetch lists and records and keep them live. But 
 This release makes joins a first-class part of Figbird. Each screen can now ask for the minimum data it needs — a window of records and their relations, declared as a single query. Figbird keeps that query fully realtime-reactive, merging events locally whenever it can safely determine the result, and refetching when it can’t.
 
 This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `useQueries` for suspending on several independent queries in parallel, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
+
+Realtime handling is safer across all APIs. Fetches and overlapping refetches no
+longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries
+remain fixed snapshots. When an item being viewed is removed, `useGet` and `useQuery`
+return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
+
+Also included:
+
+- Opt-in `figbird/devtools` for inspecting queries, fetches, realtime events, and
+  writes, plus richer lifecycle and payload details through `figbird.events`.
+- `matcherKey` for explicitly sharing queries that use equivalent custom matchers.
+- `reconnectJitter` for staggering reconnect refetches, defaulting to `[0, 3000]` ms.
+- Reliable ordering for materialized finds: queries use the network unless `$sort` or
+  `defaultSort` defines the order.
+- Package builds that no longer require a global React shim.
+- Subscriber errors no longer interrupt updates to other consumers.
 
 See the [docs](https://humaans.github.io/figbird) for the full story. The old hooks still work — see Deprecated below — so you can migrate gradually.
 
