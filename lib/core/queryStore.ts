@@ -63,9 +63,7 @@ export type ReconnectJitter = number | readonly [number, number]
 export type RetryDelay = number | ((attempt: number, error: Error) => number)
 
 type FetchAttemptOutcome =
-  | { kind: 'completed' }
-  | { kind: 'stale' }
-  | { kind: 'failed'; error: Error }
+  { kind: 'completed' } | { kind: 'stale' } | { kind: 'failed'; error: Error }
 
 const DEFAULT_RETRIES = 3
 const MAX_RETRY_DELAY = 30_000

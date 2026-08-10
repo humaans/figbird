@@ -87,6 +87,7 @@ export type {
   AdapterQuery,
   EventHandlers,
   MatcherContext,
+  PageCursor,
   PageInfo,
   PageRequest,
   PageResponse,

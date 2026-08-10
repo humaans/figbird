@@ -1,3 +1,4 @@
+import type { PageCursor, PageInfo } from '../adapters/adapter.js'
 import type { QueryRef } from './queryRef.js'
 import type { QueryState } from './queryTypes.js'
 import type { AnySchema, Schema } from './schema.js'
@@ -179,7 +180,7 @@ export class PagedQueryRoot<
 > implements PaginatedRootSource {
   #makePageRef: (
     pageIndex: number,
-    after?: unknown,
+    after?: PageCursor,
   ) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
   #onRows: (rows: unknown[]) => void
   #onChange: () => void
@@ -212,7 +213,7 @@ export class PagedQueryRoot<
     sequential: boolean
     makePageRef: (
       pageIndex: number,
-      after?: unknown,
+      after?: PageCursor,
     ) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
     onRows: (rows: unknown[]) => void
     onChange: () => void
@@ -231,16 +232,17 @@ export class PagedQueryRoot<
   #setupPage(
     pageIndex: number,
     settle?: { onError: (error: Error) => void },
-    after?: unknown,
+    after?: PageCursor,
   ): void {
     const queryRef = this.#makePageRef(pageIndex, after)
     this.#pageRefs.push(queryRef)
     let pendingSettle = settle
     const reconcile = this.#reconcile
-    const wasFetching =
+    let refetchAfterCurrent = Boolean(
       reconcile.phase === 'running' &&
       reconcile.previousQueryIds.has(queryRef.details().queryId) &&
-      queryRef.getSnapshot()?.isFetching
+      queryRef.getSnapshot()?.isFetching,
+    )
 
     const onState = (state: ReturnType<(typeof queryRef)['getSnapshot']>): void => {
       if (
@@ -250,6 +252,15 @@ export class PagedQueryRoot<
         (this.#pageRefs.length > 1 || this.#reconcile.phase !== 'idle')
       ) {
         this.#beginReconcile()
+      }
+
+      // This query id can still belong to a request started by the old cursor
+      // chain. Let that attempt settle, then start the request owned by this chain;
+      // never advance or expose the old terminal state.
+      if (refetchAfterCurrent && state && !state.isFetching) {
+        refetchAfterCurrent = false
+        queryRef.refetch()
+        return
       }
 
       if (state?.status === 'success') {
@@ -287,9 +298,6 @@ export class PagedQueryRoot<
       { staleTime: reconcile.phase === 'running' ? 0 : this.#staleTime },
     )
     this.#pageUnsubs.push(unsub)
-    // A dropped page can still have its old request in flight. Mark it dirty so
-    // QueryStore follows that response with a request issued from this fresh chain.
-    if (wasFetching) queryRef.refetch()
     onState(queryRef.getSnapshot())
   }
 
@@ -302,8 +310,9 @@ export class PagedQueryRoot<
 
     const previousPageState = this.#pageRefs.at(-1)?.getSnapshot()
     if (!previousPageState || previousPageState.status !== 'success') return
-    const after = this.#sequential ? previousPageState.pageInfo?.endCursor : undefined
-    if (this.#sequential && after === undefined) return
+    const pageInfo = this.#sequential ? this.#requirePageInfo(previousPageState) : undefined
+    if (pageInfo && !pageInfo.hasMore) return
+    const after = pageInfo?.endCursor
 
     this.#isLoadingMore = true
     this.#loadMoreError = null
@@ -414,8 +423,15 @@ export class PagedQueryRoot<
   }
 
   #pageHasMore(state: QueryState<unknown, TMeta>, data: unknown[]): boolean {
-    if (this.#sequential) return state.pageInfo?.hasMore ?? false
+    if (this.#sequential) return this.#requirePageInfo(state).hasMore
     return data.length >= this.#pageSize
+  }
+
+  #requirePageInfo(state: QueryState<unknown, TMeta>): PageInfo {
+    if (!state.pageInfo) {
+      throw new Error('Native page query settled without pageInfo')
+    }
+    return state.pageInfo
   }
 
   #beginReconcile(): void {
@@ -450,15 +466,9 @@ export class PagedQueryRoot<
     const current = this.#reconcile
     if (current.phase !== 'running') return
 
-    const data = state.status === 'success' && Array.isArray(state.data) ? state.data : []
-    const hasMore = this.#pageHasMore(state, data)
-    if (pageIndex + 1 < current.targetPages && hasMore) {
-      const after = state.pageInfo?.endCursor
-      if (after === undefined) {
-        this.#abortReconcile()
-        return
-      }
-      this.#setupPage(pageIndex + 1, undefined, after)
+    const pageInfo = this.#requirePageInfo(state)
+    if (pageIndex + 1 < current.targetPages && pageInfo.hasMore) {
+      this.#setupPage(pageIndex + 1, undefined, pageInfo.endCursor)
       return
     }
 

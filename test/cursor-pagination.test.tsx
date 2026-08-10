@@ -30,16 +30,26 @@ interface CursorCall {
   query: Record<string, unknown>
 }
 
+interface CursorHold {
+  promise: Promise<void>
+  release(): void
+}
+
 function createCursorApp(
   rows: Item[],
   pageSizeWhenFetchingAll = 3,
-  { visibility }: { visibility?: VisibilitySource } = {},
+  {
+    visibility,
+    retry,
+    retryDelay,
+  }: { visibility?: VisibilitySource; retry?: number | false; retryDelay?: number } = {},
 ) {
   let serverRows = rows
   const calls: CursorCall[] = []
   const listeners = new Map<string, Set<(item: unknown) => void>>()
   const reconnectListeners = new Set<() => void>()
   const failingCursors = new Set<string>()
+  const cursorHolds = new Map<string, CursorHold[]>()
   const cursorService = {
     async find(params: FeathersParams = {}) {
       const query = (params.query ?? {}) as Record<string, unknown>
@@ -53,6 +63,8 @@ function createCursorApp(
       const data = serverRows.slice(start, start + limit)
       const end = start + data.length
       const hasNextPage = end < serverRows.length
+      const hold = cursor ? cursorHolds.get(cursor)?.shift() : undefined
+      if (hold) await hold.promise
       return {
         data,
         pageInfo: {
@@ -93,6 +105,8 @@ function createCursorApp(
     reconcileCooldown: 0,
     reconnectJitter: 0,
     ...(visibility ? { visibility } : {}),
+    ...(retry !== undefined ? { retry } : {}),
+    ...(retryDelay !== undefined ? { retryDelay } : {}),
   })
   const Provider = FigbirdProvider<typeof schema, typeof adapter>
 
@@ -110,6 +124,16 @@ function createCursorApp(
     },
     failNextCursor(cursor: string) {
       failingCursors.add(cursor)
+    },
+    holdNextCursor(cursor: string) {
+      let release = () => {}
+      const promise = new Promise<void>(resolve => {
+        release = resolve
+      })
+      const holds = cursorHolds.get(cursor) ?? []
+      holds.push({ promise, release })
+      cursorHolds.set(cursor, holds)
+      return release
     },
     emit(event: string, item: unknown) {
       for (const listener of listeners.get(event) ?? []) listener(item)
@@ -251,6 +275,59 @@ test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor c
   unmount()
 })
 
+test('cursor paginate: an old in-flight page never leaks into a rebuilt prefix', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const cursorApp = createCursorApp(makeRows(7))
+  let loadMore: (() => void) | undefined
+
+  function List() {
+    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    loadMore = result.loadMore
+    return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
+  }
+
+  render(
+    <cursorApp.App>
+      <React.Suspense fallback={<div>loading</div>}>
+        <List />
+      </React.Suspense>
+    </cursorApp.App>,
+  )
+  await flush()
+
+  const releaseOldPage = cursorApp.holdNextCursor('cursor:3')
+  await flush(() => loadMore?.())
+  t.is($('.items')?.getAttribute('data-ids'), '1,2,3')
+
+  const inserted = { id: 99, rank: 0 }
+  cursorApp.replaceRows([inserted, ...makeRows(7)])
+  await flush(async () => {
+    cursorApp.emit('created', inserted)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  const releaseFreshPage = cursorApp.holdNextCursor('cursor:3')
+  await flush(async () => {
+    releaseOldPage()
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is($('.items')?.getAttribute('data-ids'), '1,2,3')
+  t.is(
+    cursorApp.calls.filter(call => call.query.cursor === 'cursor:3').length,
+    2,
+    'the fresh page request started without publishing the old response',
+  )
+
+  await flush(async () => {
+    releaseFreshPage()
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
+  unmount()
+})
+
 test('cursor paginate: reconnect rebuilds every loaded page from page zero', async t => {
   const { render, unmount, flush, $ } = dom()
   const cursorApp = createCursorApp(makeRows(7))
@@ -329,7 +406,7 @@ test('cursor paginate: hidden reconnect waits, then rebuilds on visibility', asy
 
 test('cursor paginate: failed prefix rebuild stays atomic and retries its depth', async t => {
   const { render, unmount, flush, $ } = dom()
-  const cursorApp = createCursorApp(makeRows(7))
+  const cursorApp = createCursorApp(makeRows(7), 3, { retry: false })
   let loadMore: (() => void) | undefined
 
   function List() {
@@ -369,6 +446,43 @@ test('cursor paginate: failed prefix rebuild stays atomic and retries its depth'
   t.deepEqual(
     cursorApp.calls.slice(-2).map(call => call.query.cursor),
     [undefined, 'cursor:3'],
+  )
+  unmount()
+})
+
+test('cursor paginate: automatic fetch retry stays inside the frozen rebuild', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const cursorApp = createCursorApp(makeRows(7), 3, { retry: 1, retryDelay: 0 })
+  let loadMore: (() => void) | undefined
+
+  function List() {
+    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    loadMore = result.loadMore
+    return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
+  }
+
+  render(
+    <cursorApp.App>
+      <React.Suspense fallback={<div>loading</div>}>
+        <List />
+      </React.Suspense>
+    </cursorApp.App>,
+  )
+  await flush()
+  await flush(() => loadMore?.())
+
+  const inserted = { id: 99, rank: 0 }
+  cursorApp.failNextCursor('cursor:3')
+  cursorApp.replaceRows([inserted, ...makeRows(7)])
+  await flush(async () => {
+    cursorApp.emit('created', inserted)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
+  t.deepEqual(
+    cursorApp.calls.slice(-3).map(call => call.query.cursor),
+    [undefined, 'cursor:3', 'cursor:3'],
   )
   unmount()
 })

@@ -1,5 +1,5 @@
 import { hashObject } from './hash.js'
-import type { MatcherContext } from '../adapters/adapter.js'
+import type { MatcherContext, PageSource } from '../adapters/adapter.js'
 import type { QueryAST } from './queryBuilder.js'
 import { planRelation, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
@@ -51,14 +51,14 @@ const WINDOWED_RELATION_FANOUT_WARN_THRESHOLD = 10
  * this structural (rather than importing the Figbird class) avoids a circular
  * dependency and states exactly what the engine relies on.
  */
-export interface RelationalQueryHost<TMeta extends Record<string, unknown>, TQuery> {
+export interface RelationalQueryHost<TParams, TMeta extends Record<string, unknown>, TQuery> {
   adapter: {
     matcher(
       query: TQuery | undefined,
       options?: unknown,
       context?: MatcherContext,
     ): (item: unknown) => boolean
-    pageSource?(serviceName: string): { dependency: 'sequential' } | undefined
+    pageSource?(serviceName: string): PageSource<TParams, TMeta> | undefined
   }
   queryStore: {
     subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
@@ -175,7 +175,7 @@ export class RelationalQueryRef<
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery = Record<string, unknown>,
 > {
-  #host: RelationalQueryHost<TMeta, TQuery>
+  #host: RelationalQueryHost<TParams, TMeta, TQuery>
   #ast: QueryAST
   #schema: S
   #queryId: string
@@ -236,7 +236,7 @@ export class RelationalQueryRef<
   #name: string | undefined
 
   constructor(
-    host: RelationalQueryHost<TMeta, TQuery>,
+    host: RelationalQueryHost<TParams, TMeta, TQuery>,
     ast: QueryAST,
     schema: S,
     onEvict?: () => void,
@@ -683,7 +683,7 @@ export class RelationalQueryRef<
 
     if (this.#ast.kind === 'paginate') {
       const pageSize = this.#ast.pageSize!
-      const sequential = this.#host.adapter.pageSource?.(serviceName)?.dependency === 'sequential'
+      const sequential = this.#host.adapter.pageSource?.(serviceName) !== undefined
       this.#pagedRoot = new PagedQueryRoot({
         pageSize,
         returnTotal: Boolean(this.#ast.returnTotal),

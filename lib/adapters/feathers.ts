@@ -2,6 +2,7 @@ import type {
   Adapter,
   EventHandlers,
   MatcherContext,
+  PageCursor,
   PageInfo,
   PageRequest,
   PageResponse,
@@ -120,6 +121,10 @@ export interface CursorPaginationOptions {
   pageInfo?: (response: unknown) => PageInfo
 }
 
+function isPageCursor(value: unknown): value is PageCursor {
+  return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
+}
+
 /**
  * Configure one Feathers service to use opaque cursor pagination.
  *
@@ -140,15 +145,12 @@ export function cursorPagination({
     if (!value || typeof value.hasNextPage !== 'boolean') {
       throw new Error('Cursor-paginated Feathers response must include pageInfo.hasNextPage')
     }
-    const result: PageInfo = {
-      hasMore: value.hasNextPage,
-      ...(Object.hasOwn(value, 'endCursor') ? { endCursor: value.endCursor } : {}),
-      ...(typeof value.total === 'number' ? { total: value.total } : {}),
-    }
-    if (result.hasMore && result.endCursor == null) {
+    const total = typeof value.total === 'number' ? { total: value.total } : {}
+    if (!value.hasNextPage) return { hasMore: false, ...total }
+    if (!isPageCursor(value.endCursor)) {
       throw new Error('Cursor-paginated Feathers response has more pages but no pageInfo.endCursor')
     }
-    return result
+    return { hasMore: true, endCursor: value.endCursor, ...total }
   },
 }: CursorPaginationOptions = {}): FeathersCursorPagination {
   return { query, pageInfo }
@@ -405,7 +407,6 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     const pagination = this.#pagination[serviceName]
     if (!pagination) return undefined
     return {
-      dependency: 'sequential',
       find: (params, page) => this.#findPage(serviceName, pagination, params, page),
     }
   }
@@ -424,8 +425,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     if (typeof pageInfo.hasMore !== 'boolean') {
       throw new Error(`Cursor pagination for "${serviceName}" did not return hasMore`)
     }
-    if (pageInfo.hasMore && pageInfo.endCursor == null) {
-      throw new Error(`Cursor pagination for "${serviceName}" has more pages but no endCursor`)
+    if (pageInfo.hasMore && !isPageCursor(pageInfo.endCursor)) {
+      throw new Error(`Cursor pagination for "${serviceName}" returned an invalid endCursor`)
     }
     if (pageInfo.hasMore && Object.is(page.after, pageInfo.endCursor)) {
       throw new Error(`Cursor pagination for "${serviceName}" returned the same cursor twice`)
@@ -506,7 +507,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       data: [],
       meta: { total: -1, limit, skip: 0 },
     }
-    let after: unknown = undefined
+    let after: PageCursor | undefined = undefined
     let first = true
 
     while (true) {

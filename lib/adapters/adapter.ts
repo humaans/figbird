@@ -12,20 +12,27 @@ export type PageResponse<TData, TMeta> = QueryResponse<TData, TMeta> & {
   pageInfo: PageInfo
 }
 
+/** A stable, serializable token suitable for transport and query-cache identity. */
+export type PageCursor = string | number
+
 /** Opaque page request passed to adapters that support native pagination. */
 export interface PageRequest {
   limit: number
   /** Adapter-issued continuation from the preceding page. */
-  after?: unknown
+  after?: PageCursor
   /** Only the first page asks the server to calculate a total. */
   returnTotal: boolean
 }
 
 /** Adapter-neutral page information consumed by the query engine. */
-export interface PageInfo {
-  hasMore: boolean
-  /** Opaque continuation to pass to the next page request. */
-  endCursor?: unknown
+export type PageInfo = (
+  | { hasMore: false }
+  | {
+      hasMore: true
+      /** Opaque continuation to pass to the next page request. */
+      endCursor: PageCursor
+    }
+) & {
   total?: number
 }
 
@@ -34,7 +41,6 @@ export interface PageInfo {
  * continuations, so later pages must be rebuilt after an earlier page changes.
  */
 export interface PageSource<TParams, TMeta> {
-  dependency: 'sequential'
   find(params: TParams | undefined, page: PageRequest): Promise<PageResponse<unknown[], TMeta>>
 }
 

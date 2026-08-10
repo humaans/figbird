@@ -426,8 +426,14 @@ cursorPagination({
     const result = response as {
       page: { more: boolean; next?: string; count?: number }
     }
+    if (!result.page.more) {
+      return { hasMore: false, total: result.page.count }
+    }
+    if (!result.page.next) {
+      throw new Error('Missing cursor for the next page')
+    }
     return {
-      hasMore: result.page.more,
+      hasMore: true,
       endCursor: result.page.next,
       total: result.page.count,
     }
