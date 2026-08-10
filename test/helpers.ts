@@ -185,6 +185,9 @@ export function createTestApp<S extends Schema>(
     // Keep existing tests deterministic: no reconcile cooldown unless a test
     // opts in with its own instance.
     reconcileCooldown: 0,
+    // Error-path tests opt into retry explicitly so they do not wait through
+    // production backoff or change their expected request counts.
+    retry: false,
   })
 
   // Pin the provider's generics — createElement can't infer them from the figbird prop.

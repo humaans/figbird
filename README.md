@@ -52,6 +52,7 @@ function NoteRow({ note }: { note: Note & { author?: User } }) {
 ```
 
 No provider needed — the hooks are bound to the instance. Cold reads suspend into your `<Suspense>` boundary; warm reads render synchronously.
+Failed fetches retry up to three times with exponential backoff before Figbird exposes the error.
 
 ## Features
 

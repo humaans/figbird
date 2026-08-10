@@ -1,5 +1,11 @@
 # Figbird Changelog
 
+## Unreleased
+
+- Retry failed query fetches up to three times with exponential backoff before exposing
+  the error. Configure the instance with `retry` and `retryDelay`; descriptor queries can
+  override both or disable retries with `retry: false`.
+
 ## 0.24.0
 
 The relational rewrite.

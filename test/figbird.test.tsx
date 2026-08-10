@@ -71,7 +71,7 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
   const adapter = new FeathersAdapter(feathers, config)
   // Create a properly typed figbird instance
   const figbirdInstance: Figbird<AppSchema, typeof adapter> =
-    figbird || new Figbird({ schema, adapter, eventBatchInterval: 0 })
+    figbird || new Figbird({ schema, adapter, eventBatchInterval: 0, retry: false })
 
   // Create typed hooks from the figbird instance
   const { useGet, useFind, useMutation } = createHooks(figbirdInstance)
