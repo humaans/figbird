@@ -7,9 +7,16 @@ import type {
   ProcessedRealtimeEvent,
   QueryConfig,
   QueryDescriptor,
-  QueryState,
   ServiceState,
 } from './queryTypes.js'
+import {
+  PagedQueryRoot,
+  SingleQueryRoot,
+  subscribeAndSeed,
+  type PaginatedRootSource,
+  type RelationalPaginationState,
+  type RootSource,
+} from './queryRoots.js'
 import {
   assembleRelations,
   getFieldValueAsList,
@@ -29,10 +36,11 @@ import {
 import type { AnySchema, RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
 
+export type { RelationalPaginationState } from './queryRoots.js'
+
 // This module is organised top-down: the consumer-facing RelationalQueryRef first,
-// followed by its internal machinery — root sources (single query vs page
-// accumulator behind one snapshot contract). The pure assembly pass lives in
-// relationalAssembly.ts.
+// followed by its relation-subscription machinery. Root query execution lives in
+// queryRoots.ts and the pure assembly pass lives in relationalAssembly.ts.
 
 // Above this many parents, a windowed relation's per-parent queries are almost
 // certainly the wrong shape (N requests for one screen) — warn and point at embed.
@@ -50,6 +58,7 @@ export interface RelationalQueryHost<TMeta extends Record<string, unknown>, TQue
       options?: unknown,
       context?: MatcherContext,
     ): (item: unknown) => boolean
+    pageSource?(serviceName: string): { dependency: 'sequential' } | undefined
   }
   queryStore: {
     subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
@@ -175,7 +184,7 @@ export class RelationalQueryRef<
   // `.paginate()` builders. `#pagedRoot` aliases the same object when paginated so
   // pagination-specific calls (loadMore, pagination block) don't need casts.
   #root: RootSource | null = null
-  #pagedRoot: PagedQueryRoot<S, TParams, TMeta, TQuery> | null = null
+  #pagedRoot: PaginatedRootSource | null = null
 
   // Per-relation state, keyed by dotted relation path (e.g. "comments" or
   // "comments.reactions"). A relation is "synced" once its entry exists here — even a
@@ -674,26 +683,44 @@ export class RelationalQueryRef<
 
     if (this.#ast.kind === 'paginate') {
       const pageSize = this.#ast.pageSize!
+      const sequential = this.#host.adapter.pageSource?.(serviceName)?.dependency === 'sequential'
       this.#pagedRoot = new PagedQueryRoot({
         pageSize,
         returnTotal: Boolean(this.#ast.returnTotal),
+        sequential,
         staleTime: this.#staleTime,
-        makePageRef: pageIndex =>
+        makePageRef: (pageIndex, after) =>
           this.#query(
-            {
-              serviceName,
-              method: 'find',
-              params: {
-                query: {
-                  ...this.#ast.query,
-                  $limit: pageSize,
-                  $skip: pageIndex * pageSize,
+            sequential
+              ? {
+                  serviceName,
+                  method: 'find',
+                  params: { query: this.#ast.query },
+                  page: {
+                    limit: pageSize,
+                    ...(after !== undefined ? { after } : {}),
+                    returnTotal: Boolean(this.#ast.returnTotal) && pageIndex === 0,
+                  },
+                }
+              : {
+                  serviceName,
+                  method: 'find',
+                  params: {
+                    query: {
+                      ...this.#ast.query,
+                      $limit: pageSize,
+                      $skip: pageIndex * pageSize,
+                    },
+                  },
                 },
-              },
-            },
             {
-              realtime: this.#realtimeMode,
+              realtime: sequential
+                ? !this.#ast.snapshot && pageIndex === 0
+                  ? 'refetch'
+                  : 'disabled'
+                : this.#realtimeMode,
               fetchPolicy: 'swr',
+              ...(sequential ? { server: true } : {}),
               ...matcherConfig,
             },
           ),
@@ -1314,432 +1341,4 @@ export function suspensePromiseAll(
     })
   })
   return aggregate
-}
-
-// ---------------------------------------------------------------------------
-// Root sources
-// ---------------------------------------------------------------------------
-
-/**
- * Root sources for relational queries. A relational query's root data comes from one
- * of two shapes — a single find/get query, or an accumulating sequence of pages — and
- * everything downstream (relation sync, gathering, assembly) only cares about "the
- * current root rows". `RootSource` is that seam: the RelationalQueryRef consumes one
- * unified snapshot contract, and the paginate-specific machinery (loadMore, hasMore,
- * page accumulation) lives entirely inside `PagedQueryRoot`.
- */
-
-interface RootSnapshot {
-  phase: 'loading' | 'error' | 'ready'
-  /** Valid when phase is 'ready'. Identity is stable while the underlying data is. */
-  rows: unknown[]
-  isFetching: boolean
-  error: Error | null
-}
-
-interface RootSource {
-  snapshot(): RootSnapshot
-  setStaleTime(staleTime: number): void
-  ensureFresh(staleTime?: number): void
-  refetch(): void
-  teardown(): void
-  queryIds(): string[]
-}
-
-/**
- * Pagination metadata exposed by paginated queries. Present on the relational
- * snapshot only when the underlying builder used `.paginate(...)`.
- */
-export interface RelationalPaginationState {
-  /**
-   * Whether more pages are likely to exist. Sticky during a `loadMore()` so the UI
-   * doesn't flicker between "more available" / "loading" / "more available".
-   */
-  hasMore: boolean
-  /** A `loadMore()` is in-flight. */
-  isLoadingMore: boolean
-  /** The most recent `loadMore()` failed. Cleared on the next attempt. */
-  loadMoreError: Error | null
-  /** Total row count from the first page's meta, if `returnTotal: true` was set. */
-  totalCount: number | undefined
-}
-
-const EMPTY_ROWS: unknown[] = []
-const LOADING_ROOT: RootSnapshot = {
-  phase: 'loading',
-  rows: EMPTY_ROWS,
-  isFetching: true,
-  error: null,
-}
-
-/**
- * Subscribe to a store query and seed from its current state. Store listeners fire
- * only on state *changes* — a query that is already warm in the QueryStore (resolved
- * earlier by another consumer) never invokes the callback, so without the seed a warm
- * read would report "loading" until the SWR refetch finished.
- */
-function subscribeAndSeed<S extends Schema, TParams, TMeta extends Record<string, unknown>, TQuery>(
-  queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
-  onSuccess: (data: unknown[]) => void,
-  onChange: () => void,
-  staleTime = 0,
-): () => void {
-  const unsub = queryRef.subscribe(
-    state => {
-      if (state.status === 'success') onSuccess(state.data as unknown[])
-      onChange()
-    },
-    { staleTime },
-  )
-  const initial = queryRef.getSnapshot()
-  if (initial?.status === 'success') onSuccess(initial.data as unknown[])
-  return unsub
-}
-
-/**
- * Root backed by a single find or get query. For get roots the single item is
- * normalized to a one-element array with a cached identity — downstream change
- * detection compares row array refs, so the wrapper must be stable across reads.
- */
-class SingleQueryRoot<
-  S extends Schema = AnySchema,
-  TParams = unknown,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
-> implements RootSource {
-  #queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
-  #unsub: () => void
-  #isGet: boolean
-  #lastGetData: unknown = undefined
-  #lastGetDataAsArray: unknown[] = []
-
-  constructor({
-    queryRef,
-    isGet,
-    onRows,
-    onChange,
-    staleTime = 0,
-  }: {
-    queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
-    isGet: boolean
-    onRows: (rows: unknown[]) => void
-    onChange: () => void
-    staleTime?: number
-  }) {
-    this.#queryRef = queryRef
-    this.#isGet = isGet
-    this.#unsub = subscribeAndSeed(
-      queryRef,
-      data => onRows(this.#asRows(data)),
-      onChange,
-      staleTime,
-    )
-  }
-
-  #asRows(data: unknown): unknown[] {
-    if (!this.#isGet) return data as unknown[]
-    if (data === this.#lastGetData) return this.#lastGetDataAsArray
-    this.#lastGetData = data
-    this.#lastGetDataAsArray = data == null ? [] : [data]
-    return this.#lastGetDataAsArray
-  }
-
-  snapshot(): RootSnapshot {
-    const s = this.#queryRef.getSnapshot()
-    if (!s || s.status === 'loading') return LOADING_ROOT
-    if (s.status === 'error') {
-      return { phase: 'error', rows: EMPTY_ROWS, isFetching: false, error: s.error }
-    }
-    return { phase: 'ready', rows: this.#asRows(s.data), isFetching: s.isFetching, error: null }
-  }
-
-  ensureFresh(staleTime?: number): void {
-    this.#queryRef.ensureFresh({ staleTime })
-  }
-
-  setStaleTime(_staleTime: number): void {}
-
-  refetch(): void {
-    this.#queryRef.refetch()
-  }
-
-  teardown(): void {
-    this.#unsub()
-  }
-
-  queryIds(): string[] {
-    return [this.#queryRef.details().queryId]
-  }
-}
-
-/**
- * Root backed by an accumulating sequence of page queries. Each loaded page is its
- * own `find` query in the QueryStore with its own `$skip + $limit` window; together
- * they form the accumulated rows. Refetching/realtime is per-page.
- */
-class PagedQueryRoot<
-  S extends Schema = AnySchema,
-  TParams = unknown,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
-> implements RootSource {
-  #makePageRef: (pageIndex: number) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
-  #onRows: (rows: unknown[]) => void
-  #onChange: () => void
-  #pageSize: number
-  #returnTotal: boolean
-
-  #pageRefs: Array<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>> = []
-  #pageUnsubs: Array<() => void> = []
-  #staleTime = 0
-  #isLoadingMore = false
-  #loadMoreError: Error | null = null
-  // Sticky `hasMore`: only flips to false when we've observed a partial page. Stays true
-  // while `loadMore()` is in flight so the UI's "Load more" button doesn't flicker.
-  #hasMoreSticky = true
-  // Cache of per-page data refs and the concatenated array — identity is stable for
-  // useSyncExternalStore. Recomputed only when at least one page's data ref changes.
-  #lastPageDataRefs: unknown[] = []
-  #lastAllPagesData: unknown[] = []
-  // Memoized pagination object — stable identity is required by useSyncExternalStore.
-  #lastPagination: RelationalPaginationState | null = null
-
-  constructor({
-    pageSize,
-    returnTotal,
-    makePageRef,
-    onRows,
-    onChange,
-    staleTime = 0,
-  }: {
-    pageSize: number
-    returnTotal: boolean
-    makePageRef: (pageIndex: number) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
-    onRows: (rows: unknown[]) => void
-    onChange: () => void
-    staleTime?: number
-  }) {
-    this.#pageSize = pageSize
-    this.#returnTotal = returnTotal
-    this.#makePageRef = makePageRef
-    this.#onRows = onRows
-    this.#onChange = onChange
-    this.#staleTime = staleTime
-    this.#setupPage(0)
-  }
-
-  /**
-   * Subscribe a page query. Each page has exactly one subscription, which also
-   * owns the pagination flags: `settle` is the one-shot hook a `loadMore()` page
-   * carries, consumed on the page's first success (clear `isLoadingMore`) or
-   * first error (report and drop the page); after that the page behaves like any
-   * other. Single ownership is what keeps `hasMore` from flickering as pages
-   * resolve in unexpected orders.
-   */
-  #setupPage(pageIndex: number, settle?: { onError: (error: Error) => void }): void {
-    const queryRef = this.#makePageRef(pageIndex)
-    this.#pageRefs.push(queryRef)
-    let pendingSettle = settle
-    const onState = (state: ReturnType<(typeof queryRef)['getSnapshot']>): void => {
-      if (state?.status === 'success') {
-        const pageData = (state.data ?? []) as unknown[]
-        // A page that returned fewer rows than requested is the last page. The page
-        // settling a `loadMore()` owns the flag for that load; unrelated page
-        // refetches leave it alone while a load is in flight.
-        if (pendingSettle) {
-          pendingSettle = undefined
-          this.#isLoadingMore = false
-          this.#loadMoreError = null
-          this.#hasMoreSticky = pageData.length >= this.#pageSize
-        } else if (!this.#isLoadingMore) {
-          this.#hasMoreSticky = pageData.length >= this.#pageSize
-        }
-        this.#onRows(this.#allPagesData())
-      } else if (state?.status === 'error' && pendingSettle) {
-        const s = pendingSettle
-        pendingSettle = undefined
-        s.onError(state.error)
-      }
-    }
-    const unsub = queryRef.subscribe(
-      state => {
-        onState(state)
-        this.#onChange()
-      },
-      { staleTime: this.#staleTime },
-    )
-    this.#pageUnsubs.push(unsub)
-    // Seed from a warm snapshot (mirrors subscribeAndSeed) — after the unsub is
-    // registered, so a settle-on-error can pop this page's subscription.
-    onState(queryRef.getSnapshot())
-  }
-
-  /**
-   * Append the next page to the accumulator. No-op when a load is already in flight,
-   * when the previous page indicated no more rows, or when the first page hasn't
-   * resolved yet.
-   */
-  loadMore(): void {
-    if (this.#isLoadingMore) return
-    if (!this.#hasMoreSticky) return
-    if (this.#pageRefs.length === 0) return
-
-    // Need the first page to have succeeded before we know whether to add more. Without
-    // this guard, a fast double-click during the initial load would queue a useless page 1.
-    const firstPageState = this.#pageRefs[0]?.getSnapshot()
-    if (!firstPageState || firstPageState.status !== 'success') return
-
-    this.#isLoadingMore = true
-    this.#loadMoreError = null
-    this.#setupPage(this.#pageRefs.length, {
-      onError: error => {
-        this.#isLoadingMore = false
-        this.#loadMoreError = error
-        // Keep hasMore truthy so the UI can offer a retry via loadMore again. Drop the
-        // failed page so a future loadMore retries the same skip rather than skipping past.
-        this.#hasMoreSticky = true
-        this.#pageRefs.pop()
-        const popped = this.#pageUnsubs.pop()
-        popped?.()
-      },
-    })
-    // The new page's subscription notifies when it settles. Notify now so the UI
-    // flips to "loading more" synchronously.
-    this.#onChange()
-  }
-
-  snapshot(): RootSnapshot {
-    if (this.#pageRefs.length === 0) return LOADING_ROOT
-
-    const pageStates: QueryState<unknown, TMeta>[] = []
-    for (const ref of this.#pageRefs) {
-      const s = ref.getSnapshot()
-      if (!s) return LOADING_ROOT
-      pageStates.push(s)
-    }
-    // Surface the first page error.
-    for (const s of pageStates) {
-      if (s.status === 'error') {
-        return { phase: 'error', rows: EMPTY_ROWS, isFetching: false, error: s.error }
-      }
-    }
-    // The first page must have succeeded once before we present data. Follow-up pages
-    // may still be loading: the accumulated rows cover what's been read so far, and
-    // `isLoadingMore` signals the in-flight load.
-    if (pageStates[0]!.status === 'loading') return LOADING_ROOT
-
-    return {
-      phase: 'ready',
-      rows: this.#allPagesData(),
-      isFetching: pageStates.some(s => s.isFetching),
-      error: null,
-    }
-  }
-
-  ensureFresh(staleTime?: number): void {
-    for (const ref of this.#pageRefs) {
-      ref.ensureFresh({ staleTime })
-    }
-  }
-
-  setStaleTime(staleTime: number): void {
-    this.#staleTime = staleTime
-  }
-
-  /** Memoized pagination block for the relational snapshot. */
-  pagination(): RelationalPaginationState {
-    const hasMore = this.#hasMoreSticky
-    const isLoadingMore = this.#isLoadingMore
-    const loadMoreError = this.#loadMoreError
-    const totalCount = this.#computeTotalCount()
-    const prev = this.#lastPagination
-    if (
-      prev &&
-      prev.hasMore === hasMore &&
-      prev.isLoadingMore === isLoadingMore &&
-      prev.loadMoreError === loadMoreError &&
-      prev.totalCount === totalCount
-    ) {
-      return prev
-    }
-    const next: RelationalPaginationState = { hasMore, isLoadingMore, loadMoreError, totalCount }
-    this.#lastPagination = next
-    return next
-  }
-
-  /**
-   * Refetch from page 0. Pages 1+ are dropped — they may now be invalid (the dataset
-   * shifted). Page 0 stays so the existing UI doesn't blank out; the QueryStore
-   * re-fetches it in place.
-   */
-  refetch(): void {
-    for (let i = 1; i < this.#pageUnsubs.length; i++) {
-      this.#pageUnsubs[i]?.()
-    }
-    this.#pageUnsubs.length = 1
-    this.#pageRefs.length = 1
-    this.#hasMoreSticky = true
-    // Dropping pages 1+ also drops any in-flight loadMore page (its subscription —
-    // and with it the pending settle — was just unsubscribed), so the flag must
-    // reset here or loadMore() would be blocked forever.
-    this.#isLoadingMore = false
-    this.#loadMoreError = null
-    this.#pageRefs[0]?.refetch()
-    // Notify so subscribers see the re-evaluated `hasMore`/`isLoadingMore` even if no
-    // store-level transition fired (e.g. nothing actually changed).
-    this.#onChange()
-  }
-
-  teardown(): void {
-    for (const unsub of this.#pageUnsubs) {
-      unsub()
-    }
-    this.#pageUnsubs.length = 0
-    this.#pageRefs.length = 0
-  }
-
-  queryIds(): string[] {
-    return this.#pageRefs.map(ref => ref.details().queryId)
-  }
-
-  /**
-   * Total count from the first page's meta if `returnTotal: true` was set. Returns
-   * `undefined` when the adapter didn't supply a total (e.g. Feathers `total: -1`).
-   */
-  #computeTotalCount(): number | undefined {
-    if (!this.#returnTotal) return undefined
-    const first = this.#pageRefs[0]
-    if (!first) return undefined
-    const s = first.getSnapshot()
-    if (!s || s.status !== 'success') return undefined
-    const meta = s.meta as { total?: number } | undefined
-    if (!meta || typeof meta.total !== 'number' || meta.total < 0) return undefined
-    return meta.total
-  }
-
-  /** Concatenate the data of all loaded pages. Stable identity across calls. */
-  #allPagesData(): unknown[] {
-    const refs: unknown[] = []
-    for (const ref of this.#pageRefs) {
-      const s = ref.getSnapshot()
-      refs.push(s?.status === 'success' && Array.isArray(s.data) ? s.data : null)
-    }
-    let unchanged = refs.length === this.#lastPageDataRefs.length
-    if (unchanged) {
-      for (let i = 0; i < refs.length; i++) {
-        if (refs[i] !== this.#lastPageDataRefs[i]) {
-          unchanged = false
-          break
-        }
-      }
-    }
-    if (unchanged) return this.#lastAllPagesData
-    const all: unknown[] = []
-    for (const ref of refs) {
-      if (Array.isArray(ref)) all.push(...ref)
-    }
-    this.#lastPageDataRefs = refs
-    this.#lastAllPagesData = all
-    return all
-  }
 }

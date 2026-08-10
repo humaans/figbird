@@ -367,6 +367,78 @@ const { data, loadMore, hasMore, isLoadingMore, loadMoreError, totalCount } = us
 
 Realtime events on a paginated query refetch the affected pages rather than merging locally. An inserted row may displace a page boundary invisibly, so the server stays the source of truth.
 
+### Cursor pagination
+
+Pagination uses `$limit` and `$skip` by default. Configure cursor-backed Feathers
+services once on the adapter; query builders and hook results stay the same:
+
+```ts
+import { cursorPagination, FeathersAdapter } from 'figbird'
+
+const adapter = new FeathersAdapter(feathers, {
+  pagination: {
+    'api/documents': cursorPagination(),
+    'api/identity-documents': cursorPagination(),
+    'api/ai-companion-threads': cursorPagination(),
+  },
+})
+```
+
+The default mapping matches this protocol:
+
+```ts
+// request query
+{
+  cursorLimit: 25,
+  returnCursor: true,
+  cursor: 'opaque-token', // omitted on page one
+  returnTotal: true, // requested on page one only
+}
+
+// response
+{
+  data: [...],
+  pageInfo: {
+    hasNextPage: true,
+    endCursor: 'next-opaque-token',
+    total: 123, // optional; normally returned on page one
+  },
+}
+```
+
+Figbird treats the cursor as opaque and chains pages sequentially. `hasNextPage` is
+authoritative, so a full-sized final page still stops correctly. `.all()` drains the
+same cursor chain. For `.paginate()`, realtime changes rebuild the currently loaded
+prefix with fresh cursors while the old rows remain visible, then replace the prefix
+in one update. An explicit `refetch()` keeps the usual behavior: discard later pages
+and restart at page one.
+
+For a different server protocol, override the two mappings:
+
+```ts
+cursorPagination({
+  query: ({ limit, after, returnTotal }) => ({
+    first: limit,
+    ...(after !== undefined ? { after } : {}),
+    ...(returnTotal ? { includeCount: true } : {}),
+  }),
+  pageInfo: response => {
+    const result = response as {
+      page: { more: boolean; next?: string; count?: number }
+    }
+    return {
+      hasMore: result.page.more,
+      endCursor: result.page.next,
+      total: result.page.count,
+    }
+  },
+})
+```
+
+Cursor controls live outside the logical Figbird query. They therefore never become
+filters, never need custom matcher support, and do not affect realtime query
+classification.
+
 ## Mutations
 
 The write side is three pieces, each owning a different granularity:
@@ -1397,6 +1469,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `updatedAtField` — string or function, defaults to `item => item.updatedAt || item.updated_at`; used to avoid overwriting newer cached data with older data when requests race
   - `defaultPageSize` — default `query.$limit` when fetching, unset by default so the server decides
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
+  - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.

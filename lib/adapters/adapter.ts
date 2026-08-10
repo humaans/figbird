@@ -3,9 +3,40 @@
  * - For find-like operations, include meta (e.g. pagination info)
  * - For get-like operations, adapters may omit meta entirely
  */
-export type QueryResponse<TData, TMeta = undefined> = { data: TData } & (TMeta extends undefined
-  ? Record<never, never>
-  : { meta: TMeta })
+export type QueryResponse<TData, TMeta = undefined> = {
+  data: TData
+} & (TMeta extends undefined ? Record<never, never> : { meta: TMeta })
+
+/** A native page response always carries normalized continuation information. */
+export type PageResponse<TData, TMeta> = QueryResponse<TData, TMeta> & {
+  pageInfo: PageInfo
+}
+
+/** Opaque page request passed to adapters that support native pagination. */
+export interface PageRequest {
+  limit: number
+  /** Adapter-issued continuation from the preceding page. */
+  after?: unknown
+  /** Only the first page asks the server to calculate a total. */
+  returnTotal: boolean
+}
+
+/** Adapter-neutral page information consumed by the query engine. */
+export interface PageInfo {
+  hasMore: boolean
+  /** Opaque continuation to pass to the next page request. */
+  endCursor?: unknown
+  total?: number
+}
+
+/**
+ * Service-level native pagination capability. Sequential sources issue opaque
+ * continuations, so later pages must be rebuilt after an earlier page changes.
+ */
+export interface PageSource<TParams, TMeta> {
+  dependency: 'sequential'
+  find(params: TParams | undefined, page: PageRequest): Promise<PageResponse<unknown[], TMeta>>
+}
 
 /**
  * Event handlers for real-time updates
@@ -40,6 +71,9 @@ export interface Adapter<
   ): Promise<QueryResponse<unknown, TMeta | undefined>>
 
   find(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
+
+  /** Return the native pagination capability for a service, if configured. */
+  pageSource?(serviceName: string): PageSource<TParams, TMeta> | undefined
 
   findAll(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
 

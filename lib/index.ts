@@ -68,12 +68,14 @@ export { RelationalQueryRef } from './core/figbird.js'
 export type { RelationalQueryState } from './core/figbird.js'
 
 // adapters
-export { FeathersAdapter } from './adapters/feathers.js'
+export { cursorPagination, FeathersAdapter } from './adapters/feathers.js'
 export type {
+  CursorPaginationOptions,
   CustomOperator,
   CustomOperatorContext,
   CustomOperatorRegistration,
   FeathersAdapterOptions,
+  FeathersCursorPagination,
 } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
@@ -85,6 +87,10 @@ export type {
   AdapterQuery,
   EventHandlers,
   MatcherContext,
+  PageInfo,
+  PageRequest,
+  PageResponse,
+  PageSource,
 } from './adapters/adapter.js'
 
 // react hooks

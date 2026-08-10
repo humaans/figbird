@@ -1,4 +1,9 @@
-import { locallySupportedOperators, type Adapter, type QueryResponse } from '../adapters/adapter.js'
+import {
+  locallySupportedOperators,
+  type Adapter,
+  type PageResponse,
+  type QueryResponse,
+} from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
@@ -58,7 +63,9 @@ export type ReconnectJitter = number | readonly [number, number]
 export type RetryDelay = number | ((attempt: number, error: Error) => number)
 
 type FetchAttemptOutcome =
-  { kind: 'completed' } | { kind: 'stale' } | { kind: 'failed'; error: Error }
+  | { kind: 'completed' }
+  | { kind: 'stale' }
+  | { kind: 'failed'; error: Error }
 
 const DEFAULT_RETRIES = 3
 const MAX_RETRY_DELAY = 30_000
@@ -66,6 +73,9 @@ const MAX_RETRY_DELAY = 30_000
 function defaultRetryDelay(attempt: number): number {
   return Math.min(1000 * 2 ** (attempt - 1), MAX_RETRY_DELAY)
 }
+
+type StoreResponse<TMeta> =
+  QueryResponse<unknown, TMeta | undefined> | PageResponse<unknown[], TMeta>
 
 type ItemId = string | number
 
@@ -670,7 +680,7 @@ export class QueryStore<
     }
   }
 
-  #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta | undefined>> {
+  #fetch(queryId: string): Promise<StoreResponse<TMeta>> {
     const query = this.#getQuery(queryId)
     if (!query) {
       return Promise.reject(new Error('Query not found'))
@@ -683,6 +693,15 @@ export class QueryStore<
       if (local) return Promise.resolve(local)
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
+      if (desc.page) {
+        const pageSource = this.#adapter.pageSource?.(desc.serviceName)
+        if (!pageSource) {
+          return Promise.reject(
+            new Error(`Adapter does not support native pagination for "${desc.serviceName}"`),
+          )
+        }
+        return pageSource.find(desc.params as TParams, desc.page)
+      }
       const local = this.#tryLocalFind(query)
       if (local) return Promise.resolve(local)
       const findConfig = config as FindQueryConfig<unknown, unknown>
@@ -819,7 +838,7 @@ export class QueryStore<
     journalEvents,
   }: {
     queryId: string
-    result: QueryResponse<unknown, TMeta | undefined>
+    result: StoreResponse<TMeta>
     journalEvents: readonly ProcessedRealtimeEvent[]
   }): void {
     let shouldRefetch = false
@@ -861,6 +880,7 @@ export class QueryStore<
         isCompleteSet && !findConfig.server ? new Map(service.entities) : null
 
       const meta = (result as { meta?: TMeta }).meta
+      const pageInfo = 'pageInfo' in result ? result.pageInfo : undefined
       const rebasedResponse = rebaseResponseData({
         data,
         preserveSnapshot: query.config.realtime === 'disabled',
@@ -924,6 +944,7 @@ export class QueryStore<
           status: 'success' as const,
           data: rebasedResponse.data,
           meta: meta || this.#adapter.emptyMeta(),
+          ...(pageInfo ? { pageInfo } : {}),
           isFetching: false,
           error: null,
         },
