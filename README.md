@@ -32,17 +32,22 @@ const figbird = new Figbird({
   schema,
 })
 
-export const { useQuery, useMutation, q } = createHooks(figbird)
+export const { useQuery, useAction, q, m } = createHooks(figbird)
 
 function Notes() {
   const { data: notes } = useQuery(q.notes.where({ read: false }).related('author'))
-  const mutation = useMutation('notes', { optimistic: true })
 
-  return notes.map(note => (
-    <div key={note.id} onClick={() => mutation.patch(note.id, { read: true })}>
+  return notes.map(note => <NoteRow key={note.id} note={note} />)
+}
+
+function NoteRow({ note }: { note: Note & { author?: User } }) {
+  const markRead = useAction('mark read', () => m.notes.patch(note.id, { read: true }))
+
+  return (
+    <button onClick={markRead.run} disabled={markRead.pending}>
       {note.content} — {note.author?.name}
-    </div>
-  ))
+    </button>
+  )
 }
 ```
 
