@@ -24,6 +24,7 @@ export class ExtensionInspectionSession implements DevtoolsInspectionController 
   #listeners = new Set<() => void>()
   #pageVersion: number | null = null
   #snapshot: DevtoolsInspectionSnapshot = { kind: 'idle', version: 0 }
+  #starting: Promise<void> | null = null
 
   constructor(
     evaluate: (expression: string) => Promise<unknown>,
@@ -44,7 +45,11 @@ export class ExtensionInspectionSession implements DevtoolsInspectionController 
     if (!this.#isAvailable()) return
     const command = ++this.#command
     this.#setSnapshot({ kind: 'picking' })
-    void this.#start(command)
+    const starting = this.#start(command)
+    this.#starting = starting
+    void starting.then(() => {
+      if (this.#starting === starting) this.#starting = null
+    })
   }
 
   stop = (): void => {
@@ -57,6 +62,7 @@ export class ExtensionInspectionSession implements DevtoolsInspectionController 
   }
 
   async refresh(): Promise<void> {
+    while (this.#starting) await this.#starting
     if (!this.isPicking()) return
     const command = this.#command
     try {

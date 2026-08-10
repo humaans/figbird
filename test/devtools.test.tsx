@@ -11,6 +11,7 @@ import {
   type FigbirdLikeForDevtools,
   type QueryRecord,
 } from '../lib/devtools/collector.js'
+import { ExtensionInspectionSession } from '../extensions/src/inspection.js'
 import { inspectQueryArea } from '../extensions/src/inspectionPage.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
 import { createTestApp, dom } from './helpers.js'
@@ -683,6 +684,38 @@ test('extension bridge starts debug collection only while connected', t => {
   bridgeState.disconnect(connection!.sessionId)
   t.is(eventSubscriptions, 0)
   t.is(bridgeState.readJson(connection!.sessionId), null)
+})
+
+test('extension inspection waits for picker startup before refreshing', async t => {
+  let releaseProtocol!: () => void
+  const protocol = new Promise<number>(resolve => {
+    releaseProtocol = () => resolve(1)
+  })
+  let reads = 0
+  let starts = 0
+  const inspection = new ExtensionInspectionSession(async expression => {
+    if (expression.endsWith('?.protocol')) return protocol
+    if (expression.endsWith('?.read()')) {
+      reads++
+      return { kind: 'picking', version: 1 }
+    }
+    if (expression.includes('.start(')) {
+      starts++
+      return { kind: 'picking', version: 1 }
+    }
+    throw new Error(`Unexpected expression: ${expression}`)
+  })
+
+  inspection.start()
+  const refresh = inspection.refresh()
+  t.is(reads, 0)
+
+  releaseProtocol()
+  await refresh
+
+  t.is(starts, 1)
+  t.is(reads, 1)
+  t.is(inspection.getSnapshot().kind, 'picking')
 })
 
 test('panel shows root queries and nests relation fetches in details', async t => {
