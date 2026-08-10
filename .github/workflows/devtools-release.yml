@@ -1,0 +1,82 @@
+name: Release browser devtools
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign_firefox:
+        description: Submit an unlisted build to Mozilla and download the signed XPI
+        type: boolean
+        default: true
+      upload_chrome:
+        description: Upload the Chrome ZIP without submitting it for review
+        type: boolean
+        default: false
+      submit_chrome:
+        description: Upload and submit the private Chrome item for review
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    environment: extension-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+      - run: npm run devtools:lint
+      - run: npm run devtools:package
+      - uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: figbird-devtools-release-inputs
+          path: |
+            extensions/build/figbird-devtools-chrome.zip
+            extensions/build/figbird-devtools-firefox-unsigned.zip
+            extensions/build/figbird-devtools-source.zip
+      - name: Sign the unlisted Firefox extension
+        if: inputs.sign_firefox
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          web-ext sign \
+            --source-dir extensions/build/firefox \
+            --artifacts-dir extensions/build/firefox-signed \
+            --channel unlisted \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET" \
+            --upload-source-code extensions/build/figbird-devtools-source.zip \
+            --approval-timeout 900000 \
+            --timeout 900000
+      - uses: actions/upload-artifact@v4
+        if: inputs.sign_firefox
+        with:
+          if-no-files-found: error
+          name: figbird-devtools-firefox-signed
+          path: extensions/build/firefox-signed/*.xpi
+      - id: google-auth
+        if: inputs.upload_chrome || inputs.submit_chrome
+        uses: google-github-actions/auth@v3
+        with:
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          service_account: ${{ vars.CHROME_SERVICE_ACCOUNT }}
+          token_format: access_token
+          workload_identity_provider: ${{ vars.CHROME_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Upload the Chrome extension
+        if: inputs.upload_chrome || inputs.submit_chrome
+        env:
+          CHROME_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          CHROME_EXTENSION_ARCHIVE: extensions/build/figbird-devtools-chrome.zip
+          CHROME_EXTENSION_ID: ${{ vars.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ vars.CHROME_PUBLISHER_ID }}
+          CHROME_SUBMIT: ${{ inputs.submit_chrome }}
+        run: node tasks/publish-chrome-devtools.js

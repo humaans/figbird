@@ -40,7 +40,8 @@
     "coverage": "c8 -r html -r text ava",
     "build": "node ./tasks/build.js",
     "devtools:build": "node ./tasks/build-devtools.js",
-    "devtools:package": "npm run devtools:build && cd extensions/build/chrome && zip -qr ../figbird-devtools-chrome.zip . && cd ../firefox && zip -qr ../figbird-devtools-firefox.zip .",
+    "devtools:lint": "npm run devtools:build && node ./tasks/lint-firefox-devtools.js",
+    "devtools:package": "npm run devtools:build && node ./tasks/package-devtools.js",
     "prepack": "npm run build",
     "watch": "node ./tasks/build.js -w",
     "demo": "npm --prefix demo install && npm --prefix demo run dev",
@@ -74,12 +75,13 @@
     "esbuild": "^0.25.9",
     "execa": "^9.6.1",
     "gh-pages": "^6.3.0",
-    "oxlint": "^1.60.0",
     "jsdom": "^29.0.2",
+    "oxlint": "^1.60.0",
     "prettier": "^3.8.2",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "web-ext": "10.6.0"
   },
   "sideEffects": false,
   "ava": {
@@ -100,7 +102,10 @@
     ]
   },
   "overrides": {
-    "minimatch": "^10.0.0"
+    "minimatch": "^10.0.0",
+    "multimatch": {
+      "minimatch": "^3.1.2"
+    }
   },
   "np": {
     "releaseDraft": false

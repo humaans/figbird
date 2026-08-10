@@ -1,0 +1,52 @@
+name: Browser devtools
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/devtools.yml
+      - extensions/**
+      - lib/**
+      - package-lock.json
+      - package.json
+      - tasks/build-devtools.js
+      - tasks/lint-firefox-devtools.js
+      - tasks/package-devtools.js
+      - tasks/publish-chrome-devtools.js
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/devtools.yml
+      - extensions/**
+      - lib/**
+      - package-lock.json
+      - package.json
+      - tasks/build-devtools.js
+      - tasks/lint-firefox-devtools.js
+      - tasks/package-devtools.js
+      - tasks/publish-chrome-devtools.js
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+      - run: npm run devtools:lint
+      - run: npm run devtools:package
+      - uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: figbird-devtools-unsigned
+          path: |
+            extensions/build/figbird-devtools-chrome.zip
+            extensions/build/figbird-devtools-firefox-unsigned.zip
+            extensions/build/figbird-devtools-source.zip

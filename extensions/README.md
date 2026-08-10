@@ -5,7 +5,7 @@
 From the repository root:
 
 ```sh
-npm install
+npm ci
 npm run devtools:build
 ```
 
@@ -39,11 +39,15 @@ npm run devtools:package
 The command creates:
 
 - `extensions/build/figbird-devtools-chrome.zip`
-- `extensions/build/figbird-devtools-firefox.zip`
+- `extensions/build/figbird-devtools-firefox-unsigned.zip`
+- `extensions/build/figbird-devtools-source.zip`
 
-Each archive has `manifest.json` at its root and can be uploaded to its browser store.
-The Chrome and Firefox source manifests share an extension version. Bump both manifests
-before publishing a new store release.
+The Chrome and unsigned Firefox archives have `manifest.json` at their root. The source
+archive lets Mozilla reproduce the minified Firefox build. Firefox users need the signed
+XPI produced by Mozilla, not the unsigned ZIP.
+
+The shared browser extension version lives in `extensions/version.json`. See
+`extensions/RELEASING.md` for publisher setup and release instructions.
 
 ## QA checklist
 
