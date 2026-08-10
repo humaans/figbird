@@ -42,7 +42,8 @@ The command creates:
 - `extensions/build/figbird-devtools-firefox.zip`
 
 Each archive has `manifest.json` at its root and can be uploaded to its browser store.
-The extension version comes from the numeric part of the root package version.
+The Chrome and Firefox source manifests share an extension version. Bump both manifests
+before publishing a new store release.
 
 ## QA checklist
 

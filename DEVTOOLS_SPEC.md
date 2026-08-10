@@ -9,7 +9,7 @@ Constructing a Figbird instance registers a weak reference with a non-enumerable
 bridge at `globalThis.__FIGBIRD_DEVTOOLS__`. Registration does not subscribe to events,
 inspect queries, or retain history.
 
-The extension evaluates the bridge in the inspected page and calls `api.connect()`. A
+The extension evaluates the bridge in the inspected page and calls `connect()`. A
 connection:
 
 - selects the newest live Figbird instance;
@@ -27,9 +27,11 @@ are marked instead of breaking the panel.
 
 ```
 lib/core/devtoolsBridge.ts  weak instance registry and inspected-page session
+lib/core/devtoolsInspection.ts  element picker and React query-area scanner
 lib/devtools/collector.ts   bounded query, event, timeline, and write history
 lib/devtools/Devtools.tsx   shared React panel used only by the extension
 extensions/src/remote.ts    polling transport exposed as a collector-compatible source
+extensions/src/protocol.ts  snapshot validation and wire-to-panel decoding
 extensions/src/panel.tsx    panel entry point
 extensions/manifests/       Chrome MV3 and Firefox MV2 manifests
 tasks/build-devtools.js     shared esbuild packaging

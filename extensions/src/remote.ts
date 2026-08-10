@@ -4,17 +4,18 @@ import type { InFlightMutation, MutationActivity } from '../../lib/core/mutation
 import type { InspectedRelationalQuery } from '../../lib/core/relationalQuery.js'
 import type {
   DevtoolsBridgeConnection,
-  DevtoolsBridgeInspection,
-  DevtoolsBridgeRead,
+  DevtoolsWireInspection,
+  DevtoolsWireRead,
 } from '../../lib/core/devtoolsBridge.js'
 import type {
   DevtoolsInspectionController,
   DevtoolsInspectionSnapshot,
 } from '../../lib/devtools/Devtools.js'
 import type { FigbirdLikeForDevtools } from '../../lib/devtools/collector.js'
+import { decodeEvent, parseConnection, parseWireRead } from './protocol.js'
 
 const POLL_INTERVAL_MS = 250
-const BRIDGE_EXPRESSION = 'globalThis["__FIGBIRD_DEVTOOLS__"]?.api'
+const BRIDGE_EXPRESSION = 'globalThis["__FIGBIRD_DEVTOOLS__"]'
 
 interface InspectedWindowApi {
   eval(
@@ -61,12 +62,17 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
     return () => this.#stateListeners.delete(listener)
   }
 
-  update(read: DevtoolsBridgeRead): void {
-    this.#queries = read.queries
+  update(read: DevtoolsWireRead): void {
+    this.#queries = read.queries.map(query => ({
+      ...query,
+      fetchedAt: query.fetchedAt,
+      query: query.query,
+    }))
     this.#relational = read.relational
     this.#mutations = read.inFlightMutations
     for (const event of read.events) {
-      for (const listener of this.#eventListeners) listener(event)
+      const decoded = decodeEvent(event)
+      for (const listener of this.#eventListeners) listener(decoded)
     }
     for (const listener of this.#stateListeners) listener(undefined)
     for (const listener of this.#mutatingListeners) listener()
@@ -123,9 +129,7 @@ export class ExtensionSession {
     this.#polling = true
     try {
       if (!this.#connection) {
-        const connection = await evaluateJson<DevtoolsBridgeConnection>(
-          `${BRIDGE_EXPRESSION}?.connect()`,
-        )
+        const connection = parseConnection(await evaluate(`${BRIDGE_EXPRESSION}?.connect()`))
         if (!connection) {
           this.#setStatus('Waiting for Figbird')
           return
@@ -138,8 +142,10 @@ export class ExtensionSession {
         )
       }
 
-      const read = await evaluateJson<DevtoolsBridgeRead>(
-        `${BRIDGE_EXPRESSION}?.read(${JSON.stringify(this.#connection.sessionId)})`,
+      const read = parseWireRead(
+        await evaluate(
+          `${BRIDGE_EXPRESSION}?.readJson(${JSON.stringify(this.#connection.sessionId)})`,
+        ),
       )
       if (!read) {
         this.#connection = null
@@ -170,7 +176,7 @@ export class ExtensionSession {
     for (const listener of this.#inspectionListeners) listener()
   }
 
-  #updateInspection(inspection: DevtoolsBridgeInspection): void {
+  #updateInspection(inspection: DevtoolsWireInspection): void {
     if (inspection.version === this.#inspectionSnapshot.version) return
     this.#inspectionSnapshot = {
       active: inspection.active,
@@ -190,11 +196,6 @@ export class ExtensionSession {
     this.#status = status
     for (const listener of this.#statusListeners) listener()
   }
-}
-
-async function evaluateJson<T>(expression: string): Promise<T | null> {
-  const result = await evaluate(`JSON.stringify(${expression} ?? null)`)
-  return typeof result === 'string' ? (JSON.parse(result) as T | null) : null
 }
 
 function evaluate(expression: string): Promise<unknown> {

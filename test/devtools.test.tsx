@@ -11,7 +11,7 @@ import {
   type FigbirdLikeForDevtools,
   type QueryRecord,
 } from '../lib/devtools/collector.js'
-import { inspectQueryArea } from '../lib/devtools/inspector.js'
+import { inspectQueryArea } from '../lib/core/devtoolsInspection.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
 import { createTestApp, dom } from './helpers.js'
 
@@ -664,23 +664,23 @@ test('extension bridge starts debug collection only while connected', t => {
   const bridgeState = (
     globalThis as typeof globalThis & {
       __FIGBIRD_DEVTOOLS__: {
-        api: {
-          connect(): { sessionId: string } | null
-          disconnect(sessionId: string): void
-          read(sessionId: string): { queries: unknown[] } | null
-        }
+        connect(): { sessionId: string } | null
+        disconnect(sessionId: string): void
+        readJson(sessionId: string): string | null
       }
     }
   ).__FIGBIRD_DEVTOOLS__
-  const connection = bridgeState.api.connect()
+  const connection = bridgeState.connect()
   t.truthy(connection)
   t.is(inspectCalls, 0)
   t.is(eventSubscriptions, 1)
-  t.truthy(bridgeState.api.read(connection!.sessionId))
+  const read = bridgeState.readJson(connection!.sessionId)
+  t.truthy(read)
+  t.true(Array.isArray(JSON.parse(read!).queries))
   t.is(inspectCalls, 1)
-  bridgeState.api.disconnect(connection!.sessionId)
+  bridgeState.disconnect(connection!.sessionId)
   t.is(eventSubscriptions, 0)
-  t.is(bridgeState.api.read(connection!.sessionId), null)
+  t.is(bridgeState.readJson(connection!.sessionId), null)
 })
 
 test('panel shows root queries and nests relation fetches in details', async t => {
