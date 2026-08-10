@@ -67,33 +67,6 @@ function defaultRetryDelay(attempt: number): number {
   return Math.min(1000 * 2 ** (attempt - 1), MAX_RETRY_DELAY)
 }
 
-function getHttpStatus(error: Error): number | undefined {
-  const errorRecord = error as Error & Record<string, unknown>
-  const response = errorRecord.response
-  const responseStatus =
-    response && typeof response === 'object'
-      ? (response as Record<string, unknown>).status
-      : undefined
-
-  for (const status of [
-    errorRecord.status,
-    errorRecord.statusCode,
-    errorRecord.code,
-    responseStatus,
-  ]) {
-    if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status < 600) {
-      return status
-    }
-  }
-
-  return undefined
-}
-
-function isRetryableError(error: Error): boolean {
-  const status = getHttpStatus(error)
-  return status === undefined || status === 408 || status === 429 || status >= 500
-}
-
 type ItemId = string | number
 
 /** The realtime event type a mutation verb produces. */
@@ -668,7 +641,9 @@ export class QueryStore<
 
   #shouldRetry(query: Query<unknown, TMeta, unknown>, retryAttempt: number, error: Error): boolean {
     const retry = this.#normalizeRetry(query.config.retry ?? this.#retry)
-    return retry !== false && retryAttempt < retry && isRetryableError(error)
+    return (
+      retry !== false && retryAttempt < retry && (this.#adapter.isRetryableError?.(error) ?? true)
+    )
   }
 
   #normalizeRetry(retry: number | false): number | false {

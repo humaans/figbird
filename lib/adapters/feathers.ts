@@ -293,6 +293,11 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     return this.feathers.service(serviceName)
   }
 
+  isRetryableError(error: Error): boolean {
+    const code = 'code' in error ? error.code : undefined
+    return typeof code !== 'number' || code < 400 || code === 408 || code === 429 || code >= 500
+  }
+
   async get(
     serviceName: string,
     resourceId: string | number,

@@ -1022,6 +1022,8 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
 2. Support the operations `find`, `get`, `create`, `update`, `patch`, `remove`
 3. For realtime, emit `created`, `patched`, `updated`, `removed` events after mutations
 4. Optionally implement `subscribeToReconnect` so active queries refetch after connectivity gaps
+5. Optionally implement `isRetryableError` to return `false` for errors that another query
+   attempt cannot fix; adapters without it treat all query errors as retryable
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 

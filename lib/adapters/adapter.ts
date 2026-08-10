@@ -45,6 +45,9 @@ export interface Adapter<
 
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 
+  /** Return false when retrying a failed query cannot help. Errors retry by default. */
+  isRetryableError?(error: Error): boolean
+
   // Optional real-time support
   subscribe?(serviceName: string, handlers: EventHandlers): () => void
 
