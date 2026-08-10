@@ -11,7 +11,7 @@ import {
   type FigbirdLikeForDevtools,
   type QueryRecord,
 } from '../lib/devtools/collector.js'
-import { inspectQueryArea } from '../lib/core/devtoolsInspection.js'
+import { inspectQueryArea } from '../extensions/src/inspectionPage.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
 import { createTestApp, dom } from './helpers.js'
 
@@ -676,7 +676,9 @@ test('extension bridge starts debug collection only while connected', t => {
   t.is(eventSubscriptions, 1)
   const read = bridgeState.readJson(connection!.sessionId)
   t.truthy(read)
-  t.true(Array.isArray(JSON.parse(read!).queries))
+  const envelope = JSON.parse(read!)
+  t.is(envelope.protocol, 1)
+  t.true(Array.isArray(envelope.read.queries))
   t.is(inspectCalls, 1)
   bridgeState.disconnect(connection!.sessionId)
   t.is(eventSubscriptions, 0)
@@ -772,7 +774,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   }
   const collector = createCollector(inspectedFigbird, { heartbeatMs: 0 })
   const inspectionSnapshot = {
-    active: false,
+    kind: 'selected' as const,
     label: 'div#issue-area',
     queryCounts: new Map([[inspectedRef.details().queryId, 1]]),
     supported: true,

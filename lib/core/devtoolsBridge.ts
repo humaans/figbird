@@ -1,4 +1,3 @@
-import { installElementPicker } from './devtoolsInspection.js'
 import type { FigbirdEvent, FigbirdEvents } from './events.js'
 import type { InspectedQuery } from './figbird.js'
 import type { InspectedRelationalQuery } from './relationalQuery.js'
@@ -26,15 +25,6 @@ type ToWireEvent<E> = E extends { error: Error }
 
 export type DevtoolsWireEvent = ToWireEvent<FigbirdEvent>
 
-export interface DevtoolsWireInspection {
-  active: boolean
-  label?: string
-  queryCounts?: Record<string, number>
-  supported?: boolean
-  truncated?: boolean
-  version: number
-}
-
 export type DevtoolsWireQuery = Omit<InspectedQuery, 'fetchedAt' | 'query'> & {
   fetchedAt?: number | undefined
   query?: Record<string, unknown> | undefined
@@ -50,16 +40,18 @@ export interface DevtoolsBridgeConnection {
 export interface DevtoolsWireRead {
   events: DevtoolsWireEvent[]
   inFlightMutations: readonly InFlightMutation[]
-  inspection: DevtoolsWireInspection
   queries: DevtoolsWireQuery[]
   relational: InspectedRelationalQuery[]
+}
+
+export interface DevtoolsWireEnvelope {
+  protocol: 1
+  read: DevtoolsWireRead
 }
 
 interface DevtoolsBridgeSession {
   events: FigbirdEvent[]
   expires: ReturnType<typeof setTimeout> | null
-  inspection: DevtoolsWireInspection
-  pickerCleanup: (() => void) | null
   source: DevtoolsSource
   unsubscribe: () => void
 }
@@ -70,8 +62,6 @@ interface DevtoolsPageBridge {
   disconnect(sessionId: string): void
   readJson(sessionId: string): string | null
   register(source: DevtoolsSource): void
-  startInspecting(sessionId: string, accent?: string): boolean
-  stopInspecting(sessionId: string): void
 }
 
 let fallbackBridge: DevtoolsPageBridge | undefined
@@ -126,7 +116,6 @@ function createPageBridge(): DevtoolsPageBridge {
     const session = sessions.get(sessionId)
     if (!session) return
     if (session.expires) clearTimeout(session.expires)
-    session.pickerCleanup?.()
     session.unsubscribe()
     sessions.delete(sessionId)
   }
@@ -152,8 +141,6 @@ function createPageBridge(): DevtoolsPageBridge {
       const session: DevtoolsBridgeSession = {
         events: [],
         expires: null,
-        inspection: { active: false, version: 0 },
-        pickerCleanup: null,
         source,
         unsubscribe: () => {},
       }
@@ -181,43 +168,15 @@ function createPageBridge(): DevtoolsPageBridge {
       const session = sessions.get(sessionId)
       if (!session) return null
       refreshExpiry(sessionId, session)
-      const read: DevtoolsWireRead = {
-        events: session.events.splice(0).map(toWireEvent),
-        inFlightMutations: session.source.mutating.getSnapshot(),
-        inspection: session.inspection,
-        queries: session.source.inspect(),
-        relational: session.source.inspectRelational(),
-      }
-      return serializeWireRead(read)
-    },
-
-    startInspecting(sessionId, accent = '#1d65d8') {
-      const session = sessions.get(sessionId)
-      if (!session) return false
-      session.pickerCleanup?.()
-      session.inspection = { active: true, version: session.inspection.version + 1 }
-      session.pickerCleanup = installElementPicker(accent, result => {
-        session.pickerCleanup = null
-        session.inspection = result
-          ? {
-              active: false,
-              label: result.label,
-              queryCounts: Object.fromEntries(result.queryCounts),
-              supported: result.supported,
-              truncated: result.truncated,
-              version: session.inspection.version + 1,
-            }
-          : { active: false, version: session.inspection.version + 1 }
+      return serializeWireEnvelope({
+        protocol: 1,
+        read: {
+          events: session.events.splice(0).map(toWireEvent),
+          inFlightMutations: session.source.mutating.getSnapshot(),
+          queries: session.source.inspect(),
+          relational: session.source.inspectRelational(),
+        },
       })
-      return true
-    },
-
-    stopInspecting(sessionId) {
-      const session = sessions.get(sessionId)
-      if (!session) return
-      session.pickerCleanup?.()
-      session.pickerCleanup = null
-      session.inspection = { active: false, version: session.inspection.version + 1 }
     },
   }
 }
@@ -258,9 +217,9 @@ function toWireEvent(event: FigbirdEvent): DevtoolsWireEvent {
   }
 }
 
-function serializeWireRead(read: DevtoolsWireRead): string {
+function serializeWireEnvelope(envelope: DevtoolsWireEnvelope): string {
   const ancestors: object[] = []
-  const serialized = JSON.stringify(read, function (_key, value: unknown): unknown {
+  const serialized = JSON.stringify(envelope, function (_key, value: unknown): unknown {
     if (value instanceof Error) return { message: value.message, name: value.name }
     if (typeof value === 'bigint') return String(value)
     if (typeof value !== 'object' || value === null) return value

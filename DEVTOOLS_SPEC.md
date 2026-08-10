@@ -16,8 +16,7 @@ connection:
 - subscribes to `figbird.events`;
 - exposes current `inspect()`, `inspectRelational()`, and `mutating` snapshots;
 - buffers at most 1,000 events between panel polls; and
-- expires after five seconds without a poll, removing every subscription and picker
-  listener.
+- expires after five seconds without a poll, removing every event subscription.
 
 The bridge serializes values before they cross the browser DevTools evaluation boundary.
 Errors retain their name and message, bigint values become strings, and circular values
@@ -27,19 +26,22 @@ are marked instead of breaking the panel.
 
 ```
 lib/core/devtoolsBridge.ts  weak instance registry and inspected-page session
-lib/core/devtoolsInspection.ts  element picker and React query-area scanner
 lib/devtools/collector.ts   bounded query, event, timeline, and write history
 lib/devtools/Devtools.tsx   shared React panel used only by the extension
 extensions/src/remote.ts    polling transport exposed as a collector-compatible source
-extensions/src/protocol.ts  snapshot validation and wire-to-panel decoding
+extensions/src/protocol.ts  versioned snapshot envelope and wire-to-panel decoding
+extensions/src/inspection.ts  extension-side picker lifecycle and state
+extensions/src/inspectionPage.ts  injected element picker and React query-area scanner
+extensions/src/picker.ts    injected picker entry point and five-second cleanup
+extensions/src/pickerProtocol.ts  shared picker key, version, and state contract
 extensions/src/panel.tsx    panel entry point
 extensions/manifests/       Chrome MV3 and Firefox MV2 manifests
 tasks/build-devtools.js     shared esbuild packaging
 ```
 
-The query-area picker also runs through the page bridge. Its overlay and React fiber scan
-execute in the inspected page, while only the selected label and query counts cross back
-to the extension panel.
+The extension injects the query-area picker into the inspected page only when the user
+selects **Inspect**. The overlay and React fiber scan stay in the extension package. An
+active picker removes its page listeners after five seconds without an extension poll.
 
 ## Build and QA
 

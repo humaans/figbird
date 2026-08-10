@@ -18,14 +18,17 @@ import {
 
 type Tab = 'queries' | 'timeline' | 'events' | 'writes'
 
-export interface DevtoolsInspectionSnapshot {
-  active: boolean
-  label?: string
-  queryCounts?: ReadonlyMap<string, number>
-  supported?: boolean
-  truncated?: boolean
-  version: number
-}
+export type DevtoolsInspectionSnapshot =
+  | { kind: 'idle'; version: number }
+  | { kind: 'picking'; version: number }
+  | {
+      kind: 'selected'
+      label: string
+      queryCounts: ReadonlyMap<string, number>
+      supported: boolean
+      truncated: boolean
+      version: number
+    }
 
 export interface DevtoolsInspectionController {
   getSnapshot(): DevtoolsInspectionSnapshot
@@ -41,7 +44,7 @@ export interface FigbirdDevtoolsPanelProps {
   theme?: DevtoolsThemeMode
 }
 
-const EMPTY_INSPECTION: DevtoolsInspectionSnapshot = { active: false, version: 0 }
+const EMPTY_INSPECTION: DevtoolsInspectionSnapshot = { kind: 'idle', version: 0 }
 const subscribeToNothing = () => () => {}
 const getEmptyInspection = () => EMPTY_INSPECTION
 
@@ -88,14 +91,7 @@ export function FigbirdDevtoolsPanel({
         : tab === 'writes'
           ? { disabled: snapshot.writes.length === 0, run: () => collector.clearWrites() }
           : null
-  const inspected = inspectionSnapshot.queryCounts
-    ? {
-        label: inspectionSnapshot.label ?? '',
-        queryCounts: inspectionSnapshot.queryCounts,
-        supported: inspectionSnapshot.supported ?? false,
-        truncated: inspectionSnapshot.truncated ?? false,
-      }
-    : null
+  const inspected = inspectionSnapshot.kind === 'selected' ? inspectionSnapshot : null
 
   return (
     <ThemeContext.Provider value={themeValue}>
@@ -152,11 +148,13 @@ export function FigbirdDevtoolsPanel({
               {inspection ? (
                 <button
                   type='button'
-                  style={buttonStyle(colors, inspectionSnapshot.active)}
-                  onClick={inspectionSnapshot.active ? inspection.stop : inspection.start}
+                  style={buttonStyle(colors, inspectionSnapshot.kind === 'picking')}
+                  onClick={
+                    inspectionSnapshot.kind === 'picking' ? inspection.stop : inspection.start
+                  }
                   title='Pick an area of the inspected page and show its mounted queries'
                 >
-                  {inspectionSnapshot.active ? 'Cancel' : 'Inspect'}
+                  {inspectionSnapshot.kind === 'picking' ? 'Cancel' : 'Inspect'}
                 </button>
               ) : null}
               {inspected ? (

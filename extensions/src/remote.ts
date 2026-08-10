@@ -2,16 +2,9 @@ import type { FigbirdEvent, FigbirdEvents } from '../../lib/core/events.js'
 import type { InspectedQuery } from '../../lib/core/figbird.js'
 import type { InFlightMutation, MutationActivity } from '../../lib/core/mutationTracker.js'
 import type { InspectedRelationalQuery } from '../../lib/core/relationalQuery.js'
-import type {
-  DevtoolsBridgeConnection,
-  DevtoolsWireInspection,
-  DevtoolsWireRead,
-} from '../../lib/core/devtoolsBridge.js'
-import type {
-  DevtoolsInspectionController,
-  DevtoolsInspectionSnapshot,
-} from '../../lib/devtools/Devtools.js'
+import type { DevtoolsBridgeConnection, DevtoolsWireRead } from '../../lib/core/devtoolsBridge.js'
 import type { FigbirdLikeForDevtools } from '../../lib/devtools/collector.js'
+import { ExtensionInspectionSession } from './inspection.js'
 import { decodeEvent, parseConnection, parseWireRead } from './protocol.js'
 
 const POLL_INTERVAL_MS = 250
@@ -81,27 +74,13 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
 
 export class ExtensionSession {
   readonly figbird = new RemoteFigbird()
-  readonly inspection: DevtoolsInspectionController
+  readonly inspection = new ExtensionInspectionSession(evaluate, () => this.#connection !== null)
 
   #connection: DevtoolsBridgeConnection | null = null
-  #inspectionListeners = new Set<() => void>()
-  #inspectionSnapshot: DevtoolsInspectionSnapshot = { active: false, version: 0 }
   #polling = false
   #status = 'Waiting for Figbird'
   #statusListeners = new Set<() => void>()
   #timer: ReturnType<typeof setInterval> | null = null
-
-  constructor() {
-    this.inspection = {
-      getSnapshot: () => this.#inspectionSnapshot,
-      start: () => void this.#setInspecting(true),
-      stop: () => void this.#setInspecting(false),
-      subscribe: listener => {
-        this.#inspectionListeners.add(listener)
-        return () => this.#inspectionListeners.delete(listener)
-      },
-    }
-  }
 
   getStatus = (): string => this.#status
 
@@ -119,6 +98,7 @@ export class ExtensionSession {
   stop(): void {
     if (this.#timer) clearInterval(this.#timer)
     this.#timer = null
+    this.inspection.stop()
     const sessionId = this.#connection?.sessionId
     this.#connection = null
     if (sessionId) void evaluate(`${BRIDGE_EXPRESSION}?.disconnect(${JSON.stringify(sessionId)})`)
@@ -149,46 +129,19 @@ export class ExtensionSession {
       )
       if (!read) {
         this.#connection = null
+        this.inspection.reset()
         this.#setStatus('Reconnecting')
         return
       }
       this.figbird.update(read)
-      this.#updateInspection(read.inspection)
+      await this.inspection.refresh()
     } catch {
       this.#connection = null
+      this.inspection.reset()
       this.#setStatus('Cannot inspect this page')
     } finally {
       this.#polling = false
     }
-  }
-
-  async #setInspecting(active: boolean): Promise<void> {
-    const sessionId = this.#connection?.sessionId
-    if (!sessionId) return
-    const method = active ? 'startInspecting' : 'stopInspecting'
-    await evaluate(
-      `${BRIDGE_EXPRESSION}?.${method}(${JSON.stringify(sessionId)}${active ? ", '#1d65d8'" : ''})`,
-    )
-    this.#inspectionSnapshot = {
-      active,
-      version: this.#inspectionSnapshot.version + 1,
-    }
-    for (const listener of this.#inspectionListeners) listener()
-  }
-
-  #updateInspection(inspection: DevtoolsWireInspection): void {
-    if (inspection.version === this.#inspectionSnapshot.version) return
-    this.#inspectionSnapshot = {
-      active: inspection.active,
-      ...(inspection.label ? { label: inspection.label } : {}),
-      ...(inspection.queryCounts
-        ? { queryCounts: new Map(Object.entries(inspection.queryCounts)) }
-        : {}),
-      ...(inspection.supported !== undefined ? { supported: inspection.supported } : {}),
-      ...(inspection.truncated !== undefined ? { truncated: inspection.truncated } : {}),
-      version: inspection.version,
-    }
-    for (const listener of this.#inspectionListeners) listener()
   }
 
   #setStatus(status: string): void {

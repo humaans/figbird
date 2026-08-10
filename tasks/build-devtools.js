@@ -15,6 +15,7 @@ for (const browser of ['chrome', 'firefox']) {
     entryPoints: {
       devtools: path.join(root, 'extensions', 'src', 'devtools.ts'),
       panel: path.join(root, 'extensions', 'src', 'panel.tsx'),
+      picker: path.join(root, 'extensions', 'src', 'picker.ts'),
     },
     format: 'iife',
     jsx: 'automatic',
