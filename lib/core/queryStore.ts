@@ -57,6 +57,9 @@ export type ReconnectJitter = number | readonly [number, number]
 /** Delay before a retry. `attempt` is one-based: 1 is the first retry. */
 export type RetryDelay = number | ((attempt: number, error: Error) => number)
 
+type FetchAttemptOutcome =
+  { kind: 'completed' } | { kind: 'stale' } | { kind: 'failed'; error: Error }
+
 const DEFAULT_RETRIES = 3
 const MAX_RETRY_DELAY = 30_000
 
@@ -133,7 +136,6 @@ export class QueryStore<
   #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
   #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
-  #retryTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
   #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
@@ -526,62 +528,73 @@ export class QueryStore<
   }
 
   // Query lifecycle
-  async #queue(
-    queryId: string,
-    {
-      retryAttempt = 0,
-      expectedGeneration,
-    }: { retryAttempt?: number; expectedGeneration?: number } = {},
-  ): Promise<void> {
-    if (
-      expectedGeneration !== undefined &&
-      this.#queryGenerations.get(queryId) !== expectedGeneration
-    ) {
-      return
+  async #queue(queryId: string): Promise<void> {
+    this.#fetching({ queryId })
+    const generation = this.#queryGenerations.get(queryId)
+    if (generation === undefined) return
+
+    let retryAttempt = 0
+    while (true) {
+      const outcome = await this.#runFetchAttempt(queryId, generation)
+      if (outcome.kind !== 'failed') return
+
+      const query = this.#getQuery(queryId)
+      if (
+        !query ||
+        this.#queryGenerations.get(queryId) !== generation ||
+        !this.#hasRetryOwner(queryId) ||
+        !this.#shouldRetry(query, retryAttempt)
+      ) {
+        if (query && this.#queryGenerations.get(queryId) === generation) {
+          this.#fetchFailed({ queryId, error: outcome.error })
+        }
+        return
+      }
+
+      retryAttempt++
+      const configuredDelay = query.config.retryDelay ?? this.#retryDelay
+      const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
+      await new Promise<void>(resolve => setTimeout(resolve, delay))
+
+      if (this.#queryGenerations.get(queryId) !== generation) return
+      if (!this.#hasRetryOwner(queryId)) {
+        this.#fetchFailed({ queryId, error: outcome.error })
+        return
+      }
+    }
+  }
+
+  async #runFetchAttempt(queryId: string, generation: number): Promise<FetchAttemptOutcome> {
+    const query = this.#getQuery(queryId)
+    if (!query || this.#queryGenerations.get(queryId) !== generation) {
+      return { kind: 'stale' }
     }
 
-    if (retryAttempt === 0) {
-      this.#clearRetryTimer(queryId)
-      this.#fetching({ queryId })
+    const startedAt = Date.now()
+    const trace = {
+      generation,
+      serviceName: query.desc.serviceName,
+      method: query.desc.method,
+      ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
+      params: query.desc.params,
     }
-    const query = this.#getQuery(queryId)
-    const generation = this.#queryGenerations.get(queryId)
-    const startedAt = query ? Date.now() : undefined
-    const trace =
-      query && generation !== undefined
-        ? {
-            generation,
-            serviceName: query.desc.serviceName,
-            method: query.desc.method,
-            ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
-            params: query.desc.params,
-          }
-        : null
-    const journalCursor = trace ? this.#fetchEventJournal.begin(trace.serviceName) : null
-    if (trace) {
-      this.#events.emit({
-        kind: 'fetch:start',
-        serviceName: trace.serviceName,
-        method: trace.method,
-        queryId,
-        generation: trace.generation,
-        ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
-        params: trace.params,
-      })
-    }
+    const journalCursor = this.#fetchEventJournal.begin(trace.serviceName)
+    this.#events.emit({
+      kind: 'fetch:start',
+      serviceName: trace.serviceName,
+      method: trace.method,
+      queryId,
+      generation,
+      ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
+      params: trace.params,
+    })
+
     try {
       const result = await this.#fetch(queryId)
-      const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
+      const durationMs = Date.now() - startedAt
       const current = this.#getQuery(queryId)
-      if (
-        trace &&
-        durationMs !== undefined &&
-        current &&
-        this.#queryGenerations.get(queryId) === trace.generation
-      ) {
-        const journal = journalCursor
-          ? this.#fetchEventJournal.read(journalCursor)
-          : { events: [], overflowed: false }
+      if (current && this.#queryGenerations.get(queryId) === generation) {
+        const journal = this.#fetchEventJournal.read(journalCursor)
         if (journal.overflowed) {
           this.#discardFetchedResponse(queryId)
         } else {
@@ -589,101 +602,46 @@ export class QueryStore<
         }
         this.#recordFetchStats(queryId, { ok: true, durationMs })
       }
-      if (trace && durationMs !== undefined) {
-        const data = result.data
-        const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
-        this.#events.emit({
-          kind: 'fetch:end',
-          serviceName: trace.serviceName,
-          method: trace.method,
-          queryId,
-          generation: trace.generation,
-          durationMs,
-          itemCount,
-        })
-      }
+
+      const data = result.data
+      const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
+      this.#events.emit({
+        kind: 'fetch:end',
+        serviceName: trace.serviceName,
+        method: trace.method,
+        queryId,
+        generation,
+        durationMs,
+        itemCount,
+      })
+      return { kind: 'completed' }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
+      const durationMs = Date.now() - startedAt
       const current = this.#getQuery(queryId)
-      if (
-        trace &&
-        durationMs !== undefined &&
-        current &&
-        this.#queryGenerations.get(queryId) === trace.generation
-      ) {
+      const isCurrent = Boolean(current && this.#queryGenerations.get(queryId) === generation)
+      if (isCurrent) {
         this.#recordFetchStats(queryId, { ok: false, durationMs })
       }
-      if (trace && durationMs !== undefined) {
-        this.#events.emit({
-          kind: 'fetch:error',
-          serviceName: trace.serviceName,
-          method: trace.method,
-          queryId,
-          generation: trace.generation,
-          durationMs,
-          error,
-        })
-      }
 
-      if (
-        trace &&
-        current &&
-        this.#queryGenerations.get(queryId) === trace.generation &&
-        this.#hasRetryOwner(queryId) &&
-        this.#shouldRetry(current, retryAttempt)
-      ) {
-        this.#scheduleRetry({
-          queryId,
-          generation: trace.generation,
-          retryAttempt: retryAttempt + 1,
-          error,
-        })
-      } else if (trace && current && this.#queryGenerations.get(queryId) === trace.generation) {
-        this.#fetchFailed({ queryId, error })
-      }
+      this.#events.emit({
+        kind: 'fetch:error',
+        serviceName: trace.serviceName,
+        method: trace.method,
+        queryId,
+        generation,
+        durationMs,
+        error,
+      })
+      return isCurrent ? { kind: 'failed', error } : { kind: 'stale' }
     } finally {
-      if (journalCursor) {
-        this.#fetchEventJournal.end(journalCursor)
-      }
+      this.#fetchEventJournal.end(journalCursor)
     }
   }
 
   #shouldRetry(query: Query<unknown, TMeta, unknown>, retryAttempt: number): boolean {
     const retry = this.#normalizeRetry(query.config.retry ?? this.#retry)
     return retry !== false && retryAttempt < retry
-  }
-
-  #scheduleRetry({
-    queryId,
-    generation,
-    retryAttempt,
-    error,
-  }: {
-    queryId: string
-    generation: number
-    retryAttempt: number
-    error: Error
-  }): void {
-    this.#clearRetryTimer(queryId)
-    const configuredDelay = this.#getQuery(queryId)?.config.retryDelay ?? this.#retryDelay
-    const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, error)
-    const timer = setTimeout(() => {
-      this.#retryTimers.delete(queryId)
-      if (this.#queryGenerations.get(queryId) === generation && !this.#hasRetryOwner(queryId)) {
-        this.#fetchFailed({ queryId, error })
-        return
-      }
-      void this.#queue(queryId, { retryAttempt, expectedGeneration: generation })
-    }, delay)
-    this.#retryTimers.set(queryId, timer)
-  }
-
-  #clearRetryTimer(queryId: string): void {
-    const timer = this.#retryTimers.get(queryId)
-    if (timer === undefined) return
-    clearTimeout(timer)
-    this.#retryTimers.delete(queryId)
   }
 
   #normalizeRetry(retry: number | false): number | false {
@@ -1670,7 +1628,6 @@ export class QueryStore<
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
-    this.#clearRetryTimer(queryId)
     this.#clearReconcileState(queryId)
     this.#transactOverService(queryId, (service, query) => {
       if (query) {
