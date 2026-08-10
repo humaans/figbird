@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import { useFigbird } from './react.js'
+import { useFigbird } from './context.js'
+
+// Public untyped mutation hook intentionally returns `any` for backwards compatibility.
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+type UntypedData = any
 
 interface MutationState<T> {
   status: 'idle' | 'loading' | 'success' | 'error'
@@ -8,9 +12,7 @@ interface MutationState<T> {
 }
 
 type MutationAction<T> =
-  | { type: 'mutating' }
-  | { type: 'success'; payload: T }
-  | { type: 'error'; payload: Error }
+  { type: 'mutating' } | { type: 'success'; payload: T } | { type: 'error'; payload: Error }
 
 export interface UseMutationResult<
   TItem,
@@ -30,10 +32,6 @@ export interface UseMutationResult<
   error: Error | null
 }
 
-// Public untyped mutation hook intentionally returns `any` for backwards compatibility.
-// oxlint-disable-next-line @typescript-eslint/no-explicit-any
-type UntypedData = any
-
 /**
  * Simple mutation hook exposing crud methods
  * of any feathers service. The resulting state
@@ -41,16 +39,41 @@ type UntypedData = any
  * by the caller. As you create/update/patch/remove
  * entities using this helper, the entities cache gets updated.
  *
+ * Writes are non-optimistic: the cache reflects the change once the server acks.
+ * Optimistic writes are a feature of the current write API (`m`).
+ *
  * Returns untyped data. For type-safe mutations, use createHooks(figbird).
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
+ *
+ * @deprecated Superseded by the split write-side story: `m` is the stateless
+ * write proxy (callable anywhere, not a hook), `useAction` carries per-action
+ * `pending`/`error` (one hook call site per action), and `useMutating` answers
+ * entity/service-level "is anything in flight". This hook conflates the two
+ * roles — a service client with a single status slot — which forces hand-rolled
+ * pending-state machines on any screen with more than one action. Fully
+ * functional and not going away soon.
  */
 export function useMutation(
   serviceName: string,
 ): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
-  const figbird = useFigbird()
+  return useMutationImpl(useFigbird(), serviceName)
+}
 
-  const [state, dispatch] = useReducer(mutationReducer<UntypedData | UntypedData[]>, {
+/** The slice of a Figbird instance the mutation hook needs. @internal */
+interface MutatingFigbird {
+  mutateDesc(desc: UntypedData): Promise<UntypedData>
+}
+
+/**
+ * Instance-taking implementation shared by the context-bound `useMutation` and the
+ * bound-instance hooks that `createHooks` produces. @internal
+ */
+export function useMutationImpl(
+  figbird: MutatingFigbird,
+  serviceName: string,
+): UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData> {
+  const [state, dispatch] = useReducer(mutationReducer<UntypedData>, {
     status: 'idle',
     data: null,
     error: null,
@@ -65,7 +88,7 @@ export function useMutation(
   }, [])
 
   const executeMutation = useCallback(
-    async <TResult>(promise: Promise<TResult>): Promise<TResult> => {
+    async (promise: Promise<UntypedData>): Promise<UntypedData> => {
       dispatch({ type: 'mutating' })
       try {
         const item = await promise
@@ -85,55 +108,29 @@ export function useMutation(
   )
 
   const create = useCallback(
-    (data: UntypedData | UntypedData[], params?: unknown) =>
-      executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'create' as const,
-          data,
-          params,
-        }) as Promise<UntypedData | UntypedData[]>,
-      ),
+    (data: UntypedData, params?: unknown) =>
+      executeMutation(figbird.mutateDesc({ serviceName, method: 'create' as const, data, params })),
     [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['create']
+  )
   const update = useCallback(
     (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'update' as const,
-          id,
-          data,
-          params,
-        }) as Promise<UntypedData>,
+        figbird.mutateDesc({ serviceName, method: 'update' as const, id, data, params }),
       ),
     [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['update']
+  )
   const patch = useCallback(
     (id: string | number, data: UntypedData, params?: unknown) =>
       executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'patch' as const,
-          id,
-          data,
-          params,
-        }) as Promise<UntypedData>,
+        figbird.mutateDesc({ serviceName, method: 'patch' as const, id, data, params }),
       ),
     [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['patch']
+  )
   const remove = useCallback(
     (id: string | number, params?: unknown) =>
-      executeMutation(
-        figbird.mutate({
-          serviceName,
-          method: 'remove' as const,
-          id,
-          params,
-        }) as Promise<UntypedData>,
-      ),
+      executeMutation(figbird.mutateDesc({ serviceName, method: 'remove' as const, id, params })),
     [executeMutation, figbird, serviceName],
-  ) as UseMutationResult<UntypedData, UntypedData, UntypedData, UntypedData>['remove']
+  )
 
   return useMemo(
     () => ({

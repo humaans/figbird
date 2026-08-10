@@ -1,4 +1,9 @@
 import sift from 'sift'
+import {
+  LOCAL_QUERY_OPERATORS,
+  SERVER_ONLY_QUERY_FILTERS,
+  SERVER_WINDOW_QUERY_FILTERS,
+} from '../core/queryClassification.js'
 
 export interface Query {
   [key: string]: string | number | boolean | null | undefined | Query | Query[]
@@ -37,10 +42,11 @@ function cleanQuery(query: QueryValue, operators: string[], filters: string[]): 
   return query
 }
 
-// Feathers control fields that are stripped from queries before matching
-export const FILTERS = ['$sort', '$limit', '$skip', '$select']
-// Query operators that are preserved for matching
-export const OPERATORS = ['$in', '$nin', '$lt', '$lte', '$gt', '$gte', '$ne', '$or']
+// Feathers control fields that are stripped from queries before matching, and the
+// operators preserved for matching — derived from classification's canonical sets
+// so "what the matcher evaluates" and "what classifies as local" cannot drift.
+export const FILTERS = [...SERVER_WINDOW_QUERY_FILTERS, ...SERVER_ONLY_QUERY_FILTERS]
+export const OPERATORS = [...LOCAL_QUERY_OPERATORS]
 
 // Removes special filters from the `query` parameters
 export function prepareQuery(

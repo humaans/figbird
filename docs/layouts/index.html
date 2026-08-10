@@ -18,6 +18,12 @@
 <div class="page">
   <div id="main">
     <div id="kube-component" class="content">
+      {{ if and (isset .Params "toc") .Params.toc }}
+      <details class="toc-mobile">
+        <summary>Contents</summary>
+        {{ replace .TableOfContents `id="TableOfContents"` "" | safeHTML }}
+      </details>
+      {{ end }}
       <div class='Image'>
         <img src='figbird.jpg' />
       </div>

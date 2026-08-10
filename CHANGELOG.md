@@ -1,5 +1,50 @@
 # Figbird Changelog
 
+## 0.24.0
+
+The relational rewrite.
+
+Figbird already made it easy to fetch lists and records and keep them live. But joining data across services was still left to you. You either had to over-fetch whole datasets so everything was available locally, or make several fetches per screen and stitch the results together by hand.
+
+This release makes joins a first-class part of Figbird. Each screen can now ask for the minimum data it needs — a window of records and their relations, declared as a single query. Figbird keeps that query fully realtime-reactive, merging events locally whenever it can safely determine the result, and refetching when it can’t.
+
+This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `useQueries` for suspending on several independent queries in parallel, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
+
+Realtime handling is safer across all APIs. Fetches and overlapping refetches no
+longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries
+remain fixed snapshots. When an item being viewed is removed, `useGet` and `useQuery`
+return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
+
+Also included:
+
+- Opt-in `figbird/devtools` for inspecting queries, fetches, realtime events, and
+  writes, plus richer lifecycle and payload details through `figbird.events`.
+- `matcherKey` for explicitly sharing queries that use equivalent custom matchers.
+- `reconnectJitter` for staggering reconnect refetches, defaulting to `[0, 3000]` ms.
+- Reliable ordering for materialized finds: queries use the network unless `$sort` or
+  `defaultSort` defines the order.
+- Package builds that no longer require a global React shim.
+- Subscriber errors no longer interrupt updates to other consumers.
+
+See the [docs](https://humaans.github.io/figbird) for the full story. The old hooks still work — see Deprecated below — so you can migrate gradually.
+
+Breaking:
+
+- `defineSchema` service-definition maps are replaced by `createSchema` + `service` +
+  relationship helpers.
+- `figbird.query(desc)` → `figbird.queryDesc(desc)`
+- `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
+- `figbird.query(builder | definition, args?)` is now the non-React mirror of `useQuery`
+- Constructor option `eventBatchProcessingInterval` renamed to `eventBatchInterval`.
+- Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
+- Removed orphaned exports: the `Item`/`Create`/`Update`/`Patch`/`Query`/`Methods`/
+  `UntypedService` type extractors (use the `ServiceItem<S, N>` family), bare
+  `one`/`many`/`embed` (reachable only via the typed relationships factories),
+  `createQueryBuilderProxy`, and classification internals (use `figbird.explain()`).
+
+Deprecated (still fully functional): `useFind`/`useGet` in favor of
+`useQuery` + builders, and `useMutation` in favor of `m` + `useAction` + `useMutating`.
+
 ## 0.23.0
 
 - Breaking: replace `defineSchema`/`defineService` service-object schemas with a canonical service-definition map passed to `defineSchema<ServiceMap>()`.

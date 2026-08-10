@@ -1,9 +1,9 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers.js'
 import { Figbird } from '../lib/core/figbird.js'
-import { defineSchema } from '../lib/core/schema.js'
+import { createSchema, service } from '../lib/core/schema.js'
 import { createHooks } from '../lib/react/createHooks.js'
-import { FigbirdProvider } from '../lib/react/react.js'
+import { FigbirdProvider } from '../lib/react/context.js'
 import { dom, mockFeathers } from './helpers.js'
 
 // Define typed query interfaces
@@ -38,16 +38,18 @@ interface User {
 }
 
 test('matcher receives properly typed query from schema', async t => {
-  const schema = defineSchema<{
-    todos: {
-      item: Todo
-      query: TodoQuery
-    }
-    users: {
-      item: User
-      query: UserQuery
-    }
-  }>()
+  const schema = createSchema({
+    services: {
+      todos: service<{
+        item: Todo
+        query: TodoQuery
+      }>(),
+      users: service<{
+        item: User
+        query: UserQuery
+      }>(),
+    },
+  })
 
   const feathers = mockFeathers({
     todos: {
@@ -70,7 +72,7 @@ test('matcher receives properly typed query from schema', async t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Test that the query is properly typed in matcher
-  const todosQuery = figbird.query(
+  const todosQuery = figbird.queryDesc(
     {
       serviceName: 'todos',
       method: 'find',
@@ -118,7 +120,7 @@ test('matcher receives properly typed query from schema', async t => {
   unsubscribe()
 
   // Test with users service to verify different query type
-  const usersQuery = figbird.query(
+  const usersQuery = figbird.queryDesc(
     {
       serviceName: 'users',
       method: 'find',
@@ -157,12 +159,14 @@ test('matcher receives properly typed query from schema', async t => {
 test('React hooks provide typed query in matcher', async t => {
   const { render, unmount, flush } = dom()
 
-  const schema = defineSchema<{
-    todos: {
-      item: Todo
-      query: TodoQuery
-    }
-  }>()
+  const schema = createSchema({
+    services: {
+      todos: service<{
+        item: Todo
+        query: TodoQuery
+      }>(),
+    },
+  })
 
   const feathers = mockFeathers({
     todos: {
@@ -246,12 +250,14 @@ test('React hooks provide typed query in matcher', async t => {
 })
 
 test('matcher with undefined query works correctly', async t => {
-  const schema = defineSchema<{
-    items: {
-      item: { id: string; name: string }
-      query: { search?: string }
-    }
-  }>()
+  const schema = createSchema({
+    services: {
+      items: service<{
+        item: { id: string; name: string }
+        query: { search?: string }
+      }>(),
+    },
+  })
 
   const feathers = mockFeathers({
     items: {
@@ -266,7 +272,7 @@ test('matcher with undefined query works correctly', async t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Query with no query params - matcher should receive undefined
-  const query = figbird.query(
+  const query = figbird.queryDesc(
     {
       serviceName: 'items',
       method: 'find',
@@ -297,4 +303,38 @@ test('matcher with undefined query works correctly', async t => {
   await new Promise(resolve => setTimeout(resolve, 50))
   t.true(undefinedQueryHandled, 'Matcher handled undefined query correctly')
   unsubscribe()
+})
+
+test('matcherKey explicitly shares a custom-matcher query', async t => {
+  const schema = createSchema({
+    services: {
+      todos: service<{ item: Todo; query: TodoQuery }>(),
+    },
+  })
+  const feathers = mockFeathers({
+    todos: {
+      data: {
+        '1': { id: '1', title: 'Task 1', completed: false, priority: 1, tags: [] },
+      },
+    },
+  })
+  const figbird = new Figbird({ schema, adapter: new FeathersAdapter(feathers) })
+  const matcher = (query: TodoQuery | undefined) => (item: Todo) =>
+    query?.completed === undefined || item.completed === query.completed
+  const desc = {
+    serviceName: 'todos',
+    method: 'find' as const,
+    params: { query: { completed: false } },
+  }
+  const first = figbird.queryDesc(desc, { matcher, matcherKey: 'incomplete-todos' })
+  const second = figbird.queryDesc(desc, { matcher, matcherKey: 'incomplete-todos' })
+
+  t.is(first.hash(), second.hash())
+  const unsubFirst = first.subscribe(() => {})
+  const unsubSecond = second.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 20))
+  t.is(feathers.service('todos').counts.find, 1)
+
+  unsubFirst()
+  unsubSecond()
 })

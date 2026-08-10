@@ -23,6 +23,17 @@ export function useFigbird<S extends Schema = AnySchema, A extends Adapter = Ada
   return context
 }
 
+/**
+ * Like `useFigbird`, but returns `undefined` instead of throwing when no provider is
+ * present. Used by hooks created via `createHooks(figbird)`, which fall back to their
+ * bound instance — making the provider optional for singleton apps while SSR and tests
+ * can still inject per-tree instances through context.
+ */
+export function useFigbirdMaybe<S extends Schema = AnySchema, A extends Adapter = Adapter>():
+  Figbird<S, A> | undefined {
+  return useContext(FigbirdContext as React.Context<Figbird<S, A> | undefined>)
+}
+
 interface FigbirdProviderProps<S extends Schema = AnySchema, A extends Adapter = Adapter> {
   figbird: Figbird<S, A>
   children: ReactNode

@@ -17,6 +17,11 @@ export interface EventHandlers {
   removed: (item: unknown) => void
 }
 
+/** Service context supplied when the adapter evaluates a query locally. */
+export interface MatcherContext {
+  serviceName: string
+}
+
 /**
  * Unified adapter interface
  * The adapter is service-agnostic and works with unknown items
@@ -43,13 +48,37 @@ export interface Adapter<
   // Optional real-time support
   subscribe?(serviceName: string, handlers: EventHandlers): () => void
 
-  // Required internal methods
+  // Optional reconnect support. Adapters should call the handler when the transport
+  // reconnects after a period where realtime events may have been missed.
+  subscribeToReconnect?(handler: () => void): () => void
+
+  /**
+   * Read an item's id, or `undefined` when absent. Pure extraction — whether a
+   * missing id is noteworthy is the store's call (it warns on event/fetch paths
+   * and stays silent on presence checks), not the adapter's.
+   */
   getId(item: unknown): string | number | undefined
 
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 
   // Matcher is typed with TQuery but works with unknown items
-  matcher(query: TQuery | undefined, options?: unknown): (item: unknown) => boolean
+  matcher(
+    query: TQuery | undefined,
+    options?: unknown,
+    context?: MatcherContext,
+  ): (item: unknown) => boolean
+
+  /**
+   * Optional: names of custom query operators the app has taught this adapter to
+   * evaluate on every service.
+   */
+  customOperators?: readonly string[]
+
+  /**
+   * Optional service-aware custom operator lookup. The returned names include
+   * globally supported operators and operators supported for this service.
+   */
+  customOperatorsFor?(serviceName: string): readonly string[]
 
   // Meta transformation methods
   itemAdded(meta: TMeta): TMeta
@@ -57,11 +86,30 @@ export interface Adapter<
 
   // Initialize empty meta to avoid unsafe casts
   emptyMeta(): TMeta
+
+  /**
+   * Meta for a find answered locally from the cache: the store knows the window it
+   * computed (`total`/`limit`/`skip`), but only the adapter knows the meta envelope
+   * its consumers expect those numbers in.
+   */
+  findMeta(window: { total: number; limit: number; skip: number }): TMeta
+}
+
+/**
+ * Resolve the operators an adapter can evaluate for one service, including the
+ * legacy global-only contract.
+ */
+export function locallySupportedOperators(
+  adapter: Pick<Adapter, 'customOperators' | 'customOperatorsFor'>,
+  serviceName: string,
+): ReadonlySet<string> {
+  return new Set(adapter.customOperatorsFor?.(serviceName) ?? adapter.customOperators ?? [])
 }
 
 // Helper types to extract adapter properties
-export type AdapterParams<A> =
-  A extends Adapter<infer P, Record<string, unknown>, unknown> ? P : never
-export type AdapterFindMeta<A> = A extends Adapter<unknown, infer M, unknown> ? M : never
-export type AdapterQuery<A> =
-  A extends Adapter<unknown, Record<string, unknown>, infer Q> ? Q : never
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterParams<A> = A extends Adapter<infer P, any, any> ? P : never
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterFindMeta<A> = A extends Adapter<any, infer M, any> ? M : never
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdapterQuery<A> = A extends Adapter<any, any, infer Q> ? Q : never

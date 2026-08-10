@@ -1,60 +1,140 @@
 // core
-export { Figbird, isFetching, isIdle, isLoading, isPending } from './core/figbird.js'
+export {
+  Figbird,
+  defineQuery,
+  QUERY_DEFINITION_BRAND,
+  QueryArgsError,
+  isFetching,
+  isIdle,
+  isLoading,
+  isPending,
+  isQueryDefinition,
+} from './core/figbird.js'
+
+export type {
+  ArgsAndOptions,
+  DefineQuery,
+  DevtoolsPreference,
+  EventType,
+  FigbirdEvent,
+  FigbirdEvents,
+  InFlightMutation,
+  MutationActivity,
+  MutationCallOptions,
+  MutationEventMethod,
+  MutationMethod,
+  MutationsHandle,
+  MutationsProxy,
+  PreparedQuery,
+  QueryDefinition,
+  ReconnectJitter,
+  StandardSchemaV1,
+  VisibilitySource,
+} from './core/figbird.js'
+export { DevtoolsControl } from './core/figbird.js'
+export { ItemRemovedError, isItemRemovedError } from './core/errors.js'
 
 // schema
-export { defineSchema } from './core/schema.js'
+export { createSchema, service } from './core/schema.js'
 export type {
   AnySchema,
-  Create,
-  Item,
-  Methods,
-  Patch,
-  Query,
+  RelationshipDef,
+  RelationshipHelpers,
+  RelationshipHop,
+  RelationshipsConfig,
   Schema,
-  SchemaConfig,
-  SchemaDefinitions,
-  SchemaServiceConfig,
+  SchemaRelationships,
+  Service,
   ServiceByName,
-  ServiceConfig,
   ServiceCreate,
-  ServiceDefinition,
-  ServiceDefinitionMap,
   ServiceItem,
-  ServiceMethod,
   ServiceMethods,
-  ServiceMethodsMap,
   ServiceNames,
   ServicePatch,
   ServiceQuery,
+  ServiceTypeDefinition,
   ServiceUpdate,
-  TypedSchema,
-  UntypedService,
-  Update,
 } from './core/schema.js'
+
+// query builder
+export { QueryBuilder } from './core/queryBuilder.js'
+export type { QueryAST, QueryBuilderProxy } from './core/queryBuilder.js'
+
+// query classification report types (returned by figbird.explain / figbird.inspect)
+export type { ClassificationReason, QueryNodeClass } from './core/queryClassification.js'
+export type { ExplainNode, ExplainReport, InspectedQuery } from './core/figbird.js'
+
+// relational query
+export { RelationalQueryRef } from './core/figbird.js'
+export type { RelationalQueryState } from './core/figbird.js'
 
 // adapters
 export { FeathersAdapter } from './adapters/feathers.js'
+export type {
+  CustomOperator,
+  CustomOperatorContext,
+  CustomOperatorRegistration,
+  FeathersAdapterOptions,
+} from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
 // Adapter interface and types
-export type { Adapter, EventHandlers } from './adapters/adapter.js'
+export type {
+  Adapter,
+  AdapterFindMeta,
+  AdapterParams,
+  AdapterQuery,
+  EventHandlers,
+  MatcherContext,
+} from './adapters/adapter.js'
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
-export { FigbirdProvider, useFigbird } from './react/react.js'
-export { useFeathers } from './react/useFeathers.js'
-export { useMethod } from './react/useMethod.js'
+export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
+// The write-side story: m is the stateless write proxy (figbird.m / createHooks);
+// useAction carries per-action pending/error; useMutating answers entity/service-level
+// "is anything in flight".
+export { useAction } from './react/useAction.js'
+export { useMutating } from './react/useMutating.js'
+// Deprecated: superseded by m + useAction + useMutating.
 export { useMutation } from './react/useMutation.js'
-export { useFind, useGet } from './react/useQuery.js'
-export { useService } from './react/useService.js'
+// useFeathers is the raw-client escape hatch, typed via createHooks.
+export { useFeathers } from './react/useFeathers.js'
+// Legacy generation (deprecated): descriptor-based reads. Fully functional, but new
+// code should use useQuery + builders.
+export { useFind, useGet } from './react/useQueryByDesc.js'
+// useQuery is the unified, Suspense-by-default builder hook; pass { suspense: false }
+// for the explicit tagged-union variant.
+export { useQuery } from './react/useQuery.js'
+// useQueries suspends on several independent queries at once — one boundary, all
+// fetches in parallel, no sequential waterfall.
+export { useQueries } from './react/useQueries.js'
+export { useDelayedFlag } from './react/useDelayedFlag.js'
+// The rest of the no-flash kit (see the "no-flash checklist" docs section):
+export { useDebouncedTransition } from './react/useDebouncedTransition.js'
+export { DelayedFallback } from './react/DelayedFallback.js'
+export type {
+  RelationalQueryResult,
+  SuspenseQueryResult,
+  UseQueryHook,
+  UseQueryOptions,
+} from './react/useQuery.js'
+export type { UseQueriesHook, UseQueriesOptions } from './react/useQueries.js'
 
 // Query-related types for advanced usage
-export type { QueryConfig, QueryState, QueryStatus } from './core/figbird.js'
+export type {
+  FindQueryConfig,
+  GetQueryConfig,
+  QueryConfig,
+  QueryState,
+  QueryStatus,
+} from './core/figbird.js'
 
 // React hook result types
-export type { UseMethodResult } from './react/useMethod.js'
+export type { UseActionHook, UseActionResult } from './react/useAction.js'
+export type { UseMutatingFilter } from './react/useMutating.js'
 export type { UseMutationResult } from './react/useMutation.js'
-export type { QueryResult } from './react/useQuery.js'
+export type { QueryResult } from './react/useQueryByDesc.js'
 
 // Feathers-specific types for TypeScript users
 export type {

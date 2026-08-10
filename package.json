@@ -1,6 +1,6 @@
 {
   "name": "figbird",
-  "version": "0.23.0",
+  "version": "0.24.0-pre.6",
   "description": "Effortless realtime data management for React + Feathers applications.",
   "type": "module",
   "types": "./dist/esm/index.d.ts",
@@ -11,6 +11,11 @@
       "types": "./dist/esm/index.d.ts",
       "require": "./dist/cjs/index.js",
       "import": "./dist/esm/index.js"
+    },
+    "./testing": {
+      "types": "./dist/esm/testing.d.ts",
+      "require": "./dist/cjs/testing.js",
+      "import": "./dist/esm/testing.js"
     },
     "./*": {
       "types": "./dist/esm/*.d.ts",
@@ -36,8 +41,11 @@
     "build": "node ./tasks/build.js",
     "prepack": "npm run build",
     "watch": "node ./tasks/build.js -w",
-    "release": "np",
-    "release:beta": "np --tag=beta",
+    "demo": "npm --prefix demo install && npm --prefix demo run dev",
+    "demo:server": "npm --prefix demo run dev:server",
+    "demo:client": "npm --prefix demo run dev:client",
+    "release": "np --no-publish && npm publish",
+    "release:next": "np --tag=next --any-branch --no-publish && npm publish --tag=next",
     "docs:build": "hugo -s docs",
     "docs:watch": "hugo server -s docs",
     "docs:release": "hugo -s docs && gh-pages -d docs/public"

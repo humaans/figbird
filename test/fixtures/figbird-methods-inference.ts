@@ -1,6 +1,6 @@
 /* oxlint-disable @typescript-eslint/no-unused-vars */
 import type { FeathersClient } from '../../lib'
-import { FeathersAdapter, Figbird, defineSchema } from '../../lib'
+import { FeathersAdapter, Figbird, createSchema, service } from '../../lib'
 
 // Define a simple Person model
 interface Person {
@@ -13,12 +13,12 @@ interface PersonService {
   item: Person
 }
 
-interface AppSchemaTypes {
-  'api/people': PersonService
-}
-
 // Build schema with a single service
-const schema = defineSchema<AppSchemaTypes>()
+const schema = createSchema({
+  services: {
+    'api/people': service<PersonService>(),
+  },
+})
 
 // Figbird instance with Feathers adapter (meta inferred as FeathersFindMeta)
 const feathers = {} as FeathersClient
@@ -31,9 +31,9 @@ function subscribeFn<Fn extends (...args: never[]) => unknown>(q: { subscribe: F
 }
 
 // QueryRef for find and get to inspect subscribe param typing
-const findSubscribe = subscribeFn(figbird.query({ serviceName: 'api/people', method: 'find' }))
+const findSubscribe = subscribeFn(figbird.queryDesc({ serviceName: 'api/people', method: 'find' }))
 const getSubscribe = subscribeFn(
-  figbird.query({ serviceName: 'api/people', method: 'get', resourceId: '1' }),
+  figbird.queryDesc({ serviceName: 'api/people', method: 'get', resourceId: '1' }),
 )
 
 // Export the state type expected by the subscribe callback for both query kinds
@@ -46,5 +46,5 @@ const createDesc = {
   method: 'create',
   data: {} as Partial<Person>,
 } as const
-const createPromise = figbird.mutate(createDesc)
+const createPromise = figbird.mutateDesc(createDesc)
 export type CreateResult = Awaited<typeof createPromise>

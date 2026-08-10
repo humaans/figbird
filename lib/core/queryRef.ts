@@ -57,9 +57,21 @@ export class QueryRef<
    * Subscribes to this query's state. Triggers fetching if needed.
    * Returns an unsubscribe function.
    */
-  subscribe(fn: (state: QueryState<T, TMeta>) => void): () => void {
+  subscribe(
+    fn: (state: QueryState<T, TMeta>) => void,
+    options?: { staleTime?: number | undefined },
+  ): () => void {
     this.#queryStore.materialize(this)
-    return this.#queryStore.subscribe<T>(this.#queryId, fn)
+    return this.#queryStore.subscribe<T>(this.#queryId, fn, options)
+  }
+
+  /**
+   * Re-run the store's subscribe-time freshness check without adding a listener.
+   * Relational refs use this when a stricter subscriber joins an already-live tree.
+   */
+  ensureFresh(options?: { staleTime?: number | undefined }): void {
+    this.#queryStore.materialize(this)
+    this.#queryStore.ensureFresh(this.#queryId, options)
   }
 
   /** Returns the latest known state for this query, if available. */

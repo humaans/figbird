@@ -1,4 +1,5 @@
 import type { AnySchema, Schema, ServiceItem, ServiceNames } from './schema.js'
+import type { StoredQueryClass } from './queryClassification.js'
 
 /**
  * Event types supported by Figbird
@@ -20,6 +21,20 @@ export interface QueuedEvent {
   serviceName: string
   type: EventType
   items: unknown[]
+}
+
+/**
+ * A realtime event after it has been applied to the entity cache. Carries the
+ * previous entity so downstream invalidation logic (e.g. relational filters) can
+ * detect which fields changed.
+ */
+export interface ProcessedRealtimeEvent {
+  serviceName: string
+  type: EventType
+  item: unknown
+  previousItem: unknown | null
+  /** Always defined — events whose item has no resolvable id are never applied. */
+  itemId: string | number
 }
 
 export type QueryStatus = 'loading' | 'success' | 'error'
@@ -78,10 +93,18 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   queryId: string
   desc: QueryDescriptor
   config: QueryConfig<T, TQuery>
+  /**
+   * How this query is maintained, computed once at materialize time (`desc` and
+   * `config` are frozen — they are what the query id hashes). The realtime event
+   * loop reads this instead of re-walking the query per item.
+   */
+  classification: StoredQueryClass
   pending: boolean
   dirty: boolean
   filterItem: (item: ElementType<T>) => boolean
   state: QueryState<T, TMeta>
+  /** Epoch ms of the last successful fetch — the seed of staleness decisions. */
+  fetchedAt?: number
 }
 
 /**
@@ -91,6 +114,13 @@ export interface ServiceState<TMeta = Record<string, unknown>> {
   entities: Map<string | number, unknown>
   queries: Map<string, Query<unknown, TMeta, unknown>>
   itemQueryIndex: Map<string | number, Set<string>>
+  /**
+   * Set when an unfiltered allPages fetch (a filterless `.all()`) succeeded: the
+   * complete row set is in the entity cache, realtime maintains it, and matcher-
+   * decidable finds are answered locally without a roundtrip. A *filtered* `.all()`
+   * is complete only for its own query and never sets this.
+   */
+  materialized?: { queryId: string; fetchedAt: number }
 }
 
 /**
@@ -116,6 +146,16 @@ export interface FindDescriptor {
  * Discriminated union of query descriptors
  */
 export type QueryDescriptor = GetDescriptor | FindDescriptor
+
+/**
+ * The one sanctioned crossing of the `params?: unknown` boundary: project the
+ * adapter-shaped params down to the `query` object figbird inspects (for
+ * classification, matching, and window maintenance).
+ */
+export function queryOfParams(params: unknown): Record<string, unknown> | undefined {
+  // `|| undefined` normalizes a runtime null (or other falsy junk) to undefined.
+  return (params as { query?: Record<string, unknown> } | undefined)?.query || undefined
+}
 
 /**
  * Helper type to extract element type from arrays
@@ -162,6 +202,21 @@ interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
    * be serialized into a stable shared cache key.
    */
   matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
+
+  /**
+   * Explicit cache-sharing key for custom matchers. Queries with the same
+   * descriptor and matcherKey share one result; the key must therefore identify
+   * equivalent matcher behavior. Without it, matcher queries stay hook-isolated.
+   */
+  matcherKey?: string
+
+  /**
+   * Treat this query as server-maintained. Realtime events from the query's service
+   * refetch active subscribers and mark inactive cached queries pending.
+   * Use this for server-authoritative projections, virtual fields, search, or
+   * other server-only membership/order/value semantics.
+   */
+  server?: boolean
 }
 
 /**
@@ -187,8 +242,7 @@ export interface FindQueryConfig<TItem = unknown, TQuery = unknown> extends Base
  * Discriminated union of query configurations
  */
 export type QueryConfig<TItem = unknown, TQuery = unknown> =
-  | GetQueryConfig<TItem, TQuery>
-  | FindQueryConfig<TItem, TQuery>
+  GetQueryConfig<TItem, TQuery> | FindQueryConfig<TItem, TQuery>
 
 /**
  * Combined config for get operations
@@ -212,8 +266,7 @@ export type CombinedFindConfig<TItem = unknown, TQuery = unknown> = FindDescript
  * Combined config for internal use
  */
 export type CombinedConfig<TItem = unknown, TQuery = unknown> =
-  | CombinedGetConfig<TItem, TQuery>
-  | CombinedFindConfig<TItem, TQuery>
+  CombinedGetConfig<TItem, TQuery> | CombinedFindConfig<TItem, TQuery>
 
 /**
  * Item matcher function type
@@ -241,6 +294,14 @@ export type InferQueryData<S extends Schema, D extends QueryDescriptor> = S exte
 interface BaseMutationDescriptor {
   serviceName: string
   params?: unknown
+  /**
+   * When set, apply a synthetic event to the local store before the network round-trip.
+   * On success the server's response replaces the optimistic item; on failure the change
+   * is rolled back and a `mutate:rollback` event is emitted. `true` synthesizes the item
+   * from the request; a non-boolean value is applied as the optimistic item verbatim
+   * (typed per service by the `mutateDesc` overloads — this is the untyped base).
+   */
+  optimistic?: boolean | unknown
 }
 
 /**
@@ -312,7 +373,8 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
   config: QueryConfig<TItem, TQuery>
 } {
   // Extract common properties
-  const { serviceName, method, skip, realtime, fetchPolicy, matcher, ...rest } = combinedConfig
+  const { serviceName, method, skip, realtime, fetchPolicy, matcher, matcherKey, server, ...rest } =
+    combinedConfig
 
   if (method === 'get') {
     const { resourceId, ...params } = rest as CombinedGetConfig<TItem, TQuery>
@@ -329,6 +391,8 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(realtime !== undefined && { realtime }),
       ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
+      ...(matcherKey !== undefined && { matcherKey }),
+      ...(server !== undefined && { server }),
     }
 
     return { desc, config: normalizeQueryConfig(config) }
@@ -346,7 +410,9 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(realtime !== undefined && { realtime }),
       ...(fetchPolicy !== undefined && { fetchPolicy }),
       ...(matcher !== undefined && { matcher }),
+      ...(matcherKey !== undefined && { matcherKey }),
       ...(allPages !== undefined && { allPages }),
+      ...(server !== undefined && { server }),
     }
 
     return { desc, config: normalizeQueryConfig(config) }

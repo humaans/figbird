@@ -1,0 +1,5 @@
+{{ if ge .Level 2 -}}
+<h{{ .Level }} id="{{ .Anchor | safeURL }}">{{ .Text }}<a class="heading-anchor" href="#{{ .Anchor | safeURL }}" aria-label="Link to this section">#</a></h{{ .Level }}>
+{{- else -}}
+<h{{ .Level }} id="{{ .Anchor | safeURL }}">{{ .Text }}</h{{ .Level }}>
+{{- end }}

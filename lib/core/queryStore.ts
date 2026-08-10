@@ -1,20 +1,86 @@
-import type { Adapter, QueryResponse } from '../adapters/adapter.js'
+import { locallySupportedOperators, type Adapter, type QueryResponse } from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
-import type {
-  ElementType,
-  Event,
-  FindQueryConfig,
-  InferMutationData,
-  ItemMatcher,
-  MutationDescriptor,
-  Query,
-  QueryConfig,
-  QueryDescriptor,
-  QueryState,
-  QueuedEvent,
-  ServiceState,
+import { isEphemeralQuery } from './queryIdentity.js'
+import { FigbirdEventEmitter, type MutationMethod } from './events.js'
+import { MutationTracker } from './mutationTracker.js'
+import { sortRowsLocally } from './sort.js'
+import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchRebase.js'
+import {
+  addQueryToItemIndex,
+  applyEventsToService,
+  createServiceState,
+  diffCompleteSet,
+  groupQueuedEvents,
+  isUnfilteredFindQuery,
+  replayFetchedQueryFromEvents,
+  removeQueryFromItemIndex,
+  splitWindow,
+  updateQueriesFromEvents,
+} from './windowMaintenance.js'
+import {
+  classifyStoredQuery,
+  isServerMaintained,
+  type StoredQueryClass,
+} from './queryClassification.js'
+import {
+  queryOfParams,
+  type ElementType,
+  type Event,
+  type FindQueryConfig,
+  type GetQueryConfig,
+  type InferMutationData,
+  type ItemMatcher,
+  type MutationDescriptor,
+  type ProcessedRealtimeEvent,
+  type Query,
+  type QueryConfig,
+  type QueryDescriptor,
+  type QueryState,
+  type QueuedEvent,
+  type ServiceState,
 } from './queryTypes.js'
+
+/**
+ * Where the store learns whether the tab is visible. Injectable for tests and
+ * non-browser environments; the default reads `document.visibilityState`.
+ */
+export interface VisibilitySource {
+  isHidden(): boolean
+  /** Notify on visibility changes. Returns an unsubscribe function. */
+  onChange(listener: () => void): () => void
+}
+
+/** Random reconnect delay in ms. A number means `[0, number]`; `0` disables jitter. */
+export type ReconnectJitter = number | readonly [number, number]
+
+type ItemId = string | number
+
+/** The realtime event type a mutation verb produces. */
+const MUTATION_EVENT_TYPE = {
+  create: 'created',
+  update: 'updated',
+  patch: 'patched',
+  remove: 'removed',
+} as const satisfies Record<MutationMethod, Event['type']>
+
+export interface QueryFetchStats {
+  fetchCount: number
+  errorCount: number
+  lastDurationMs?: number
+  totalDurationMs: number
+}
+
+function documentVisibility(): VisibilitySource {
+  return {
+    isHidden: () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
+    onChange: listener => {
+      if (typeof document === 'undefined') return () => {}
+      document.addEventListener('visibilitychange', listener)
+      return () => document.removeEventListener('visibilitychange', listener)
+    },
+  }
+}
 
 /**
  * Internal query store managing entities, queries, and subscriptions.
@@ -26,39 +92,121 @@ export class QueryStore<
   TQuery = Record<string, unknown>,
 > {
   #adapter: Adapter<TParams, TMeta, TQuery>
+  #events: FigbirdEventEmitter
+  #mutations: MutationTracker
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
+  #processedEventListeners: Set<(event: ProcessedRealtimeEvent) => void> = new Set()
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
   #serviceNamesByQueryId: Map<string, string> = new Map()
+  #queryGenerations: Map<string, number> = new Map()
+  #queryStats: Map<string, QueryFetchStats> = new Map()
+  #nextQueryGeneration = 1
+
+  #fetchEventJournal = new FetchEventJournal()
+
+  // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
+  // with trailing timers, and the set of reconciliations deferred while hidden.
+  #reconcileCooldown: number
+  #visibility: VisibilitySource
+  #reconcileWindows: Map<
+    string,
+    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null }
+  > = new Map()
+  #deferredWhileHidden: Set<string> = new Set()
+
+  #defaultSort: Record<string, number> | undefined
+  #reconnectJitter: readonly [number, number]
+  #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
+  #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
-  #eventBatchProcessingInterval: number | undefined = 100
+  #eventBatchInterval: number | undefined = 100
   #processingEventQueue = false
+  // Query ids whose listener notification has been deferred to the next microtask
+  // (see #scheduleDeferredNotify). Null when nothing is scheduled.
+  #deferredNotifyQueryIds: Set<string> | null = null
 
   constructor({
     adapter,
-    eventBatchProcessingInterval = 100,
+    eventBatchInterval = 100,
+    reconcileCooldown = 2000,
+    reconnectJitter = [0, 3000],
+    visibility,
+    defaultSort,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
-    eventBatchProcessingInterval?: number | undefined
+    eventBatchInterval?: number | undefined
+    /**
+     * Minimum interval (ms) between event-driven refetches of one query — burst
+     * safety for server-window/server-authoritative reconciliation. The first
+     * event refetches immediately (leading edge); further events within the
+     * window coalesce into one guaranteed trailing refetch. `0` disables.
+     */
+    reconcileCooldown?: number
+    /** Random delay before reconnect sweeps. A number means `[0, number]`; `0` disables. */
+    reconnectJitter?: ReconnectJitter
+    /** Visibility source for hidden-tab gating. Defaults to `document`. */
+    visibility?: VisibilitySource
+    /**
+     * The backend's implicit ordering for queries without `$sort` (e.g.
+     * `{ createdAt: -1, id: -1 }`). Lets window maintenance place realtime items
+     * into unsorted windows locally instead of refetching. Must mirror the
+     * server's actual default order — divergence shows up as misplaced rows
+     * until the next fetch.
+     */
+    defaultSort?: Record<string, number>
   }) {
     this.#adapter = adapter
-    this.#eventBatchProcessingInterval = eventBatchProcessingInterval
+    this.#defaultSort = defaultSort
+    this.#eventBatchInterval = eventBatchInterval
+    this.#events = new FigbirdEventEmitter()
+    this.#mutations = new MutationTracker()
+    this.#reconcileCooldown = reconcileCooldown
+    this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
+    this.#visibility = visibility ?? documentVisibility()
+    this.#visibility.onChange(() => this.#drainDeferredReconciles())
+    this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep())
   }
 
   // Public store API
+  /** The instance's observability event emitter — the store is its single owner. */
+  get events(): FigbirdEventEmitter {
+    return this.#events
+  }
+
+  /** The instance's in-flight mutation tracker — the store is its single owner. */
+  get mutations(): MutationTracker {
+    return this.#mutations
+  }
+
   /** Returns the entire store state map keyed by service name. */
   getState(): Map<string, ServiceState<TMeta>> {
     return this.#state
   }
 
+  /** Returns the state for a specific service by name. */
+  getServiceState(serviceName: string): ServiceState<TMeta> | undefined {
+    return this.#state.get(serviceName)
+  }
+
   /** Returns the current state for a query by id, if present. */
   getQueryState<T>(queryId: string): QueryState<T, TMeta> | undefined {
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
+  }
+
+  getQueryStats(queryId: string): QueryFetchStats | undefined {
+    const stats = this.#queryStats.get(queryId)
+    if (!stats) return undefined
+    return { ...stats }
+  }
+
+  getQueryGeneration(queryId: string): number | undefined {
+    return this.#queryGenerations.get(queryId)
   }
 
   /**
@@ -70,31 +218,36 @@ export class QueryStore<
 
     if (!this.#getQuery(queryId)) {
       this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
+      this.#queryGenerations.set(queryId, this.#nextQueryGeneration++)
 
-      this.#transactOverService(
-        queryId,
-        service => {
-          service.queries.set(queryId, {
-            queryId,
+      const classification = classifyStoredQuery(desc.method, queryOfParams(desc.params), {
+        server: (config as { server?: boolean }).server,
+        allPages: (config as { allPages?: boolean }).allPages,
+        localOperators: locallySupportedOperators(this.#adapter, desc.serviceName),
+      })
+
+      this.#transactOverService(queryId, service => {
+        service.queries.set(queryId, {
+          queryId,
+          desc,
+          config: config as QueryConfig<unknown, unknown>,
+          classification,
+          pending: !config.skip,
+          dirty: false,
+          filterItem: this.#createItemFilter<unknown, unknown>(
             desc,
-            config: config as QueryConfig<unknown, unknown>,
-            pending: !config.skip,
-            dirty: false,
-            filterItem: this.#createItemFilter<unknown, unknown>(
-              desc,
-              config as QueryConfig<unknown, unknown>,
-            ) as (item: unknown) => boolean,
-            state: {
-              status: 'loading' as const,
-              data: null,
-              meta: this.#adapter.emptyMeta(),
-              isFetching: !config.skip,
-              error: null,
-            },
-          })
-        },
-        { silent: true },
-      )
+            config as QueryConfig<unknown, unknown>,
+            classification,
+          ) as (item: unknown) => boolean,
+          state: {
+            status: 'loading' as const,
+            data: null,
+            meta: this.#adapter.emptyMeta(),
+            isFetching: !config.skip,
+            error: null,
+          },
+        })
+      })
     }
   }
 
@@ -102,27 +255,24 @@ export class QueryStore<
    * Subscribe to a query state by id. Triggers fetches if needed.
    * Returns an unsubscribe function.
    */
-  subscribe<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
+  subscribe<T>(
+    queryId: string,
+    fn: (state: QueryState<T, TMeta>) => void,
+    options: { staleTime?: number | undefined } = {},
+  ): () => void {
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
 
-    if (
-      q.pending ||
-      (q.state.status === 'success' && q.config.fetchPolicy === 'swr' && !q.state.isFetching) ||
-      (q.state.status === 'error' && !q.state.isFetching)
-    ) {
-      this.#queue(queryId)
-    }
+    this.ensureFresh(queryId, options)
 
     const removeListener = this.#addListener(queryId, fn)
 
     this.#subscribeToRealtime(queryId)
 
-    const shouldVacuumByDefault =
-      q.config.fetchPolicy === 'network-only' || Boolean(q.config.matcher)
-    return ({ vacuum = shouldVacuumByDefault }: { vacuum?: boolean } = {}) => {
+    const shouldVacuum = isEphemeralQuery(q.config)
+    return () => {
       removeListener()
-      if (vacuum && this.#listenerCount(queryId) === 0) {
+      if (shouldVacuum && this.#listenerCount(queryId) === 0) {
         this.#vacuum({ queryId })
       }
     }
@@ -131,6 +281,56 @@ export class QueryStore<
   /** Subscribe to any store state changes across all services. */
   subscribeToStateChanges(fn: (state: Map<string, ServiceState<TMeta>>) => void): () => void {
     return this.#addGlobalListener(fn)
+  }
+
+  /**
+   * Subscribe to realtime events after they've been applied to the entity cache.
+   * Used internally for relational-filter invalidation; each event carries the
+   * previous entity so listeners can detect which fields changed.
+   */
+  subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void {
+    this.#processedEventListeners.add(fn)
+    return () => {
+      this.#processedEventListeners.delete(fn)
+    }
+  }
+
+  /**
+   * Ensure a realtime subscription exists for a service even before any query
+   * against it is subscribed. Used by relational-filter invalidation, which needs
+   * events from dependency services the consumer never queries directly.
+   */
+  ensureRealtimeSubscription(serviceName: string): void {
+    this.#subscribeToRealtimeService(serviceName)
+  }
+
+  /** Number of active subscribers for a query — powers figbird.inspect(). */
+  getSubscriberCount(queryId: string): number {
+    return this.#listenerCount(queryId)
+  }
+
+  /**
+   * Ensure a materialized query satisfies a subscriber's freshness tolerance.
+   * `staleTime` is not part of query identity: a later, stricter subscriber must be
+   * able to revalidate an already-live query without rebuilding its subscription.
+   */
+  ensureFresh(queryId: string, options: { staleTime?: number | undefined } = {}): void {
+    const q = this.#getQuery(queryId)
+    if (!q) return
+
+    const staleTime = options.staleTime ?? 0
+    const isFresh =
+      staleTime > 0 && q.fetchedAt !== undefined && Date.now() - q.fetchedAt < staleTime
+    if (
+      q.pending ||
+      (q.state.status === 'success' &&
+        q.config.fetchPolicy === 'swr' &&
+        !q.state.isFetching &&
+        !isFresh) ||
+      (q.state.status === 'error' && !q.state.isFetching)
+    ) {
+      this.#queue(queryId)
+    }
   }
 
   /** Refetch a specific query by id. */
@@ -142,46 +342,257 @@ export class QueryStore<
       this.#queue(queryId)
     } else {
       // Mark as dirty to refetch after current fetch completes
-      this.#transactOverService(
-        queryId,
-        (service, query) => {
-          service.queries.set(queryId, {
-            ...query!,
-            dirty: true,
-          })
-        },
-        { silent: true },
-      )
+      this.#transactOverService(queryId, (service, query) => {
+        service.queries.set(queryId, {
+          ...query!,
+          dirty: true,
+        })
+      })
     }
   }
 
   /** Perform a service mutation and update the store from the result. */
   mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
-    const { serviceName, method } = desc
-    const updaters: Record<string, (item: unknown) => void> = {
-      create: item => this.#processEvent(serviceName, { type: 'created', item }),
-      update: item => this.#processEvent(serviceName, { type: 'updated', item }),
-      patch: item => this.#processEvent(serviceName, { type: 'patched', item }),
-      remove: item => this.#processEvent(serviceName, { type: 'removed', item }),
+    const { serviceName, method, optimistic } = desc
+    // For creates, track by the client-generated id — this is what lets
+    // `useMutating({ id })` cover the create→navigate→act-before-ack window.
+    const id = method !== 'create' ? desc.id : this.#peekId(desc.data)
+    const isOptimistic = optimistic !== undefined && optimistic !== false
+    const restoreItem =
+      isOptimistic && method !== 'create' && id !== undefined
+        ? this.#getEntity(serviceName, id)
+        : null
+    // The one decision point for "what event, if any, applies before the server ack".
+    // `null` always means "nothing displays the item — nothing to apply or roll back".
+    const plan = isOptimistic ? this.#planOptimistic(desc, restoreItem) : null
+
+    // The id contract: an optimistic create must carry a client-generated id the
+    // server will accept. Identity is what everything downstream is built on —
+    // React keys, realtime echo dedup, navigation, child-row foreign keys — and
+    // an optimistic item without a real id has none. Confirmed creates
+    // (non-optimistic) are the mode for server-assigned ids: await the create,
+    // the server's item carries its identity.
+    if (plan?.type === 'created') {
+      const items: unknown[] = Array.isArray(plan.item) ? plan.item : [plan.item]
+      if (items.some(item => this.#peekId(item) === undefined)) {
+        throw new Error(
+          `figbird: optimistic creates on "${serviceName}" need a client-generated id the ` +
+            'server will accept (e.g. crypto.randomUUID()) — provide one in the data, or use ' +
+            'a confirmed create to wait for the server-assigned id.',
+        )
+      }
     }
 
     // Convert named params to args array for the adapter
     const args = this.#buildMutationArgs(desc)
 
-    return this.#adapter.mutate(serviceName, method, args).then((item: unknown) => {
-      updaters[method]?.(item)
-      return item as InferMutationData<S, D>
+    return this.#trackMutation(
+      {
+        serviceName,
+        method,
+        ...(id !== undefined ? { id } : {}),
+        optimistic: isOptimistic,
+        args,
+      },
+      () => {
+        if (plan) this.#processEvent(serviceName, plan)
+        return this.#adapter.mutate(serviceName, method, args)
+      },
+      {
+        // Apply the cache update before ending the tracker entry, so by the time a
+        // `useMutating` subscriber sees "not busy" the data is already in the cache.
+        onSuccess: item => this.#applyMutationEvent(serviceName, method, item),
+        onError: (_error, mutationId) => {
+          if (plan) {
+            this.#rollbackOptimistic(serviceName, method, id, plan.item, restoreItem)
+            this.#events.emit({
+              kind: 'mutate:rollback',
+              mutationId,
+              serviceName,
+              method,
+              ...(id !== undefined ? { id } : {}),
+            })
+          }
+        },
+      },
+    ) as Promise<InferMutationData<S, D>>
+  }
+
+  /**
+   * Call a custom (non-CRUD) service method — the mutation path for everything
+   * beyond create/update/patch/remove (`archive`, `sendReminder`, ...). The result
+   * shape is unknown to figbird, so no cache update is applied; the call still
+   * flows through the mutation tracker and the `mutate:*` observability events so
+   * `useMutating` and devtools see it. No `id` is recorded — custom method args
+   * are positional and opaque.
+   */
+  call(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+    return this.#trackMutation({ serviceName, method, optimistic: false, args }, () =>
+      this.#adapter.mutate(serviceName, method, args),
+    )
+  }
+
+  /**
+   * Shared mutation lifecycle around `run()` (which performs any optimistic apply
+   * and the adapter call, synchronously in that order). The tracker entry is
+   * registered synchronously — not via the deferred events channel — so
+   * `figbird.mutating` snapshots are correct at any moment (see MutationTracker),
+   * and it registers *before* `run()` so an optimistic apply never notifies
+   * subscribers while the tracker still reads "not busy". On settle, the
+   * `onSuccess`/`onError` hooks fire before the tracker entry ends, so by the time
+   * a `useMutating` subscriber sees "not busy" the cache already reflects the
+   * outcome. Errors are normalized to `Error` and rethrown.
+   */
+  #trackMutation<T>(
+    entry: {
+      serviceName: string
+      method: string
+      id?: string | number
+      optimistic: boolean
+      args: readonly unknown[]
+    },
+    run: () => Promise<T>,
+    hooks?: {
+      onSuccess?: (result: T) => void
+      onError?: (error: Error, mutationId: number) => void
+    },
+  ): Promise<T> {
+    const { serviceName, method, id, optimistic, args } = entry
+    const idField = id !== undefined ? { id } : {}
+    const startedAt = Date.now()
+    const mutationId = this.#mutations.start({ serviceName, method, ...idField })
+    this.#events.emit({
+      kind: 'mutate:start',
+      mutationId,
+      serviceName,
+      method,
+      ...idField,
+      optimistic,
+      args,
     })
+    return run().then(
+      result => {
+        hooks?.onSuccess?.(result)
+        this.#mutations.end(mutationId)
+        this.#events.emit({
+          kind: 'mutate:end',
+          mutationId,
+          serviceName,
+          method,
+          durationMs: Date.now() - startedAt,
+          ...idField,
+          optimistic,
+        })
+        return result
+      },
+      (err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err))
+        hooks?.onError?.(error, mutationId)
+        this.#mutations.end(mutationId)
+        this.#events.emit({
+          kind: 'mutate:error',
+          mutationId,
+          serviceName,
+          method,
+          durationMs: Date.now() - startedAt,
+          error,
+          ...idField,
+          optimistic,
+        })
+        throw error
+      },
+    )
   }
 
   // Query lifecycle
   async #queue(queryId: string): Promise<void> {
     this.#fetching({ queryId })
+    const query = this.#getQuery(queryId)
+    const generation = this.#queryGenerations.get(queryId)
+    const startedAt = query ? Date.now() : undefined
+    const trace =
+      query && generation !== undefined
+        ? {
+            generation,
+            serviceName: query.desc.serviceName,
+            method: query.desc.method,
+            ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
+            params: query.desc.params,
+          }
+        : null
+    const journalCursor = trace ? this.#fetchEventJournal.begin(trace.serviceName) : null
+    if (trace) {
+      this.#events.emit({
+        kind: 'fetch:start',
+        serviceName: trace.serviceName,
+        method: trace.method,
+        queryId,
+        generation: trace.generation,
+        ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
+        params: trace.params,
+      })
+    }
     try {
       const result = await this.#fetch(queryId)
-      this.#fetched({ queryId, result })
+      const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
+      const current = this.#getQuery(queryId)
+      if (
+        trace &&
+        durationMs !== undefined &&
+        current &&
+        this.#queryGenerations.get(queryId) === trace.generation
+      ) {
+        const journal = journalCursor
+          ? this.#fetchEventJournal.read(journalCursor)
+          : { events: [], overflowed: false }
+        if (journal.overflowed) {
+          this.#discardFetchedResponse(queryId)
+        } else {
+          this.#fetched({ queryId, result, journalEvents: journal.events })
+        }
+        this.#recordFetchStats(queryId, { ok: true, durationMs })
+      }
+      if (trace && durationMs !== undefined) {
+        const data = result.data
+        const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
+        this.#events.emit({
+          kind: 'fetch:end',
+          serviceName: trace.serviceName,
+          method: trace.method,
+          queryId,
+          generation: trace.generation,
+          durationMs,
+          itemCount,
+        })
+      }
     } catch (err) {
-      this.#fetchFailed({ queryId, error: err instanceof Error ? err : new Error(String(err)) })
+      const error = err instanceof Error ? err : new Error(String(err))
+      const durationMs = startedAt === undefined ? undefined : Date.now() - startedAt
+      const current = this.#getQuery(queryId)
+      if (
+        trace &&
+        durationMs !== undefined &&
+        current &&
+        this.#queryGenerations.get(queryId) === trace.generation
+      ) {
+        this.#fetchFailed({ queryId, error })
+        this.#recordFetchStats(queryId, { ok: false, durationMs })
+      }
+      if (trace && durationMs !== undefined) {
+        this.#events.emit({
+          kind: 'fetch:error',
+          serviceName: trace.serviceName,
+          method: trace.method,
+          queryId,
+          generation: trace.generation,
+          durationMs,
+          error,
+        })
+      }
+    } finally {
+      if (journalCursor) {
+        this.#fetchEventJournal.end(journalCursor)
+      }
     }
   }
 
@@ -194,8 +605,12 @@ export class QueryStore<
     const { desc, config } = query
 
     if (desc.method === 'get') {
+      const local = this.#tryLocalGet(query)
+      if (local) return Promise.resolve(local)
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
+      const local = this.#tryLocalFind(query)
+      if (local) return Promise.resolve(local)
       const findConfig = config as FindQueryConfig<unknown, unknown>
       return findConfig.allPages
         ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
@@ -203,118 +618,323 @@ export class QueryStore<
     }
   }
 
-  #fetching({ queryId }: { queryId: string }): void {
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
+  /**
+   * Answer a get locally when the service is fully materialized (an `.all()` query
+   * succeeded): the entity cache is the complete row set, so a present entity is
+   * the answer with no roundtrip — realtime events, the reconnect sweep, and
+   * complete-set fetch diffs keep it fresh, the same soundness argument local finds
+   * rely on. Conditions (`.get(id).where(...)`) evaluate locally too when they're
+   * locally decidable — same matcher, same custom-operator registry as finds.
+   *
+   * Falls through to the server whenever the local answer would be an *error*: a
+   * missing entity or a present entity failing the predicate. Completeness makes a
+   * local not-found sound in principle, but those cases are rare, a roundtrip there
+   * is cheap, and the server's error carries the adapter's real error shape (which
+   * apps match on) rather than a synthesized one. Non-local conditions (`$regex`),
+   * `network-only`, and `.server()` reads always go out.
+   */
+  #tryLocalGet(
+    query: Query<unknown, TMeta, unknown>,
+  ): QueryResponse<unknown, TMeta | undefined> | null {
+    const desc = query.desc
+    if (desc.method !== 'get') return null
+    // Gets with non-local conditions stored as 'server-authoritative' at
+    // materialize time (see classifyStoredQuery) — never answered locally.
+    if (query.classification !== 'get') return null
+    const service = this.#state.get(desc.serviceName)
+    if (!service?.materialized) return null
 
-      service.queries.set(queryId, {
-        ...query,
-        pending: false,
-        dirty: false,
-        state:
-          query.state.status === 'error'
-            ? {
-                status: 'loading' as const,
-                data: null,
-                meta: query.state.meta,
-                isFetching: true,
-                error: null,
-              }
-            : query.state.status === 'success'
+    const config = query.config as GetQueryConfig<unknown, unknown>
+    if (config.server) return null
+    if (config.fetchPolicy === 'network-only') return null
+
+    const entity = service.entities.get(desc.resourceId)
+    if (entity === undefined) return null
+
+    const q = queryOfParams(desc.params)
+    if (q && Object.keys(q).length > 0) {
+      // classification === 'get' guarantees the conditions are locally evaluable.
+      if (!this.#resolveMatcher(desc.serviceName, config, q)(entity)) return null
+    }
+
+    return { data: entity } as QueryResponse<unknown, TMeta | undefined>
+  }
+
+  /**
+   * Answer a find locally when the service is fully materialized (an `.all()` query
+   * succeeded): filter the entity cache with the adapter matcher, then sort and slice
+   * any window client-side. Windowed queries against a materialized service classify
+   * server-window, so realtime events refetch them — and the "refetch" lands here,
+   * recomputing from the local set with no network.
+   *
+   * Returns null (fall through to the network) for: non-materialized services, the
+   * materialization root itself, `.server()` queries, and predicates the local matcher
+   * cannot decide ($select, $regex, custom operators).
+   */
+  #tryLocalFind(
+    query: Query<unknown, TMeta, unknown>,
+  ): QueryResponse<unknown, TMeta | undefined> | null {
+    const service = this.#state.get(query.desc.serviceName)
+    if (!service?.materialized) return null
+    if (service.materialized.queryId === query.queryId) return null
+
+    const config = query.config as FindQueryConfig<unknown, unknown>
+    // Honor the documented fetchPolicy contract ("always fetch on mount"), same
+    // as #tryLocalGet — a materialized cache doesn't override an explicit opt-out.
+    if (config.fetchPolicy === 'network-only') return null
+    // Stored classification is the single source of truth: authoritative reasons
+    // ($select, $regex, custom operators, .server()) survive allPages-neutralization,
+    // while window filters don't — windows are computed locally below. So
+    // 'server-authoritative' is exactly "not locally answerable".
+    if (query.classification === 'server-authoritative') return null
+
+    const q = queryOfParams(query.desc.params)
+    const { filters, sort, limit, skip } = splitWindow(q)
+    const effectiveSort = sort ?? this.#defaultSort
+    // A complete entity set proves membership, but it does not reveal the
+    // backend's implicit order. Without an explicit or configured sort, serving
+    // insertion order from the cache would be permanently approximate.
+    if (!effectiveSort) return null
+    const match = this.#resolveMatcher(query.desc.serviceName, config, filters)
+    let rows = [...service.entities.values()].filter(match)
+    rows = sortRowsLocally(rows, effectiveSort)
+    const total = rows.length
+    const data = rows.slice(skip, limit !== undefined ? skip + limit : undefined)
+    // The adapter owns the meta envelope — the store only knows the window numbers.
+    // (Cast because QueryResponse's meta arm can't resolve for an unresolved TMeta.)
+    return {
+      data,
+      meta: this.#adapter.findMeta({ total, limit: limit ?? total, skip }),
+    } as QueryResponse<unknown, TMeta>
+  }
+
+  #fetching({ queryId }: { queryId: string }): void {
+    // This is the only listener-notifying transition reachable synchronously from
+    // a React render (useQuery → suspensePromise → root/relation setup → subscribe
+    // → #queue → here); everything past `await #fetch` is already async. Deferring
+    // the notification (not the state write — the fetch still starts synchronously
+    // and warm reads are unaffected) keeps other subscribed components from being
+    // updated mid-render.
+    this.#scheduleDeferredNotify(
+      this.#transactOverService(queryId, (service, query) => {
+        if (!query) return
+
+        service.queries.set(queryId, {
+          ...query,
+          pending: false,
+          dirty: false,
+          // error and loading states both restart as a clean loading state.
+          state:
+            query.state.status === 'success'
               ? { ...query.state, isFetching: true }
               : {
-                  status: query.state.status,
+                  status: 'loading' as const,
                   data: null,
                   meta: query.state.meta,
                   isFetching: true,
                   error: null,
                 },
-      })
-    })
+        })
+      }),
+    )
   }
 
   #fetched({
     queryId,
     result,
+    journalEvents,
   }: {
     queryId: string
     result: QueryResponse<unknown, TMeta | undefined>
+    journalEvents: readonly ProcessedRealtimeEvent[]
   }): void {
     let shouldRefetch = false
+    let hadEffectiveJournalEvents = false
+    const processedEvents: ProcessedRealtimeEvent[] = []
+    const serverMaintainedQueriesToRefetch = new Set<string>()
 
-    this.#transactOverService(queryId, (service, query) => {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const touched = this.#transactOverServiceByName(serviceName ?? '', (service, touch) => {
+      const query = service.queries.get(queryId)
       if (!query) return
+      touch(queryId)
 
+      const getId = this.#getIdReader(query.desc.serviceName)
       const data = result.data
+      const responseItems = Array.isArray(data) ? data : data == null ? [] : [data]
+      const rebasePlan = planFetchRebase({
+        responseItems,
+        journalEvents,
+        getId,
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+      })
+      const effectiveJournalEvents = rebasePlan.events
+      hadEffectiveJournalEvents = effectiveJournalEvents.length > 0
+      const journaledItemIds = rebasePlan.itemIds
+
+      // A complete-set fetch (unfiltered allPages — the materialization condition)
+      // is authoritative for the whole service: snapshot the entity cache before
+      // applying the result so it can be diffed below and the changes propagated
+      // to every other query the same way realtime events are. `.server()` fetches
+      // don't diff — a server-authoritative query refetching in response to diff
+      // events must not itself produce diff events, or two of them could cycle.
+      const findConfig = query.config as FindQueryConfig<unknown, unknown>
+      const isCompleteSet =
+        query.desc.method === 'find' &&
+        Boolean(findConfig.allPages) &&
+        isUnfilteredFindQuery(query.desc.params)
+      const previousEntities =
+        isCompleteSet && !findConfig.server ? new Map(service.entities) : null
+
       const meta = (result as { meta?: TMeta }).meta
-      const getId = (item: unknown) => this.#adapter.getId(item)
-      const nextItemIds = new Set<string | number>()
-      const getFreshItem = (item: unknown) => {
-        const itemId = getId(item)
-        if (itemId === undefined) {
-          return item
-        }
+      const rebasedResponse = rebaseResponseData({
+        data,
+        preserveSnapshot: query.config.realtime === 'disabled',
+        latestEventById: rebasePlan.latestEventById,
+        entities: service.entities,
+        getId,
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+        canKeepCurrentItem: item =>
+          !(
+            query.desc.method === 'find' &&
+            query.config.realtime === 'merge' &&
+            !isServerMaintained(query.classification) &&
+            !query.filterItem(item)
+          ),
+      })
+      const nextItemIds = new Set(rebasedResponse.itemIds)
 
-        const currItem = service.entities.get(itemId)
-        if (!currItem || !this.#adapter.isItemStale(currItem, item)) {
-          return item
-        }
+      // Replace this query's index entries directly from its previous and next
+      // rows. This avoids scanning every id ever seen on the service per fetch.
+      removeQueryFromItemIndex({ service, query, queryId, getId })
 
-        if (query.desc.method === 'find' && !query.filterItem(currItem)) {
-          return undefined
-        }
-
-        return currItem
-      }
-      const freshData = Array.isArray(data)
-        ? data.reduce<unknown[]>((acc, item) => {
-            const freshItem = getFreshItem(item)
-            if (freshItem !== undefined) {
-              acc.push(freshItem)
-            }
-            return acc
-          }, [])
-        : getFreshItem(data)
-      const freshItems = Array.isArray(freshData) ? freshData : [freshData]
-
-      for (const item of freshItems) {
+      for (const item of rebasedResponse.items) {
         const itemId = getId(item)
         if (itemId !== undefined) {
-          nextItemIds.add(itemId)
-          service.entities.set(itemId, item)
+          if (!journaledItemIds.has(itemId)) {
+            const currentItem = service.entities.get(itemId)
+            if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
+              service.entities.set(itemId, item)
+            }
+          }
           addQueryToItemIndex(service, itemId, queryId)
         }
       }
 
-      for (const [itemId, queryIds] of service.itemQueryIndex) {
-        if (!nextItemIds.has(itemId)) {
-          queryIds.delete(queryId)
+      // `nextItemIds` is also the complete-set diff input. Rebase its membership
+      // to the last in-flight event so a stale root response cannot delete a
+      // created row or resurrect a removed one service-wide.
+      for (const [itemId, event] of rebasePlan.latestEventById) {
+        if (event.type === 'removed') {
+          nextItemIds.delete(itemId)
+        } else if (isCompleteSet) {
+          nextItemIds.add(itemId)
         }
       }
 
       shouldRefetch = query.dirty
 
+      // A successful unfiltered allPages fetch (`.all()` with no filters) means the
+      // complete row set is now local: mark the service materialized so matcher-
+      // decidable finds are answered from the cache (see #tryLocalFind). A *filtered*
+      // allPages fetch is complete only for its own filter — it must not materialize
+      // the service.
+      if (isCompleteSet) {
+        service.materialized = { queryId, fetchedAt: Date.now() }
+      }
+
       service.queries.set(queryId, {
         ...query,
+        fetchedAt: Date.now(),
         state: {
           status: 'success' as const,
-          data: freshData,
+          data: rebasedResponse.data,
           meta: meta || this.#adapter.emptyMeta(),
           isFetching: false,
           error: null,
         },
       })
-    })
 
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+      // Diff the complete set against the pre-fetch cache and apply the changes as
+      // synthetic events. Without this, queries answered locally from the cache
+      // (see #tryLocalFind) would never observe changes a root refetch brought in —
+      // rows created or removed out-of-band would be invisible to them forever.
+      // The fetched query itself is excluded: its state was just set from the result.
+      if (previousEntities) {
+        processedEvents.push(
+          ...diffCompleteSet({
+            service,
+            serviceName: query.desc.serviceName,
+            previousEntities,
+            nextItemIds,
+            ignoredItemIds: journaledItemIds,
+          }),
+        )
+        if (processedEvents.length > 0) {
+          updateQueriesFromEvents({
+            service,
+            appliedItems: processedEvents,
+            touch,
+            getId,
+            itemAdded: meta => this.#adapter.itemAdded(meta),
+            itemRemoved: meta => this.#adapter.itemRemoved(meta),
+            serverMaintainedQueriesToRefetch,
+            excludeQueryId: queryId,
+            defaultSort: this.#defaultSort,
+          })
+        }
+      }
+
+      if (effectiveJournalEvents.length > 0 && query.config.realtime !== 'disabled') {
+        replayFetchedQueryFromEvents({
+          service,
+          queryId,
+          events: effectiveJournalEvents,
+          touch,
+          getId,
+          itemAdded: meta => this.#adapter.itemAdded(meta),
+          itemRemoved: meta => this.#adapter.itemRemoved(meta),
+          defaultSort: this.#defaultSort,
+        })
+      }
+    })
+    this.#notify(touched)
+
+    if (processedEvents.length > 0) {
+      // Same follow-ups as the realtime event path: reconcile queries that can't
+      // merge locally and surface the changes to relational-filter invalidation.
+      // Unlike realtime events, diffs don't trigger `realtime: 'refetch'` queries —
+      // a refetch-on-diff that itself diffs would cycle.
+      for (const event of processedEvents) {
+        this.#emitProcessedEvent(event)
+      }
+    }
+
+    const query = this.#getQuery(queryId)
+    const service = serviceName === undefined ? undefined : this.#state.get(serviceName)
+    const isMaterializedRoot = service?.materialized?.queryId === queryId
+    const shouldRunFollowup = this.#listenerCount(queryId) > 0 || isMaterializedRoot
+
+    if (shouldRefetch && shouldRunFollowup) {
+      serverMaintainedQueriesToRefetch.delete(queryId)
       this.#queue(queryId)
+    } else if (hadEffectiveJournalEvents && query?.config.realtime !== 'disabled') {
+      // Even exact replay cannot prove every server-maintained membership/order
+      // edge. One gated trailing reconciliation guarantees convergence.
+      serverMaintainedQueriesToRefetch.add(queryId)
+    }
+
+    for (const id of serverMaintainedQueriesToRefetch) {
+      this.#requestReconcile(id, {
+        force: id === service?.materialized?.queryId,
+      })
     }
   }
 
   #fetchFailed({ queryId, error }: { queryId: string; error: Error }): void {
     let shouldRefetch = false
 
-    this.#transactOverService(queryId, (service, query) => {
+    const touched = this.#transactOverService(queryId, (service, query) => {
       if (!query) return
 
       shouldRefetch = query.dirty
@@ -330,10 +950,50 @@ export class QueryStore<
         },
       })
     })
+    this.#notify(touched)
 
-    if (shouldRefetch && this.#listenerCount(queryId) > 0) {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const isMaterializedRoot =
+      serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
+    if (shouldRefetch && (this.#listenerCount(queryId) > 0 || isMaterializedRoot)) {
       this.#queue(queryId)
     }
+  }
+
+  /** Discard an unsafe response and reconcile from a fresh journal cursor. */
+  #discardFetchedResponse(queryId: string): void {
+    const touched = this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+      service.queries.set(queryId, {
+        ...query,
+        state: { ...query.state, isFetching: false },
+      })
+    })
+
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const isMaterializedRoot =
+      serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
+    this.#requestReconcile(queryId, { force: isMaterializedRoot })
+    // An immediate reconciliation has already restored isFetching=true; hidden
+    // or inactive queries expose the settled state and remain pending instead.
+    this.#notify(touched)
+  }
+
+  #recordFetchStats(
+    queryId: string,
+    { ok, durationMs }: { ok: boolean; durationMs: number },
+  ): void {
+    const current = this.#queryStats.get(queryId) ?? {
+      fetchCount: 0,
+      errorCount: 0,
+      totalDurationMs: 0,
+    }
+    this.#queryStats.set(queryId, {
+      fetchCount: current.fetchCount + 1,
+      errorCount: current.errorCount + (ok ? 0 : 1),
+      totalDurationMs: current.totalDurationMs + durationMs,
+      lastDurationMs: durationMs,
+    })
   }
 
   // Realtime event handling
@@ -341,16 +1001,13 @@ export class QueryStore<
     const query = this.#getQuery(queryId)
     if (!query) return
 
-    const { serviceName } = query.desc
+    this.#subscribeToRealtimeService(query.desc.serviceName)
+  }
 
+  #subscribeToRealtimeService(serviceName: string): void {
     // check if already subscribed to the events of this service
-    if (this.#realtime.has(serviceName)) {
-      return
-    }
-
-    if (!this.#adapter.subscribe) {
-      return // Real-time not supported by this adapter
-    }
+    if (this.#realtime.has(serviceName)) return
+    if (!this.#adapter.subscribe) return // Real-time not supported by this adapter
 
     const created = (item: unknown) => this.#queueEvent(serviceName, { type: 'created', item })
     const updated = (item: unknown) => this.#queueEvent(serviceName, { type: 'updated', item })
@@ -366,30 +1023,45 @@ export class QueryStore<
     this.#realtime.add(serviceName)
   }
 
-  #processEvent(serviceName: string, event: Event): void {
+  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): void {
+    for (const item of items) {
+      this.#events.emit({
+        kind: 'realtime',
+        serviceName,
+        type,
+        itemId: this.#getIdWarn(serviceName, item),
+      })
+    }
+  }
+
+  /** Push an event onto the queue and emit the observability signal for its items. */
+  #enqueueEvent(serviceName: string, event: Event): void {
+    const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
       serviceName,
       type: event.type,
-      items: Array.isArray(event.item) ? event.item : [event.item],
+      items,
     })
+    this.#emitRealtimeForItems(serviceName, event.type, items)
+  }
 
+  /** Apply an event immediately — used for mutation results and optimistic writes. */
+  #processEvent(serviceName: string, event: Event): void {
+    this.#enqueueEvent(serviceName, event)
     this.#processQueuedEvents()
   }
 
+  /** Queue a realtime event for batched processing. */
   #queueEvent(serviceName: string, event: Event): void {
-    this.#eventQueue.push({
-      serviceName,
-      type: event.type,
-      items: Array.isArray(event.item) ? event.item : [event.item],
-    })
+    this.#enqueueEvent(serviceName, event)
 
     if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later
-      if (this.#eventBatchProcessingInterval) {
+      if (this.#eventBatchInterval) {
         this.#eventBatchProcessingTimer = setTimeout(() => {
           this.#eventBatchProcessingTimer = null
           this.#processQueuedEvents()
-        }, this.#eventBatchProcessingInterval)
+        }, this.#eventBatchInterval)
       } else {
         // batching is disabled, process each event immediately
         this.#processQueuedEvents()
@@ -404,34 +1076,88 @@ export class QueryStore<
 
     this.#processingEventQueue = true
     try {
-      const getId = (item: unknown) => this.#adapter.getId(item)
       const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
 
       while (this.#eventQueue.length > 0) {
         const eventsByService = groupQueuedEvents(this.#eventQueue)
         this.#eventQueue = []
 
+        const touchedQueryIds = new Set<string>()
+        const followups: Array<{
+          serviceName: string
+          serverMaintainedQueriesToRefetch: Set<string>
+          processedEvents: ProcessedRealtimeEvent[]
+        }> = []
+
+        // Apply every service's events before notifying anyone — the batch is the
+        // atomicity unit for observers. Notifying per service would let a relational
+        // query spanning services A and B compute a wasted intermediate snapshot
+        // after A's events but before B's, and non-React subscribers would observe
+        // the intermediate state.
         for (const [serviceName, events] of Object.entries(eventsByService)) {
-          this.#transactOverServiceByName(serviceName, (service, touch) => {
-            const appliedEvents = applyEventsToService({
+          const getId = this.#getIdReader(serviceName)
+          const serverMaintainedQueriesToRefetch = new Set<string>()
+          const processedEvents: ProcessedRealtimeEvent[] = []
+
+          const modifiedQueries = this.#transactOverServiceByName(serviceName, (service, touch) => {
+            applyEventsToService({
               service,
+              serviceName,
               events,
               getId,
               isItemStale,
+              processedEvents,
             })
 
-            // Update queries only for non-stale items
-            if (appliedEvents.length > 0) {
+            // Update queries only for the items actually applied to the entity
+            // cache — stale-skipped items never reach query state.
+            if (processedEvents.length > 0) {
               updateQueriesFromEvents({
                 service,
-                appliedEvents,
+                appliedItems: processedEvents,
                 touch,
                 getId,
                 itemAdded: meta => this.#adapter.itemAdded(meta),
                 itemRemoved: meta => this.#adapter.itemRemoved(meta),
+                serverMaintainedQueriesToRefetch,
+                defaultSort: this.#defaultSort,
               })
             }
           })
+
+          // Record only events that actually changed the entity cache. The fetch
+          // rebase replays these over any response snapshot dispatched earlier.
+          this.#fetchEventJournal.record(processedEvents)
+
+          for (const queryId of modifiedQueries) {
+            touchedQueryIds.add(queryId)
+          }
+          followups.push({ serviceName, serverMaintainedQueriesToRefetch, processedEvents })
+        }
+
+        // Notify once per batch, after all services have applied.
+        for (const queryId of touchedQueryIds) {
+          this.#invokeListeners(queryId)
+        }
+        if (touchedQueryIds.size > 0) {
+          this.#invokeGlobalListeners()
+        }
+
+        for (const {
+          serviceName,
+          serverMaintainedQueriesToRefetch,
+          processedEvents,
+        } of followups) {
+          // Server-maintained queries can't merge events locally: reconcile active
+          // ones through the gate (cooldown + hidden-tab deferral); the gate marks
+          // inactive cached ones pending so their next subscription reconciles.
+          for (const queryId of serverMaintainedQueriesToRefetch) {
+            this.#requestReconcile(queryId)
+          }
+
+          for (const event of processedEvents) {
+            this.#emitProcessedEvent(event)
+          }
 
           // Refetch refetchable queries if needed
           this.#refetchRefetchableQueries(serviceName)
@@ -442,14 +1168,300 @@ export class QueryStore<
     }
   }
 
+  #emitProcessedEvent(event: ProcessedRealtimeEvent): void {
+    for (const listener of this.#processedEventListeners) {
+      try {
+        listener(event)
+      } catch {
+        // Internal invalidation listeners should not break the event loop.
+      }
+    }
+  }
+
   #refetchRefetchableQueries(serviceName: string): void {
     const service = this.getState().get(serviceName)
     if (!service) return
 
     for (const query of service.queries.values()) {
       if (query.config.realtime === 'refetch' && this.#listenerCount(query.queryId) > 0) {
-        this.refetch(query.queryId)
+        this.#requestReconcile(query.queryId)
       }
+    }
+  }
+
+  /**
+   * The reconciliation gate. Every EVENT-DRIVEN refetch (server-window /
+   * server-authoritative queries reacting to realtime events, `realtime:
+   * 'refetch'` queries, and the reconnect sweep) passes through here — manual
+   * `refetch()`, first fetches, and SWR revalidation do not.
+   *
+   * Correctness contract: a reconciliation may be delayed and coalesced, never
+   * dropped — the trailing refetch (or the drain-on-visible) always lands on
+   * the latest server state after the last relevant event.
+   *
+   * - Hidden tab → defer: mark the query pending (truthful in `inspect()`) and
+   *   reconcile once when the tab becomes visible. Local-exact merges are
+   *   unaffected — only network reconciliation pauses.
+   * - Cooldown: the first event in a window refetches immediately (leading
+   *   edge — isolated changes stay as fast as today); further events within
+   *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
+   */
+  #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
+    if (!force && this.#listenerCount(queryId) === 0) {
+      this.#markQueryPending(queryId)
+      return
+    }
+
+    if (this.#visibility.isHidden()) {
+      this.#deferredWhileHidden.add(queryId)
+      this.#markQueryPending(queryId)
+      return
+    }
+
+    if (this.#reconcileCooldown <= 0) {
+      this.#emitReconcileStarted(queryId)
+      this.refetch(queryId)
+      return
+    }
+
+    const now = Date.now()
+    const window = this.#reconcileWindows.get(queryId)
+
+    if (!window || now - window.lastAt >= this.#reconcileCooldown) {
+      this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
+      this.#emitReconcileStarted(queryId)
+      this.refetch(queryId)
+      return
+    }
+
+    if (window.trailing) return // the pending trailing refetch already covers this
+
+    const timer = setTimeout(
+      () => {
+        const current = this.#reconcileWindows.get(queryId)
+        if (current) current.trailing = null
+        if (!this.#getQuery(queryId)) {
+          this.#reconcileWindows.delete(queryId)
+          return
+        }
+        // Re-enter the gate after the window expires unless the tab went hidden or
+        // the last subscriber left in the meantime.
+        this.#requestReconcile(queryId)
+      },
+      window.lastAt + this.#reconcileCooldown - now,
+    )
+    // Never keep a Node process alive for a pending reconciliation.
+    ;(timer as { unref?: () => void }).unref?.()
+    window.trailing = timer
+  }
+
+  #emitReconcileStarted(queryId: string): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (serviceName !== undefined) {
+      this.#events.emit({ kind: 'reconcile:started', queryId, serviceName })
+    }
+  }
+
+  /** On becoming visible, reconcile everything that deferred while hidden. */
+  #drainDeferredReconciles(): void {
+    if (this.#visibility.isHidden() || this.#deferredWhileHidden.size === 0) return
+    const deferred = Array.from(this.#deferredWhileHidden)
+    this.#deferredWhileHidden.clear()
+    for (const queryId of deferred) {
+      if (!this.#getQuery(queryId)) continue
+      this.#requestReconcile(queryId)
+    }
+  }
+
+  #clearReconcileState(queryId: string): void {
+    const window = this.#reconcileWindows.get(queryId)
+    if (window?.trailing) clearTimeout(window.trailing)
+    this.#reconcileWindows.delete(queryId)
+    this.#deferredWhileHidden.delete(queryId)
+  }
+
+  /**
+   * Manually refetch cached queries — the escape hatch for changes figbird cannot
+   * observe: custom methods on services without realtime events, out-of-band writes,
+   * eventless integrations. Scoped to one service, or the whole store when called
+   * with no argument.
+   *
+   * Manual intent is never gated: active queries refetch immediately (no reconcile
+   * cooldown, no hidden-tab deferral); inactive cached queries are marked pending so
+   * their next subscriber refetches; a materialized `.all()` root refetches even
+   * with no subscribers, since local reads depend on its completeness.
+   */
+  refetchQueries(serviceName?: string): void {
+    for (const [name, service] of this.getState()) {
+      if (serviceName !== undefined && name !== serviceName) continue
+      for (const query of service.queries.values()) {
+        if (query.config.skip) continue
+        const active = this.#listenerCount(query.queryId) > 0
+        const isMaterializedRoot = query.queryId === service.materialized?.queryId
+        if (active || isMaterializedRoot) {
+          // `refetch()` marks an in-flight query dirty, guaranteeing exactly one
+          // follow-up instead of dispatching a second fetch in the same generation.
+          this.refetch(query.queryId)
+        } else {
+          this.#markQueryPending(query.queryId)
+        }
+      }
+    }
+  }
+
+  #refetchActiveQueries(): void {
+    for (const service of this.getState().values()) {
+      // Materialization roots reconcile even with no subscribers — every local read
+      // depends on their completeness, and events may have been missed while offline.
+      if (service.materialized) {
+        this.#requestReconcile(service.materialized.queryId, { force: true })
+      }
+      for (const query of service.queries.values()) {
+        if (query.queryId === service.materialized?.queryId) continue
+        if (
+          !query.config.skip &&
+          query.config.realtime !== 'disabled' &&
+          this.#listenerCount(query.queryId) > 0
+        ) {
+          this.#requestReconcile(query.queryId)
+        }
+      }
+    }
+  }
+
+  #scheduleReconnectSweep(): void {
+    if (this.#reconnectSweepTimer) return
+    const [min, max] = this.#reconnectJitter
+    const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
+    if (delay === 0) {
+      this.#refetchActiveQueries()
+      return
+    }
+
+    const timer = setTimeout(() => {
+      this.#reconnectSweepTimer = null
+      this.#refetchActiveQueries()
+    }, delay)
+    ;(timer as { unref?: () => void }).unref?.()
+    this.#reconnectSweepTimer = timer
+  }
+
+  #normalizeReconnectJitter(value: ReconnectJitter): readonly [number, number] {
+    if (typeof value === 'number') {
+      return [0, Math.max(0, value)]
+    }
+    const first = Math.max(0, value[0])
+    const second = Math.max(0, value[1])
+    return first <= second ? [first, second] : [second, first]
+  }
+
+  #markQueryPending(queryId: string): void {
+    this.#transactOverService(queryId, (service, query) => {
+      if (!query) return
+
+      service.queries.set(queryId, {
+        ...query,
+        pending: true,
+      })
+    })
+  }
+
+  // Optimistic mutation support
+  #getEntity(serviceName: string, id: string | number): unknown {
+    return this.#state.get(serviceName)?.entities.get(id) ?? null
+  }
+
+  /**
+   * Id read for event and fetch paths, where a missing id means data figbird can't
+   * track — warn so the integration bug is visible. Presence checks use #peekId.
+   */
+  #getIdWarn(serviceName: string, item: unknown): string | number | undefined {
+    const id = this.#adapter.getId(item)
+    if (id === undefined && !this.#warnedMissingIdServices.has(serviceName)) {
+      this.#warnedMissingIdServices.add(serviceName)
+      console.warn(`An item has been received without any ID from "${serviceName}"`, item)
+    }
+    return id
+  }
+
+  #getIdReader(serviceName: string): (item: unknown) => ItemId | undefined {
+    return item => this.#getIdWarn(serviceName, item)
+  }
+
+  /** Warn-free id read — presence checks on payloads that may lack ids. */
+  #peekId(item: unknown): string | number | undefined {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
+    return this.#adapter.getId(item)
+  }
+
+  /**
+   * Plan the optimistic cache application for a mutation: the event to apply before
+   * the server ack, or `null` when nothing displays the item so there is nothing to
+   * apply. Create uses the request body (or the explicit optimistic item); update/
+   * patch merge `data` onto the cached row; remove deletes the cached row.
+   */
+  #planOptimistic(desc: MutationDescriptor, restoreItem: unknown): Event | null {
+    const { optimistic } = desc
+    const explicit =
+      optimistic !== undefined && optimistic !== true && optimistic !== false ? optimistic : null
+    if (desc.method === 'create') {
+      return { type: 'created', item: explicit ?? desc.data }
+    }
+    if (desc.method === 'remove') {
+      // Delete the cached row now; an uncached row isn't displayed anywhere.
+      return restoreItem ? { type: 'removed', item: restoreItem } : null
+    }
+    const restoreRecord = (
+      restoreItem && typeof restoreItem === 'object' ? restoreItem : {}
+    ) as Record<string, unknown>
+    const item = explicit ?? { ...restoreRecord, ...(desc.data as Record<string, unknown>) }
+    // patch/update on an entity that is not in the cache: the merged optimistic item
+    // has no id and nothing displays it — skip silently (the server response updates
+    // the cache as usual). Applying it would just warn and no-op.
+    if (restoreItem === null && this.#peekId(item) === undefined) {
+      return null
+    }
+    return { type: MUTATION_EVENT_TYPE[desc.method], item }
+  }
+
+  #applyMutationEvent(serviceName: string, method: MutationMethod, item: unknown): void {
+    this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item })
+  }
+
+  #rollbackOptimistic(
+    serviceName: string,
+    method: MutationMethod,
+    id: string | number | undefined,
+    optimisticItem: unknown,
+    restoreItem: unknown,
+  ): void {
+    if (method === 'create') {
+      // Drop the optimistically-created item.
+      const optimisticId =
+        optimisticItem && typeof optimisticItem === 'object'
+          ? this.#adapter.getId(optimisticItem)
+          : undefined
+      if (optimisticId !== undefined) {
+        this.#processEvent(serviceName, {
+          type: 'removed',
+          item: optimisticItem,
+        })
+      }
+      return
+    }
+    if (method === 'remove') {
+      // Restore the previously-removed item if we still have its prior shape.
+      if (restoreItem) {
+        this.#processEvent(serviceName, { type: 'created', item: restoreItem })
+      }
+      return
+    }
+    if (id === undefined) return
+    if (restoreItem) {
+      this.#processEvent(serviceName, { type: 'patched', item: restoreItem })
+    } else {
+      // No prior snapshot — best-effort: drop the optimistic patch entirely.
+      this.#processEvent(serviceName, { type: 'removed', item: { id } })
     }
   }
 
@@ -465,91 +1477,108 @@ export class QueryStore<
     return undefined
   }
 
-  #updateState(
-    mutate: (state: Map<string, ServiceState<TMeta>>, touch: (queryId: string) => void) => void,
-    { silent = false } = {},
-  ): void {
-    const modifiedQueries = new Set<string>()
+  /** Notify listeners of the touched queries synchronously, then global listeners. */
+  #notify(queryIds: Set<string>): void {
+    if (queryIds.size === 0) return
+    for (const queryId of queryIds) {
+      this.#invokeListeners(queryId)
+    }
+    this.#invokeGlobalListeners()
+  }
 
-    // Modify fn to track changes
-    const touch = (queryId: string) => modifiedQueries.add(queryId)
-
-    mutate(this.#state, touch)
-
-    if (!silent && modifiedQueries.size > 0) {
-      for (const queryId of modifiedQueries) {
+  /**
+   * Invoke listeners on the next microtask instead of synchronously, coalescing
+   * repeated schedules. Used for transitions that can happen while React is
+   * rendering: subscribing to a query can start a fetch synchronously (including
+   * from `suspensePromise()` during render), and the resulting isFetching
+   * transition must not fire other components' `onStoreChange` mid-render —
+   * React warns with "Cannot update a component while rendering a different
+   * component". Listeners read the *current* state when invoked, so deferring
+   * never delivers a stale snapshot.
+   */
+  #scheduleDeferredNotify(queryIds: Set<string>): void {
+    if (this.#deferredNotifyQueryIds) {
+      for (const queryId of queryIds) {
+        this.#deferredNotifyQueryIds.add(queryId)
+      }
+      return
+    }
+    this.#deferredNotifyQueryIds = new Set(queryIds)
+    queueMicrotask(() => {
+      const ids = this.#deferredNotifyQueryIds
+      this.#deferredNotifyQueryIds = null
+      if (!ids || ids.size === 0) return
+      for (const queryId of ids) {
         this.#invokeListeners(queryId)
       }
       this.#invokeGlobalListeners()
-    }
+    })
   }
 
+  /**
+   * Run `fn` over a query's service state, collecting touched query ids. Transactions
+   * never notify — notification is an explicit follow-up at the call site
+   * (`#notify` for synchronous delivery, `#scheduleDeferredNotify` for render-safe
+   * deferral), so the policy is readable where it applies.
+   */
   #transactOverService(
     queryId: string,
-    fn: (
-      service: ServiceState<TMeta>,
-      query?: Query<unknown, TMeta, unknown>,
-      touch?: (queryId: string) => void,
-    ) => void,
-    options?: { silent?: boolean },
-  ): void {
+    fn: (service: ServiceState<TMeta>, query?: Query<unknown, TMeta, unknown>) => void,
+  ): Set<string> {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
-    if (!serviceName) return
+    if (!serviceName) return new Set()
 
-    this.#transactOverServiceByName(
-      serviceName,
-      (service, touch) => {
-        fn(service, service.queries.get(queryId), touch)
-        touch(queryId)
-      },
-      options,
-    )
+    return this.#transactOverServiceByName(serviceName, (service, touch) => {
+      fn(service, service.queries.get(queryId))
+      touch(queryId)
+    })
   }
 
+  /** See #transactOverService — same contract, keyed by service name. */
   #transactOverServiceByName(
     serviceName: string,
     fn: (service: ServiceState<TMeta>, touch: (queryId: string) => void) => void,
-    { silent = false } = {},
-  ): void {
-    if (serviceName) {
-      // initialise the service structure if needed
-      if (!this.getState().get(serviceName)) {
-        this.getState().set(serviceName, createServiceState())
-      }
+  ): Set<string> {
+    if (!serviceName) return new Set()
 
-      this.#updateState(
-        (state, touch) => {
-          const service = state.get(serviceName)
-          if (service) {
-            fn(service, touch)
-          }
-        },
-        { silent },
-      )
+    // initialise the service structure if needed
+    if (!this.getState().get(serviceName)) {
+      this.getState().set(serviceName, createServiceState())
     }
+
+    const modifiedQueries = new Set<string>()
+    const touch = (queryId: string) => modifiedQueries.add(queryId)
+    const service = this.#state.get(serviceName)
+    if (service) {
+      fn(service, touch)
+    }
+    return modifiedQueries
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
-    this.#transactOverService(
-      queryId,
-      (service, query) => {
-        if (query) {
-          if (query.state.data) {
-            const getId = (item: unknown) => this.#adapter.getId(item)
-            removeQueryFromItemIndex({ service, query, queryId, getId })
-          }
-          service.queries.delete(queryId)
-          this.#serviceNamesByQueryId.delete(queryId)
+    this.#clearReconcileState(queryId)
+    this.#transactOverService(queryId, (service, query) => {
+      if (query) {
+        if (query.state.data) {
+          const getId = this.#getIdReader(query.desc.serviceName)
+          removeQueryFromItemIndex({ service, query, queryId, getId })
         }
-      },
-      { silent: true },
-    )
+        service.queries.delete(queryId)
+        this.#serviceNamesByQueryId.delete(queryId)
+        this.#queryGenerations.delete(queryId)
+        this.#queryStats.delete(queryId)
+        if (service.materialized?.queryId === queryId) {
+          delete service.materialized
+        }
+      }
+    })
   }
 
   // Internal helpers
   #createItemFilter<T, TQueryType>(
     desc: QueryDescriptor,
     config: QueryConfig<T, TQueryType>,
+    classification: StoredQueryClass,
   ): ItemMatcher<ElementType<T>> {
     // if this query is not using the realtime mode
     // we will never be merging events into the cache
@@ -562,11 +1591,37 @@ export class QueryStore<
       return () => false
     }
 
-    const query = (desc.params as Record<string, unknown>)?.query || undefined
-    if (config.matcher) {
-      return config.matcher(query as TQueryType | undefined) as ItemMatcher<ElementType<T>>
+    // Server-authoritative queries never merge events locally — they refetch, and
+    // their predicates ($regex, unknown operators) would throw in the default
+    // matcher anyway. Server-window predicates are locally evaluable by
+    // construction (anything non-local classifies authoritative), and window
+    // maintenance needs them to judge event membership — build the real matcher.
+    if (classification === 'server-authoritative') {
+      return () => false
     }
-    return this.#adapter.matcher(query as TQuery | undefined) as ItemMatcher<ElementType<T>>
+
+    return this.#resolveMatcher(
+      desc.serviceName,
+      config as QueryConfig<unknown, unknown>,
+      queryOfParams(desc.params),
+    )
+  }
+
+  /**
+   * The effective matcher for a query: the per-query `matcher` factory from config
+   * wins, else the adapter's. The casts across the typed-factory/unknown-item
+   * boundary live here and nowhere else.
+   */
+  #resolveMatcher(
+    serviceName: string,
+    config: QueryConfig<unknown, unknown>,
+    filters: Record<string, unknown> | undefined,
+  ): (item: unknown) => boolean {
+    return config.matcher
+      ? (config.matcher(filters as never) as (item: unknown) => boolean)
+      : (this.#adapter.matcher(filters as TQuery | undefined, undefined, {
+          serviceName,
+        }) as (item: unknown) => boolean)
   }
 
   /** Convert mutation descriptor to args array for adapter */
@@ -603,7 +1658,13 @@ export class QueryStore<
     if (listeners) {
       const state = this.getQueryState(queryId)
       if (state) {
-        listeners.forEach(listener => listener(state))
+        for (const listener of listeners) {
+          try {
+            listener(state)
+          } catch (error) {
+            this.#reportListenerError('query', error)
+          }
+        }
       }
     }
   }
@@ -617,222 +1678,24 @@ export class QueryStore<
 
   #invokeGlobalListeners(): void {
     const state = this.getState()
-    this.#globalListeners.forEach(listener => listener(state))
+    for (const listener of this.#globalListeners) {
+      try {
+        listener(state)
+      } catch (error) {
+        this.#reportListenerError('global', error)
+      }
+    }
+  }
+
+  #reportListenerError(kind: 'query' | 'global', error: unknown): void {
+    try {
+      console.error(`figbird: ${kind} listener threw`, error)
+    } catch {
+      // Error reporting must never re-enter or abort the store's update loop.
+    }
   }
 
   #listenerCount(queryId: string): number {
     return this.#listeners.get(queryId)?.size || 0
-  }
-}
-
-type ItemId = string | number
-
-function createServiceState<TMeta = Record<string, unknown>>(): ServiceState<TMeta> {
-  return {
-    entities: new Map(),
-    queries: new Map(),
-    itemQueryIndex: new Map(),
-  }
-}
-
-function getQueryItems<TMeta = Record<string, unknown>>(
-  query: Query<unknown, TMeta, unknown>,
-): unknown[] {
-  return Array.isArray(query.state.data)
-    ? query.state.data
-    : query.state.data
-      ? [query.state.data]
-      : []
-}
-
-function addQueryToItemIndex<TMeta>(
-  service: ServiceState<TMeta>,
-  itemId: ItemId,
-  queryId: string,
-): void {
-  if (!service.itemQueryIndex.has(itemId)) {
-    service.itemQueryIndex.set(itemId, new Set())
-  }
-  service.itemQueryIndex.get(itemId)!.add(queryId)
-}
-
-function removeQueryFromItemIndex<TMeta>({
-  service,
-  query,
-  queryId,
-  getId,
-}: {
-  service: ServiceState<TMeta>
-  query: Query<unknown, TMeta, unknown>
-  queryId: string
-  getId: (item: unknown) => ItemId | undefined
-}): void {
-  for (const item of getQueryItems(query)) {
-    const id = getId(item)
-    if (id !== undefined && service.itemQueryIndex.has(id)) {
-      service.itemQueryIndex.get(id)!.delete(queryId)
-    }
-  }
-}
-
-function groupQueuedEvents(events: QueuedEvent[]): Record<string, QueuedEvent[]> {
-  const eventsByService: Record<string, QueuedEvent[]> = {}
-  for (const event of events) {
-    if (!eventsByService[event.serviceName]) {
-      eventsByService[event.serviceName] = []
-    }
-    eventsByService[event.serviceName]!.push(event)
-  }
-  return eventsByService
-}
-
-function applyEventsToService<TMeta>({
-  service,
-  events,
-  getId,
-  isItemStale,
-}: {
-  service: ServiceState<TMeta>
-  events: QueuedEvent[]
-  getId: (item: unknown) => ItemId | undefined
-  isItemStale: (curr: unknown, next: unknown) => boolean
-}): QueuedEvent[] {
-  const appliedEvents: QueuedEvent[] = []
-  for (const event of events) {
-    const { type, items } = event
-    for (const item of items) {
-      if (type === 'created') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          service.entities.set(itemId, item)
-          appliedEvents.push(event)
-        }
-      } else if (type === 'updated' || type === 'patched') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          const currItem = service.entities.get(itemId)
-          if (!currItem || !isItemStale(currItem, item)) {
-            service.entities.set(itemId, item)
-            appliedEvents.push(event)
-          }
-        }
-      } else if (type === 'removed') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          service.entities.delete(itemId)
-          appliedEvents.push(event)
-        }
-      }
-    }
-  }
-
-  return appliedEvents
-}
-
-function updateQueriesFromEvents<TMeta>({
-  service,
-  appliedEvents,
-  touch,
-  getId,
-  itemAdded,
-  itemRemoved,
-}: {
-  service: ServiceState<TMeta>
-  appliedEvents: QueuedEvent[]
-  touch: (queryId: string) => void
-  getId: (item: unknown) => ItemId | undefined
-  itemAdded: (meta: TMeta) => TMeta
-  itemRemoved: (meta: TMeta) => TMeta
-}): void {
-  for (const { type, items } of appliedEvents) {
-    for (const item of items) {
-      const itemId = getId(item)
-      if (itemId === undefined) continue
-
-      if (!service.itemQueryIndex.has(itemId)) {
-        service.itemQueryIndex.set(itemId, new Set())
-      }
-      const itemQueryIndex = service.itemQueryIndex.get(itemId)!
-
-      for (const [queryId, query] of service.queries) {
-        let matches: boolean
-
-        if (query.config.realtime !== 'merge') {
-          continue
-        }
-
-        if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') {
-          continue
-        }
-
-        if (type === 'removed') {
-          matches = false
-        } else {
-          matches = query.filterItem(item)
-        }
-
-        const hasItem = itemQueryIndex.has(queryId)
-        if (hasItem && !matches) {
-          // remove
-          const query = service.queries.get(queryId)!
-          const nextState: QueryState<unknown, TMeta> =
-            query.desc.method === 'get' && query.state.status === 'success'
-              ? {
-                  status: 'loading' as const,
-                  data: null,
-                  meta: itemRemoved(query.state.meta),
-                  isFetching: false,
-                  error: null,
-                }
-              : query.state.status === 'success'
-                ? {
-                    ...query.state,
-                    meta: itemRemoved(query.state.meta),
-                    data: (query.state.data as unknown[]).filter(
-                      (x: unknown) => getId(x) !== itemId,
-                    ),
-                  }
-                : query.state
-          service.queries.set(queryId, {
-            ...query,
-            state: nextState,
-          })
-          itemQueryIndex.delete(queryId)
-          touch(queryId)
-        } else if (hasItem && matches) {
-          // update
-          service.queries.set(queryId, {
-            ...query,
-            state:
-              query.state.status === 'success'
-                ? {
-                    ...query.state,
-                    data:
-                      query.desc.method === 'get'
-                        ? item
-                        : (query.state.data as unknown[]).map((x: unknown) =>
-                            getId(x) === itemId ? item : x,
-                          ),
-                  }
-                : query.state,
-          })
-          touch(queryId)
-        } else if (matches && query.desc.method === 'find' && query.state.data) {
-          service.queries.set(queryId, {
-            ...query,
-            state:
-              query.state.status === 'success'
-                ? {
-                    ...query.state,
-                    meta: itemAdded(query.state.meta),
-                    data: (query.state.data as unknown[]).concat(item),
-                  }
-                : query.state,
-          })
-          itemQueryIndex.add(queryId)
-          touch(queryId)
-        }
-      }
-    }
   }
 }

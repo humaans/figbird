@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo:client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "demo:client"],
+      "port": 5173
+    },
+    {
+      "name": "demo:client-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "demo", "run", "dev:client", "--", "--port", "5273", "--strictPort"],
+      "port": 5273
+    },
+    {
+      "name": "demo:server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "demo:server"],
+      "port": 3030
+    },
+    {
+      "name": "docs:watch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "docs:watch"],
+      "port": 1313
+    },
+    {
+      "name": "docs:preview",
+      "runtimeExecutable": "hugo",
+      "runtimeArgs": ["server", "-s", "docs", "--port", "1414"],
+      "port": 1414
+    }
+  ]
+}

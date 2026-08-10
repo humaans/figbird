@@ -1,4 +1,4 @@
-import type { Adapter, EventHandlers, QueryResponse } from './adapter.js'
+import type { Adapter, EventHandlers, MatcherContext, QueryResponse } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type {
   Schema,
@@ -9,7 +9,6 @@ import type {
   ServicePatch,
   ServiceQuery,
   ServiceMethods,
-  ServiceMethodsMap,
 } from '../core/schema.js'
 
 // Helper types for field extraction
@@ -110,6 +109,12 @@ export interface FeathersClient {
   [key: string]: unknown
 }
 
+interface ReconnectEventSource {
+  on(event: string, listener: () => void): void
+  off?: (event: string, listener: () => void) => void
+  removeListener?: (event: string, listener: () => void) => void
+}
+
 /**
  * Typed Feathers service for a specific service in the schema.
  * Provides full type safety for CRUD methods and custom methods.
@@ -120,7 +125,8 @@ export type TypedFeathersService<
   TUpdate,
   TPatch,
   TQuery,
-  TMethods extends ServiceMethodsMap,
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  TMethods extends Record<string, (...args: any[]) => any>,
 > = {
   get(id: string | number, params?: FeathersParams<TQuery>): Promise<TItem>
   find(
@@ -158,11 +164,51 @@ export type TypedFeathersClient<S extends Schema> = {
   >
 }
 
-interface FeathersAdapterOptions {
+/**
+ * A custom query operator implementation: receives the operand from the query
+ * (`{ $asOf: '2026-07-06' }` → `'2026-07-06'`) and the resolved service path,
+ * then returns an item predicate. Registered operators are matched at the top level
+ * of the query.
+ */
+export interface CustomOperatorContext {
+  serviceName: string
+}
+
+export type CustomOperator = (
+  operand: unknown,
+  context: CustomOperatorContext,
+) => (item: unknown) => boolean
+
+export type CustomOperatorRegistration =
+  | CustomOperator
+  | {
+      byService: Record<string, CustomOperator>
+    }
+
+export interface FeathersAdapterOptions {
   idField?: IdFieldType
   updatedAtField?: UpdatedAtFieldType
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
+  /**
+   * Teach the client to evaluate custom query operators locally, so queries using
+   * them stay realtime-mergeable instead of classifying server-authoritative.
+   *
+   * This is a correctness contract: the predicate must reproduce the server's
+   * membership semantics for the operator exactly — figbird will trust it to decide
+   * which realtime events belong in which query results.
+   *
+   * @example
+   * operators: {
+   *   $asOf: asOf => item => isEffectiveOn(item, asOf),
+   *   $visibleAt: {
+   *     byService: {
+   *       'api/posts': visibleAt => item => isVisibleAt(item, visibleAt),
+   *     },
+   *   },
+   * }
+   */
+  operators?: Record<string, CustomOperatorRegistration>
 }
 
 /**
@@ -187,6 +233,24 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #updatedAtField: UpdatedAtFieldType
   #defaultPageSize: number | undefined
   #defaultPageSizeWhenFetchingAll: number | undefined
+  #operators: Record<string, CustomOperatorRegistration>
+
+  /** Names of custom operators registered for every service. */
+  get customOperators(): readonly string[] {
+    return Object.entries(this.#operators)
+      .filter(([, registration]) => typeof registration === 'function')
+      .map(([name]) => name)
+  }
+
+  /** Names of global and service-scoped custom operators available on a service. */
+  customOperatorsFor(serviceName: string): readonly string[] {
+    return Object.entries(this.#operators)
+      .filter(
+        ([, registration]) =>
+          typeof registration === 'function' || registration.byService[serviceName] !== undefined,
+      )
+      .map(([name]) => name)
+  }
 
   /**
    * Helper to merge query parameters while maintaining type safety
@@ -214,6 +278,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       },
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
+      operators = {},
     }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
@@ -221,6 +286,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#updatedAtField = updatedAtField
     this.#defaultPageSize = defaultPageSize
     this.#defaultPageSizeWhenFetchingAll = defaultPageSizeWhenFetchingAll
+    this.#operators = operators
   }
 
   #service(serviceName: string): FeathersService {
@@ -327,23 +393,56 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     }
   }
 
+  subscribeToReconnect(handler: () => void): () => void {
+    const source = this.#getReconnectEventSource()
+    if (!source) return () => {}
+
+    source.on('reconnect', handler)
+    return () => {
+      if (source.off) {
+        source.off('reconnect', handler)
+      } else {
+        source.removeListener?.('reconnect', handler)
+      }
+    }
+  }
+
+  #getReconnectEventSource(): ReconnectEventSource | null {
+    const io = (this.feathers as { io?: { io?: unknown } }).io
+    const candidates = [
+      // socket.io v3+ emits 'reconnect' on the Manager (socket.io), not the Socket —
+      // prefer it when present, otherwise fall back to the socket itself (older
+      // clients and primus emit 'reconnect' directly).
+      io?.io,
+      io,
+      (this.feathers as { socket?: unknown }).socket,
+      (this.feathers as { primus?: unknown }).primus,
+    ]
+
+    for (const candidate of candidates) {
+      if (
+        candidate &&
+        typeof candidate === 'object' &&
+        'on' in candidate &&
+        typeof candidate.on === 'function'
+      ) {
+        return candidate as ReconnectEventSource
+      }
+    }
+
+    return null
+  }
+
   getId(item: unknown): string | number | undefined {
-    const id =
-      typeof this.#idField === 'string'
-        ? ((item as Record<string, unknown>)[this.#idField] as string | number | undefined)
-        : this.#idField(item)
-    if (!id) console.warn('An item has been received without any ID', item)
-    return id
+    return typeof this.#idField === 'string'
+      ? ((item as Record<string, unknown>)[this.#idField] as string | number | undefined)
+      : this.#idField(item)
   }
 
   #getUpdatedAt(item: unknown): string | Date | number | null | undefined {
     return typeof this.#updatedAtField === 'string'
       ? ((item as Record<string, unknown>)[this.#updatedAtField] as
-          | string
-          | Date
-          | number
-          | null
-          | undefined)
+          string | Date | number | null | undefined)
       : this.#updatedAtField(item)
   }
 
@@ -360,9 +459,46 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     return nextMs < currMs
   }
 
-  matcher(query: TQuery | undefined, options?: PrepareQueryOptions): (item: unknown) => boolean {
+  #operatorFor(name: string, context: MatcherContext | undefined): CustomOperator | undefined {
+    if (!Object.hasOwn(this.#operators, name)) return undefined
+
+    const registration = this.#operators[name]!
+    if (typeof registration === 'function') return registration
+    if (!context) {
+      throw new Error(
+        `figbird: custom operator "${name}" is service-scoped, but matcher() was called ` +
+          'without a serviceName context.',
+      )
+    }
+    return registration.byService[context.serviceName]
+  }
+
+  matcher(
+    query: TQuery | undefined,
+    options?: PrepareQueryOptions,
+    context?: MatcherContext,
+  ): (item: unknown) => boolean {
+    // Registered custom operators are peeled off the top level of the query and
+    // composed as predicates around the sift-based matcher for the rest.
+    const q = query as Record<string, unknown> | undefined
+    const rest: Record<string, unknown> = {}
+    const predicates: Array<(item: unknown) => boolean> = []
+    const operatorContext = { serviceName: context?.serviceName ?? '' }
+
+    for (const [name, operand] of Object.entries(q ?? {})) {
+      const handler = this.#operatorFor(name, context)
+      if (handler) {
+        predicates.push(handler(operand, operatorContext))
+      } else {
+        rest[name] = operand
+      }
+    }
+
     // Cast to Query type - the matcher function will validate and clean the query internally
-    return matcher(query as Query | undefined, options)
+    if (predicates.length === 0) return matcher(query as Query | undefined, options)
+
+    const base = matcher(rest as Query, options)
+    return item => base(item) && predicates.every(predicate => predicate(item))
   }
 
   itemAdded(meta: FeathersFindMeta): FeathersFindMeta {
@@ -383,5 +519,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
 
   emptyMeta(): FeathersFindMeta {
     return { total: -1, limit: 0, skip: 0 }
+  }
+
+  findMeta(window: { total: number; limit: number; skip: number }): FeathersFindMeta {
+    return window
   }
 }

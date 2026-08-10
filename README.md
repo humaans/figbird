@@ -1,8 +1,8 @@
 # Figbird
 
-A data fetching library for React + Feathers applications. Used in production at [Humaans](https://humaans.io/).
+A realtime, relational data layer for React + Feathers applications. Used in production at [Humaans](https://humaans.io/).
 
-Figbird gives you React hooks that fetch data and keep it updated. When a record changes - from this component, another component, or a realtime event from the server - every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.
+Figbird gives you one query hook that fetches an entity graph — a record together with its relations — and keeps it updated. When a record changes, from this component, another component, or a realtime event from the server, every query referencing that data re-renders with the new state. No cache invalidation, no manual refetching.
 
 ## Install
 
@@ -12,91 +12,55 @@ pnpm add figbird
 
 ## Usage
 
-```ts
-import { Figbird, FeathersAdapter, FigbirdProvider, createHooks } from 'figbird'
+```tsx
+import { Figbird, FeathersAdapter, createSchema, service, createHooks } from 'figbird'
+
+const schema = createSchema({
+  services: {
+    notes: service<{ item: Note }>(),
+    users: service<{ item: User }>(),
+  },
+  relationships: {
+    notes: ({ one }) => ({
+      author: one({ sourceField: 'authorId', destService: 'users' }),
+    }),
+  },
+})
 
 const figbird = new Figbird({
   adapter: new FeathersAdapter(feathersClient),
+  schema,
 })
 
-export const { useFind, useGet, useMutation, useService, useMethod } = createHooks(figbird)
-
-function App() {
-  return (
-    <FigbirdProvider figbird={figbird}>
-      <Notes />
-    </FigbirdProvider>
-  )
-}
+export const { useQuery, useAction, q, m } = createHooks(figbird)
 
 function Notes() {
-  const { data } = useFind('notes')
-  const notesService = useService('notes')
+  const { data: notes } = useQuery(q.notes.where({ read: false }).related('author'))
 
-  return data?.map(note => (
-    <div key={note.id} onClick={() => notesService.patch(note.id, { read: true })}>
-      {note.content}
-    </div>
-  ))
+  return notes.map(note => <NoteRow key={note.id} note={note} />)
 }
 
-function SendDocumentButton({ id }: { id: string }) {
-  const [requestSendDocument, { status, data, error }] = useMethod(
-    'api/esign-instances',
-    'requestSendDocument',
-  )
+function NoteRow({ note }: { note: Note & { author?: User } }) {
+  const markRead = useAction('mark read', () => m.notes.patch(note.id, { read: true }))
 
   return (
-    <button disabled={status === 'loading'} onClick={() => requestSendDocument(id)}>
-      {data ? 'Sent' : error ? `Retry: ${error.message}` : 'Send'}
+    <button onClick={markRead.run} disabled={markRead.pending}>
+      {note.content} — {note.author?.name}
     </button>
   )
 }
 ```
 
-`useService('notes')` returns the Feathers service for that schema service. When you create hooks
-from a typed Figbird instance, the returned service is narrowed by the literal service name and
-includes typed CRUD methods plus any custom methods declared in the schema.
+No provider needed — the hooks are bound to the instance. Cold reads suspend into your `<Suspense>` boundary; warm reads render synchronously.
 
 ## Features
 
-- **Live queries** - results update as records are created, modified, or removed
-- **Shared cache** - same data across components, always consistent
-- **Realtime built-in** - Feathers websocket events update your UI automatically
-- **Fetch policies** - `swr`, `cache-first`, or `network-only` per query
-- **Custom methods** - typed service method calls with `status`, `data`, `error`, and `reset`
-- **Full TypeScript** - define a schema once, get inference everywhere
-
-## Typed Schemas
-
-Define a service map once, then bind it to a Figbird schema with `defineSchema`.
-The same shape works for handwritten schemas and generated API contracts.
-
-```ts
-import { defineSchema } from 'figbird'
-
-interface ApiSchemaTypes {
-  people: {
-    item: Person
-    create: PersonCreate
-    patch: PersonPatch
-    query: PersonQuery
-  }
-  tasks: {
-    item: Task
-  }
-}
-
-const schema = defineSchema<ApiSchemaTypes>({
-  services: {
-    people: { path: 'api/people' },
-    tasks: { path: 'api/tasks' },
-  },
-})
-```
-
-The `services` config is optional. Omit it when your schema keys already match
-your Feathers service paths.
+- **Relational queries** — declare relations once, `.related()` assembles live entity graphs
+- **Live queries** — results update as records are created, modified, or removed
+- **Suspense-native** — loading states live in boundaries, not branches
+- **Optimistic mutations** — declared once per surface, rolled back on failure everywhere
+- **Prepare & prefetch** — routers and hover handlers warm the exact queries screens will read
+- **Full TypeScript** — define a schema once, get inference through builders, relations, and mutations
 
 ## Documentation
 

@@ -1,49 +1,52 @@
 $sidebar-width: 300px;
 
-body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif,
-    'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
-}
-
 h1,
 h2,
 h3,
 h4,
 h5,
 h6 {
-  color: #222;
-  font-family:
-    'Geist',
-    -apple-system,
-    BlinkMacSystemFont,
-    sans-serif;
+  scroll-margin-top: 2rem;
 }
 
-h1 {
-  margin-top: 60px;
-  margin-bottom: 20px;
+.heading-anchor {
+  margin-left: 0.375em;
+  font-weight: 400;
+  color: #d1d5db;
+  text-decoration: none;
+  opacity: 0;
+}
+
+h1:hover .heading-anchor,
+h2:hover .heading-anchor,
+h3:hover .heading-anchor,
+h4:hover .heading-anchor,
+.heading-anchor:focus {
+  opacity: 1;
+}
+
+.heading-anchor:hover {
+  color: #cf222e;
+}
+
+.content li + li {
+  margin-top: 0.375rem;
 }
 
 #TOC {
   padding: 32px;
 
   @media (min-width: 768px) {
-    color: rgb(26, 26, 26);
-    color: #ccc;
     position: fixed;
+    width: $sidebar-width;
     margin-left: 0px;
     padding: 30px 60px 30px 40px;
     top: 0;
     left: 0;
     bottom: 0;
-    font-size: 14px;
+    font-size: 13px;
     border-right: 1px solid #e5e7eb;
     overflow: auto;
-  }
-
-  @media (min-height: 980px) {
-    padding-top: 100px;
   }
 }
 
@@ -117,11 +120,15 @@ h1 {
 }
 
 .content {
-  max-width: 680px;
+  max-width: 720px;
 
   @media (min-width: 768px) {
     margin: 60px 120px;
   }
+}
+
+.toc-mobile {
+  display: none;
 }
 
 @media (max-width: 768px) {
@@ -129,22 +136,67 @@ h1 {
     padding-left: 20px;
     padding-right: 20px;
   }
+
+  #TOC {
+    display: none;
+  }
+
+  .toc-mobile {
+    display: block;
+    margin: 60px 0 0;
+    padding: 12px 16px;
+    border: 1px solid #eaedf0;
+    border-radius: 8px;
+    background: #f6f8fa;
+
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    nav {
+      margin-top: 8px;
+    }
+
+    li {
+      line-height: 1.7;
+    }
+
+    li + li {
+      margin-top: 0;
+    }
+
+    a {
+      text-decoration: none;
+      color: #1e1e1e;
+    }
+
+    > nav > ul > li > a {
+      font-weight: 600;
+    }
+  }
 }
 
 .highlight {
-  margin: 1.5rem 0;
+  margin: 1.25rem 0;
 }
 
 .highlight pre {
   padding: 1rem;
   overflow: auto;
   border-radius: 8px;
+  /* size comes from the base `pre` rule (0.875rem) */
+  font-weight: 500;
 }
 
 .top-links {
   position: fixed;
   top: 20px;
   right: 20px;
+
+  @media (max-width: 768px) {
+    position: absolute;
+  }
   z-index: 100;
   display: flex;
   align-items: center;

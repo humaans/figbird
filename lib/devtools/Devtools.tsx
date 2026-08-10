@@ -1,0 +1,475 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
+import { createPortal } from 'react-dom'
+import { createCollector, type FigbirdLikeForDevtools } from './collector.js'
+import { inspectQueryArea, useElementPicker, type InspectedQueryArea } from './inspector.js'
+import { QueriesTab } from './QueriesTab.js'
+import { TimelineRangeControl, TimelineTab, type TimelineRange } from './TimelineTab.js'
+import { EventsTab } from './EventsTab.js'
+import { WritesTab } from './WritesTab.js'
+import { buildDevtoolsModel } from './model.js'
+import {
+  ThemeContext,
+  buttonStyle,
+  darkColors,
+  iconButtonStyle,
+  lightColors,
+  makeStyles,
+  useDevtoolsTheme,
+  usePopoutDocument,
+  usePreferredColorScheme,
+} from './ui.js'
+
+export interface FigbirdDevtoolsProps {
+  figbird: FigbirdLikeForDevtools
+  defaultOpen?: boolean
+  /** Used only when enable() or disable() has not stored an explicit preference. */
+  enabledByDefault?: boolean
+  theme?: 'system' | 'light' | 'dark'
+}
+
+type Tab = 'queries' | 'timeline' | 'events' | 'writes'
+
+const STORAGE_KEY = 'figbird:devtools'
+const MIN_HEIGHT = 220
+const DEFAULT_HEIGHT = 360
+
+export function FigbirdDevtools(props: FigbirdDevtoolsProps) {
+  const { figbird, enabledByDefault = false } = props
+  const subscribe = useCallback(
+    (listener: () => void) => figbird.devtools?.subscribe(listener) ?? (() => {}),
+    [figbird.devtools],
+  )
+  const getSnapshot = useCallback(() => figbird.devtools?.getSnapshot(), [figbird.devtools])
+  const preference = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
+  if (!(preference ?? enabledByDefault)) return null
+  return <DevtoolsSession {...props} />
+}
+
+function DevtoolsSession({ figbird, defaultOpen = false, theme = 'system' }: FigbirdDevtoolsProps) {
+  const activeCollector = useMemo(() => createCollector(figbird), [figbird])
+  const colorScheme = usePreferredColorScheme(theme)
+  const colors = colorScheme === 'dark' ? darkColors : lightColors
+  const styles = useMemo(() => makeStyles(colors), [colors])
+  const themeValue = useMemo(() => ({ colors, styles }), [colors, styles])
+  const [open, setOpen] = useState(defaultOpen)
+  const [tab, setTab] = useState<Tab>('queries')
+  const [height, setHeight] = useState(readStoredHeight)
+  const [queryFilter, setQueryFilter] = useState('')
+  const [queryActiveOnly, setQueryActiveOnly] = useState(true)
+  const [eventFilter, setEventFilter] = useState('')
+  const [timelineRange, setTimelineRange] = useState<TimelineRange>(30_000)
+  const [popoutWindow, setPopoutWindow] = useState<Window | null>(null)
+  const [inspecting, setInspecting] = useState(false)
+  const [inspectedArea, setInspectedArea] = useState<InspectedQueryArea | null>(null)
+
+  const startInspecting = useCallback(() => {
+    setTab('queries')
+    setInspecting(true)
+    if (popoutWindow) window.focus()
+  }, [popoutWindow])
+
+  const finishInspecting = useCallback((area: InspectedQueryArea | null) => {
+    if (area) setInspectedArea(area)
+    setInspecting(false)
+  }, [])
+  useElementPicker(inspecting, colors.blue, finishInspecting)
+  usePopoutDocument(popoutWindow, colorScheme, colors)
+
+  const closeDevtools = useCallback(() => {
+    if (popoutWindow && !popoutWindow.closed) popoutWindow.close()
+    setPopoutWindow(null)
+    setOpen(false)
+  }, [popoutWindow])
+
+  const toggleDevtools = useCallback(() => {
+    if (open) {
+      closeDevtools()
+    } else {
+      setOpen(true)
+    }
+  }, [closeDevtools, open])
+
+  const dockDevtools = useCallback(() => {
+    if (popoutWindow && !popoutWindow.closed) popoutWindow.close()
+    setPopoutWindow(null)
+  }, [popoutWindow])
+
+  const popOutDevtools = useCallback(() => {
+    if (popoutWindow && !popoutWindow.closed) {
+      popoutWindow.focus()
+      return
+    }
+    const width = Math.min(1400, window.screen.availWidth || 1400)
+    const height = Math.min(900, window.screen.availHeight || 900)
+    const popup = window.open(
+      '',
+      'figbird-devtools',
+      `popup=yes,width=${width},height=${height},resizable=yes,scrollbars=yes`,
+    )
+    if (!popup) return
+    popup.document.title = 'Figbird devtools'
+    popup.focus()
+    setPopoutWindow(popup)
+  }, [popoutWindow])
+
+  useEffect(() => {
+    activeCollector.start()
+    return () => activeCollector.stop()
+  }, [activeCollector])
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if (!isDevtoolsShortcut(event)) return
+      event.preventDefault()
+      event.stopPropagation()
+      toggleDevtools()
+    }
+    window.addEventListener('keydown', onShortcut)
+    if (popoutWindow) popoutWindow.addEventListener('keydown', onShortcut)
+    return () => {
+      window.removeEventListener('keydown', onShortcut)
+      if (popoutWindow) popoutWindow.removeEventListener('keydown', onShortcut)
+    }
+  }, [popoutWindow, toggleDevtools])
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeDevtools()
+    }
+    const targetWindow = popoutWindow ?? window
+    targetWindow.addEventListener('keydown', onKey)
+    return () => targetWindow.removeEventListener('keydown', onKey)
+  }, [closeDevtools, open, popoutWindow])
+
+  useEffect(() => {
+    if (!popoutWindow) return
+    const handleClosed = () => {
+      setPopoutWindow(current => (current === popoutWindow ? null : current))
+    }
+    popoutWindow.addEventListener('beforeunload', handleClosed)
+    return () => {
+      popoutWindow.removeEventListener('beforeunload', handleClosed)
+      if (!popoutWindow.closed) popoutWindow.close()
+    }
+  }, [popoutWindow])
+
+  useEffect(() => {
+    writeStoredHeight(height)
+  }, [height])
+
+  const subscribe = useCallback(
+    (fn: () => void) => activeCollector.subscribe(fn),
+    [activeCollector],
+  )
+  const getSnapshot = useCallback(() => activeCollector.getSnapshot(), [activeCollector])
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
+  useEffect(() => {
+    setInspectedArea(current => {
+      if (!current) return current
+      if (!current.element.isConnected) return null
+      const next = inspectQueryArea(current.element)
+      return sameQueryCounts(current, next) ? current : next
+    })
+  }, [snapshot])
+
+  const onResizeStart = (event: ReactMouseEvent) => {
+    event.preventDefault()
+    const startY = event.clientY
+    const startHeight = height
+    const onMove = (move: MouseEvent) => {
+      const next = Math.max(
+        MIN_HEIGHT,
+        Math.min(window.innerHeight - 48, startHeight + startY - move.clientY),
+      )
+      setHeight(next)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const model = useMemo(() => buildDevtoolsModel(snapshot), [snapshot])
+  const timelineEmpty =
+    snapshot.timeline.realtime.length === 0 &&
+    snapshot.queries.every(query => query.spans.length === 0)
+  const clearAction =
+    tab === 'events'
+      ? {
+          disabled: snapshot.events.length === 0,
+          run: () => activeCollector.clearEvents(),
+        }
+      : tab === 'timeline'
+        ? {
+            disabled: timelineEmpty,
+            run: () => activeCollector.clearTimeline(),
+          }
+        : tab === 'writes'
+          ? {
+              disabled: snapshot.writes.length === 0,
+              run: () => activeCollector.clearWrites(),
+            }
+          : null
+
+  const drawer = (
+    <section
+      data-figbird-devtools='drawer'
+      style={{
+        ...styles.drawer,
+        height: popoutWindow ? '100vh' : height,
+        ...(popoutWindow ? { top: 0, borderTop: 'none', boxShadow: 'none', fontSize: 11 } : {}),
+      }}
+      aria-label='Figbird devtools'
+    >
+      {!popoutWindow ? <div style={styles.resize} onMouseDown={onResizeStart} /> : null}
+      <header style={styles.header}>
+        <span style={styles.brand}>figbird</span>
+        {(['queries', 'timeline', 'events', 'writes'] as const).map(item => (
+          <TabButton
+            key={item}
+            active={tab === item}
+            onClick={() => setTab(item)}
+            label={
+              item === 'writes' && snapshot.inFlightWrites > 0
+                ? `writes (${snapshot.inFlightWrites})`
+                : item
+            }
+          />
+        ))}
+        {tab === 'queries' ? (
+          <>
+            <input
+              style={styles.input}
+              value={queryFilter}
+              onChange={event => setQueryFilter(event.currentTarget.value)}
+              placeholder='Filter service or query'
+            />
+            <label
+              style={{
+                color: colors.muted,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <input
+                type='checkbox'
+                checked={queryActiveOnly}
+                onChange={event => setQueryActiveOnly(event.currentTarget.checked)}
+              />
+              active only
+            </label>
+            <button
+              type='button'
+              style={buttonStyle(colors, inspecting)}
+              onClick={inspecting ? () => setInspecting(false) : startInspecting}
+              title='Pick an area of the app and show only its mounted queries'
+            >
+              {inspecting ? 'Cancel' : 'Inspect'}
+            </button>
+            {inspectedArea ? (
+              <button
+                type='button'
+                onClick={() => setInspectedArea(null)}
+                title={
+                  inspectedArea.supported
+                    ? inspectedArea.truncated
+                      ? `Clear partial area filter: inspection reached its safety limit after finding ${inspectedArea.queryCounts.size} query roots in ${inspectedArea.label}`
+                      : `Clear area filter: ${inspectedArea.queryCounts.size} query roots mounted in ${inspectedArea.label}`
+                    : 'React component ownership is unavailable for this element'
+                }
+                style={{
+                  ...buttonStyle(colors, true),
+                  color: !inspectedArea.supported
+                    ? colors.red
+                    : inspectedArea.truncated
+                      ? colors.amber
+                      : colors.blue,
+                  maxWidth: 145,
+                  display: 'flex',
+                  minWidth: 0,
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {inspectedArea.label}
+                </span>
+                <span style={{ flexShrink: 0 }}>
+                  ·{' '}
+                  {inspectedArea.supported
+                    ? `${inspectedArea.queryCounts.size}${inspectedArea.truncated ? '+' : ''}`
+                    : 'unavailable'}
+                </span>
+              </button>
+            ) : null}
+          </>
+        ) : null}
+        {tab === 'events' ? (
+          <input
+            style={styles.input}
+            value={eventFilter}
+            onChange={event => setEventFilter(event.currentTarget.value)}
+            placeholder='Filter events'
+          />
+        ) : null}
+        {tab === 'timeline' ? (
+          <TimelineRangeControl value={timelineRange} onChange={setTimelineRange} />
+        ) : null}
+        {clearAction ? (
+          <ClearButton disabled={clearAction.disabled} onClick={clearAction.run} />
+        ) : null}
+        <span style={styles.spacer} />
+        <button
+          type='button'
+          style={buttonStyle(colors, false)}
+          onClick={popoutWindow ? dockDevtools : popOutDevtools}
+          title={popoutWindow ? 'Move devtools back into the app' : 'Open devtools in a new window'}
+        >
+          {popoutWindow ? 'Dock' : 'Pop out'}
+        </button>
+        <button
+          type='button'
+          aria-label='Close'
+          title='Close devtools'
+          style={iconButtonStyle(colors)}
+          onClick={closeDevtools}
+        >
+          ×
+        </button>
+      </header>
+      <main style={styles.body}>
+        {tab === 'queries' ? (
+          <QueriesTab
+            model={model}
+            filter={queryFilter}
+            activeOnly={queryActiveOnly}
+            inspectedQueryCounts={inspectedArea?.queryCounts ?? null}
+          />
+        ) : null}
+        {tab === 'timeline' ? (
+          <TimelineTab snapshot={snapshot} model={model} range={timelineRange} />
+        ) : null}
+        {tab === 'events' ? (
+          <EventsTab events={snapshot.events} filter={eventFilter} scopes={model.scopesByQueryId} />
+        ) : null}
+        {tab === 'writes' ? (
+          <WritesTab writes={snapshot.writes} inFlight={snapshot.inFlightWrites} />
+        ) : null}
+      </main>
+    </section>
+  )
+
+  return (
+    <ThemeContext.Provider value={themeValue}>
+      {open ? (popoutWindow ? createPortal(drawer, popoutWindow.document.body) : drawer) : null}
+    </ThemeContext.Provider>
+  )
+}
+
+function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <button
+      type='button'
+      style={{
+        ...buttonStyle(colors, false),
+        opacity: disabled ? 0.55 : 1,
+      }}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      Clear
+    </button>
+  )
+}
+
+function isDevtoolsShortcut(event: KeyboardEvent): boolean {
+  return (
+    event.code === 'Period' &&
+    event.shiftKey &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    !event.repeat
+  )
+}
+
+function sameQueryCounts(a: InspectedQueryArea, b: InspectedQueryArea): boolean {
+  if (
+    a.label !== b.label ||
+    a.supported !== b.supported ||
+    a.truncated !== b.truncated ||
+    a.queryCounts.size !== b.queryCounts.size
+  ) {
+    return false
+  }
+  for (const [key, count] of a.queryCounts) {
+    if (b.queryCounts.get(key) !== count) return false
+  }
+  return true
+}
+
+function readStoredHeight(): number {
+  try {
+    if (typeof window === 'undefined') return DEFAULT_HEIGHT
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const parsed = raw ? Number(raw) : NaN
+    return Number.isFinite(parsed) ? Math.max(MIN_HEIGHT, parsed) : DEFAULT_HEIGHT
+  } catch {
+    return DEFAULT_HEIGHT
+  }
+}
+
+function writeStoredHeight(height: number): void {
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(STORAGE_KEY, String(Math.round(height)))
+  } catch {
+    // The drawer still works when storage is unavailable.
+  }
+}
+
+function TabButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean
+  onClick: () => void
+  label: string
+}) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <button
+      type='button'
+      style={{
+        height: 40,
+        alignSelf: 'stretch',
+        padding: '0 6px',
+        border: 0,
+        borderBottom: `2px solid ${active ? colors.blue : 'transparent'}`,
+        background: 'transparent',
+        color: active ? colors.text : colors.muted,
+        font: 'inherit',
+        fontWeight: active ? 650 : 500,
+        cursor: 'pointer',
+      }}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  )
+}
