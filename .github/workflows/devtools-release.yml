@@ -25,8 +25,8 @@ jobs:
     environment: extension-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           cache: npm
           node-version: 22
@@ -34,7 +34,7 @@ jobs:
       - run: npm test
       - run: npm run devtools:lint
       - run: npm run devtools:package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           if-no-files-found: error
           name: figbird-devtools-release-inputs
@@ -57,7 +57,7 @@ jobs:
             --upload-source-code extensions/build/figbird-devtools-source.zip \
             --approval-timeout 900000 \
             --timeout 900000
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: inputs.sign_firefox
         with:
           if-no-files-found: error
@@ -65,7 +65,7 @@ jobs:
           path: extensions/build/firefox-signed/*.xpi
       - id: google-auth
         if: inputs.upload_chrome || inputs.submit_chrome
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           access_token_scopes: https://www.googleapis.com/auth/chromewebstore
           service_account: ${{ vars.CHROME_SERVICE_ACCOUNT }}
