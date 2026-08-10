@@ -406,10 +406,15 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
   }) as never
 
   const create = m.notes.create({ id: 77, content: 'doomed' })
-  const dependentPatch = m.notes.patch(77, { content: 'still doomed' })
+  const dependentPatch = m.notes.patch(
+    77,
+    { content: 'still doomed' },
+    { optimisticItem: { id: 77, content: 'explicitly doomed' } },
+  )
+  t.is(latest?.data?.find(note => note.id === 77)?.content, 'explicitly doomed')
   await t.throwsAsync(() => create, { message: 'rejected' })
   await t.throwsAsync(() => dependentPatch, { message: /cancelled queued mutations/ })
-  t.false(latest?.data?.some(n => n.content === 'doomed'))
+  t.false(latest?.data?.some(note => note.id === 77))
   t.is(latest?.data?.length, 2)
   t.is(patchCalls, 0)
 })

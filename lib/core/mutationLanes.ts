@@ -10,10 +10,14 @@ export interface MutationLaneEntry {
   optimistic: boolean
 }
 
-export interface MutationLane<TEntry extends MutationLaneEntry> {
-  key: string
-  serviceName: string
-  id: ItemId
+/** Opaque identity for a lane; mutable lane state stays inside MutationLanes. */
+export interface MutationLane {
+  readonly key: string
+  readonly serviceName: string
+  readonly id: ItemId
+}
+
+interface MutationLaneState<TEntry extends MutationLaneEntry> extends MutationLane {
   base: ProjectedEntity
   visible: ProjectedEntity
   lastPresent: unknown | null
@@ -23,30 +27,44 @@ export interface MutationLane<TEntry extends MutationLaneEntry> {
   deferredProcessedEvents: ProcessedRealtimeEvent[]
 }
 
-export interface ProjectionChange<TEntry extends MutationLaneEntry> {
-  lane: MutationLane<TEntry>
+export interface ProjectionChange {
+  lane: MutationLane
   previous: ProjectedEntity
   next: ProjectedEntity
 }
 
-/** Owns each entity's confirmed base and folds its unsettled optimistic intents. */
+export interface AuthoritativeTransition {
+  projection: ProjectionChange
+  event: ProcessedRealtimeEvent
+}
+
+export type MutationOutcome = { ok: true; item: unknown } | { ok: false; error: Error }
+
+export interface LaneSettlement<TEntry extends MutationLaneEntry> {
+  projection: ProjectionChange
+  cancelled: TEntry[]
+  authoritativeEvent: ProcessedRealtimeEvent | null
+}
+
+export interface ReleasedLaneEffects {
+  processedEvents: readonly ProcessedRealtimeEvent[]
+  queryIds: ReadonlySet<string>
+}
+
+/** Owns each entity's confirmed base and every transition of its mutation queue. */
 export class MutationLanes<TEntry extends MutationLaneEntry> {
-  readonly #lanes = new Map<string, MutationLane<TEntry>>()
+  readonly #lanes = new Map<string, MutationLaneState<TEntry>>()
   readonly #getId: (item: unknown) => ItemId | undefined
 
   constructor(getId: (item: unknown) => ItemId | undefined) {
     this.#getId = getId
   }
 
-  get(serviceName: string, id: ItemId): MutationLane<TEntry> | undefined {
+  get(serviceName: string, id: ItemId): MutationLane | undefined {
     return this.#lanes.get(this.#key(serviceName, id))
   }
 
-  getByKey(key: string): MutationLane<TEntry> | undefined {
-    return this.#lanes.get(key)
-  }
-
-  ensure(serviceName: string, id: ItemId, cached: unknown): MutationLane<TEntry> {
+  ensure(serviceName: string, id: ItemId, cached: unknown): MutationLane {
     const key = this.#key(serviceName, id)
     let lane = this.#lanes.get(key)
     if (lane) return lane
@@ -68,54 +86,122 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return lane
   }
 
+  enqueue(lane: MutationLane, entry: TEntry): ProjectionChange {
+    const state = this.#require(lane)
+    state.entries.push(entry)
+    return this.#reproject(state)
+  }
+
+  takeNext(lane: MutationLane): TEntry | undefined {
+    const state = this.#require(lane)
+    if (state.running) return undefined
+    const entry = state.entries[0]
+    if (entry) state.running = true
+    return entry
+  }
+
+  settle(
+    lane: MutationLane,
+    entry: TEntry,
+    outcome: MutationOutcome,
+  ): LaneSettlement<TEntry> | null {
+    const state = this.#lanes.get(lane.key)
+    if (state !== lane) return null
+    const index = state.entries.indexOf(entry)
+    // Cancelled dependants reject their gates after the lane has forgotten them.
+    if (index === -1) return null
+
+    state.entries.splice(index, 1)
+    state.running = false
+
+    const cancelled = !outcome.ok && entry.desc.method === 'create' ? state.entries.splice(0) : []
+    let authoritativeEvent: ProcessedRealtimeEvent | null = null
+
+    if (outcome.ok) {
+      const type = MUTATION_EVENT_TYPE[entry.desc.method]
+      const previousItem = state.base === ABSENT ? null : state.base
+      const eventItem =
+        entry.desc.method === 'remove' ? (outcome.item ?? state.lastPresent) : outcome.item
+      this.#setBase(state, type, outcome.item)
+      if (eventItem !== null && eventItem !== undefined) {
+        authoritativeEvent = {
+          origin: 'authoritative',
+          serviceName: state.serviceName,
+          type,
+          item: eventItem,
+          previousItem,
+          itemId: state.id,
+        }
+      }
+    }
+
+    return {
+      projection: this.#reproject(state),
+      cancelled,
+      authoritativeEvent,
+    }
+  }
+
+  acceptAuthoritative(lane: MutationLane, type: EventType, item: unknown): AuthoritativeTransition
   acceptAuthoritative(
-    lane: MutationLane<TEntry>,
-    type: EventType,
-    item: unknown,
-  ): ProjectionChange<TEntry>
-  acceptAuthoritative(
-    lane: MutationLane<TEntry>,
+    lane: MutationLane,
     type: EventType,
     item: unknown,
     isItemStale: (current: unknown, next: unknown) => boolean,
-  ): ProjectionChange<TEntry> | null
+  ): AuthoritativeTransition | null
   acceptAuthoritative(
-    lane: MutationLane<TEntry>,
+    lane: MutationLane,
     type: EventType,
     item: unknown,
     isItemStale?: (current: unknown, next: unknown) => boolean,
-  ): ProjectionChange<TEntry> | null {
-    const previousBase = lane.base === ABSENT ? null : lane.base
+  ): AuthoritativeTransition | null {
+    const state = this.#require(lane)
+    const previousItem = state.base === ABSENT ? null : state.base
     if (
       isItemStale &&
       (type === 'updated' || type === 'patched') &&
-      previousBase &&
-      isItemStale(previousBase, item)
+      previousItem &&
+      isItemStale(previousItem, item)
     ) {
       return null
     }
 
-    lane.base = type === 'removed' ? ABSENT : item
-    if (type !== 'removed') lane.lastPresent = item
-    return this.reproject(lane)
-  }
-
-  reproject(lane: MutationLane<TEntry>): ProjectionChange<TEntry> {
-    const previous = lane.visible
-    let next = lane.base
-    for (const entry of lane.entries) {
-      if (entry.optimistic) next = this.#applyIntent(next, entry.desc)
+    this.#setBase(state, type, item)
+    return {
+      projection: this.#reproject(state),
+      event: {
+        origin: 'authoritative',
+        serviceName: state.serviceName,
+        type,
+        item,
+        previousItem,
+        itemId: state.id,
+      },
     }
-    lane.visible = next
-    if (next !== ABSENT) lane.lastPresent = next
-    return { lane, previous, next }
   }
 
-  release(lane: MutationLane<TEntry>): boolean {
-    if (lane.running || lane.entries.length > 0) return false
-    if (this.#lanes.get(lane.key) !== lane) return false
-    this.#lanes.delete(lane.key)
+  deferQueryIds(laneKey: string, queryIds: Iterable<string>): boolean {
+    const lane = this.#lanes.get(laneKey)
+    if (!lane) return false
+    for (const queryId of queryIds) lane.deferredQueryIds.add(queryId)
     return true
+  }
+
+  deferProcessedEvent(laneKey: string, event: ProcessedRealtimeEvent): boolean {
+    const lane = this.#lanes.get(laneKey)
+    if (!lane) return false
+    lane.deferredProcessedEvents.push(event)
+    return true
+  }
+
+  release(lane: MutationLane): ReleasedLaneEffects | null {
+    const state = this.#require(lane)
+    if (state.running || state.entries.length > 0) return null
+    this.#lanes.delete(state.key)
+    return {
+      processedEvents: state.deferredProcessedEvents,
+      queryIds: state.deferredQueryIds,
+    }
   }
 
   overlayEvents(serviceName: string): ProcessedRealtimeEvent[] {
@@ -150,6 +236,22 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return events
   }
 
+  #setBase(state: MutationLaneState<TEntry>, type: EventType, item: unknown): void {
+    state.base = type === 'removed' ? ABSENT : item
+    if (type !== 'removed') state.lastPresent = item
+  }
+
+  #reproject(state: MutationLaneState<TEntry>): ProjectionChange {
+    const previous = state.visible
+    let next = state.base
+    for (const entry of state.entries) {
+      if (entry.optimistic) next = this.#applyIntent(next, entry.desc)
+    }
+    state.visible = next
+    if (next !== ABSENT) state.lastPresent = next
+    return { lane: state, previous, next }
+  }
+
   #applyIntent(current: ProjectedEntity, desc: MutationDescriptor): ProjectedEntity {
     const explicit =
       desc.optimistic !== undefined && desc.optimistic !== true && desc.optimistic !== false
@@ -168,7 +270,20 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return { ...(currentRecord ?? {}), ...data }
   }
 
+  #require(lane: MutationLane): MutationLaneState<TEntry> {
+    const state = this.#lanes.get(lane.key)
+    if (state !== lane) throw new Error(`figbird: inactive mutation lane ${lane.key}`)
+    return state
+  }
+
   #key(serviceName: string, id: ItemId): string {
     return JSON.stringify([serviceName, typeof id, id])
   }
 }
+
+const MUTATION_EVENT_TYPE = {
+  create: 'created',
+  update: 'updated',
+  patch: 'patched',
+  remove: 'removed',
+} as const satisfies Record<MutationDescriptor['method'], EventType>

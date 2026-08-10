@@ -7,7 +7,7 @@ import {
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
-import { FigbirdEventEmitter, type MutationMethod } from './events.js'
+import { FigbirdEventEmitter } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
 import { sortRowsLocally } from './sort.js'
 import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchRebase.js'
@@ -97,13 +97,15 @@ interface QueuedMutation {
   gate: MutationGate
 }
 
-/** The realtime event type a mutation verb produces. */
-const MUTATION_EVENT_TYPE = {
-  create: 'created',
-  update: 'updated',
-  patch: 'patched',
-  remove: 'removed',
-} as const satisfies Record<MutationMethod, Event['type']>
+interface AppliedEventEffect {
+  event: ProcessedRealtimeEvent
+  reconcileQueryIds: Set<string>
+}
+
+interface PublishedEventEffects {
+  reconcileQueryIds: Set<string>
+  refetchService: boolean
+}
 
 export interface QueryFetchStats {
   fetchCount: number
@@ -568,21 +570,17 @@ export class QueryStore<
       },
     )
 
-    lane.entries.push(entry)
-    this.#applyProjection(this.#mutationLanes.reproject(lane), true)
+    this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true)
     this.#drainMutationLane(lane)
     return tracked
   }
 
-  #drainMutationLane(lane: MutationLane<QueuedMutation>): void {
-    if (lane.running) return
-    const entry = lane.entries[0]
+  #drainMutationLane(lane: MutationLane): void {
+    const entry = this.#mutationLanes.takeNext(lane)
     if (!entry) {
       this.#releaseMutationLane(lane)
       return
     }
-
-    lane.running = true
     let request: Promise<unknown>
     try {
       request = this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args])
@@ -594,75 +592,42 @@ export class QueryStore<
   }
 
   #settleQueuedMutation(
-    lane: MutationLane<QueuedMutation>,
+    lane: MutationLane,
     entry: QueuedMutation,
     outcome: { ok: true; item: unknown } | { ok: false; error: Error },
   ): void {
-    const index = lane.entries.indexOf(entry)
-    // A failed create cancels its queued dependants before their rejected gates
-    // run these hooks. They have no remaining lane state to settle a second time.
-    if (index === -1) return
+    const settlement = this.#mutationLanes.settle(lane, entry, outcome)
+    if (!settlement) return
 
-    lane.entries.splice(index, 1)
-    lane.running = false
-    let projection: ProjectionChange<QueuedMutation>
-
-    if (outcome.ok) {
-      const previousBase = lane.base === ABSENT ? null : lane.base
-      projection = this.#mutationLanes.acceptAuthoritative(
-        lane,
-        MUTATION_EVENT_TYPE[entry.desc.method],
-        outcome.item,
-      )
-
-      // A mutation acknowledgement is authoritative even when remaining overlays
-      // keep the visible projection unchanged. Recording it protects fetches that
-      // began before the acknowledgement from replacing the newer server state.
-      const ackItem =
-        entry.desc.method === 'remove' ? (outcome.item ?? lane.lastPresent) : outcome.item
-      if (ackItem !== null && ackItem !== undefined) {
-        this.#fetchEventJournal.record([
-          {
-            origin: 'authoritative',
-            serviceName: lane.serviceName,
-            type: MUTATION_EVENT_TYPE[entry.desc.method],
-            item: ackItem,
-            previousItem: previousBase,
-            itemId: lane.id,
-          },
-        ])
-      }
-    } else {
-      projection = this.#mutationLanes.reproject(lane)
+    // A mutation acknowledgement is authoritative even when remaining overlays
+    // keep the visible projection unchanged. Recording it protects fetches that
+    // began before the acknowledgement from replacing the newer server state.
+    if (settlement.authoritativeEvent) {
+      this.#fetchEventJournal.record([settlement.authoritativeEvent])
     }
 
-    let cancelled: QueuedMutation[] = []
-    if (!outcome.ok && entry.desc.method === 'create') {
-      cancelled = lane.entries.splice(0)
-    }
+    this.#applyProjection(settlement.projection, true)
 
-    this.#applyProjection(projection, true)
-
-    if (cancelled.length > 0) {
+    if (settlement.cancelled.length > 0) {
       const dependencyError = new Error(
         `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ` +
           'because its create mutation failed.',
         { cause: outcome.ok ? undefined : outcome.error },
       )
-      for (const queued of cancelled) queued.gate.reject(dependencyError)
+      for (const queued of settlement.cancelled) queued.gate.reject(dependencyError)
     }
 
     this.#drainMutationLane(lane)
   }
 
-  #applyProjection(change: ProjectionChange<QueuedMutation>, immediate: boolean): void {
+  #applyProjection(change: ProjectionChange, immediate: boolean): void {
     const event = this.#projectionEvent(change)
     if (!event) return
     this.#enqueueProjectionEvent(change.lane, event)
     if (immediate) this.#processQueuedEvents()
   }
 
-  #projectionEvent(change: ProjectionChange<QueuedMutation>): Event | null {
+  #projectionEvent(change: ProjectionChange): Event | null {
     const { previous, next } = change
     if (previous === ABSENT && next === ABSENT) return null
     if (previous === ABSENT) {
@@ -672,11 +637,12 @@ export class QueryStore<
     return previous === next ? null : { type: 'patched', item: next }
   }
 
-  #releaseMutationLane(lane: MutationLane<QueuedMutation>): void {
-    if (!this.#mutationLanes.release(lane)) return
+  #releaseMutationLane(lane: MutationLane): void {
+    const effects = this.#mutationLanes.release(lane)
+    if (!effects) return
 
-    for (const event of lane.deferredProcessedEvents) this.#emitProcessedEvent(event)
-    for (const queryId of lane.deferredQueryIds) this.#requestReconcile(queryId)
+    for (const event of effects.processedEvents) this.#emitProcessedEvent(event)
+    for (const queryId of effects.queryIds) this.#requestReconcile(queryId)
   }
 
   /** Active optimistic projections must survive fetches that started after them. */
@@ -1076,8 +1042,7 @@ export class QueryStore<
   }): void {
     let shouldRefetch = false
     let hadEffectiveJournalEvents = false
-    const processedEvents: ProcessedRealtimeEvent[] = []
-    const serverMaintainedQueriesToRefetch = new Set<string>()
+    const eventEffects: AppliedEventEffect[] = []
 
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     const touched = this.#transactOverServiceByName(serviceName ?? '', (service, touch) => {
@@ -1100,14 +1065,14 @@ export class QueryStore<
         if (itemId === undefined || rebasePlan.itemIds.has(itemId)) continue
         const lane = this.#mutationLanes.get(query.desc.serviceName, itemId)
         if (!lane) continue
-        const projection = this.#mutationLanes.acceptAuthoritative(
+        const transition = this.#mutationLanes.acceptAuthoritative(
           lane,
-          lane.base === ABSENT ? 'created' : 'updated',
+          'updated',
           item,
           (current, next) => this.#adapter.isItemStale(current, next),
         )
-        if (!projection) continue
-        const projectionEvent = this.#projectionEvent(projection)
+        if (!transition) continue
+        const projectionEvent = this.#projectionEvent(transition.projection)
         if (projectionEvent) {
           fetchedProjectionEvents.push({
             origin: 'projection',
@@ -1120,14 +1085,15 @@ export class QueryStore<
       }
 
       if (fetchedProjectionEvents.length > 0) {
-        applyEventsToService({
-          service,
-          serviceName: query.desc.serviceName,
-          events: fetchedProjectionEvents,
-          getId,
-          isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
-          processedEvents,
-        })
+        eventEffects.push(
+          ...this.#applyServiceEvents({
+            service,
+            serviceName: query.desc.serviceName,
+            events: fetchedProjectionEvents,
+            touch,
+            excludeQueryId: queryId,
+          }),
+        )
       }
 
       const activeOverlayEvents = this.#activeMutationOverlayEvents(query.desc.serviceName)
@@ -1237,13 +1203,20 @@ export class QueryStore<
       // rows created or removed out-of-band would be invisible to them forever.
       // The fetched query itself is excluded: its state was just set from the result.
       if (previousEntities) {
-        processedEvents.push(
-          ...diffCompleteSet({
+        const diffEvents = diffCompleteSet({
+          service,
+          serviceName: query.desc.serviceName,
+          previousEntities,
+          nextItemIds,
+          ignoredItemIds: journaledItemIds,
+        })
+        eventEffects.push(
+          ...this.#updateQueriesForEvents({
             service,
             serviceName: query.desc.serviceName,
-            previousEntities,
-            nextItemIds,
-            ignoredItemIds: journaledItemIds,
+            processedEvents: diffEvents,
+            touch,
+            excludeQueryId: queryId,
           }),
         )
       }
@@ -1264,47 +1237,17 @@ export class QueryStore<
           defaultSort: this.#defaultSort,
         })
       }
-
-      for (const processedEvent of processedEvents) {
-        const eventReconciles = new Set<string>()
-        updateQueriesFromEvents({
-          service,
-          appliedItems: [processedEvent],
-          touch,
-          getId,
-          itemAdded: meta => this.#adapter.itemAdded(meta),
-          itemRemoved: meta => this.#adapter.itemRemoved(meta),
-          serverMaintainedQueriesToRefetch: eventReconciles,
-          excludeQueryId: queryId,
-          defaultSort: this.#defaultSort,
-        })
-        const lane =
-          processedEvent.origin === 'projection'
-            ? this.#mutationLanes.getByKey(processedEvent.mutationLaneKey)
-            : undefined
-        if (lane) {
-          for (const id of eventReconciles) lane.deferredQueryIds.add(id)
-        } else {
-          for (const id of eventReconciles) serverMaintainedQueriesToRefetch.add(id)
-        }
-      }
     })
     this.#notify(touched)
 
-    if (processedEvents.length > 0) {
-      // Same follow-ups as the realtime event path: reconcile queries that can't
-      // merge locally and surface the changes to relational-filter invalidation.
-      // Unlike realtime events, diffs don't trigger `realtime: 'refetch'` queries —
-      // a refetch-on-diff that itself diffs would cycle.
-      for (const event of processedEvents) {
-        const lane =
-          event.origin === 'projection'
-            ? this.#mutationLanes.getByKey(event.mutationLaneKey)
-            : undefined
-        if (lane) lane.deferredProcessedEvents.push(event)
-        else this.#emitProcessedEvent(event)
-      }
-    }
+    // Fetch diffs share event publication with realtime, except they cannot
+    // trigger refetch-mode queries: a refetch-on-diff would cycle.
+    const publishedEffects = this.#publishServiceEventEffects(
+      serviceName ?? '',
+      eventEffects,
+      'none',
+    )
+    const serverMaintainedQueriesToRefetch = publishedEffects.reconcileQueryIds
 
     const query = this.#getQuery(queryId)
     const service = serviceName === undefined ? undefined : this.#state.get(serviceName)
@@ -1443,7 +1386,7 @@ export class QueryStore<
   }
 
   /** Queue a lane projection without presenting it as a server event. */
-  #enqueueProjectionEvent(lane: MutationLane<QueuedMutation>, event: Event): void {
+  #enqueueProjectionEvent(lane: MutationLane, event: Event): void {
     this.#eventQueue.push({
       origin: 'projection',
       serviceName: lane.serviceName,
@@ -1471,25 +1414,15 @@ export class QueryStore<
         continue
       }
 
-      const previousBase = lane.base === ABSENT ? null : lane.base
-      const projection = this.#mutationLanes.acceptAuthoritative(
+      const transition = this.#mutationLanes.acceptAuthoritative(
         lane,
         event.type,
         item,
         (current, next) => this.#adapter.isItemStale(current, next),
       )
-      if (!projection) continue
-      this.#fetchEventJournal.record([
-        {
-          origin: 'authoritative',
-          serviceName: lane.serviceName,
-          type: event.type,
-          item,
-          previousItem: previousBase,
-          itemId: lane.id,
-        },
-      ])
-      this.#applyProjection(projection, false)
+      if (!transition) continue
+      this.#fetchEventJournal.record([transition.event])
+      this.#applyProjection(transition.projection, false)
     }
 
     if (this.#eventQueue.length === 0) return
@@ -1508,6 +1441,103 @@ export class QueryStore<
     }
   }
 
+  #applyServiceEvents({
+    service,
+    serviceName,
+    events,
+    touch,
+    excludeQueryId,
+  }: {
+    service: ServiceState<TMeta>
+    serviceName: string
+    events: QueuedEvent[]
+    touch: (queryId: string) => void
+    excludeQueryId?: string
+  }): AppliedEventEffect[] {
+    const getId = this.#getIdReader(serviceName)
+    const processedEvents: ProcessedRealtimeEvent[] = []
+    applyEventsToService({
+      service,
+      serviceName,
+      events,
+      getId,
+      isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+      processedEvents,
+    })
+    return this.#updateQueriesForEvents({
+      service,
+      serviceName,
+      processedEvents,
+      touch,
+      ...(excludeQueryId ? { excludeQueryId } : {}),
+    })
+  }
+
+  #updateQueriesForEvents({
+    service,
+    serviceName,
+    processedEvents,
+    touch,
+    excludeQueryId,
+  }: {
+    service: ServiceState<TMeta>
+    serviceName: string
+    processedEvents: readonly ProcessedRealtimeEvent[]
+    touch: (queryId: string) => void
+    excludeQueryId?: string
+  }): AppliedEventEffect[] {
+    const getId = this.#getIdReader(serviceName)
+    return processedEvents.map(event => {
+      const reconcileQueryIds = new Set<string>()
+      updateQueriesFromEvents({
+        service,
+        appliedItems: [event],
+        touch,
+        getId,
+        itemAdded: meta => this.#adapter.itemAdded(meta),
+        itemRemoved: meta => this.#adapter.itemRemoved(meta),
+        serverMaintainedQueriesToRefetch: reconcileQueryIds,
+        ...(excludeQueryId ? { excludeQueryId } : {}),
+        defaultSort: this.#defaultSort,
+      })
+      return { event, reconcileQueryIds }
+    })
+  }
+
+  #publishServiceEventEffects(
+    serviceName: string,
+    effects: readonly AppliedEventEffect[],
+    refetchPolicy: 'realtime' | 'none',
+  ): PublishedEventEffects {
+    const immediateReconciles = new Set<string>()
+    for (const { event, reconcileQueryIds } of effects) {
+      const deferred =
+        event.origin === 'projection' &&
+        this.#mutationLanes.deferQueryIds(event.mutationLaneKey, reconcileQueryIds)
+      if (!deferred) {
+        for (const queryId of reconcileQueryIds) immediateReconciles.add(queryId)
+      }
+
+      const deferredEvent =
+        event.origin === 'projection' &&
+        this.#mutationLanes.deferProcessedEvent(event.mutationLaneKey, event)
+      if (!deferredEvent) this.#emitProcessedEvent(event)
+    }
+
+    const refetchService =
+      refetchPolicy === 'realtime' && effects.some(({ event }) => event.origin === 'authoritative')
+    if (refetchPolicy === 'realtime' && effects.length > 0 && !refetchService) {
+      const refetchableQueryIds = this.#refetchableQueryIds(serviceName)
+      for (const { event } of effects) {
+        if (event.origin === 'projection') {
+          this.#mutationLanes.deferQueryIds(event.mutationLaneKey, refetchableQueryIds)
+        }
+      }
+    }
+
+    return { reconcileQueryIds: immediateReconciles, refetchService }
+  }
+
   #processQueuedEvents(): void {
     if (this.#processingEventQueue || this.#eventQueue.length === 0) {
       return
@@ -1515,8 +1545,6 @@ export class QueryStore<
 
     this.#processingEventQueue = true
     try {
-      const isItemStale = (curr: unknown, next: unknown) => this.#adapter.isItemStale(curr, next)
-
       while (this.#eventQueue.length > 0) {
         const eventsByService = groupQueuedEvents(this.#eventQueue)
         this.#eventQueue = []
@@ -1524,8 +1552,7 @@ export class QueryStore<
         const touchedQueryIds = new Set<string>()
         const followups: Array<{
           serviceName: string
-          serverMaintainedQueriesToRefetch: Set<string>
-          processedEvents: ProcessedRealtimeEvent[]
+          effects: AppliedEventEffect[]
         }> = []
 
         // Apply every service's events before notifying anyone — the batch is the
@@ -1534,58 +1561,25 @@ export class QueryStore<
         // after A's events but before B's, and non-React subscribers would observe
         // the intermediate state.
         for (const [serviceName, events] of Object.entries(eventsByService)) {
-          const getId = this.#getIdReader(serviceName)
-          const serverMaintainedQueriesToRefetch = new Set<string>()
-          const processedEvents: ProcessedRealtimeEvent[] = []
+          let effects: AppliedEventEffect[] = []
 
           const modifiedQueries = this.#transactOverServiceByName(serviceName, (service, touch) => {
-            applyEventsToService({
+            effects = this.#applyServiceEvents({
               service,
               serviceName,
               events,
-              getId,
-              isItemStale,
-              processedEvents,
+              touch,
             })
-
-            // Update queries only for the items actually applied to the entity
-            // cache — stale-skipped items never reach query state. Track
-            // reconciliation per projected event so speculative work can wait
-            // for its mutation lane to settle.
-            for (const processedEvent of processedEvents) {
-              const eventReconciles = new Set<string>()
-              updateQueriesFromEvents({
-                service,
-                appliedItems: [processedEvent],
-                touch,
-                getId,
-                itemAdded: meta => this.#adapter.itemAdded(meta),
-                itemRemoved: meta => this.#adapter.itemRemoved(meta),
-                serverMaintainedQueriesToRefetch: eventReconciles,
-                defaultSort: this.#defaultSort,
-              })
-              const lane =
-                processedEvent.origin === 'projection'
-                  ? this.#mutationLanes.getByKey(processedEvent.mutationLaneKey)
-                  : undefined
-              if (lane) {
-                for (const queryId of eventReconciles) lane.deferredQueryIds.add(queryId)
-              } else {
-                for (const queryId of eventReconciles) {
-                  serverMaintainedQueriesToRefetch.add(queryId)
-                }
-              }
-            }
           })
 
           // Record only events that actually changed the entity cache. The fetch
           // rebase replays these over any response snapshot dispatched earlier.
-          this.#fetchEventJournal.record(processedEvents)
+          this.#fetchEventJournal.record(effects.map(({ event }) => event))
 
           for (const queryId of modifiedQueries) {
             touchedQueryIds.add(queryId)
           }
-          followups.push({ serviceName, serverMaintainedQueriesToRefetch, processedEvents })
+          followups.push({ serviceName, effects })
         }
 
         // Notify once per batch, after all services have applied.
@@ -1596,42 +1590,19 @@ export class QueryStore<
           this.#invokeGlobalListeners()
         }
 
-        for (const {
-          serviceName,
-          serverMaintainedQueriesToRefetch,
-          processedEvents,
-        } of followups) {
+        for (const { serviceName, effects } of followups) {
+          const publishedEffects = this.#publishServiceEventEffects(
+            serviceName,
+            effects,
+            'realtime',
+          )
           // Server-maintained queries can't merge events locally: reconcile active
           // ones through the gate (cooldown + hidden-tab deferral); the gate marks
           // inactive cached ones pending so their next subscription reconciles.
-          for (const queryId of serverMaintainedQueriesToRefetch) {
+          for (const queryId of publishedEffects.reconcileQueryIds) {
             this.#requestReconcile(queryId)
           }
-
-          for (const event of processedEvents) {
-            const lane =
-              event.origin === 'projection'
-                ? this.#mutationLanes.getByKey(event.mutationLaneKey)
-                : undefined
-            if (lane) lane.deferredProcessedEvents.push(event)
-            else this.#emitProcessedEvent(event)
-          }
-
-          const immediateRefetch = processedEvents.some(event => event.origin === 'authoritative')
-          if (immediateRefetch) {
-            this.#refetchRefetchableQueries(serviceName)
-          } else {
-            for (const event of processedEvents) {
-              const lane =
-                event.origin === 'projection'
-                  ? this.#mutationLanes.getByKey(event.mutationLaneKey)
-                  : undefined
-              if (!lane) continue
-              for (const queryId of this.#refetchableQueryIds(serviceName)) {
-                lane.deferredQueryIds.add(queryId)
-              }
-            }
-          }
+          if (publishedEffects.refetchService) this.#refetchRefetchableQueries(serviceName)
         }
       }
     } finally {
