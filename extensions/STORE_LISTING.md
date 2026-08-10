@@ -20,13 +20,20 @@ Full description:
 
 ## Chrome Web Store
 
+- Extension ID: `kaechbnbhjilkpjfpljbifpmbcppkpff`
 - Visibility: Private
-- Access: Humaans Google Workspace domain
+- Access: `Team - team@humaans.io` trusted tester group
 - Purpose: Provide an interactive developer-tools panel for debugging Figbird applications.
 - Website content handling: Yes. The panel reads Figbird diagnostic state from the inspected page and processes it only in browser memory for the visible debugging interface.
 - Data transmission or sharing: None
 - Remote code: None
 - Permissions justification: The extension declares no optional or host permissions. Its `devtools_page` is required to add the Figbird panel and inspect the page selected by the developer.
+- Store icon: `extensions/icons/icon128.png`
+- Store screenshot: `extensions/store-assets/figbird-devtools-chrome.png`
+
+The screenshot is rendered from the production panel bundle with representative local diagnostic
+data. Its reproducible preview page is `extensions/store-assets/panel-preview.html`; run
+`npm run devtools:build`, serve the repository root, and capture that page at 1280 × 800.
 
 Use the private Humaans Workspace distribution for the first manual submission. The Chrome Web Store API preserves the dashboard's visibility setting on later releases.
 

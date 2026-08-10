@@ -20,8 +20,11 @@ Keep store ownership and automation under organization accounts. Do not use pers
 
 1. Register the Humaans Workspace account in the Chrome Web Store Developer Dashboard and accept the developer agreement.
 2. Create the item by uploading `extensions/build/figbird-devtools-chrome.zip`.
-3. Complete the listing and privacy forms using `extensions/STORE_LISTING.md`.
-4. Set visibility to **Private** and grant access to the Humaans Workspace domain.
+3. Complete the listing and privacy forms using `extensions/STORE_LISTING.md`, including the
+   store icon and screenshot under `extensions/store-assets`.
+4. Set visibility to **Private** and select the `Team - team@humaans.io` trusted tester group.
+   This gives the Humaans team access without exposing the listing publicly. Domain publishing
+   can replace the group later if it is enabled by a Workspace administrator.
 5. Submit the first release manually. Chrome requires a manual publication after changing visibility before API publication can use that setting.
 6. Enable the Chrome Web Store API in a Humaans Google Cloud project. Create a service account and add its email under the publisher dashboard's **Account** section.
 7. Configure GitHub-to-Google Cloud Workload Identity Federation for this repository and service account. Do not create a long-lived service-account key.

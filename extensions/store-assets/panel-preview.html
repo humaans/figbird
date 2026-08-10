@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Figbird Devtools store preview</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const fetchedAt = Date.now()
+      const read = {
+        events: [
+          {
+            kind: 'fetch:start',
+            queryId: 'issues-open',
+            generation: 1,
+            serviceName: 'issues',
+            method: 'find',
+          },
+          {
+            kind: 'fetch:end',
+            queryId: 'issues-open',
+            generation: 1,
+            serviceName: 'issues',
+            method: 'find',
+            durationMs: 42,
+            itemCount: 18,
+          },
+          {
+            kind: 'realtime',
+            serviceName: 'issues',
+            type: 'patched',
+            itemId: 76,
+          },
+        ],
+        inFlightMutations: [],
+        queries: [
+          {
+            queryId: 'issues-open',
+            generation: 1,
+            serviceName: 'issues',
+            method: 'find',
+            query: { status: 'open', $sort: { updatedAt: -1 }, $limit: 50 },
+            classification: 'server-authoritative',
+            status: 'success',
+            isFetching: false,
+            itemCount: 18,
+            fetchedAt,
+            subscriberCount: 3,
+            fetchCount: 4,
+            errorCount: 0,
+            totalDurationMs: 168,
+            lastDurationMs: 42,
+          },
+          {
+            queryId: 'people-active',
+            generation: 1,
+            serviceName: 'people',
+            method: 'find',
+            query: { status: 'active', $limit: 100 },
+            classification: 'local-exact',
+            status: 'success',
+            isFetching: false,
+            itemCount: 64,
+            fetchedAt,
+            subscriberCount: 2,
+            fetchCount: 1,
+            errorCount: 0,
+            totalDurationMs: 27,
+            lastDurationMs: 27,
+          },
+          {
+            queryId: 'team-7',
+            generation: 1,
+            serviceName: 'teams',
+            method: 'get',
+            resourceId: 7,
+            classification: 'get',
+            status: 'success',
+            isFetching: false,
+            itemCount: 1,
+            fetchedAt,
+            subscriberCount: 1,
+            fetchCount: 1,
+            errorCount: 0,
+            totalDurationMs: 12,
+            lastDurationMs: 12,
+          },
+          {
+            queryId: 'time-off-upcoming',
+            generation: 1,
+            serviceName: 'timeOffRequests',
+            method: 'find',
+            query: { status: 'approved', startDate: { $gte: '2026-08-10' } },
+            classification: 'local-partial',
+            status: 'success',
+            isFetching: false,
+            itemCount: 9,
+            fetchedAt,
+            subscriberCount: 1,
+            fetchCount: 2,
+            errorCount: 0,
+            totalDurationMs: 61,
+            lastDurationMs: 29,
+          },
+        ],
+        relational: [],
+      }
+
+      let firstRead = true
+      globalThis.__FIGBIRD_DEVTOOLS__ = {
+        protocol: 1,
+        connect: () => ({
+          instanceCount: 1,
+          instanceId: 1,
+          protocol: 1,
+          sessionId: 'store-preview',
+        }),
+        disconnect: () => {},
+        readJson: () => {
+          const value = { ...read, events: firstRead ? read.events : [] }
+          firstRead = false
+          return JSON.stringify({ protocol: 1, read: value })
+        },
+      }
+
+      globalThis.chrome = {
+        devtools: {
+          inspectedWindow: {
+            eval(expression, callback) {
+              try {
+                callback(globalThis.eval(expression))
+              } catch (error) {
+                callback(undefined, { isException: true, value: String(error) })
+              }
+            },
+          },
+        },
+        runtime: {
+          getURL: path => new URL(`../build/chrome/${path}`, location.href).href,
+        },
+      }
+    </script>
+    <script type="module" src="../build/chrome/panel.js"></script>
+    <script>
+      setTimeout(() => document.querySelector('tbody tr')?.click(), 500)
+    </script>
+  </body>
+</html>
