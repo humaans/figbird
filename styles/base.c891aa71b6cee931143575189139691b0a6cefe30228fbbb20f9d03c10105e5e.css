@@ -271,7 +271,9 @@ figcaption {
   opacity: 0.6; }
 
 p code,
-li code {
+li code,
+td code,
+th code {
   display: inline;
   background: lab(96.52% -0.0000298 0.00001192);
   border: 1px solid lab(92% 0 0);
@@ -301,7 +303,7 @@ table {
   max-width: 100%;
   width: 100%;
   empty-cells: show;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 24px; }
 
 table caption {

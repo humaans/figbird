@@ -37,22 +37,22 @@ document.addEventListener('DOMContentLoaded', function () {
       current = sections[sections.length - 1].link
     }
 
+    // Above the first heading (page top), highlight the first section rather
+    // than nothing.
+    if (!current && sections.length > 0) {
+      current = sections[0].link
+    }
+
     links.forEach(link => link.classList.remove('active'))
     if (current) {
       current.classList.add('active')
     }
   }
 
-  let ticking = false
-  window.addEventListener('scroll', function () {
-    if (!ticking) {
-      window.requestAnimationFrame(function () {
-        updateActiveLink()
-        ticking = false
-      })
-      ticking = true
-    }
-  })
+  // No rAF gating: the update is a cheap loop, and a requestAnimationFrame
+  // ticket never fires in a hidden tab — a stuck "ticking" flag would kill the
+  // spy for the rest of the session after backgrounding mid-scroll.
+  window.addEventListener('scroll', updateActiveLink, { passive: true })
 
   updateActiveLink()
 })

@@ -43,16 +43,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
-  let ticking = false
-  window.addEventListener('scroll', function () {
-    if (!ticking) {
-      window.requestAnimationFrame(function () {
-        updateActiveLink()
-        ticking = false
-      })
-      ticking = true
-    }
-  })
+  // No rAF gating: the update is a cheap loop, and a requestAnimationFrame
+  // ticket never fires in a hidden tab — a stuck "ticking" flag would kill the
+  // spy for the rest of the session after backgrounding mid-scroll.
+  window.addEventListener('scroll', updateActiveLink, { passive: true })
 
   updateActiveLink()
 })

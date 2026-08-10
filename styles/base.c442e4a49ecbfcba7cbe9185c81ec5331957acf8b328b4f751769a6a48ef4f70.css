@@ -1,3 +1,4 @@
+@charset "UTF-8";
 /*
   Base reset + typography.
   Originally derived from Kube 6.5.2 (http://imperavi.com/kube/, MIT),
@@ -118,6 +119,13 @@ p {
 
 h2 + p,
 h3 + p {
+  margin-top: 0; }
+
+/* A subheading directly under its section heading hugs it — otherwise the
+   subheading's large top margin wins the collapse and the section heading
+   floats equidistant between the content above and below. */
+h1 + h2,
+h2 + h3 {
   margin-top: 0; }
 
 h1 a,
@@ -271,7 +279,9 @@ figcaption {
   opacity: 0.6; }
 
 p code,
-li code {
+li code,
+td code,
+th code {
   display: inline;
   background: lab(96.52% -0.0000298 0.00001192);
   border: 1px solid lab(92% 0 0);
@@ -301,7 +311,7 @@ table {
   max-width: 100%;
   width: 100%;
   empty-cells: show;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 24px; }
 
 table caption {
