@@ -3,9 +3,7 @@ import { spawnSync } from 'node:child_process'
 const result = spawnSync(
   process.execPath,
   [
-    'node_modules/web-ext/bin/web-ext.js',
-    'lint',
-    '--source-dir',
+    'node_modules/addons-linter/bin/addons-linter',
     'extensions/build/firefox',
     '--output',
     'json',

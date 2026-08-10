@@ -10,7 +10,7 @@ Keep store ownership and automation under organization accounts. Do not use pers
 
 1. Increase the version in `extensions/version.json`. Browser extension versions can contain one to four dot-separated integers.
 2. Update the extension code and listing or privacy copy if its behavior changed.
-3. Run `npm test`, `npm run devtools:lint`, and `npm run devtools:package`.
+3. Run `npm test` and `npm run devtools:check`.
 4. QA the unpacked Chrome and Firefox builds using `extensions/README.md`.
 5. Merge the reviewed version change before running the release workflow.
 
