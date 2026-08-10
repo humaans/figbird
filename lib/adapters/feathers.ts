@@ -106,9 +106,17 @@ type FeathersFindResult =
 export interface FeathersCursorPagination {
   query(page: PageRequest): Record<string, unknown>
   pageInfo(response: unknown): PageInfo
+  /** Page size used when `.all()` drains this cursor service. */
+  pageSizeWhenFetchingAll?: number
 }
 
 export interface CursorPaginationOptions {
+  /**
+   * Page size used when `.all()` drains this cursor service. Overrides the
+   * adapter-wide `defaultPageSizeWhenFetchingAll` for services with a lower
+   * cursor limit.
+   */
+  pageSizeWhenFetchingAll?: number
   /**
    * Map Figbird's adapter-neutral request to Feathers query controls. Defaults
    * to Humaans' `cursor`/`cursorLimit`/`returnCursor` protocol.
@@ -134,6 +142,7 @@ function isPageCursor(value: unknown): value is PageCursor {
  * })
  */
 export function cursorPagination({
+  pageSizeWhenFetchingAll,
   query = page => ({
     cursorLimit: page.limit,
     returnCursor: true,
@@ -153,7 +162,19 @@ export function cursorPagination({
     return { hasMore: true, endCursor: value.endCursor, ...total }
   },
 }: CursorPaginationOptions = {}): FeathersCursorPagination {
-  return { query, pageInfo }
+  if (
+    pageSizeWhenFetchingAll !== undefined &&
+    (!Number.isFinite(pageSizeWhenFetchingAll) || pageSizeWhenFetchingAll <= 0)
+  ) {
+    throw new Error(
+      `cursorPagination(): pageSizeWhenFetchingAll must be a positive number, got ${pageSizeWhenFetchingAll}`,
+    )
+  }
+  return {
+    query,
+    pageInfo,
+    ...(pageSizeWhenFetchingAll !== undefined ? { pageSizeWhenFetchingAll } : {}),
+  }
 }
 
 /**
@@ -502,7 +523,11 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     pagination: FeathersCursorPagination,
     params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
-    const limit = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize || 50
+    const limit =
+      pagination.pageSizeWhenFetchingAll ||
+      this.#defaultPageSizeWhenFetchingAll ||
+      this.#defaultPageSize ||
+      50
     const result: QueryResponse<unknown[], FeathersFindMeta> = {
       data: [],
       meta: { total: -1, limit, skip: 0 },

@@ -42,7 +42,13 @@ function createCursorApp(
     visibility,
     retry,
     retryDelay,
-  }: { visibility?: VisibilitySource; retry?: number | false; retryDelay?: number } = {},
+    cursorPageSizeWhenFetchingAll,
+  }: {
+    visibility?: VisibilitySource
+    retry?: number | false
+    retryDelay?: number
+    cursorPageSizeWhenFetchingAll?: number
+  } = {},
 ) {
   let serverRows = rows
   const calls: CursorCall[] = []
@@ -96,7 +102,13 @@ function createCursorApp(
   }
   const adapter = new FeathersAdapter(feathers, {
     defaultPageSizeWhenFetchingAll: pageSizeWhenFetchingAll,
-    pagination: { items: cursorPagination() },
+    pagination: {
+      items: cursorPagination({
+        ...(cursorPageSizeWhenFetchingAll !== undefined
+          ? { pageSizeWhenFetchingAll: cursorPageSizeWhenFetchingAll }
+          : {}),
+      }),
+    },
   })
   const figbird = new Figbird({
     schema,
@@ -238,6 +250,29 @@ test('cursor all: drains every page and only requests the total on page one', as
     [undefined, 'cursor:3', 'cursor:6'],
   )
   unsub()
+})
+
+test('cursor all: a per-service page size overrides the adapter-wide default', async t => {
+  const { calls, figbird } = createCursorApp(makeRows(201), 2500, {
+    cursorPageSizeWhenFetchingAll: 100,
+  })
+  const ref = figbird.query(figbird.q.items.all())
+  const unsub = ref.subscribe(() => {})
+
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is((ref.getSnapshot().data as Item[]).length, 201)
+  t.deepEqual(
+    calls.map(call => call.query.cursorLimit),
+    [100, 100, 100],
+  )
+  unsub()
+})
+
+test('cursorPagination: rejects an invalid all-page size', t => {
+  t.throws(() => cursorPagination({ pageSizeWhenFetchingAll: 0 }), {
+    message: /pageSizeWhenFetchingAll/,
+  })
 })
 
 test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor chain', async t => {
