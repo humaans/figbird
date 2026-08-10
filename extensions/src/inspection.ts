@@ -22,9 +22,9 @@ export class ExtensionInspectionSession implements DevtoolsInspectionController 
   #evaluate: (expression: string) => Promise<unknown>
   #isAvailable: () => boolean
   #listeners = new Set<() => void>()
+  #operations: Promise<void> = Promise.resolve()
   #pageVersion: number | null = null
   #snapshot: DevtoolsInspectionSnapshot = { kind: 'idle', version: 0 }
-  #starting: Promise<void> | null = null
 
   constructor(
     evaluate: (expression: string) => Promise<unknown>,
@@ -45,26 +45,27 @@ export class ExtensionInspectionSession implements DevtoolsInspectionController 
     if (!this.#isAvailable()) return
     const command = ++this.#command
     this.#setSnapshot({ kind: 'picking' })
-    const starting = this.#start(command)
-    this.#starting = starting
-    void starting.then(() => {
-      if (this.#starting === starting) this.#starting = null
-    })
+    void this.#serialize(() => this.#start(command))
   }
 
   stop = (): void => {
     this.reset()
-    void this.#evaluate(`${PICKER_EXPRESSION}?.stop()`).catch(() => {})
+    void this.#serialize(async () => {
+      await this.#evaluate(`${PICKER_EXPRESSION}?.stop()`).catch(() => {})
+    })
   }
 
   isPicking(): boolean {
     return this.#snapshot.kind === 'picking'
   }
 
-  async refresh(): Promise<void> {
-    while (this.#starting) await this.#starting
-    if (!this.isPicking()) return
+  refresh(): Promise<void> {
     const command = this.#command
+    return this.#serialize(() => this.#refresh(command))
+  }
+
+  async #refresh(command: number): Promise<void> {
+    if (command !== this.#command || !this.isPicking()) return
     try {
       const snapshot = parsePickerSnapshot(await this.#evaluate(`${PICKER_EXPRESSION}?.read()`))
       if (command !== this.#command) return
@@ -83,6 +84,7 @@ export class ExtensionInspectionSession implements DevtoolsInspectionController 
 
   async #start(command: number): Promise<void> {
     try {
+      if (command !== this.#command) return
       await this.#ensurePicker()
       if (command !== this.#command) return
       const snapshot = parsePickerSnapshot(
@@ -92,6 +94,12 @@ export class ExtensionInspectionSession implements DevtoolsInspectionController 
     } catch {
       if (command === this.#command) this.reset()
     }
+  }
+
+  #serialize(operation: () => Promise<void>): Promise<void> {
+    const result = this.#operations.then(operation)
+    this.#operations = result.catch(() => {})
+    return result
   }
 
   async #ensurePicker(): Promise<void> {

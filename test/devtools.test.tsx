@@ -718,6 +718,49 @@ test('extension inspection waits for picker startup before refreshing', async t 
   t.is(inspection.getSnapshot().kind, 'picking')
 })
 
+test('extension inspection serializes stop before restarting the picker', async t => {
+  let page: { kind: 'idle' | 'picking'; version: number } = { kind: 'idle', version: 0 }
+  let releaseStop!: () => void
+  const stopGate = new Promise<void>(resolve => {
+    releaseStop = resolve
+  })
+  let reportStopStarted!: () => void
+  const stopStarted = new Promise<void>(resolve => {
+    reportStopStarted = resolve
+  })
+  let starts = 0
+  const inspection = new ExtensionInspectionSession(async expression => {
+    if (expression.endsWith('?.protocol')) return 1
+    if (expression.endsWith('?.read()')) return page
+    if (expression.includes('.start(')) {
+      starts++
+      page = { kind: 'picking', version: page.version + 1 }
+      return page
+    }
+    if (expression.endsWith('?.stop()')) {
+      reportStopStarted()
+      await stopGate
+      page = { kind: 'idle', version: page.version + 1 }
+      return page
+    }
+    throw new Error(`Unexpected expression: ${expression}`)
+  })
+
+  inspection.start()
+  await inspection.refresh()
+  inspection.stop()
+  await stopStarted
+  inspection.start()
+
+  t.is(starts, 1)
+  releaseStop()
+  await inspection.refresh()
+
+  t.is(starts, 2)
+  t.deepEqual(page, { kind: 'picking', version: 3 })
+  t.is(inspection.getSnapshot().kind, 'picking')
+})
+
 test('panel shows root queries and nests relation fetches in details', async t => {
   const { figbird } = app()
   const { render, unmount, click, $, $all, act } = dom()
