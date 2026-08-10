@@ -10,7 +10,6 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      'figbird/devtools': path.resolve(__dirname, '../lib/devtools.ts'),
       figbird: path.resolve(__dirname, '../lib/index.ts'),
     },
     // figbird loads from the parent repo. Dedupe React so hooks use the demo's copy.

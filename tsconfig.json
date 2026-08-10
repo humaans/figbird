@@ -37,8 +37,8 @@
     "skipLibCheck": true,
 
     // JSX support (for React)
-    "jsx": "react-jsx",
+    "jsx": "react-jsx"
   },
-  "include": ["lib/**/*", "test/**/*"],
-  "exclude": ["node_modules", "dist", "coverage", "docs"],
+  "include": ["lib/**/*", "test/**/*", "extensions/src/**/*"],
+  "exclude": ["node_modules", "dist", "coverage", "docs"]
 }

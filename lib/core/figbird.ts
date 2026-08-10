@@ -5,7 +5,7 @@ import {
   type AdapterParams,
   type AdapterQuery,
 } from '../adapters/adapter.js'
-import { DevtoolsControl } from './devtoolsControl.js'
+import { registerDevtoolsInstance } from './devtoolsBridge.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
 import type { MutationActivity } from './mutationTracker.js'
@@ -33,8 +33,6 @@ import {
 } from './queryStore.js'
 
 export type { ReconnectJitter, RetryDelay, VisibilitySource } from './queryStore.js'
-export { DevtoolsControl } from './devtoolsControl.js'
-export type { DevtoolsPreference } from './devtoolsControl.js'
 import {
   normalizeQueryConfig,
   queryOfParams,
@@ -133,7 +131,6 @@ export class Figbird<
   adapter: A
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
-  readonly devtools = new DevtoolsControl()
 
   // Cache of active RelationalQueryRef instances, keyed by AST hash. This is critical for
   // React 18 Suspense interop: on suspense retries React discards render-state (including
@@ -201,6 +198,7 @@ export class Figbird<
       ...(visibility !== undefined ? { visibility } : {}),
       ...(defaultSort !== undefined ? { defaultSort } : {}),
     })
+    registerDevtoolsInstance(this)
   }
 
   /**

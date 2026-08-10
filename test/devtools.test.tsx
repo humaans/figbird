@@ -1,8 +1,10 @@
 import test from 'ava'
-import { JSDOM } from 'jsdom'
 import { createSchema, service, type FigbirdEvent } from '../lib/index.js'
 import { FigbirdEventEmitter } from '../lib/core/events.js'
-import { FigbirdDevtools } from '../lib/devtools.js'
+import {
+  FigbirdDevtoolsPanel,
+  type DevtoolsInspectionController,
+} from '../lib/devtools/Devtools.js'
 import {
   createCollector,
   type DevtoolsSnapshot,
@@ -637,129 +639,51 @@ test('devtools model keeps operation identity separate from shared fetch identit
   t.is(model.scopesByQueryId.get(root.queryId)?.length, 2)
 })
 
-test('drawer renders, switches tabs, and pops out', t => {
+test('extension bridge starts debug collection only while connected', t => {
+  dom()
   const { figbird } = app()
-  const { render, unmount, click, $all, $, act } = dom()
-  const storedPreferences = new Map<string, string>()
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storedPreferences.get(key) ?? null,
-      setItem: (key: string, value: string) => storedPreferences.set(key, value),
-    } as Pick<Storage, 'getItem' | 'setItem'>,
-  })
-
-  const shortcut = () => {
-    act(() => {
-      window.dispatchEvent(
-        new window.KeyboardEvent('keydown', {
-          code: 'Period',
-          ctrlKey: true,
-          shiftKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      )
-    })
-  }
-
   const inspect = figbird.inspect.bind(figbird)
   let inspectCalls = 0
   figbird.inspect = () => {
     inspectCalls++
     return inspect()
   }
-
-  render(<FigbirdDevtools figbird={figbird} enabledByDefault={false} />)
-
-  shortcut()
-  t.is($('[aria-label="Figbird devtools"]'), null)
+  const subscribe = figbird.events.subscribe.bind(figbird.events)
+  let eventSubscriptions = 0
+  figbird.events.subscribe = listener => {
+    eventSubscriptions++
+    const unsubscribe = subscribe(listener)
+    return () => {
+      eventSubscriptions--
+      unsubscribe()
+    }
+  }
   t.is(inspectCalls, 0)
+  t.is(eventSubscriptions, 0)
 
-  act(() => figbird.devtools.enable())
-  t.true(inspectCalls > 0)
-  t.is(storedPreferences.get('figbird:devtools:enabled'), 'true')
-  shortcut()
-  t.truthy($('[aria-label="Figbird devtools"]'))
-  t.false($all('button').some(button => button.textContent?.startsWith('Figbird devtools')))
-
-  const buttons = $all('button')
-  const eventsButton = buttons.find(button => button.textContent === 'events')
-  t.truthy(eventsButton)
-  click(eventsButton!)
-
-  t.true($all('input').some(input => input.getAttribute('placeholder') === 'Filter events'))
-  t.true($all('button').some(button => button.textContent === 'Clear'))
-
-  const popupDom = new JSDOM('<!doctype html><html><head></head><body></body></html>')
-  const popupWindow = popupDom.window as unknown as Window
-  let popupClosed = false
-  Object.defineProperties(popupWindow, {
-    closed: { configurable: true, get: () => popupClosed },
-    close: {
-      configurable: true,
-      value: () => {
-        popupClosed = true
-      },
-    },
-    focus: { configurable: true, value: () => {} },
-  })
-  Object.defineProperty(window, 'open', {
-    configurable: true,
-    value: () => popupWindow,
-  })
-
-  const popoutButton = $all('button').find(button => button.textContent === 'Pop out')
-  t.truthy(popoutButton)
-  click(popoutButton!)
-
-  t.is($('[aria-label="Figbird devtools"]'), null)
-  const dockButton = Array.from(popupDom.window.document.querySelectorAll('button')).find(
-    button => button.textContent === 'Dock',
-  )
-  t.truthy(dockButton)
-  t.is(popupDom.window.document.documentElement.style.fontSize, '11px')
-  t.is(popupDom.window.document.body.style.fontSize, '11px')
-  t.is(
-    popupDom.window.document.querySelector('meta[name="viewport"]')?.getAttribute('content'),
-    'width=device-width, initial-scale=1',
-  )
-
-  act(() => {
-    dockButton!.dispatchEvent(
-      new popupDom.window.MouseEvent('click', { bubbles: true, cancelable: true }),
-    )
-  })
-
-  t.true(popupClosed)
-  t.truthy($('[aria-label="Figbird devtools"]'))
-
-  act(() => figbird.devtools.disable())
-  t.is(storedPreferences.get('figbird:devtools:enabled'), 'false')
-  t.is($('[aria-label="Figbird devtools"]'), null)
-  shortcut()
-  t.is($('[aria-label="Figbird devtools"]'), null)
-  act(() => figbird.devtools.enable())
-
-  unmount()
-
-  const blocked = dom()
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    get() {
-      throw new window.DOMException('Storage blocked', 'SecurityError')
-    },
-  })
-  const blockedApp = app()
-  blockedApp.figbird.devtools.enable()
-  blocked.render(
-    <FigbirdDevtools figbird={blockedApp.figbird} defaultOpen enabledByDefault={false} />,
-  )
-  t.truthy(blocked.$('[aria-label="Figbird devtools"]'))
-  blocked.unmount()
+  const bridgeState = (
+    globalThis as typeof globalThis & {
+      __FIGBIRD_DEVTOOLS__: {
+        api: {
+          connect(): { sessionId: string } | null
+          disconnect(sessionId: string): void
+          read(sessionId: string): { queries: unknown[] } | null
+        }
+      }
+    }
+  ).__FIGBIRD_DEVTOOLS__
+  const connection = bridgeState.api.connect()
+  t.truthy(connection)
+  t.is(inspectCalls, 0)
+  t.is(eventSubscriptions, 1)
+  t.truthy(bridgeState.api.read(connection!.sessionId))
+  t.is(inspectCalls, 1)
+  bridgeState.api.disconnect(connection!.sessionId)
+  t.is(eventSubscriptions, 0)
+  t.is(bridgeState.api.read(connection!.sessionId), null)
 })
 
-test('drawer shows root queries and nests relation fetches in details', async t => {
+test('panel shows root queries and nests relation fetches in details', async t => {
   const { figbird } = app()
   const { render, unmount, click, $, $all, act } = dom()
   const inspectedRef = figbird.query(figbird.q.notes)
@@ -842,13 +766,27 @@ test('drawer shows root queries and nests relation fetches in details', async t 
   const events = new FigbirdEventEmitter()
   const inspectedRows = snapshot.queries.map(inspectedRow)
   const inspectedFigbird: FigbirdLikeForDevtools = {
-    devtools: figbird.devtools,
     events,
     inspect: () => inspectedRows,
     inspectRelational: () => snapshot.relational,
   }
+  const collector = createCollector(inspectedFigbird, { heartbeatMs: 0 })
+  const inspectionSnapshot = {
+    active: false,
+    label: 'div#issue-area',
+    queryCounts: new Map([[inspectedRef.details().queryId, 1]]),
+    supported: true,
+    truncated: false,
+    version: 1,
+  }
+  const inspection: DevtoolsInspectionController = {
+    getSnapshot: () => inspectionSnapshot,
+    start: () => {},
+    stop: () => {},
+    subscribe: () => () => {},
+  }
 
-  render(<FigbirdDevtools figbird={inspectedFigbird} defaultOpen enabledByDefault />)
+  render(<FigbirdDevtoolsPanel collector={collector} inspection={inspection} />)
   await act(async () => {
     events.emit({
       kind: 'fetch:start',
@@ -917,11 +855,6 @@ test('drawer shows root queries and nests relation fetches in details', async t 
     value: hostFiber,
     enumerable: true,
   })
-
-  const inspectButton = $all('button').find(button => button.textContent === 'Inspect')
-  t.truthy(inspectButton)
-  click(inspectButton!)
-  click(inspectedElement)
 
   t.true(($all('tbody tr')[0]?.textContent ?? '').includes('1 here'))
 

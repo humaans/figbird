@@ -1,5 +1,4 @@
 import type {
-  DevtoolsControl,
   FigbirdEvent,
   FigbirdEvents,
   InspectedQuery,
@@ -9,7 +8,6 @@ import type {
 import { now } from './format.js'
 
 export interface FigbirdLikeForDevtools {
-  devtools?: DevtoolsControl
   events: FigbirdEvents
   mutating?: MutationActivity
   inspect(): InspectedQuery[]

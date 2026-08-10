@@ -1800,9 +1800,11 @@ queries._ One live table, one row per active query on the page:
   `action:*` rows in the app's own vocabulary above them.
 
 Everything above is derivable from the three projections plus timestamps; the events
-channel already carries durations, item counts, and correlation ids. Packaging question
-(in-app drawer component à la the demo, versus a browser extension) is open — the drawer
-is dramatically cheaper and works everywhere, and the demo already prototypes one.
+channel already carries durations, item counts, and correlation ids. The UI ships as
+Chrome and Firefox DevTools extensions. A weak page bridge registers each Figbird
+instance, then the extension connects from the inspected-page context. Collection and
+event subscriptions begin only for that session and expire when the panel stops polling.
+Apps do not mount a component or expose an enable/disable preference API.
 
-Status: **wanted** — highest fun-to-effort ratio of the ideas here, but deliberately
-sequenced after real dogfooding so the panel shows what its users actually reach for.
+Status: **implemented** — shared panel, Chrome Manifest V3 package, and Firefox Manifest
+V2 package, with repository builds for unpacked QA and store-ready zip archives.
