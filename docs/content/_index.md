@@ -785,6 +785,9 @@ The query stays in its fetching state between attempts, so a cold query keeps su
 and a background refetch keeps showing its cached data. Only the final failure enters the
 error state.
 
+Retries apply to network failures, timeouts, `408`, `429`, and `5xx` responses. Other
+`4xx` responses fail immediately because repeating the same request will not fix them.
+
 Configure the policy on the instance:
 
 ```ts

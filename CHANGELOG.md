@@ -4,7 +4,8 @@
 
 - Retry failed query fetches up to three times with exponential backoff before exposing
   the error. Configure the instance with `retry` and `retryDelay`; descriptor queries can
-  override both or disable retries with `retry: false`.
+  override both or disable retries with `retry: false`. Network errors, timeouts, `408`,
+  `429`, and `5xx` responses retry; other `4xx` responses fail immediately.
 
 ## 0.24.0
 
