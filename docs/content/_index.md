@@ -777,6 +777,40 @@ useQuery(q.currencies, { staleTime: Infinity }) // cache-first
 It is a read-site option, not query identity: readers with different tolerances share one cache
 entry, and the most demanding one keeps it freshest. `prepare()` and `prefetch()` accept it too.
 
+### Fetch retries
+
+Figbird retries a failed fetch up to three times before exposing the error. The default
+delay uses exponential backoff: 1s, 2s, then 4s, capped at 30s if you allow more retries.
+The query stays in its fetching state between attempts, so a cold query keeps suspending
+and a background refetch keeps showing its cached data. Only the final failure enters the
+error state.
+
+Configure the policy on the instance:
+
+```ts
+const figbird = new Figbird({
+  adapter,
+  schema,
+  retry: 5, // retries after the initial request
+  retryDelay: (attempt, error) => Math.min(500 * 2 ** (attempt - 1), 10_000),
+})
+```
+
+`attempt` is one-based: `1` is the first retry. Pass a number for a fixed delay, or
+`retry: false` to disable automatic retries. A manual `refetch()` after the final error
+starts a new retry budget.
+
+Descriptor queries can override the instance policy with numeric `retry` and
+`retryDelay` options:
+
+```ts
+useFind('audit-log', { retry: false })
+figbird.queryDesc(desc, { retry: 1, retryDelay: 250 })
+```
+
+Each network attempt emits its own fetch lifecycle events and contributes to the query's
+fetch and error counts in `inspect()`.
+
 ### Freezing a query: .snapshot()
 
 `.snapshot()` fetches once and then ignores realtime entirely, for the root and every
@@ -1318,7 +1352,14 @@ order.
 The core instance holding the adapter, schema, and shared query state.
 
 ```ts
-const figbird = new Figbird({ adapter, schema, eventBatchInterval?, reconnectJitter? })
+const figbird = new Figbird({
+  adapter,
+  schema,
+  eventBatchInterval?,
+  retry?,
+  retryDelay?,
+  reconnectJitter?,
+})
 ```
 
 | Member                                            | Description                                                                                                                                                 |
@@ -1522,6 +1563,8 @@ automatically, via `swr` + classification-driven realtime):
 - `fetchPolicy` — cache vs network: `swr` (default — show cached, revalidate in background),
   `cache-first` (fetch only when nothing is cached), or `network-only` (always fetch;
   hook-scoped results)
+- `retry` — failed fetches to retry before exposing the error; `false` disables retries
+- `retryDelay` — fixed delay in milliseconds between retries
 - `allPages` — fetch all pages (`parallel` + `parallelLimit` control concurrency)
 - `matcher` — custom `(query) => (item) => boolean` for realtime merging
 - `matcherKey` — opt into sharing equivalent custom-matcher queries across hooks;

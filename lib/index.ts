@@ -28,6 +28,7 @@ export type {
   PreparedQuery,
   QueryDefinition,
   ReconnectJitter,
+  RetryDelay,
   StandardSchemaV1,
   VisibilitySource,
 } from './core/figbird.js'

@@ -54,6 +54,16 @@ export interface VisibilitySource {
 /** Random reconnect delay in ms. A number means `[0, number]`; `0` disables jitter. */
 export type ReconnectJitter = number | readonly [number, number]
 
+/** Delay before a retry. `attempt` is one-based: 1 is the first retry. */
+export type RetryDelay = number | ((attempt: number, error: Error) => number)
+
+const DEFAULT_RETRIES = 3
+const MAX_RETRY_DELAY = 30_000
+
+function defaultRetryDelay(attempt: number): number {
+  return Math.min(1000 * 2 ** (attempt - 1), MAX_RETRY_DELAY)
+}
+
 type ItemId = string | number
 
 /** The realtime event type a mutation verb produces. */
@@ -119,8 +129,11 @@ export class QueryStore<
   #deferredWhileHidden: Set<string> = new Set()
 
   #defaultSort: Record<string, number> | undefined
+  #retry: number | false
+  #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
   #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
+  #retryTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
   #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
@@ -135,6 +148,8 @@ export class QueryStore<
     adapter,
     eventBatchInterval = 100,
     reconcileCooldown = 2000,
+    retry = DEFAULT_RETRIES,
+    retryDelay = defaultRetryDelay,
     reconnectJitter = [0, 3000],
     visibility,
     defaultSort,
@@ -148,6 +163,10 @@ export class QueryStore<
      * window coalesce into one guaranteed trailing refetch. `0` disables.
      */
     reconcileCooldown?: number
+    /** Failed fetches to retry. Defaults to 3; `false` disables retries. */
+    retry?: number | false
+    /** Fixed or computed delay before each retry. Defaults to 1s, 2s, 4s, capped at 30s. */
+    retryDelay?: RetryDelay
     /** Random delay before reconnect sweeps. A number means `[0, number]`; `0` disables. */
     reconnectJitter?: ReconnectJitter
     /** Visibility source for hidden-tab gating. Defaults to `document`. */
@@ -167,6 +186,8 @@ export class QueryStore<
     this.#events = new FigbirdEventEmitter()
     this.#mutations = new MutationTracker()
     this.#reconcileCooldown = reconcileCooldown
+    this.#retry = this.#normalizeRetry(retry)
+    this.#retryDelay = retryDelay
     this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
@@ -505,8 +526,24 @@ export class QueryStore<
   }
 
   // Query lifecycle
-  async #queue(queryId: string): Promise<void> {
-    this.#fetching({ queryId })
+  async #queue(
+    queryId: string,
+    {
+      retryAttempt = 0,
+      expectedGeneration,
+    }: { retryAttempt?: number; expectedGeneration?: number } = {},
+  ): Promise<void> {
+    if (
+      expectedGeneration !== undefined &&
+      this.#queryGenerations.get(queryId) !== expectedGeneration
+    ) {
+      return
+    }
+
+    if (retryAttempt === 0) {
+      this.#clearRetryTimer(queryId)
+      this.#fetching({ queryId })
+    }
     const query = this.#getQuery(queryId)
     const generation = this.#queryGenerations.get(queryId)
     const startedAt = query ? Date.now() : undefined
@@ -575,7 +612,6 @@ export class QueryStore<
         current &&
         this.#queryGenerations.get(queryId) === trace.generation
       ) {
-        this.#fetchFailed({ queryId, error })
         this.#recordFetchStats(queryId, { ok: false, durationMs })
       }
       if (trace && durationMs !== undefined) {
@@ -589,10 +625,88 @@ export class QueryStore<
           error,
         })
       }
+
+      if (
+        trace &&
+        current &&
+        this.#queryGenerations.get(queryId) === trace.generation &&
+        this.#hasRetryOwner(queryId) &&
+        this.#shouldRetry(current, retryAttempt)
+      ) {
+        this.#scheduleRetry({
+          queryId,
+          generation: trace.generation,
+          retryAttempt: retryAttempt + 1,
+          error,
+        })
+      } else if (trace && current && this.#queryGenerations.get(queryId) === trace.generation) {
+        this.#fetchFailed({ queryId, error })
+      }
     } finally {
       if (journalCursor) {
         this.#fetchEventJournal.end(journalCursor)
       }
+    }
+  }
+
+  #shouldRetry(query: Query<unknown, TMeta, unknown>, retryAttempt: number): boolean {
+    const retry = this.#normalizeRetry(query.config.retry ?? this.#retry)
+    return retry !== false && retryAttempt < retry
+  }
+
+  #scheduleRetry({
+    queryId,
+    generation,
+    retryAttempt,
+    error,
+  }: {
+    queryId: string
+    generation: number
+    retryAttempt: number
+    error: Error
+  }): void {
+    this.#clearRetryTimer(queryId)
+    const configuredDelay = this.#getQuery(queryId)?.config.retryDelay ?? this.#retryDelay
+    const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, error)
+    const timer = setTimeout(() => {
+      this.#retryTimers.delete(queryId)
+      if (this.#queryGenerations.get(queryId) === generation && !this.#hasRetryOwner(queryId)) {
+        this.#fetchFailed({ queryId, error })
+        return
+      }
+      void this.#queue(queryId, { retryAttempt, expectedGeneration: generation })
+    }, delay)
+    this.#retryTimers.set(queryId, timer)
+  }
+
+  #clearRetryTimer(queryId: string): void {
+    const timer = this.#retryTimers.get(queryId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.#retryTimers.delete(queryId)
+  }
+
+  #normalizeRetry(retry: number | false): number | false {
+    if (retry === false || !Number.isFinite(retry) || retry <= 0) return false
+    return Math.floor(retry)
+  }
+
+  #hasRetryOwner(queryId: string): boolean {
+    if (this.#listenerCount(queryId) > 0) return true
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    return (
+      serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
+    )
+  }
+
+  #resolveRetryDelay(delay: RetryDelay, attempt: number, error: Error): number {
+    try {
+      const value = typeof delay === 'function' ? delay(attempt, error) : delay
+      return Number.isFinite(value) ? Math.max(0, value) : 0
+    } catch {
+      // A timing hook must not turn a handled fetch failure into an unhandled
+      // rejection. Fall back to the built-in cadence for this attempt.
+      return defaultRetryDelay(attempt)
     }
   }
 
@@ -1556,6 +1670,7 @@ export class QueryStore<
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
+    this.#clearRetryTimer(queryId)
     this.#clearReconcileState(queryId)
     this.#transactOverService(queryId, (service, query) => {
       if (query) {

@@ -1,5 +1,5 @@
 import test from 'ava'
-import { FeathersAdapter, Figbird, createSchema, service } from '../lib'
+import { FeathersAdapter, Figbird, createSchema, service, type RetryDelay } from '../lib'
 import { FetchEventJournal, MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
 import type { ProcessedRealtimeEvent } from '../lib/core/queryTypes'
 import { mockFeathers, type TestItem } from './helpers'
@@ -29,7 +29,15 @@ async function waitFor(predicate: () => boolean, message: string): Promise<void>
 
 function createApp(
   data: Record<string, Note>,
-  { eventBatchInterval = 0 }: { eventBatchInterval?: number } = {},
+  {
+    eventBatchInterval = 0,
+    retry,
+    retryDelay,
+  }: {
+    eventBatchInterval?: number
+    retry?: number | false
+    retryDelay?: RetryDelay
+  } = {},
 ) {
   const feathers = mockFeathers({ notes: { data } }, { queryAwareFind: true })
   const figbird = new Figbird({
@@ -38,9 +46,92 @@ function createApp(
     eventBatchInterval,
     reconcileCooldown: 0,
     reconnectJitter: 0,
+    ...(retry !== undefined ? { retry } : {}),
+    ...(retryDelay !== undefined ? { retryDelay } : {}),
   })
   return { figbird, notes: feathers.service('notes') }
 }
+
+test('failed fetches retry with backoff before exposing an error', async t => {
+  const delays: Array<{ attempt: number; message: string }> = []
+  const { figbird, notes } = createApp(
+    { 1: { id: 1, content: 'one', rank: 1 } },
+    {
+      retryDelay: (attempt, error) => {
+        delays.push({ attempt, message: error.message })
+        return 0
+      },
+    },
+  )
+  const find = notes.find.bind(notes)
+  let failuresRemaining = 2
+  notes.find = async params => {
+    if (failuresRemaining-- > 0) {
+      notes.counts.find++
+      throw new Error('network down')
+    }
+    return find(params)
+  }
+
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const observedStatuses: string[] = []
+  const unsub = ref.subscribe(state => observedStatuses.push(state.status))
+
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the retried find')
+
+  t.is(notes.counts.find, 3, 'the initial request plus two retries ran')
+  t.deepEqual(delays, [
+    { attempt: 1, message: 'network down' },
+    { attempt: 2, message: 'network down' },
+  ])
+  t.false(observedStatuses.includes('error'), 'retryable failures stay internal')
+  const stats = figbird.queryStore.getQueryStats(ref.hash())
+  t.is(stats?.fetchCount, 3)
+  t.is(stats?.errorCount, 2)
+  unsub()
+})
+
+test('retry exhaustion exposes the final error and per-query retry false opts out', async t => {
+  const { figbird, notes } = createApp({}, { retry: 2, retryDelay: 0 })
+  notes.find = async () => {
+    notes.counts.find++
+    throw new Error('still offline')
+  }
+
+  const retried = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsubRetried = retried.subscribe(() => {})
+  await waitFor(() => retried.getSnapshot()?.status === 'error', 'retry exhaustion')
+  t.is(notes.counts.find, 3)
+  t.is(retried.getSnapshot()?.error?.message, 'still offline')
+  unsubRetried()
+
+  notes.counts.find = 0
+  const noRetry = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { disabled: true } } },
+    { retry: false },
+  )
+  const unsubNoRetry = noRetry.subscribe(() => {})
+  await waitFor(() => noRetry.getSnapshot()?.status === 'error', 'the opted-out failure')
+  t.is(notes.counts.find, 1)
+  unsubNoRetry()
+})
+
+test('a pending retry stops when the query loses its last subscriber', async t => {
+  const { figbird, notes } = createApp({}, { retry: 3, retryDelay: 20 })
+  notes.find = async () => {
+    notes.counts.find++
+    throw new Error('offline')
+  }
+
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => notes.counts.find === 1, 'the first failed request')
+  unsub()
+  await sleep(40)
+
+  t.is(notes.counts.find, 1)
+  t.is(ref.getSnapshot()?.status, 'error')
+})
 
 function ids(data: unknown): number[] {
   return (data as Note[]).map(note => note.id)

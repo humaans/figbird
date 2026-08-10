@@ -194,6 +194,15 @@ interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
   fetchPolicy?: 'swr' | 'cache-first' | 'network-only'
 
   /**
+   * Failed fetches to retry before exposing the error. Inherits the Figbird
+   * instance setting when omitted. `false` disables retries for this query.
+   */
+  retry?: number | false
+
+  /** Fixed delay in milliseconds before each retry for this query. */
+  retryDelay?: number
+
+  /**
    * Optional custom matcher factory. Only used in realtime 'merge' mode.
    * Receives the prepared query object; returns a predicate for items.
    * Provide this if your adapter needs custom client-side matching logic.
@@ -373,8 +382,19 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
   config: QueryConfig<TItem, TQuery>
 } {
   // Extract common properties
-  const { serviceName, method, skip, realtime, fetchPolicy, matcher, matcherKey, server, ...rest } =
-    combinedConfig
+  const {
+    serviceName,
+    method,
+    skip,
+    realtime,
+    fetchPolicy,
+    retry,
+    retryDelay,
+    matcher,
+    matcherKey,
+    server,
+    ...rest
+  } = combinedConfig
 
   if (method === 'get') {
     const { resourceId, ...params } = rest as CombinedGetConfig<TItem, TQuery>
@@ -390,6 +410,8 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(skip !== undefined && { skip }),
       ...(realtime !== undefined && { realtime }),
       ...(fetchPolicy !== undefined && { fetchPolicy }),
+      ...(retry !== undefined && { retry }),
+      ...(retryDelay !== undefined && { retryDelay }),
       ...(matcher !== undefined && { matcher }),
       ...(matcherKey !== undefined && { matcherKey }),
       ...(server !== undefined && { server }),
@@ -409,6 +431,8 @@ export function splitConfig<TItem = unknown, TQuery = unknown>(
       ...(skip !== undefined && { skip }),
       ...(realtime !== undefined && { realtime }),
       ...(fetchPolicy !== undefined && { fetchPolicy }),
+      ...(retry !== undefined && { retry }),
+      ...(retryDelay !== undefined && { retryDelay }),
       ...(matcher !== undefined && { matcher }),
       ...(matcherKey !== undefined && { matcherKey }),
       ...(allPages !== undefined && { allPages }),

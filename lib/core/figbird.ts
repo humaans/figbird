@@ -25,9 +25,14 @@ import {
 import { explainQuery, type ExplainReport, type QueryNodeClass } from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
-import { QueryStore, type ReconnectJitter, type VisibilitySource } from './queryStore.js'
+import {
+  QueryStore,
+  type ReconnectJitter,
+  type RetryDelay,
+  type VisibilitySource,
+} from './queryStore.js'
 
-export type { ReconnectJitter, VisibilitySource } from './queryStore.js'
+export type { ReconnectJitter, RetryDelay, VisibilitySource } from './queryStore.js'
 export { DevtoolsControl } from './devtoolsControl.js'
 export type { DevtoolsPreference } from './devtoolsControl.js'
 import {
@@ -148,6 +153,10 @@ export class Figbird<
    * @param reconcileCooldown Burst safety: minimum interval (ms) between event-driven
    *   refetches of one query. First event refetches immediately; further events within
    *   the window coalesce into one guaranteed trailing refetch. Default 2000; 0 disables.
+   * @param retry Failed fetches to retry before exposing the error. Defaults to 3;
+   *   `false` disables automatic retry.
+   * @param retryDelay Fixed or computed delay before each retry. Defaults to exponential
+   *   backoff (1s, 2s, 4s, capped at 30s).
    * @param reconnectJitter Random delay before a reconnect sweep, which staggers visible
    *   clients after a server restart. Defaults to [0, 3000]; 0 restores immediate sweeps.
    * @param visibility Visibility source for hidden-tab gating (defaults to `document`).
@@ -164,6 +173,8 @@ export class Figbird<
     eventBatchInterval,
     schema,
     reconcileCooldown,
+    retry,
+    retryDelay,
     reconnectJitter,
     visibility,
     defaultSort,
@@ -172,6 +183,8 @@ export class Figbird<
     eventBatchInterval?: number
     schema?: S
     reconcileCooldown?: number
+    retry?: number | false
+    retryDelay?: RetryDelay
     reconnectJitter?: ReconnectJitter
     visibility?: VisibilitySource
     defaultSort?: Record<string, 1 | -1>
@@ -182,6 +195,8 @@ export class Figbird<
       adapter,
       eventBatchInterval,
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
+      ...(retry !== undefined ? { retry } : {}),
+      ...(retryDelay !== undefined ? { retryDelay } : {}),
       ...(reconnectJitter !== undefined ? { reconnectJitter } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
       ...(defaultSort !== undefined ? { defaultSort } : {}),
