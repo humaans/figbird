@@ -120,9 +120,34 @@ test('m: optimisticItem supplies the synthesized cache item without flipping pol
   // The synthesized item (not the raw patch data) is what the cache shows.
   t.is(latest?.data?.find(n => n.id === 1)?.content, 'synthesized!')
 
+  // A fetch that begins after the optimistic event still replays the active
+  // overlay instead of replacing it with the server's old value.
+  ref.refetch()
+  await new Promise(r => setTimeout(r, 10))
+  t.is(latest?.data?.find(n => n.id === 1)?.content, 'synthesized!')
+
   gate.resolve({ id: 1, content: 'server' })
   await pending
   t.is(latest?.data?.find(n => n.id === 1)?.content, 'server')
+
+  const failedGate = deferred<MockItem>()
+  const rebasedGate = deferred<MockItem>()
+  let queuedPatchCall = 0
+  feathers.service('notes').patch = (() =>
+    queuedPatchCall++ === 0 ? failedGate.promise : rebasedGate.promise) as never
+
+  const failed = m.notes.patch(1, { content: 'will fail' })
+  const rebased = m.notes.patch(1, { content: 'survives' })
+  t.is(latest?.data?.find(n => n.id === 1)?.content, 'survives')
+
+  failedGate.reject(new Error('first patch failed'))
+  await t.throwsAsync(() => failed, { message: 'first patch failed' })
+  t.is(queuedPatchCall, 2, 'the next patch starts after the failed head settles')
+  t.is(latest?.data?.find(n => n.id === 1)?.content, 'survives')
+
+  rebasedGate.resolve({ id: 1, content: 'survives' })
+  await rebased
+  t.is(latest?.data?.find(n => n.id === 1)?.content, 'survives')
 })
 
 test('m: custom schema methods dispatch through the adapter with events and tracking', async t => {
@@ -230,7 +255,7 @@ test('id contract: optimistic creates without a client id throw synchronously', 
   t.throws(() => m.notes.create([{ id: 7, content: 'ok' }, { content: 'no id' }]))
 })
 
-test('id contract: optimistic creates with a client id show immediately; the realtime echo dedupes by id', async t => {
+test('id contract: keyed optimistic mutations serialize and rebase over each acknowledgement', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const { m } = figbird
 
@@ -242,18 +267,74 @@ test('id contract: optimistic creates with a client id show immediately; the rea
   await new Promise(r => setTimeout(r, 10))
   t.is(latest?.data?.length, 2)
 
-  const gate = deferred<MockItem>()
-  feathers.service('notes').create = (() => gate.promise) as never
+  const windowRef = figbird.queryDesc({
+    serviceName: 'notes',
+    method: 'find',
+    params: { query: { $limit: 1 } },
+  })
+  windowRef.subscribe(() => {})
+  await new Promise(r => setTimeout(r, 10))
+  const initialFindCount = feathers.service('notes').counts.find
 
-  const pending = m.notes.create({ id: 99, content: 'draft' })
+  const createGate = deferred<MockItem>()
+  const firstPatchGate = deferred<MockItem>()
+  const secondPatchGate = deferred<MockItem>()
+  const removeGate = deferred<MockItem>()
+  const calls: string[] = []
+  feathers.service('notes').create = (() => {
+    calls.push('create')
+    return createGate.promise
+  }) as never
+  let patchCall = 0
+  feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
+    calls.push(`patch:${data.content}`)
+    return patchCall++ === 0 ? firstPatchGate.promise : secondPatchGate.promise
+  }) as never
+  feathers.service('notes').remove = (() => {
+    calls.push('remove')
+    return removeGate.promise
+  }) as never
 
-  // Visible before the ack, under its real (client-minted) identity.
-  t.is(latest?.data?.find(n => n.content === 'draft')?.id, 99)
+  const created = m.notes.create({ id: 99, content: 'draft' })
+  const firstPatch = m.notes.patch(99, { content: 'edited once' })
+  const secondPatch = m.notes.patch(99, { content: 'edited twice' })
+  const removed = m.notes.remove(99)
 
-  gate.resolve({ id: 99, content: 'draft' })
-  const created = await pending
-  t.is(created.id, 99)
-  t.is(latest?.data?.filter(n => n.id === 99).length, 1, 'ack merges by id — no duplicate')
+  // All intents apply immediately, but only the lane head reaches the adapter.
+  t.deepEqual(calls, ['create'])
+  t.false(latest?.data?.some(n => n.id === 99))
+  t.is(
+    feathers.service('notes').counts.find,
+    initialFindCount,
+    'server-window reconciliation waits for the speculative lane',
+  )
+
+  createGate.resolve({ id: 99, content: 'created by server' })
+  await created
+  t.deepEqual(calls, ['create', 'patch:edited once'])
+  t.false(
+    latest?.data?.some(n => n.id === 99),
+    'remaining remove keeps the row hidden',
+  )
+
+  firstPatchGate.resolve({ id: 99, content: 'first server patch' })
+  await firstPatch
+  t.deepEqual(calls, ['create', 'patch:edited once', 'patch:edited twice'])
+  t.false(latest?.data?.some(n => n.id === 99))
+
+  secondPatchGate.resolve({ id: 99, content: 'second server patch' })
+  await secondPatch
+  t.deepEqual(calls, ['create', 'patch:edited once', 'patch:edited twice', 'remove'])
+  t.false(latest?.data?.some(n => n.id === 99))
+
+  removeGate.resolve({ id: 99, content: 'second server patch' })
+  await removed
+  t.false(latest?.data?.some(n => n.id === 99))
+  t.is(
+    feathers.service('notes').counts.find,
+    initialFindCount + 1,
+    'the server window reconciles once after the lane drains',
+  )
 })
 
 test('id contract: confirmed creates need no id — await the create for the server-assigned identity', async t => {
@@ -288,13 +369,20 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
   })
   await new Promise(r => setTimeout(r, 10))
 
+  let patchCalls = 0
   feathers.service('notes').create = (() => Promise.reject(new Error('rejected'))) as never
+  feathers.service('notes').patch = (() => {
+    patchCalls += 1
+    return Promise.resolve({ id: 77, content: 'should not run' })
+  }) as never
 
-  await t.throwsAsync(() => m.notes.create({ id: 77, content: 'doomed' }), {
-    message: 'rejected',
-  })
+  const create = m.notes.create({ id: 77, content: 'doomed' })
+  const dependentPatch = m.notes.patch(77, { content: 'still doomed' })
+  await t.throwsAsync(() => create, { message: 'rejected' })
+  await t.throwsAsync(() => dependentPatch, { message: /cancelled queued mutations/ })
   t.false(latest?.data?.some(n => n.content === 'doomed'))
   t.is(latest?.data?.length, 2)
+  t.is(patchCalls, 0)
 })
 
 test('create-id tracking: optimistic creates with client ids are visible to useMutating by id', async t => {

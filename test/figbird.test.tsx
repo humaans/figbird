@@ -2279,7 +2279,7 @@ test('useFind recovers gracefully from errors on refetch', async t => {
   unmount()
 })
 
-test('concurrent mutations maintain data consistency', async t => {
+test('concurrent mutations on one record settle in call order', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, useMutation, feathers } = app()
   let hasFiredMutations = false
@@ -2327,9 +2327,10 @@ test('concurrent mutations maintain data consistency', async t => {
     await new Promise(resolve => setTimeout(resolve, 50))
   })
 
-  // The last update to complete should win (update1 because it has longer delay)
+  // Per-record mutation lanes send update2 only after update1 settles, so call
+  // order wins even though update2 has the shorter individual delay.
   t.is($all('.note').length, 1)
-  t.is($all('.note')[0]?.innerHTML, 'update1')
+  t.is($all('.note')[0]?.innerHTML, 'update2')
 
   unmount()
 })

@@ -544,6 +544,38 @@ failures are never silent: rollback is global, `useAction` gives every action an
 slot, and the events channel sees everything. `confirmed` is greppable on purpose. It
 names your critical surfaces.
 
+### Writes to one record form a queue
+
+Keyed CRUD calls for the same service record are sent in call order. Every optimistic
+intent still appears immediately; Figbird keeps the last confirmed server item as a base
+and replays the remaining intents over it after each success or failure:
+
+```ts
+const id = crypto.randomUUID()
+
+const created = m.issues.create({ id, title: 'Draft' })
+const titled = m.issues.patch(id, { title: 'Ready' })
+const closed = m.issues.patch(id, { status: 'closed' })
+const removed = m.issues.remove(id)
+
+await Promise.all([created, titled, closed, removed])
+```
+
+The cache ends at the optimistic remove immediately, while the adapter receives
+`create`, `patch`, `patch`, and `remove` one at a time. Server acknowledgements cannot
+resurrect an older projection. If a patch fails, Figbird removes that intent and rebases
+later intents over the last confirmed item. If a create fails, it cancels the queued
+writes that depended on that identity.
+
+Different records still write in parallel. Confirmed keyed writes join the same queue so
+they cannot overtake optimistic writes. Id-less confirmed creates, batch creates, and
+custom methods are not keyed and therefore do not join a record queue. Coordinated
+writes across records or services need an explicit server transaction.
+
+Active optimistic projections are replayed over fetch responses. Locally decidable
+queries and relations update immediately; server-window, server-authoritative, and
+relational-filter reconciliations wait until the record queue settles, then refetch once.
+
 ### Creates and ids: the id contract
 
 **Optimistic creates carry a client-generated id the server will accept.** Everything
@@ -655,10 +687,10 @@ It's backed by a synchronous mutation tracker in the core (not the batched event
 channel), so it is correct even for components that mount _while_ a mutation is already
 in flight, and it sees writes from other components, route actions, and non-React code.
 
-The canonical use is serializing writes to one record: overlapping optimistic patches to
-the same row make rollback ambiguous, so disable the whole toolbar with
-`useMutating({ service, id })` while any action on that record is in flight. Each
-button's `useAction.pending` still labels _which_ one is running.
+Figbird serializes keyed server writes and rebases their optimistic projections. The
+canonical UI use for this hook is preventing duplicate or stale user intent: disable the
+whole toolbar with `useMutating({ service, id })` while any action on that record is in
+flight. Each button's `useAction.pending` still labels _which_ one is running.
 
 Caveats: optimistic creates are tracked by their client-generated id (the id contract
 guarantees one); `confirmed` creates without a client id and custom-method calls carry no

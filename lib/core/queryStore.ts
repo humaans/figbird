@@ -79,6 +79,35 @@ type StoreResponse<TMeta> =
 
 type ItemId = string | number
 
+const ABSENT = Symbol('figbird.absent')
+type ProjectedEntity = unknown | typeof ABSENT
+
+interface MutationGate {
+  promise: Promise<unknown>
+  resolve(value: unknown): void
+  reject(error: unknown): void
+}
+
+interface QueuedMutation {
+  desc: MutationDescriptor
+  args: readonly unknown[]
+  optimistic: boolean
+  gate: MutationGate
+}
+
+interface MutationLane {
+  key: string
+  serviceName: string
+  id: ItemId
+  base: ProjectedEntity
+  visible: ProjectedEntity
+  lastPresent: unknown | null
+  entries: QueuedMutation[]
+  running: boolean
+  deferredQueryIds: Set<string>
+  deferredProcessedEvents: ProcessedRealtimeEvent[]
+}
+
 /** The realtime event type a mutation verb produces. */
 const MUTATION_EVENT_TYPE = {
   create: 'created',
@@ -130,6 +159,7 @@ export class QueryStore<
   #nextQueryGeneration = 1
 
   #fetchEventJournal = new FetchEventJournal()
+  #mutationLanes: Map<string, MutationLane> = new Map()
 
   // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
   // with trailing timers, and the set of reconciliations deferred while hidden.
@@ -425,8 +455,6 @@ export class QueryStore<
       isOptimistic && method !== 'create' && id !== undefined
         ? this.#getEntity(serviceName, id)
         : null
-    // The one decision point for "what event, if any, applies before the server ack".
-    // `null` always means "nothing displays the item — nothing to apply or roll back".
     const plan = isOptimistic ? this.#planOptimistic(desc, restoreItem) : null
 
     // The id contract: an optimistic create must carry a client-generated id the
@@ -446,8 +474,14 @@ export class QueryStore<
       }
     }
 
-    // Convert named params to args array for the adapter
     const args = this.#buildMutationArgs(desc)
+
+    // A stable id is the serialization key. Id-less confirmed creates and batch
+    // creates keep the direct path because one request cannot belong to one entity
+    // lane without a multi-key transaction primitive.
+    if (id !== undefined && !(method === 'create' && Array.isArray(desc.data))) {
+      return this.#enqueueMutation(desc, id, isOptimistic, args) as Promise<InferMutationData<S, D>>
+    }
 
     return this.#trackMutation(
       {
@@ -479,6 +513,252 @@ export class QueryStore<
         },
       },
     ) as Promise<InferMutationData<S, D>>
+  }
+
+  /** Queue one keyed CRUD call behind earlier calls for the same service entity. */
+  #enqueueMutation(
+    desc: MutationDescriptor,
+    id: ItemId,
+    optimistic: boolean,
+    args: readonly unknown[],
+  ): Promise<unknown> {
+    const key = this.#mutationLaneKey(desc.serviceName, id)
+    let lane = this.#mutationLanes.get(key)
+    if (!lane) {
+      const cached = this.#getEntity(desc.serviceName, id)
+      const base = cached ?? ABSENT
+      lane = {
+        key,
+        serviceName: desc.serviceName,
+        id,
+        base,
+        visible: base,
+        lastPresent: cached,
+        entries: [],
+        running: false,
+        deferredQueryIds: new Set(),
+        deferredProcessedEvents: [],
+      }
+      this.#mutationLanes.set(key, lane)
+    }
+
+    let resolve!: (value: unknown) => void
+    let reject!: (error: unknown) => void
+    const promise = new Promise<unknown>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    const entry: QueuedMutation = {
+      desc,
+      args,
+      optimistic,
+      gate: { promise, resolve, reject },
+    }
+
+    const tracked = this.#trackMutation(
+      {
+        serviceName: desc.serviceName,
+        method: desc.method,
+        id,
+        optimistic,
+        args,
+      },
+      () => entry.gate.promise,
+      {
+        onSuccess: item => this.#settleQueuedMutation(lane!, entry, { ok: true, item }),
+        onError: (error, mutationId) => {
+          this.#settleQueuedMutation(lane!, entry, { ok: false, error })
+          if (optimistic) {
+            this.#events.emit({
+              kind: 'mutate:rollback',
+              mutationId,
+              serviceName: desc.serviceName,
+              method: desc.method,
+              id,
+            })
+          }
+        },
+      },
+    )
+
+    lane.entries.push(entry)
+    this.#reprojectMutationLane(lane)
+    this.#drainMutationLane(lane)
+    return tracked
+  }
+
+  #mutationLaneKey(serviceName: string, id: ItemId): string {
+    return JSON.stringify([serviceName, typeof id, id])
+  }
+
+  #drainMutationLane(lane: MutationLane): void {
+    if (lane.running) return
+    const entry = lane.entries[0]
+    if (!entry) {
+      this.#releaseMutationLane(lane)
+      return
+    }
+
+    lane.running = true
+    let request: Promise<unknown>
+    try {
+      request = this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args])
+    } catch (error) {
+      entry.gate.reject(error)
+      return
+    }
+    request.then(entry.gate.resolve, entry.gate.reject)
+  }
+
+  #settleQueuedMutation(
+    lane: MutationLane,
+    entry: QueuedMutation,
+    outcome: { ok: true; item: unknown } | { ok: false; error: Error },
+  ): void {
+    const index = lane.entries.indexOf(entry)
+    // A failed create cancels its queued dependants before their rejected gates
+    // run these hooks. They have no remaining lane state to settle a second time.
+    if (index === -1) return
+
+    lane.entries.splice(index, 1)
+    lane.running = false
+
+    if (outcome.ok) {
+      const previousBase = lane.base === ABSENT ? null : lane.base
+      lane.base = entry.desc.method === 'remove' ? ABSENT : outcome.item
+      if (outcome.item !== null && outcome.item !== undefined) {
+        lane.lastPresent = outcome.item
+      }
+
+      // A mutation acknowledgement is authoritative even when remaining overlays
+      // keep the visible projection unchanged. Recording it protects fetches that
+      // began before the acknowledgement from replacing the newer server state.
+      const ackItem =
+        entry.desc.method === 'remove' ? (outcome.item ?? lane.lastPresent) : outcome.item
+      if (ackItem !== null && ackItem !== undefined) {
+        this.#fetchEventJournal.record([
+          {
+            serviceName: lane.serviceName,
+            type: MUTATION_EVENT_TYPE[entry.desc.method],
+            item: ackItem,
+            previousItem: previousBase,
+            itemId: lane.id,
+          },
+        ])
+      }
+    }
+
+    let cancelled: QueuedMutation[] = []
+    if (!outcome.ok && entry.desc.method === 'create') {
+      cancelled = lane.entries.splice(0)
+    }
+
+    this.#reprojectMutationLane(lane)
+
+    if (cancelled.length > 0) {
+      const dependencyError = new Error(
+        `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ` +
+          'because its create mutation failed.',
+        { cause: outcome.ok ? undefined : outcome.error },
+      )
+      for (const queued of cancelled) queued.gate.reject(dependencyError)
+    }
+
+    this.#drainMutationLane(lane)
+  }
+
+  #reprojectMutationLane(lane: MutationLane): void {
+    const previous = lane.visible
+    let next = lane.base
+    for (const entry of lane.entries) {
+      if (entry.optimistic) next = this.#applyOptimisticIntent(next, entry.desc)
+    }
+    lane.visible = next
+    if (next !== ABSENT) lane.lastPresent = next
+
+    if (previous === ABSENT && next === ABSENT) return
+    const mutationLaneKey = lane.key
+    if (previous === ABSENT) {
+      this.#processEvent(
+        lane.serviceName,
+        { type: 'created', item: next },
+        { force: true, mutationLaneKey, emitRealtime: false },
+      )
+      return
+    }
+    if (next === ABSENT) {
+      this.#processEvent(
+        lane.serviceName,
+        { type: 'removed', item: previous },
+        { force: true, mutationLaneKey, emitRealtime: false },
+      )
+      return
+    }
+    if (previous !== next) {
+      this.#processEvent(
+        lane.serviceName,
+        { type: 'patched', item: next },
+        { force: true, mutationLaneKey, emitRealtime: false },
+      )
+    }
+  }
+
+  #applyOptimisticIntent(current: ProjectedEntity, desc: MutationDescriptor): ProjectedEntity {
+    const explicit =
+      desc.optimistic !== undefined && desc.optimistic !== true && desc.optimistic !== false
+        ? desc.optimistic
+        : null
+    if (desc.method === 'create') return explicit ?? desc.data
+    if (desc.method === 'remove') return ABSENT
+    if (explicit !== null) return explicit
+
+    const currentRecord =
+      current !== ABSENT && current && typeof current === 'object'
+        ? (current as Record<string, unknown>)
+        : null
+    const data = desc.data as Record<string, unknown>
+    if (!currentRecord && this.#peekId(data) === undefined) return current
+    return { ...(currentRecord ?? {}), ...data }
+  }
+
+  #releaseMutationLane(lane: MutationLane): void {
+    if (lane.running || lane.entries.length > 0) return
+    if (this.#mutationLanes.get(lane.key) !== lane) return
+    this.#mutationLanes.delete(lane.key)
+
+    for (const event of lane.deferredProcessedEvents) this.#emitProcessedEvent(event)
+    for (const queryId of lane.deferredQueryIds) this.#requestReconcile(queryId)
+  }
+
+  /** Active optimistic projections must survive fetches that started after them. */
+  #activeMutationOverlayEvents(serviceName: string): ProcessedRealtimeEvent[] {
+    const events: ProcessedRealtimeEvent[] = []
+    for (const lane of this.#mutationLanes.values()) {
+      if (lane.serviceName !== serviceName || !lane.entries.some(entry => entry.optimistic))
+        continue
+      const previousItem = lane.base === ABSENT ? null : lane.base
+      if (lane.visible === ABSENT) {
+        if (!lane.lastPresent) continue
+        events.push({
+          serviceName,
+          type: 'removed',
+          item: lane.lastPresent,
+          previousItem,
+          itemId: lane.id,
+          mutationLaneKey: lane.key,
+        })
+      } else {
+        events.push({
+          serviceName,
+          type: lane.base === ABSENT ? 'created' : 'patched',
+          item: lane.visible,
+          previousItem,
+          itemId: lane.id,
+          mutationLaneKey: lane.key,
+        })
+      }
+    }
+    return events
   }
 
   /**
@@ -891,9 +1171,18 @@ export class QueryStore<
         getId,
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
-      const effectiveJournalEvents = rebasePlan.events
-      hadEffectiveJournalEvents = effectiveJournalEvents.length > 0
-      const journaledItemIds = rebasePlan.itemIds
+      const overlayEvents =
+        query.config.realtime === 'disabled'
+          ? []
+          : this.#activeMutationOverlayEvents(query.desc.serviceName)
+      const effectiveJournalEvents = [...rebasePlan.events, ...overlayEvents]
+      hadEffectiveJournalEvents = rebasePlan.events.length > 0
+      const latestEventById = new Map(rebasePlan.latestEventById)
+      const journaledItemIds = new Set(rebasePlan.itemIds)
+      for (const event of overlayEvents) {
+        latestEventById.set(event.itemId, event)
+        journaledItemIds.add(event.itemId)
+      }
 
       // A complete-set fetch (unfiltered allPages — the materialization condition)
       // is authoritative for the whole service: snapshot the entity cache before
@@ -915,7 +1204,7 @@ export class QueryStore<
       const rebasedResponse = rebaseResponseData({
         data,
         preserveResponseItems: query.config.realtime === 'disabled' || isProjection,
-        latestEventById: rebasePlan.latestEventById,
+        latestEventById,
         entities: service.entities,
         getId,
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
@@ -953,7 +1242,7 @@ export class QueryStore<
       // `nextItemIds` is also the complete-set diff input. Rebase its membership
       // to the last in-flight event so a stale root response cannot delete a
       // created row or resurrect a removed one service-wide.
-      for (const [itemId, event] of rebasePlan.latestEventById) {
+      for (const [itemId, event] of latestEventById) {
         if (event.type === 'removed') {
           nextItemIds.delete(itemId)
         } else if (isCompleteSet) {
@@ -1169,25 +1458,57 @@ export class QueryStore<
   }
 
   /** Push an event onto the queue and emit the observability signal for its items. */
-  #enqueueEvent(serviceName: string, event: Event): void {
+  #enqueueEvent(
+    serviceName: string,
+    event: Event,
+    {
+      force = false,
+      mutationLaneKey,
+      emitRealtime = true,
+    }: { force?: boolean; mutationLaneKey?: string; emitRealtime?: boolean } = {},
+  ): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
       serviceName,
       type: event.type,
       items,
+      ...(force ? { force: true } : {}),
+      ...(mutationLaneKey ? { mutationLaneKey } : {}),
     })
-    this.#emitRealtimeForItems(serviceName, event.type, items)
+    if (emitRealtime) this.#emitRealtimeForItems(serviceName, event.type, items)
   }
 
   /** Apply an event immediately — used for mutation results and optimistic writes. */
-  #processEvent(serviceName: string, event: Event): void {
-    this.#enqueueEvent(serviceName, event)
+  #processEvent(
+    serviceName: string,
+    event: Event,
+    options?: { force?: boolean; mutationLaneKey?: string; emitRealtime?: boolean },
+  ): void {
+    this.#enqueueEvent(serviceName, event, options)
     this.#processQueuedEvents()
   }
 
   /** Queue a realtime event for batched processing. */
   #queueEvent(serviceName: string, event: Event): void {
-    this.#enqueueEvent(serviceName, event)
+    const items = Array.isArray(event.item) ? event.item : [event.item]
+    this.#emitRealtimeForItems(serviceName, event.type, items)
+    const passthrough: unknown[] = []
+    for (const item of items) {
+      const id = this.#peekId(item)
+      const lane =
+        id === undefined
+          ? undefined
+          : this.#mutationLanes.get(this.#mutationLaneKey(serviceName, id))
+      if (lane) this.#applyAuthoritativeEventToLane(lane, event.type, item)
+      else passthrough.push(item)
+    }
+
+    if (passthrough.length === 0) return
+    this.#enqueueEvent(
+      serviceName,
+      { type: event.type, item: passthrough.length === 1 ? passthrough[0] : passthrough },
+      { emitRealtime: false },
+    )
 
     if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later
@@ -1201,6 +1522,30 @@ export class QueryStore<
         this.#processQueuedEvents()
       }
     }
+  }
+
+  #applyAuthoritativeEventToLane(lane: MutationLane, type: Event['type'], item: unknown): void {
+    const previousBase = lane.base === ABSENT ? null : lane.base
+    if (
+      (type === 'updated' || type === 'patched') &&
+      previousBase &&
+      this.#adapter.isItemStale(previousBase, item)
+    ) {
+      return
+    }
+
+    lane.base = type === 'removed' ? ABSENT : item
+    if (type !== 'removed') lane.lastPresent = item
+    this.#fetchEventJournal.record([
+      {
+        serviceName: lane.serviceName,
+        type,
+        item,
+        previousItem: previousBase,
+        itemId: lane.id,
+      },
+    ])
+    this.#reprojectMutationLane(lane)
   }
 
   #processQueuedEvents(): void {
@@ -1244,18 +1589,31 @@ export class QueryStore<
             })
 
             // Update queries only for the items actually applied to the entity
-            // cache — stale-skipped items never reach query state.
-            if (processedEvents.length > 0) {
+            // cache — stale-skipped items never reach query state. Track
+            // reconciliation per projected event so speculative work can wait
+            // for its mutation lane to settle.
+            for (const processedEvent of processedEvents) {
+              const eventReconciles = new Set<string>()
               updateQueriesFromEvents({
                 service,
-                appliedItems: processedEvents,
+                appliedItems: [processedEvent],
                 touch,
                 getId,
                 itemAdded: meta => this.#adapter.itemAdded(meta),
                 itemRemoved: meta => this.#adapter.itemRemoved(meta),
-                serverMaintainedQueriesToRefetch,
+                serverMaintainedQueriesToRefetch: eventReconciles,
                 defaultSort: this.#defaultSort,
               })
+              const lane = processedEvent.mutationLaneKey
+                ? this.#mutationLanes.get(processedEvent.mutationLaneKey)
+                : undefined
+              if (lane) {
+                for (const queryId of eventReconciles) lane.deferredQueryIds.add(queryId)
+              } else {
+                for (const queryId of eventReconciles) {
+                  serverMaintainedQueriesToRefetch.add(queryId)
+                }
+              }
             }
           })
 
@@ -1290,11 +1648,27 @@ export class QueryStore<
           }
 
           for (const event of processedEvents) {
-            this.#emitProcessedEvent(event)
+            const lane = event.mutationLaneKey
+              ? this.#mutationLanes.get(event.mutationLaneKey)
+              : undefined
+            if (lane) lane.deferredProcessedEvents.push(event)
+            else this.#emitProcessedEvent(event)
           }
 
-          // Refetch refetchable queries if needed
-          this.#refetchRefetchableQueries(serviceName)
+          const immediateRefetch = processedEvents.some(event => !event.mutationLaneKey)
+          if (immediateRefetch) {
+            this.#refetchRefetchableQueries(serviceName)
+          } else {
+            for (const event of processedEvents) {
+              const lane = event.mutationLaneKey
+                ? this.#mutationLanes.get(event.mutationLaneKey)
+                : undefined
+              if (!lane) continue
+              for (const queryId of this.#refetchableQueryIds(serviceName)) {
+                lane.deferredQueryIds.add(queryId)
+              }
+            }
+          }
         }
       }
     } finally {
@@ -1313,14 +1687,17 @@ export class QueryStore<
   }
 
   #refetchRefetchableQueries(serviceName: string): void {
-    const service = this.getState().get(serviceName)
-    if (!service) return
+    for (const queryId of this.#refetchableQueryIds(serviceName)) this.#requestReconcile(queryId)
+  }
 
-    for (const query of service.queries.values()) {
-      if (query.config.realtime === 'refetch' && this.#listenerCount(query.queryId) > 0) {
-        this.#requestReconcile(query.queryId)
-      }
-    }
+  #refetchableQueryIds(serviceName: string): string[] {
+    const service = this.getState().get(serviceName)
+    if (!service) return []
+    return [...service.queries.values()]
+      .filter(
+        query => query.config.realtime === 'refetch' && this.#listenerCount(query.queryId) > 0,
+      )
+      .map(query => query.queryId)
   }
 
   /**

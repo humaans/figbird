@@ -643,14 +643,30 @@ The replacement factors each granularity to the layer that owns it:
   built on the events channel: event delivery is deferred to a microtask and events never replay,
   so a subscriber mounting mid-mutation would report a false negative. A synchronous
   `MutationTracker` in the core (updated at the mutate call sites, exposed as `figbird.mutating`)
-  gives `useSyncExternalStore` a correct snapshot at any moment. The canonical use is serializing
-  writes per record — overlapping optimistic patches make rollback ambiguous, so the app disables
-  the surface while `useMutating({ service, id })` is true.
+  gives `useSyncExternalStore` a correct snapshot at any moment. Keyed CRUD writes serialize in a
+  store-level per-record lane; the canonical UI use is preventing duplicate or stale user intent by
+  disabling the surface while `useMutating({ service, id })` is true.
 
 Non-goals, decided: no keyed status on `useMutation` (stringly identity split across two call
-sites); no drop/serial/once modes on `useAction` (the entity-level disable is the real concurrency
-policy; button-level modes would paper over it); no event-stream-based `useMutating` (see above).
+sites); no drop/serial/once modes on `useAction` (record ordering belongs to the store and duplicate
+intent belongs to the UI); no event-stream-based `useMutating` (see above).
 `useMutation` remains as a deprecated, fully-functional legacy hook.
+
+**Per-record mutation lanes.** Keyed CRUD calls for one `(service, id)` apply their optimistic
+intents immediately but reach the adapter one at a time. A lane keeps the last authoritative item
+as its base and folds the remaining create/update/patch/remove intents over that base after every
+acknowledgement or failure. This prevents an older response from replacing newer optimistic state
+and makes rollback compositional: remove only the failed intent, then replay what remains. A failed
+create cancels the queued writes that depended on the identity. Different records stay parallel;
+id-less confirmed creates, batch creates, and opaque custom methods have no record key and keep the
+direct path.
+
+The active intent overlay participates in fetch rebasing even when it predates the fetch cursor.
+Locally exact query nodes consume projected entity events immediately. Reconciliation that needs
+server truth — server windows, authoritative queries, and relational-filter invalidation — is
+collected by the lane and released once when the lane drains. Relational assembly itself needs no
+mutation-specific path: its ordinary root and relation query inputs already rebuild from projected
+events.
 
 `mutate:*` events gained a `mutationId` correlating one mutation's lifecycle, and their `method`
 widened to admit custom method names.

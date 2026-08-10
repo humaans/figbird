@@ -10,6 +10,11 @@ This release makes joins a first-class part of Figbird. Each screen can now ask 
 
 This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `useQueries` for suspending on several independent queries in parallel, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
 
+Keyed writes to one record now form a mutation queue. Optimistic intents still appear
+immediately, while adapter calls run in order and rebase over each server response or
+failure. Active optimistic state survives fetches, and server-backed query and relation
+reconciliation waits until the queue settles.
+
 Realtime handling is safer across all APIs. Fetches and overlapping refetches no
 longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries
 remain fixed snapshots. When an item being viewed is removed, `useGet` and `useQuery`

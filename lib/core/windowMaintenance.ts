@@ -169,13 +169,20 @@ export function applyEventsToService<TMeta>({
         if (itemId !== undefined) {
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.set(itemId, item)
-          processedEvents.push({ serviceName, type, item, previousItem, itemId })
+          processedEvents.push({
+            serviceName,
+            type,
+            item,
+            previousItem,
+            itemId,
+            ...(event.mutationLaneKey ? { mutationLaneKey: event.mutationLaneKey } : {}),
+          })
         }
       } else if (type === 'updated' || type === 'patched') {
         const itemId = getId(item)
         if (itemId !== undefined) {
           const currItem = service.entities.get(itemId)
-          if (!currItem || !isItemStale(currItem, item)) {
+          if (event.force || !currItem || !isItemStale(currItem, item)) {
             service.entities.set(itemId, item)
             processedEvents.push({
               serviceName,
@@ -183,6 +190,7 @@ export function applyEventsToService<TMeta>({
               item,
               previousItem: currItem ?? null,
               itemId,
+              ...(event.mutationLaneKey ? { mutationLaneKey: event.mutationLaneKey } : {}),
             })
           }
         }
@@ -191,7 +199,14 @@ export function applyEventsToService<TMeta>({
         if (itemId !== undefined) {
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.delete(itemId)
-          processedEvents.push({ serviceName, type, item, previousItem, itemId })
+          processedEvents.push({
+            serviceName,
+            type,
+            item,
+            previousItem,
+            itemId,
+            ...(event.mutationLaneKey ? { mutationLaneKey: event.mutationLaneKey } : {}),
+          })
         }
       }
     }

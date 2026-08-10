@@ -22,6 +22,13 @@ export interface QueuedEvent {
   serviceName: string
   type: EventType
   items: unknown[]
+  /** Force a local projection over the visible cache, bypassing server staleness checks. */
+  force?: boolean
+  /**
+   * Optimistic mutation lane that owns this projected event. Reconciliation work
+   * caused by the event waits until the lane has no more queued writes.
+   */
+  mutationLaneKey?: string
 }
 
 /**
@@ -36,6 +43,8 @@ export interface ProcessedRealtimeEvent {
   previousItem: unknown | null
   /** Always defined — events whose item has no resolvable id are never applied. */
   itemId: string | number
+  /** Present for a visible projection backed by an unsettled mutation lane. */
+  mutationLaneKey?: string
 }
 
 export type QueryStatus = 'loading' | 'success' | 'error'
