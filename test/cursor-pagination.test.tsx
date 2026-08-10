@@ -6,6 +6,7 @@ import {
   FeathersAdapter,
   Figbird,
   FigbirdProvider,
+  offsetPagination,
   service,
   useQuery,
   type FeathersClient,
@@ -42,12 +43,12 @@ function createCursorApp(
     visibility,
     retry,
     retryDelay,
-    cursorPageSizeWhenFetchingAll,
+    cursorMaxPageSize,
   }: {
     visibility?: VisibilitySource
     retry?: number | false
     retryDelay?: number
-    cursorPageSizeWhenFetchingAll?: number
+    cursorMaxPageSize?: number
   } = {},
 ) {
   let serverRows = rows
@@ -60,8 +61,8 @@ function createCursorApp(
     async find(params: FeathersParams = {}) {
       const query = (params.query ?? {}) as Record<string, unknown>
       calls.push({ query })
-      const limit = query.cursorLimit as number
-      const cursor = query.cursor as string | undefined
+      const limit = query.$limit as number
+      const cursor = query.$after as string | null
       if (cursor && failingCursors.delete(cursor)) {
         throw new Error(`failed ${cursor}`)
       }
@@ -73,11 +74,12 @@ function createCursorApp(
       if (hold) await hold.promise
       return {
         data,
-        pageInfo: {
-          hasNextPage,
-          endCursor: hasNextPage ? `cursor:${end}` : null,
-          ...(query.returnTotal ? { total: serverRows.length } : {}),
-        },
+        limit,
+        hasPreviousPage: cursor !== null,
+        hasNextPage,
+        startCursor: data.length > 0 ? `cursor:${start}` : null,
+        endCursor: data.length > 0 ? `cursor:${end}` : null,
+        ...(query.$total ? { total: serverRows.length } : {}),
       }
     },
     on(event: string, listener: (item: unknown) => void) {
@@ -104,9 +106,7 @@ function createCursorApp(
     defaultPageSizeWhenFetchingAll: pageSizeWhenFetchingAll,
     pagination: {
       items: cursorPagination({
-        ...(cursorPageSizeWhenFetchingAll !== undefined
-          ? { pageSizeWhenFetchingAll: cursorPageSizeWhenFetchingAll }
-          : {}),
+        ...(cursorMaxPageSize !== undefined ? { maxPageSize: cursorMaxPageSize } : {}),
       }),
     },
   })
@@ -130,6 +130,7 @@ function createCursorApp(
     App,
     adapter,
     calls,
+    feathers,
     figbird,
     replaceRows(next: Item[]) {
       serverRows = next
@@ -211,68 +212,81 @@ test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full fi
   t.is($('.items')?.getAttribute('data-total'), '6')
   t.deepEqual(calls[0]?.query, {
     rank: { $gte: 1 },
-    cursorLimit: 3,
-    returnCursor: true,
-    returnTotal: true,
+    $limit: 3,
+    $after: null,
+    $total: true,
   })
 
   await flush(() => loadMore?.())
 
   t.is($('.items')?.getAttribute('data-ids'), '1,2,3,4,5,6')
   t.is($('.items')?.getAttribute('data-more'), 'false')
-  const nextPageCall = calls.find(call => call.query.cursor === 'cursor:3')
+  const nextPageCall = calls.find(call => call.query.$after === 'cursor:3')
   t.deepEqual(nextPageCall?.query, {
     rank: { $gte: 1 },
-    cursorLimit: 3,
-    returnCursor: true,
-    cursor: 'cursor:3',
+    $limit: 3,
+    $after: 'cursor:3',
   })
   unmount()
 })
 
-test('cursor all: drains every page and only requests the total on page one', async t => {
-  const { calls, figbird } = createCursorApp(makeRows(7), 3)
-  const ref = figbird.query(figbird.q.items.all())
-  const unsub = ref.subscribe(() => {})
-
-  await new Promise(resolve => setTimeout(resolve, 10))
+test('cursor all: drains every page without requesting a server total', async t => {
+  const { adapter, calls } = createCursorApp(makeRows(7), 3)
+  const result = await adapter.findAll('items')
 
   t.deepEqual(
-    (ref.getSnapshot().data as Item[]).map(item => item.id),
+    (result.data as Item[]).map(item => item.id),
     [1, 2, 3, 4, 5, 6, 7],
   )
   t.is(calls.length, 3)
-  t.true(calls[0]?.query.returnTotal === true)
-  t.false(Object.hasOwn(calls[1]?.query ?? {}, 'returnTotal'))
-  t.false(Object.hasOwn(calls[2]?.query ?? {}, 'returnTotal'))
+  t.true(calls.every(call => !Object.hasOwn(call.query, '$total')))
+  t.is(result.meta.total, 7)
   t.deepEqual(
-    calls.map(call => call.query.cursor),
-    [undefined, 'cursor:3', 'cursor:6'],
+    calls.map(call => call.query.$after),
+    [null, 'cursor:3', 'cursor:6'],
   )
-  unsub()
 })
 
-test('cursor all: a per-service page size overrides the adapter-wide default', async t => {
-  const { calls, figbird } = createCursorApp(makeRows(201), 2500, {
-    cursorPageSizeWhenFetchingAll: 100,
+test('cursor all: a global default accepts per-service offset overrides', async t => {
+  const { calls, feathers } = createCursorApp(makeRows(201))
+  const cursor100 = cursorPagination({ maxPageSize: 100 })
+  const adapter = new FeathersAdapter(feathers, {
+    defaultPageSizeWhenFetchingAll: 2500,
+    defaultPagination: cursor100,
   })
-  const ref = figbird.query(figbird.q.items.all())
-  const unsub = ref.subscribe(() => {})
+  const result = await adapter.findAll('items')
 
-  await new Promise(resolve => setTimeout(resolve, 10))
-
-  t.is((ref.getSnapshot().data as Item[]).length, 201)
+  t.is(result.data.length, 201)
   t.deepEqual(
-    calls.map(call => call.query.cursorLimit),
+    calls.map(call => call.query.$limit),
     [100, 100, 100],
   )
-  unsub()
+
+  const adapterWithOverride = new FeathersAdapter(feathers, {
+    defaultPagination: cursor100,
+    pagination: { items: offsetPagination() },
+  })
+  t.is(adapterWithOverride.pageSource('items'), undefined)
+  t.truthy(adapterWithOverride.pageSource('other-items'))
 })
 
-test('cursorPagination: rejects an invalid all-page size', t => {
-  t.throws(() => cursorPagination({ pageSizeWhenFetchingAll: 0 }), {
-    message: /pageSizeWhenFetchingAll/,
+test('cursorPagination: validates and enforces the service maximum', async t => {
+  t.throws(() => cursorPagination({ maxPageSize: 0 }), {
+    message: /maxPageSize must be a positive integer/,
   })
+  t.throws(() => cursorPagination({ maxPageSize: 1.5 }), {
+    message: /maxPageSize must be a positive integer/,
+  })
+
+  const { adapter, calls } = createCursorApp(makeRows(3), 3, {
+    cursorMaxPageSize: 2,
+  })
+  const pageSource = adapter.pageSource('items')
+  if (!pageSource) return t.fail('expected items to expose native pagination')
+  await t.throwsAsync(pageSource.find(undefined, { limit: 3, returnTotal: false }), {
+    message: /accepts at most 2 rows per page, got 3/,
+  })
+  t.is(calls.length, 0)
 })
 
 test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor chain', async t => {
@@ -305,8 +319,8 @@ test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor c
   })
 
   t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
-  const lastTwoCalls = cursorApp.calls.slice(-2).map(call => call.query.cursor)
-  t.deepEqual(lastTwoCalls, [undefined, 'cursor:3'])
+  const lastTwoCalls = cursorApp.calls.slice(-2).map(call => call.query.$after)
+  t.deepEqual(lastTwoCalls, [null, 'cursor:3'])
   unmount()
 })
 
@@ -349,7 +363,7 @@ test('cursor paginate: an old in-flight page never leaks into a rebuilt prefix',
 
   t.is($('.items')?.getAttribute('data-ids'), '1,2,3')
   t.is(
-    cursorApp.calls.filter(call => call.query.cursor === 'cursor:3').length,
+    cursorApp.calls.filter(call => call.query.$after === 'cursor:3').length,
     2,
     'the fresh page request started without publishing the old response',
   )
@@ -392,8 +406,8 @@ test('cursor paginate: reconnect rebuilds every loaded page from page zero', asy
 
   t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
   t.deepEqual(
-    cursorApp.calls.slice(-2).map(call => call.query.cursor),
-    [undefined, 'cursor:3'],
+    cursorApp.calls.slice(-2).map(call => call.query.$after),
+    [null, 'cursor:3'],
   )
   unmount()
 })
@@ -479,8 +493,8 @@ test('cursor paginate: failed prefix rebuild stays atomic and retries its depth'
 
   t.is($('.items')?.getAttribute('data-ids'), '100,99,1,2,3,4')
   t.deepEqual(
-    cursorApp.calls.slice(-2).map(call => call.query.cursor),
-    [undefined, 'cursor:3'],
+    cursorApp.calls.slice(-2).map(call => call.query.$after),
+    [null, 'cursor:3'],
   )
   unmount()
 })
@@ -516,8 +530,8 @@ test('cursor paginate: automatic fetch retry stays inside the frozen rebuild', a
 
   t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
   t.deepEqual(
-    cursorApp.calls.slice(-3).map(call => call.query.cursor),
-    [undefined, 'cursor:3', 'cursor:3'],
+    cursorApp.calls.slice(-3).map(call => call.query.$after),
+    [null, 'cursor:3', 'cursor:3'],
   )
   unmount()
 })
@@ -526,7 +540,7 @@ test('cursor pagination: rejects a response that cannot continue safely', async 
   const feathers: FeathersClient = {
     service: () =>
       ({
-        find: async () => ({ data: [], pageInfo: { hasNextPage: true, endCursor: null } }),
+        find: async () => ({ data: [], hasNextPage: true, endCursor: null }),
       }) as unknown as FeathersService,
   }
   const adapter = new FeathersAdapter(feathers, {
@@ -536,6 +550,6 @@ test('cursor pagination: rejects a response that cannot continue safely', async 
   if (!pageSource) return t.fail('expected items to expose native pagination')
 
   await t.throwsAsync(pageSource.find(undefined, { limit: 10, returnTotal: false }), {
-    message: /no pageInfo\.endCursor/,
+    message: /no endCursor/,
   })
 })

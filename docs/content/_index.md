@@ -373,13 +373,30 @@ Pagination uses `$limit` and `$skip` by default. Configure cursor-backed Feather
 services once on the adapter; query builders and hook results stay the same:
 
 ```ts
-import { cursorPagination, FeathersAdapter } from 'figbird'
+import {
+  cursorPagination,
+  FeathersAdapter,
+  offsetPagination,
+} from 'figbird'
+
+const cursor100 = cursorPagination({ maxPageSize: 100 })
 
 const adapter = new FeathersAdapter(feathers, {
+  defaultPagination: cursor100,
   pagination: {
-    'api/documents': cursorPagination(),
-    'api/identity-documents': cursorPagination(),
-    'api/ai-companion-threads': cursorPagination(),
+    'api/legacy-reports': offsetPagination(),
+  },
+})
+```
+
+Without `defaultPagination`, services use offset pagination. List cursor services in
+`pagination` when cursor support is the exception:
+
+```ts
+const adapter = new FeathersAdapter(feathers, {
+  pagination: {
+    'api/documents': cursor100,
+    'api/identity-documents': cursor100,
   },
 })
 ```
@@ -389,29 +406,31 @@ The default mapping matches this protocol:
 ```ts
 // request query
 {
-  cursorLimit: 25,
-  returnCursor: true,
-  cursor: 'opaque-token', // omitted on page one
-  returnTotal: true, // requested on page one only
+  $limit: 25,
+  $after: null, // an opaque endCursor on later pages
+  $total: true, // page one of paginate({ returnTotal: true }) only
 }
 
 // response
 {
   data: [...],
-  pageInfo: {
-    hasNextPage: true,
-    endCursor: 'next-opaque-token',
-    total: 123, // optional; normally returned on page one
-  },
+  total: 123, // optional; normally returned on page one
+  limit: 25,
+  hasPreviousPage: false,
+  hasNextPage: true,
+  startCursor: 'first-opaque-token',
+  endCursor: 'last-opaque-token',
 }
 ```
 
 Figbird treats the cursor as opaque and chains pages sequentially. `hasNextPage` is
 authoritative, so a full-sized final page still stops correctly. `.all()` drains the
-same cursor chain. For `.paginate()`, realtime changes rebuild the currently loaded
-prefix with fresh cursors while the old rows remain visible, then replace the prefix
-in one update. An explicit `refetch()` keeps the usual behavior: discard later pages
-and restart at page one.
+same cursor chain without requesting a server count; once complete, the row count is
+exact. `maxPageSize` caps `.all()` batches and rejects larger explicit `.paginate()`
+page sizes before a request reaches Feathers. For `.paginate()`, realtime changes
+rebuild the currently loaded prefix with fresh cursors while the old rows remain
+visible, then replace the prefix in one update. An explicit `refetch()` keeps the
+usual behavior: discard later pages and restart at page one.
 
 For a different server protocol, override the two mappings:
 
@@ -444,6 +463,11 @@ cursorPagination({
 Cursor controls live outside the logical Figbird query. They therefore never become
 filters, never need custom matcher support, and do not affect realtime query
 classification.
+
+Custom adapters choose pagination directly; they do not use these Feathers options.
+Implement `pageSource(serviceName)` for services with adapter-native sequential
+pagination, or return `undefined` to keep the query engine's `$limit`/`$skip` path.
+The adapter's `findAll` implementation owns exhaustive reads in either case.
 
 ## Mutations
 

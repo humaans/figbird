@@ -111,10 +111,11 @@ test('QueryBuilder.paginate: returnTotal defaults to omitted (undefined)', t => 
   t.is(ast.returnTotal, undefined)
 })
 
-test('QueryBuilder.paginate: rejects non-positive pageSize', t => {
+test('QueryBuilder.paginate: requires a positive integer pageSize', t => {
   const { figbird } = createPaginateApp()
   t.throws(() => figbird.q.issues.paginate({ pageSize: 0 }), { message: /pageSize/i })
   t.throws(() => figbird.q.issues.paginate({ pageSize: -3 }), { message: /pageSize/i })
+  t.throws(() => figbird.q.issues.paginate({ pageSize: 1.5 }), { message: /pageSize/i })
 })
 
 test('QueryBuilder.paginate: composes with where and orderBy before paginate', t => {

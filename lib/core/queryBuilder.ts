@@ -369,8 +369,8 @@ export class QueryBuilder<
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
     options: { pageSize: number; returnTotal?: boolean },
   ): QueryBuilder<S, TService, TItem, TRelated, 'many', 'paginate'> {
-    if (!Number.isFinite(options.pageSize) || options.pageSize <= 0) {
-      throw new Error(`paginate(): pageSize must be a positive number, got ${options.pageSize}`)
+    if (!Number.isInteger(options.pageSize) || options.pageSize <= 0) {
+      throw new Error(`paginate(): pageSize must be a positive integer, got ${options.pageSize}`)
     }
     return new QueryBuilder(this.#schema, this.#state.service, {
       ...this.#state,
