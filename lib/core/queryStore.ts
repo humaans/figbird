@@ -12,6 +12,13 @@ import { MutationTracker } from './mutationTracker.js'
 import { sortRowsLocally } from './sort.js'
 import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchRebase.js'
 import {
+  ABSENT,
+  MutationLanes,
+  type ItemId,
+  type MutationLane,
+  type ProjectionChange,
+} from './mutationLanes.js'
+import {
   addQueryToItemIndex,
   applyEventsToService,
   applyVisibleEventToQuery,
@@ -33,6 +40,7 @@ import {
 import {
   queryOfParams,
   type ElementType,
+  type CreateMutationDescriptor,
   type Event,
   type FindQueryConfig,
   type GetQueryConfig,
@@ -73,14 +81,8 @@ const MAX_RETRY_DELAY = 30_000
 function defaultRetryDelay(attempt: number): number {
   return Math.min(1000 * 2 ** (attempt - 1), MAX_RETRY_DELAY)
 }
-
 type StoreResponse<TMeta> =
   QueryResponse<unknown, TMeta | undefined> | PageResponse<unknown[], TMeta>
-
-type ItemId = string | number
-
-const ABSENT = Symbol('figbird.absent')
-type ProjectedEntity = unknown | typeof ABSENT
 
 interface MutationGate {
   promise: Promise<unknown>
@@ -93,19 +95,6 @@ interface QueuedMutation {
   args: readonly unknown[]
   optimistic: boolean
   gate: MutationGate
-}
-
-interface MutationLane {
-  key: string
-  serviceName: string
-  id: ItemId
-  base: ProjectedEntity
-  visible: ProjectedEntity
-  lastPresent: unknown | null
-  entries: QueuedMutation[]
-  running: boolean
-  deferredQueryIds: Set<string>
-  deferredProcessedEvents: ProcessedRealtimeEvent[]
 }
 
 /** The realtime event type a mutation verb produces. */
@@ -159,7 +148,7 @@ export class QueryStore<
   #nextQueryGeneration = 1
 
   #fetchEventJournal = new FetchEventJournal()
-  #mutationLanes: Map<string, MutationLane> = new Map()
+  #mutationLanes: MutationLanes<QueuedMutation>
 
   // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
   // with trailing timers, and the set of reconciliations deferred while hidden.
@@ -224,6 +213,7 @@ export class QueryStore<
     defaultSort?: Record<string, number>
   }) {
     this.#adapter = adapter
+    this.#mutationLanes = new MutationLanes(item => this.#peekId(item))
     this.#defaultSort = defaultSort
     this.#eventBatchInterval = eventBatchInterval
     this.#events = new FigbirdEventEmitter()
@@ -451,11 +441,6 @@ export class QueryStore<
     // `useMutating({ id })` cover the create→navigate→act-before-ack window.
     const id = method !== 'create' ? desc.id : this.#peekId(desc.data)
     const isOptimistic = optimistic !== undefined && optimistic !== false
-    const restoreItem =
-      isOptimistic && method !== 'create' && id !== undefined
-        ? this.#getEntity(serviceName, id)
-        : null
-    const plan = isOptimistic ? this.#planOptimistic(desc, restoreItem) : null
 
     // The id contract: an optimistic create must carry a client-generated id the
     // server will accept. Identity is what everything downstream is built on —
@@ -463,8 +448,9 @@ export class QueryStore<
     // an optimistic item without a real id has none. Confirmed creates
     // (non-optimistic) are the mode for server-assigned ids: await the create,
     // the server's item carries its identity.
-    if (plan?.type === 'created') {
-      const items: unknown[] = Array.isArray(plan.item) ? plan.item : [plan.item]
+    if (isOptimistic && method === 'create') {
+      const optimisticItem = optimistic !== true && optimistic !== false ? optimistic : desc.data
+      const items: unknown[] = Array.isArray(optimisticItem) ? optimisticItem : [optimisticItem]
       if (items.some(item => this.#peekId(item) === undefined)) {
         throw new Error(
           `figbird: optimistic creates on "${serviceName}" need a client-generated id the ` +
@@ -483,36 +469,51 @@ export class QueryStore<
       return this.#enqueueMutation(desc, id, isOptimistic, args) as Promise<InferMutationData<S, D>>
     }
 
+    // Every update, patch, and remove has an id and therefore took the lane path.
+    // What remains is an id-less confirmed create or a batch create, neither of
+    // which can be represented by one entity lane.
+    if (method !== 'create') {
+      throw new Error(`figbird: ${method} mutation is missing its entity id`)
+    }
+    return this.#mutateUnkeyedCreate(desc, args, isOptimistic) as Promise<InferMutationData<S, D>>
+  }
+
+  #mutateUnkeyedCreate(
+    desc: CreateMutationDescriptor,
+    args: readonly unknown[],
+    optimistic: boolean,
+  ): Promise<unknown> {
+    const optimisticItem =
+      desc.optimistic !== true && desc.optimistic !== false ? desc.optimistic : desc.data
     return this.#trackMutation(
       {
-        serviceName,
-        method,
-        ...(id !== undefined ? { id } : {}),
-        optimistic: isOptimistic,
+        serviceName: desc.serviceName,
+        method: desc.method,
+        optimistic,
         args,
       },
       () => {
-        if (plan) this.#processEvent(serviceName, plan)
-        return this.#adapter.mutate(serviceName, method, args)
+        if (optimistic) {
+          this.#processEvent(desc.serviceName, { type: 'created', item: optimisticItem })
+        }
+        return this.#adapter.mutate(desc.serviceName, desc.method, [...args])
       },
       {
         // Apply the cache update before ending the tracker entry, so by the time a
         // `useMutating` subscriber sees "not busy" the data is already in the cache.
-        onSuccess: item => this.#applyMutationEvent(serviceName, method, item),
+        onSuccess: item => this.#processEvent(desc.serviceName, { type: 'created', item }),
         onError: (_error, mutationId) => {
-          if (plan) {
-            this.#rollbackOptimistic(serviceName, method, id, plan.item, restoreItem)
-            this.#events.emit({
-              kind: 'mutate:rollback',
-              mutationId,
-              serviceName,
-              method,
-              ...(id !== undefined ? { id } : {}),
-            })
-          }
+          if (!optimistic) return
+          this.#processEvent(desc.serviceName, { type: 'removed', item: optimisticItem })
+          this.#events.emit({
+            kind: 'mutate:rollback',
+            mutationId,
+            serviceName: desc.serviceName,
+            method: desc.method,
+          })
         },
       },
-    ) as Promise<InferMutationData<S, D>>
+    )
   }
 
   /** Queue one keyed CRUD call behind earlier calls for the same service entity. */
@@ -522,25 +523,11 @@ export class QueryStore<
     optimistic: boolean,
     args: readonly unknown[],
   ): Promise<unknown> {
-    const key = this.#mutationLaneKey(desc.serviceName, id)
-    let lane = this.#mutationLanes.get(key)
-    if (!lane) {
-      const cached = this.#getEntity(desc.serviceName, id)
-      const base = cached ?? ABSENT
-      lane = {
-        key,
-        serviceName: desc.serviceName,
-        id,
-        base,
-        visible: base,
-        lastPresent: cached,
-        entries: [],
-        running: false,
-        deferredQueryIds: new Set(),
-        deferredProcessedEvents: [],
-      }
-      this.#mutationLanes.set(key, lane)
-    }
+    const lane = this.#mutationLanes.ensure(
+      desc.serviceName,
+      id,
+      this.#getEntity(desc.serviceName, id),
+    )
 
     let resolve!: (value: unknown) => void
     let reject!: (error: unknown) => void
@@ -565,9 +552,9 @@ export class QueryStore<
       },
       () => entry.gate.promise,
       {
-        onSuccess: item => this.#settleQueuedMutation(lane!, entry, { ok: true, item }),
+        onSuccess: item => this.#settleQueuedMutation(lane, entry, { ok: true, item }),
         onError: (error, mutationId) => {
-          this.#settleQueuedMutation(lane!, entry, { ok: false, error })
+          this.#settleQueuedMutation(lane, entry, { ok: false, error })
           if (optimistic) {
             this.#events.emit({
               kind: 'mutate:rollback',
@@ -582,16 +569,12 @@ export class QueryStore<
     )
 
     lane.entries.push(entry)
-    this.#reprojectMutationLane(lane)
+    this.#applyProjection(this.#mutationLanes.reproject(lane), true)
     this.#drainMutationLane(lane)
     return tracked
   }
 
-  #mutationLaneKey(serviceName: string, id: ItemId): string {
-    return JSON.stringify([serviceName, typeof id, id])
-  }
-
-  #drainMutationLane(lane: MutationLane): void {
+  #drainMutationLane(lane: MutationLane<QueuedMutation>): void {
     if (lane.running) return
     const entry = lane.entries[0]
     if (!entry) {
@@ -611,7 +594,7 @@ export class QueryStore<
   }
 
   #settleQueuedMutation(
-    lane: MutationLane,
+    lane: MutationLane<QueuedMutation>,
     entry: QueuedMutation,
     outcome: { ok: true; item: unknown } | { ok: false; error: Error },
   ): void {
@@ -622,13 +605,15 @@ export class QueryStore<
 
     lane.entries.splice(index, 1)
     lane.running = false
+    let projection: ProjectionChange<QueuedMutation>
 
     if (outcome.ok) {
       const previousBase = lane.base === ABSENT ? null : lane.base
-      lane.base = entry.desc.method === 'remove' ? ABSENT : outcome.item
-      if (outcome.item !== null && outcome.item !== undefined) {
-        lane.lastPresent = outcome.item
-      }
+      projection = this.#mutationLanes.acceptAuthoritative(
+        lane,
+        MUTATION_EVENT_TYPE[entry.desc.method],
+        outcome.item,
+      )
 
       // A mutation acknowledgement is authoritative even when remaining overlays
       // keep the visible projection unchanged. Recording it protects fetches that
@@ -638,6 +623,7 @@ export class QueryStore<
       if (ackItem !== null && ackItem !== undefined) {
         this.#fetchEventJournal.record([
           {
+            origin: 'authoritative',
             serviceName: lane.serviceName,
             type: MUTATION_EVENT_TYPE[entry.desc.method],
             item: ackItem,
@@ -646,6 +632,8 @@ export class QueryStore<
           },
         ])
       }
+    } else {
+      projection = this.#mutationLanes.reproject(lane)
     }
 
     let cancelled: QueuedMutation[] = []
@@ -653,7 +641,7 @@ export class QueryStore<
       cancelled = lane.entries.splice(0)
     }
 
-    this.#reprojectMutationLane(lane)
+    this.#applyProjection(projection, true)
 
     if (cancelled.length > 0) {
       const dependencyError = new Error(
@@ -667,64 +655,25 @@ export class QueryStore<
     this.#drainMutationLane(lane)
   }
 
-  #reprojectMutationLane(lane: MutationLane): void {
-    const previous = lane.visible
-    let next = lane.base
-    for (const entry of lane.entries) {
-      if (entry.optimistic) next = this.#applyOptimisticIntent(next, entry.desc)
-    }
-    lane.visible = next
-    if (next !== ABSENT) lane.lastPresent = next
+  #applyProjection(change: ProjectionChange<QueuedMutation>, immediate: boolean): void {
+    const event = this.#projectionEvent(change)
+    if (!event) return
+    this.#enqueueProjectionEvent(change.lane, event)
+    if (immediate) this.#processQueuedEvents()
+  }
 
-    if (previous === ABSENT && next === ABSENT) return
-    const mutationLaneKey = lane.key
+  #projectionEvent(change: ProjectionChange<QueuedMutation>): Event | null {
+    const { previous, next } = change
+    if (previous === ABSENT && next === ABSENT) return null
     if (previous === ABSENT) {
-      this.#processEvent(
-        lane.serviceName,
-        { type: 'created', item: next },
-        { force: true, mutationLaneKey, emitRealtime: false },
-      )
-      return
+      return { type: 'created', item: next }
     }
-    if (next === ABSENT) {
-      this.#processEvent(
-        lane.serviceName,
-        { type: 'removed', item: previous },
-        { force: true, mutationLaneKey, emitRealtime: false },
-      )
-      return
-    }
-    if (previous !== next) {
-      this.#processEvent(
-        lane.serviceName,
-        { type: 'patched', item: next },
-        { force: true, mutationLaneKey, emitRealtime: false },
-      )
-    }
+    if (next === ABSENT) return { type: 'removed', item: previous }
+    return previous === next ? null : { type: 'patched', item: next }
   }
 
-  #applyOptimisticIntent(current: ProjectedEntity, desc: MutationDescriptor): ProjectedEntity {
-    const explicit =
-      desc.optimistic !== undefined && desc.optimistic !== true && desc.optimistic !== false
-        ? desc.optimistic
-        : null
-    if (desc.method === 'create') return explicit ?? desc.data
-    if (desc.method === 'remove') return ABSENT
-    if (explicit !== null) return explicit
-
-    const currentRecord =
-      current !== ABSENT && current && typeof current === 'object'
-        ? (current as Record<string, unknown>)
-        : null
-    const data = desc.data as Record<string, unknown>
-    if (!currentRecord && this.#peekId(data) === undefined) return current
-    return { ...(currentRecord ?? {}), ...data }
-  }
-
-  #releaseMutationLane(lane: MutationLane): void {
-    if (lane.running || lane.entries.length > 0) return
-    if (this.#mutationLanes.get(lane.key) !== lane) return
-    this.#mutationLanes.delete(lane.key)
+  #releaseMutationLane(lane: MutationLane<QueuedMutation>): void {
+    if (!this.#mutationLanes.release(lane)) return
 
     for (const event of lane.deferredProcessedEvents) this.#emitProcessedEvent(event)
     for (const queryId of lane.deferredQueryIds) this.#requestReconcile(queryId)
@@ -732,33 +681,7 @@ export class QueryStore<
 
   /** Active optimistic projections must survive fetches that started after them. */
   #activeMutationOverlayEvents(serviceName: string): ProcessedRealtimeEvent[] {
-    const events: ProcessedRealtimeEvent[] = []
-    for (const lane of this.#mutationLanes.values()) {
-      if (lane.serviceName !== serviceName || !lane.entries.some(entry => entry.optimistic))
-        continue
-      const previousItem = lane.base === ABSENT ? null : lane.base
-      if (lane.visible === ABSENT) {
-        if (!lane.lastPresent) continue
-        events.push({
-          serviceName,
-          type: 'removed',
-          item: lane.lastPresent,
-          previousItem,
-          itemId: lane.id,
-          mutationLaneKey: lane.key,
-        })
-      } else {
-        events.push({
-          serviceName,
-          type: lane.base === ABSENT ? 'created' : 'patched',
-          item: lane.visible,
-          previousItem,
-          itemId: lane.id,
-          mutationLaneKey: lane.key,
-        })
-      }
-    }
-    return events
+    return this.#mutationLanes.overlayEvents(serviceName)
   }
 
   /**
@@ -1171,18 +1094,52 @@ export class QueryStore<
         getId,
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
-      const overlayEvents =
-        query.config.realtime === 'disabled'
-          ? []
-          : this.#activeMutationOverlayEvents(query.desc.serviceName)
+      const fetchedProjectionEvents: QueuedEvent[] = []
+      for (const item of responseItems) {
+        const itemId = getId(item)
+        if (itemId === undefined || rebasePlan.itemIds.has(itemId)) continue
+        const lane = this.#mutationLanes.get(query.desc.serviceName, itemId)
+        if (!lane) continue
+        const projection = this.#mutationLanes.acceptAuthoritative(
+          lane,
+          lane.base === ABSENT ? 'created' : 'updated',
+          item,
+          (current, next) => this.#adapter.isItemStale(current, next),
+        )
+        if (!projection) continue
+        const projectionEvent = this.#projectionEvent(projection)
+        if (projectionEvent) {
+          fetchedProjectionEvents.push({
+            origin: 'projection',
+            serviceName: lane.serviceName,
+            type: projectionEvent.type,
+            items: [projectionEvent.item],
+            mutationLaneKey: lane.key,
+          })
+        }
+      }
+
+      if (fetchedProjectionEvents.length > 0) {
+        applyEventsToService({
+          service,
+          serviceName: query.desc.serviceName,
+          events: fetchedProjectionEvents,
+          getId,
+          isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+          processedEvents,
+        })
+      }
+
+      const activeOverlayEvents = this.#activeMutationOverlayEvents(query.desc.serviceName)
+      const overlayEvents = query.config.realtime === 'disabled' ? [] : activeOverlayEvents
       const effectiveJournalEvents = [...rebasePlan.events, ...overlayEvents]
       hadEffectiveJournalEvents = rebasePlan.events.length > 0
       const latestEventById = new Map(rebasePlan.latestEventById)
       const journaledItemIds = new Set(rebasePlan.itemIds)
       for (const event of overlayEvents) {
         latestEventById.set(event.itemId, event)
-        journaledItemIds.add(event.itemId)
       }
+      for (const event of activeOverlayEvents) journaledItemIds.add(event.itemId)
 
       // A complete-set fetch (unfiltered allPages — the materialization condition)
       // is authoritative for the whole service: snapshot the entity cache before
@@ -1289,19 +1246,6 @@ export class QueryStore<
             ignoredItemIds: journaledItemIds,
           }),
         )
-        if (processedEvents.length > 0) {
-          updateQueriesFromEvents({
-            service,
-            appliedItems: processedEvents,
-            touch,
-            getId,
-            itemAdded: meta => this.#adapter.itemAdded(meta),
-            itemRemoved: meta => this.#adapter.itemRemoved(meta),
-            serverMaintainedQueriesToRefetch,
-            excludeQueryId: queryId,
-            defaultSort: this.#defaultSort,
-          })
-        }
       }
 
       if (
@@ -1320,6 +1264,30 @@ export class QueryStore<
           defaultSort: this.#defaultSort,
         })
       }
+
+      for (const processedEvent of processedEvents) {
+        const eventReconciles = new Set<string>()
+        updateQueriesFromEvents({
+          service,
+          appliedItems: [processedEvent],
+          touch,
+          getId,
+          itemAdded: meta => this.#adapter.itemAdded(meta),
+          itemRemoved: meta => this.#adapter.itemRemoved(meta),
+          serverMaintainedQueriesToRefetch: eventReconciles,
+          excludeQueryId: queryId,
+          defaultSort: this.#defaultSort,
+        })
+        const lane =
+          processedEvent.origin === 'projection'
+            ? this.#mutationLanes.getByKey(processedEvent.mutationLaneKey)
+            : undefined
+        if (lane) {
+          for (const id of eventReconciles) lane.deferredQueryIds.add(id)
+        } else {
+          for (const id of eventReconciles) serverMaintainedQueriesToRefetch.add(id)
+        }
+      }
     })
     this.#notify(touched)
 
@@ -1329,7 +1297,12 @@ export class QueryStore<
       // Unlike realtime events, diffs don't trigger `realtime: 'refetch'` queries —
       // a refetch-on-diff that itself diffs would cycle.
       for (const event of processedEvents) {
-        this.#emitProcessedEvent(event)
+        const lane =
+          event.origin === 'projection'
+            ? this.#mutationLanes.getByKey(event.mutationLaneKey)
+            : undefined
+        if (lane) lane.deferredProcessedEvents.push(event)
+        else this.#emitProcessedEvent(event)
       }
     }
 
@@ -1457,34 +1430,32 @@ export class QueryStore<
     }
   }
 
-  /** Push an event onto the queue and emit the observability signal for its items. */
-  #enqueueEvent(
-    serviceName: string,
-    event: Event,
-    {
-      force = false,
-      mutationLaneKey,
-      emitRealtime = true,
-    }: { force?: boolean; mutationLaneKey?: string; emitRealtime?: boolean } = {},
-  ): void {
+  /** Push an authoritative event onto the atomic queue. */
+  #enqueueAuthoritativeEvent(serviceName: string, event: Event, emitRealtime = true): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
+      origin: 'authoritative',
       serviceName,
       type: event.type,
       items,
-      ...(force ? { force: true } : {}),
-      ...(mutationLaneKey ? { mutationLaneKey } : {}),
     })
     if (emitRealtime) this.#emitRealtimeForItems(serviceName, event.type, items)
   }
 
+  /** Queue a lane projection without presenting it as a server event. */
+  #enqueueProjectionEvent(lane: MutationLane<QueuedMutation>, event: Event): void {
+    this.#eventQueue.push({
+      origin: 'projection',
+      serviceName: lane.serviceName,
+      type: event.type,
+      items: Array.isArray(event.item) ? event.item : [event.item],
+      mutationLaneKey: lane.key,
+    })
+  }
+
   /** Apply an event immediately — used for mutation results and optimistic writes. */
-  #processEvent(
-    serviceName: string,
-    event: Event,
-    options?: { force?: boolean; mutationLaneKey?: string; emitRealtime?: boolean },
-  ): void {
-    this.#enqueueEvent(serviceName, event, options)
+  #processEvent(serviceName: string, event: Event): void {
+    this.#enqueueAuthoritativeEvent(serviceName, event)
     this.#processQueuedEvents()
   }
 
@@ -1492,23 +1463,36 @@ export class QueryStore<
   #queueEvent(serviceName: string, event: Event): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#emitRealtimeForItems(serviceName, event.type, items)
-    const passthrough: unknown[] = []
     for (const item of items) {
       const id = this.#peekId(item)
-      const lane =
-        id === undefined
-          ? undefined
-          : this.#mutationLanes.get(this.#mutationLaneKey(serviceName, id))
-      if (lane) this.#applyAuthoritativeEventToLane(lane, event.type, item)
-      else passthrough.push(item)
+      const lane = id === undefined ? undefined : this.#mutationLanes.get(serviceName, id)
+      if (!lane) {
+        this.#enqueueAuthoritativeEvent(serviceName, { type: event.type, item }, false)
+        continue
+      }
+
+      const previousBase = lane.base === ABSENT ? null : lane.base
+      const projection = this.#mutationLanes.acceptAuthoritative(
+        lane,
+        event.type,
+        item,
+        (current, next) => this.#adapter.isItemStale(current, next),
+      )
+      if (!projection) continue
+      this.#fetchEventJournal.record([
+        {
+          origin: 'authoritative',
+          serviceName: lane.serviceName,
+          type: event.type,
+          item,
+          previousItem: previousBase,
+          itemId: lane.id,
+        },
+      ])
+      this.#applyProjection(projection, false)
     }
 
-    if (passthrough.length === 0) return
-    this.#enqueueEvent(
-      serviceName,
-      { type: event.type, item: passthrough.length === 1 ? passthrough[0] : passthrough },
-      { emitRealtime: false },
-    )
+    if (this.#eventQueue.length === 0) return
 
     if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later
@@ -1522,30 +1506,6 @@ export class QueryStore<
         this.#processQueuedEvents()
       }
     }
-  }
-
-  #applyAuthoritativeEventToLane(lane: MutationLane, type: Event['type'], item: unknown): void {
-    const previousBase = lane.base === ABSENT ? null : lane.base
-    if (
-      (type === 'updated' || type === 'patched') &&
-      previousBase &&
-      this.#adapter.isItemStale(previousBase, item)
-    ) {
-      return
-    }
-
-    lane.base = type === 'removed' ? ABSENT : item
-    if (type !== 'removed') lane.lastPresent = item
-    this.#fetchEventJournal.record([
-      {
-        serviceName: lane.serviceName,
-        type,
-        item,
-        previousItem: previousBase,
-        itemId: lane.id,
-      },
-    ])
-    this.#reprojectMutationLane(lane)
   }
 
   #processQueuedEvents(): void {
@@ -1604,9 +1564,10 @@ export class QueryStore<
                 serverMaintainedQueriesToRefetch: eventReconciles,
                 defaultSort: this.#defaultSort,
               })
-              const lane = processedEvent.mutationLaneKey
-                ? this.#mutationLanes.get(processedEvent.mutationLaneKey)
-                : undefined
+              const lane =
+                processedEvent.origin === 'projection'
+                  ? this.#mutationLanes.getByKey(processedEvent.mutationLaneKey)
+                  : undefined
               if (lane) {
                 for (const queryId of eventReconciles) lane.deferredQueryIds.add(queryId)
               } else {
@@ -1648,21 +1609,23 @@ export class QueryStore<
           }
 
           for (const event of processedEvents) {
-            const lane = event.mutationLaneKey
-              ? this.#mutationLanes.get(event.mutationLaneKey)
-              : undefined
+            const lane =
+              event.origin === 'projection'
+                ? this.#mutationLanes.getByKey(event.mutationLaneKey)
+                : undefined
             if (lane) lane.deferredProcessedEvents.push(event)
             else this.#emitProcessedEvent(event)
           }
 
-          const immediateRefetch = processedEvents.some(event => !event.mutationLaneKey)
+          const immediateRefetch = processedEvents.some(event => event.origin === 'authoritative')
           if (immediateRefetch) {
             this.#refetchRefetchableQueries(serviceName)
           } else {
             for (const event of processedEvents) {
-              const lane = event.mutationLaneKey
-                ? this.#mutationLanes.get(event.mutationLaneKey)
-                : undefined
+              const lane =
+                event.origin === 'projection'
+                  ? this.#mutationLanes.getByKey(event.mutationLaneKey)
+                  : undefined
               if (!lane) continue
               for (const queryId of this.#refetchableQueryIds(serviceName)) {
                 lane.deferredQueryIds.add(queryId)
@@ -1903,77 +1866,6 @@ export class QueryStore<
   #peekId(item: unknown): string | number | undefined {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
     return this.#adapter.getId(item)
-  }
-
-  /**
-   * Plan the optimistic cache application for a mutation: the event to apply before
-   * the server ack, or `null` when nothing displays the item so there is nothing to
-   * apply. Create uses the request body (or the explicit optimistic item); update/
-   * patch merge `data` onto the cached row; remove deletes the cached row.
-   */
-  #planOptimistic(desc: MutationDescriptor, restoreItem: unknown): Event | null {
-    const { optimistic } = desc
-    const explicit =
-      optimistic !== undefined && optimistic !== true && optimistic !== false ? optimistic : null
-    if (desc.method === 'create') {
-      return { type: 'created', item: explicit ?? desc.data }
-    }
-    if (desc.method === 'remove') {
-      // Delete the cached row now; an uncached row isn't displayed anywhere.
-      return restoreItem ? { type: 'removed', item: restoreItem } : null
-    }
-    const restoreRecord = (
-      restoreItem && typeof restoreItem === 'object' ? restoreItem : {}
-    ) as Record<string, unknown>
-    const item = explicit ?? { ...restoreRecord, ...(desc.data as Record<string, unknown>) }
-    // patch/update on an entity that is not in the cache: the merged optimistic item
-    // has no id and nothing displays it — skip silently (the server response updates
-    // the cache as usual). Applying it would just warn and no-op.
-    if (restoreItem === null && this.#peekId(item) === undefined) {
-      return null
-    }
-    return { type: MUTATION_EVENT_TYPE[desc.method], item }
-  }
-
-  #applyMutationEvent(serviceName: string, method: MutationMethod, item: unknown): void {
-    this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item })
-  }
-
-  #rollbackOptimistic(
-    serviceName: string,
-    method: MutationMethod,
-    id: string | number | undefined,
-    optimisticItem: unknown,
-    restoreItem: unknown,
-  ): void {
-    if (method === 'create') {
-      // Drop the optimistically-created item.
-      const optimisticId =
-        optimisticItem && typeof optimisticItem === 'object'
-          ? this.#adapter.getId(optimisticItem)
-          : undefined
-      if (optimisticId !== undefined) {
-        this.#processEvent(serviceName, {
-          type: 'removed',
-          item: optimisticItem,
-        })
-      }
-      return
-    }
-    if (method === 'remove') {
-      // Restore the previously-removed item if we still have its prior shape.
-      if (restoreItem) {
-        this.#processEvent(serviceName, { type: 'created', item: restoreItem })
-      }
-      return
-    }
-    if (id === undefined) return
-    if (restoreItem) {
-      this.#processEvent(serviceName, { type: 'patched', item: restoreItem })
-    } else {
-      // No prior snapshot — best-effort: drop the optimistic patch entirely.
-      this.#processEvent(serviceName, { type: 'removed', item: { id } })
-    }
   }
 
   // State management

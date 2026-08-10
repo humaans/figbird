@@ -18,34 +18,35 @@ export interface Event {
 /**
  * Queued event for batch processing
  */
-export interface QueuedEvent {
+interface QueuedEventBase {
   serviceName: string
   type: EventType
   items: unknown[]
-  /** Force a local projection over the visible cache, bypassing server staleness checks. */
-  force?: boolean
-  /**
-   * Optimistic mutation lane that owns this projected event. Reconciliation work
-   * caused by the event waits until the lane has no more queued writes.
-   */
-  mutationLaneKey?: string
 }
+
+/** Internal entity changes waiting at the store's atomic event boundary. */
+export type QueuedEvent =
+  | (QueuedEventBase & { origin: 'authoritative' })
+  | (QueuedEventBase & { origin: 'projection'; mutationLaneKey: string })
 
 /**
  * A realtime event after it has been applied to the entity cache. Carries the
  * previous entity so downstream invalidation logic (e.g. relational filters) can
  * detect which fields changed.
  */
-export interface ProcessedRealtimeEvent {
+interface ProcessedEventBase {
   serviceName: string
   type: EventType
   item: unknown
   previousItem: unknown | null
   /** Always defined — events whose item has no resolvable id are never applied. */
   itemId: string | number
-  /** Present for a visible projection backed by an unsettled mutation lane. */
-  mutationLaneKey?: string
 }
+
+/** An authoritative or optimistic entity change after cache application. */
+export type ProcessedRealtimeEvent =
+  | (ProcessedEventBase & { origin: 'authoritative' })
+  | (ProcessedEventBase & { origin: 'projection'; mutationLaneKey: string })
 
 export type QueryStatus = 'loading' | 'success' | 'error'
 

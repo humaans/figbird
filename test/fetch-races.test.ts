@@ -159,6 +159,7 @@ function ids(data: unknown): number[] {
 
 function processedEvent(itemId: number): ProcessedRealtimeEvent {
   return {
+    origin: 'authoritative',
     serviceName: 'notes',
     type: 'patched',
     item: { id: itemId },
@@ -166,6 +167,49 @@ function processedEvent(itemId: number): ProcessedRealtimeEvent {
     itemId,
   }
 }
+
+test('lane projections keep the realtime batch atomic', async t => {
+  const { figbird, notes } = createApp(
+    {
+      1: { id: 1, content: 'one', rank: 1, updatedAt: 1 },
+      2: { id: 2, content: 'two', rank: 2, updatedAt: 1 },
+    },
+    { eventBatchInterval: 30 },
+  )
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const snapshots: string[][] = []
+  const unsub = ref.subscribe(state => {
+    if (state.status === 'success') {
+      snapshots.push((state.data as Note[]).map(note => note.content))
+    }
+  })
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial find')
+
+  let resolvePatch!: (item: TestItem) => void
+  const patchGate = new Promise<TestItem>(resolve => {
+    resolvePatch = resolve
+  })
+  notes.patch = () => patchGate
+  const pending = figbird.mutateDesc({
+    serviceName: 'notes',
+    method: 'patch',
+    id: 1,
+    data: { content: 'optimistic' },
+    optimistic: true,
+  })
+  snapshots.length = 0
+
+  notes.emit('patched', { id: 1, content: 'server lane', rank: 1, updatedAt: 2 })
+  notes.emit('patched', { id: 2, content: 'server peer', rank: 2, updatedAt: 2 })
+  t.is(snapshots.length, 0, 'neither half of the batch is observable early')
+
+  await waitFor(() => snapshots.length > 0, 'the realtime batch')
+  t.deepEqual(snapshots, [['optimistic', 'server peer']])
+
+  resolvePatch({ id: 1, content: 'server ack', rank: 1, updatedAt: 3 })
+  await pending
+  unsub()
+})
 
 test('journal overflow invalidates only cursors that exceed the event limit', t => {
   const journal = new FetchEventJournal(3)

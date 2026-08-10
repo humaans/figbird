@@ -150,6 +150,35 @@ test('m: optimisticItem supplies the synthesized cache item without flipping pol
   t.is(latest?.data?.find(n => n.id === 1)?.content, 'survives')
 })
 
+test('m: failed optimistic mutation reveals authoritative data fetched while pending', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const { m } = createHooks(figbird)
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const gate = deferred<MockItem>()
+  const notes = feathers.service('notes')
+  notes.patch = () => gate.promise
+  const pending = m.notes.patch(1, { content: 'optimistic' })
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'optimistic')
+
+  notes.data = {
+    ...notes.data,
+    1: { id: 1, content: 'fetched while pending', updatedAt: Date.now() },
+  }
+  ref.refetch()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'optimistic')
+
+  gate.reject(new Error('patch failed'))
+  await t.throwsAsync(() => pending, { message: 'patch failed' })
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'fetched while pending')
+})
+
 test('m: custom schema methods dispatch through the adapter with events and tracking', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const { m } = figbird

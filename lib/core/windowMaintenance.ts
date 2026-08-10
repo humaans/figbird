@@ -175,14 +175,16 @@ export function applyEventsToService<TMeta>({
             item,
             previousItem,
             itemId,
-            ...(event.mutationLaneKey ? { mutationLaneKey: event.mutationLaneKey } : {}),
+            ...(event.origin === 'projection'
+              ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
+              : { origin: event.origin }),
           })
         }
       } else if (type === 'updated' || type === 'patched') {
         const itemId = getId(item)
         if (itemId !== undefined) {
           const currItem = service.entities.get(itemId)
-          if (event.force || !currItem || !isItemStale(currItem, item)) {
+          if (event.origin === 'projection' || !currItem || !isItemStale(currItem, item)) {
             service.entities.set(itemId, item)
             processedEvents.push({
               serviceName,
@@ -190,7 +192,9 @@ export function applyEventsToService<TMeta>({
               item,
               previousItem: currItem ?? null,
               itemId,
-              ...(event.mutationLaneKey ? { mutationLaneKey: event.mutationLaneKey } : {}),
+              ...(event.origin === 'projection'
+                ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
+                : { origin: event.origin }),
             })
           }
         }
@@ -205,7 +209,9 @@ export function applyEventsToService<TMeta>({
             item,
             previousItem,
             itemId,
-            ...(event.mutationLaneKey ? { mutationLaneKey: event.mutationLaneKey } : {}),
+            ...(event.origin === 'projection'
+              ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
+              : { origin: event.origin }),
           })
         }
       }
@@ -239,7 +245,14 @@ export function diffCompleteSet<TMeta>({
     if (ignoredItemIds?.has(itemId)) continue
     if (!nextItemIds.has(itemId)) {
       service.entities.delete(itemId)
-      events.push({ serviceName, type: 'removed', item: previousItem, previousItem, itemId })
+      events.push({
+        origin: 'authoritative',
+        serviceName,
+        type: 'removed',
+        item: previousItem,
+        previousItem,
+        itemId,
+      })
     }
   }
   for (const itemId of nextItemIds) {
@@ -247,9 +260,23 @@ export function diffCompleteSet<TMeta>({
     const item = service.entities.get(itemId)!
     const previousItem = previousEntities.get(itemId)
     if (!previousItem) {
-      events.push({ serviceName, type: 'created', item, previousItem: null, itemId })
+      events.push({
+        origin: 'authoritative',
+        serviceName,
+        type: 'created',
+        item,
+        previousItem: null,
+        itemId,
+      })
     } else if (previousItem !== item) {
-      events.push({ serviceName, type: 'updated', item, previousItem, itemId })
+      events.push({
+        origin: 'authoritative',
+        serviceName,
+        type: 'updated',
+        item,
+        previousItem,
+        itemId,
+      })
     }
   }
   return events
