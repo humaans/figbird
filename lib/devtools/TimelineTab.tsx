@@ -10,9 +10,7 @@ import {
 } from './TimelineCanvas.js'
 import { buttonStyle, useDevtoolsTheme } from './ui.js'
 
-const MIN_TRACK_WIDTH = 680
 const END_GUTTER_MS = 1_000
-const GRID_TICK_MS = 5_000
 
 type RawTimelineLane =
   | {
@@ -188,11 +186,9 @@ function timelineLayout(
   const earliest = Math.min(...points)
   const start = startedAt > 0 ? Math.min(startedAt, earliest) : earliest
   const latest = Math.max(...points)
-  const minimumDuration = (MIN_TRACK_WIDTH / PIXELS_PER_SECOND) * 1_000
-  const duration = Math.max(minimumDuration, latest - start + END_GUTTER_MS)
-  const end = start + duration
+  const duration = Math.max(END_GUTTER_MS, latest - start + END_GUTTER_MS)
   const trackWidth = Math.ceil((duration / 1_000) * PIXELS_PER_SECOND)
-  return { start, end, trackWidth, ticks: timelineAxisTicks(start, end) }
+  return { start, trackWidth }
 }
 
 function timelineQueryDetail(
@@ -215,9 +211,4 @@ function timelineScopeLabel(scopes: readonly EventQueryScope[] | undefined): str
   if (!scopes || scopes.length === 0) return 'retained'
   if (scopes.length === 1) return scopes[0]!.label
   return `${scopes.length} scopes`
-}
-
-function timelineAxisTicks(start: number, end: number): number[] {
-  const count = Math.floor((end - start) / GRID_TICK_MS)
-  return Array.from({ length: count + 1 }, (_, index) => start + GRID_TICK_MS * index)
 }

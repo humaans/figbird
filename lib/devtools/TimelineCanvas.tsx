@@ -6,9 +6,10 @@ import {
   TIMELINE_LABEL_WIDTH as LABEL_WIDTH,
   type TimelineViewport,
 } from './TimelineOverview.js'
-import { useDevtoolsTheme } from './ui.js'
+import { useDevtoolsTheme, type DevtoolsColors } from './ui.js'
 
 const FOLLOW_THRESHOLD = 24
+const GRID_TICK_MS = 5_000
 export const TIMELINE_PIXELS_PER_SECOND = 64
 
 export type TimelineLane =
@@ -32,8 +33,11 @@ export type TimelineLane =
 
 export interface TimelineLayout {
   start: number
-  end: number
   trackWidth: number
+}
+
+interface RenderedTimelineLayout extends TimelineLayout {
+  end: number
   ticks: number[]
 }
 
@@ -57,7 +61,18 @@ export function TimelineCanvas({
   const trackScrollRef = useRef<HTMLDivElement>(null)
   const axisScrollRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState<TimelineViewport>({ left: 0, width: 1 })
-  const trackWidth = layout?.trackWidth
+  const [availableTrackWidth, setAvailableTrackWidth] = useState(0)
+  const hasLayout = layout !== null
+  const trackWidth = layout ? Math.max(layout.trackWidth, availableTrackWidth) : undefined
+  const renderedLayout: RenderedTimelineLayout | null =
+    layout && trackWidth !== undefined
+      ? {
+          ...layout,
+          end: layout.start + (trackWidth / TIMELINE_PIXELS_PER_SECOND) * 1_000,
+          trackWidth,
+          ticks: timelineAxisTicks(layout.start, trackWidth),
+        }
+      : null
   const updateViewport = useCallback(() => {
     const scroll = trackScrollRef.current
     if (!scroll || trackWidth === undefined) return
@@ -90,16 +105,23 @@ export function TimelineCanvas({
   }, [follow, lanes.length, trackWidth, updateViewport])
 
   useLayoutEffect(() => {
+    if (!hasLayout) return
     const scroll = trackScrollRef.current
     if (!scroll) return
-    updateViewport()
+    const measure = () => {
+      const width = scroll.clientWidth
+      setAvailableTrackWidth(current => (current === width ? current : width))
+    }
+    measure()
     if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(updateViewport)
+    const observer = new ResizeObserver(measure)
     observer.observe(scroll)
     return () => observer.disconnect()
-  }, [updateViewport])
+  }, [hasLayout])
 
-  if (!layout) {
+  useLayoutEffect(updateViewport, [updateViewport])
+
+  if (!layout || !renderedLayout) {
     return (
       <div style={{ ...styles.scroll, height: 'auto', flex: 1, minHeight: 0 }}>
         <div style={{ padding: 16, color: colors.muted }}>
@@ -113,7 +135,7 @@ export function TimelineCanvas({
     <>
       <TimelineOverview
         lanes={lanes}
-        layout={layout}
+        layout={renderedLayout}
         nowPoint={nowPoint}
         viewport={viewport}
         onNavigate={ratio => {
@@ -123,8 +145,8 @@ export function TimelineCanvas({
           scroll.scrollLeft = Math.max(
             0,
             Math.min(
-              layout.trackWidth - visibleTrackWidth,
-              ratio * layout.trackWidth - visibleTrackWidth / 2,
+              renderedLayout.trackWidth - visibleTrackWidth,
+              ratio * renderedLayout.trackWidth - visibleTrackWidth / 2,
             ),
           )
           if (axisScrollRef.current) axisScrollRef.current.scrollLeft = scroll.scrollLeft
@@ -142,7 +164,7 @@ export function TimelineCanvas({
         }}
       >
         <div
-          title={`Recording started ${formatTimelineClock(layout.start, wallClockOffset, true)}`}
+          title={`Recording started ${formatTimelineClock(renderedLayout.start, wallClockOffset, true)}`}
           style={{
             color: colors.muted,
             padding: '7px 10px 0',
@@ -157,7 +179,7 @@ export function TimelineCanvas({
           aria-hidden='true'
           style={{ overflow: 'hidden', borderBottom: `1px solid ${colors.border}` }}
         >
-          <TimelineAxis layout={layout} wallClockOffset={wallClockOffset} />
+          <TimelineAxis layout={renderedLayout} wallClockOffset={wallClockOffset} />
         </div>
       </div>
       <div
@@ -201,11 +223,11 @@ export function TimelineCanvas({
               if (distance > FOLLOW_THRESHOLD) onFollowChange(false)
             }}
           >
-            <div style={{ width: layout.trackWidth, paddingBottom: 10 }}>
+            <div style={{ width: renderedLayout.trackWidth, paddingBottom: 10 }}>
               {lanes.map(lane => (
                 <TimelineLaneTrack
                   key={lane.id}
-                  layout={layout}
+                  layout={renderedLayout}
                   bars={lane.kind === 'query' ? lane.bars : []}
                   ticks={lane.kind === 'realtime' ? lane.ticks : []}
                   nowPoint={nowPoint}
@@ -224,7 +246,7 @@ function TimelineAxis({
   layout,
   wallClockOffset,
 }: {
-  layout: TimelineLayout
+  layout: RenderedTimelineLayout
   wallClockOffset: number
 }) {
   const { colors } = useDevtoolsTheme()
@@ -234,7 +256,7 @@ function TimelineAxis({
         position: 'relative',
         width: layout.trackWidth,
         minHeight: 38,
-        background: colors.bg,
+        ...timelineGridStyle(colors),
       }}
     >
       {layout.ticks.map(tick => (
@@ -355,20 +377,9 @@ function TimelineLaneTrack({
         height: 32,
         boxSizing: 'border-box',
         borderBottom: `1px solid ${colors.rowBorder}`,
+        ...timelineGridStyle(colors),
       }}
     >
-      {layout.ticks.map(tick => (
-        <span
-          key={tick}
-          aria-hidden='true'
-          style={{
-            position: 'absolute',
-            insetBlock: 0,
-            left: timeToPixels(tick, layout.start),
-            borderLeft: `1px solid ${colors.rowBorder}`,
-          }}
-        />
-      ))}
       {bars.map((bar, index) => {
         const barEnd = bar.endAt ?? nowPoint
         const left = timeToPixels(bar.startAt, layout.start)
@@ -437,10 +448,28 @@ function timeToPixels(value: number, start: number): number {
 
 function formatTimelineOffset(value: number): string {
   const seconds = Math.round(value / 1_000)
-  if (seconds < 60) return seconds === 0 ? '0s' : `+${seconds}s`
+  if (seconds < 60) return `${seconds}s`
   const minutes = Math.floor(seconds / 60)
   const remainder = seconds % 60
-  return remainder === 0 ? `+${minutes}m` : `+${minutes}m ${remainder}s`
+  return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`
+}
+
+function timelineAxisTicks(start: number, trackWidth: number): number[] {
+  const duration = (trackWidth / TIMELINE_PIXELS_PER_SECOND) * 1_000
+  const count = Math.floor(duration / GRID_TICK_MS)
+  return Array.from({ length: count + 1 }, (_, index) => start + GRID_TICK_MS * index)
+}
+
+function timelineGridStyle(colors: DevtoolsColors) {
+  const second = TIMELINE_PIXELS_PER_SECOND
+  const major = second * (GRID_TICK_MS / 1_000)
+  return {
+    backgroundColor: colors.panel2,
+    backgroundImage: [
+      `repeating-linear-gradient(to right, ${colors.border} 0, ${colors.border} 1px, transparent 1px, transparent ${major}px)`,
+      `repeating-linear-gradient(to right, ${colors.rowBorder} 0, ${colors.rowBorder} 1px, transparent 1px, transparent ${second}px)`,
+    ].join(', '),
+  }
 }
 
 function formatTimelineClock(
