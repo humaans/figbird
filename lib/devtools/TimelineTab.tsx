@@ -1,10 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DevtoolsSnapshot, QueryRecord, QuerySpan } from './collector.js'
 import { compactJson, formatClock, formatMs, now } from './format.js'
 import type { DevtoolsModel, EventQueryScope } from './model.js'
+import {
+  TimelineOverview,
+  TIMELINE_LABEL_WIDTH as LABEL_WIDTH,
+  type TimelineViewport,
+} from './TimelineOverview.js'
 import { buttonStyle, useDevtoolsTheme } from './ui.js'
 
-const LABEL_WIDTH = 220
 const MIN_TRACK_WIDTH = 680
 const PIXELS_PER_SECOND = 64
 const END_GUTTER_MS = 1_000
@@ -109,6 +113,7 @@ export function TimelineTab({
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [viewport, setViewport] = useState<TimelineViewport>({ left: 0, width: 1 })
   const rawLanes = useMemo(() => {
     const realtimeByService = new Map<string, number[]>()
     for (const item of snapshot.timeline.realtime) {
@@ -170,23 +175,75 @@ export function TimelineTab({
     return a.id.localeCompare(b.id)
   })
   const trackWidth = layout?.trackWidth
+  const updateViewport = useCallback(() => {
+    const scroll = scrollRef.current
+    if (!scroll || trackWidth === undefined) return
+    const visibleTrackWidth = Math.max(1, scroll.clientWidth - LABEL_WIDTH)
+    const next = {
+      left: Math.max(0, Math.min(1, scroll.scrollLeft / trackWidth)),
+      width: Math.max(0, Math.min(1, visibleTrackWidth / trackWidth)),
+    }
+    setViewport(current =>
+      Math.abs(current.left - next.left) < 0.0001 && Math.abs(current.width - next.width) < 0.0001
+        ? current
+        : next,
+    )
+  }, [trackWidth])
 
   useLayoutEffect(() => {
     const scroll = scrollRef.current
     if (!scroll || !follow || trackWidth === undefined) return
     scroll.scrollLeft = Math.max(0, scroll.scrollWidth - scroll.clientWidth)
-  }, [follow, lanes.length, trackWidth])
+    scroll.scrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
+    updateViewport()
+  }, [follow, lanes.length, trackWidth, updateViewport])
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll) return
+    updateViewport()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(updateViewport)
+    observer.observe(scroll)
+    return () => observer.disconnect()
+  }, [updateViewport])
 
   return (
     <section style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {layout ? (
+        <TimelineOverview
+          lanes={lanes}
+          layout={layout}
+          nowPoint={nowPoint}
+          viewport={viewport}
+          onNavigate={ratio => {
+            const scroll = scrollRef.current
+            if (!scroll) return
+            const visibleTrackWidth = Math.max(1, scroll.clientWidth - LABEL_WIDTH)
+            scroll.scrollLeft = Math.max(
+              0,
+              Math.min(
+                layout.trackWidth - visibleTrackWidth,
+                ratio * layout.trackWidth - visibleTrackWidth / 2,
+              ),
+            )
+            onFollowChange(false)
+            updateViewport()
+          }}
+        />
+      ) : null}
       <div
         ref={scrollRef}
-        style={styles.scroll}
+        style={{ ...styles.scroll, height: 'auto', flex: 1, minHeight: 0 }}
         onScroll={event => {
+          updateViewport()
           if (!follow) return
           const scroll = event.currentTarget
-          const distanceFromEnd = scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft
-          if (distanceFromEnd > FOLLOW_THRESHOLD) onFollowChange(false)
+          const horizontalDistance = scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft
+          const verticalDistance = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop
+          if (horizontalDistance > FOLLOW_THRESHOLD || verticalDistance > FOLLOW_THRESHOLD) {
+            onFollowChange(false)
+          }
         }}
       >
         {layout ? (
@@ -244,9 +301,13 @@ function TimelineAxis({
   return (
     <div
       style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 3,
         display: 'grid',
         gridTemplateColumns: `${LABEL_WIDTH}px ${layout.trackWidth}px`,
         minHeight: 38,
+        background: colors.bg,
       }}
     >
       <div
@@ -387,8 +448,8 @@ function TimelineLegendItem({
         aria-hidden='true'
         style={{
           width: shape === 'dot' ? 6 : 20,
-          height: shape === 'dot' ? 6 : 9,
-          borderRadius: shape === 'dot' ? 999 : 2,
+          height: shape === 'dot' ? 6 : 7,
+          borderRadius: 999,
           background: color,
           display: 'inline-block',
         }}
@@ -460,24 +521,41 @@ function TimelineLane({
         {bars.map((bar, index) => {
           const barEnd = bar.endAt ?? nowPoint
           const left = timeToPixels(bar.startAt, layout.start)
-          const width = Math.max(18, timeToPixels(barEnd, bar.startAt))
+          const width = Math.max(9, timeToPixels(barEnd, bar.startAt))
+          const color = bar.ok === false ? colors.red : colors.green
           return (
             <span
               key={`${bar.startAt}:${index}`}
+              data-timeline-fetch={bar.ok === false ? 'failed' : 'success'}
               title={[
                 `${bar.ok === false ? 'Failed fetch' : 'Fetch'} · ${formatMs(barEnd - bar.startAt)}`,
                 formatTimelineClock(bar.startAt, wallClockOffset, true),
               ].join('\n')}
               style={{
                 position: 'absolute',
-                top: 16,
+                top: 13,
                 left,
                 width,
-                height: 10,
-                borderRadius: 1,
-                background: bar.ok === false ? colors.red : colors.green,
+                height: 8,
+                overflow: 'hidden',
+                borderRadius: 999,
+                background: `linear-gradient(180deg, color-mix(in srgb, ${color} 76%, white), ${color})`,
+                boxShadow: `0 0 0 1px color-mix(in srgb, ${color} 62%, ${colors.bg})`,
               }}
-            />
+            >
+              <span
+                aria-hidden='true'
+                style={{
+                  position: 'absolute',
+                  insetBlock: 1,
+                  left: 2,
+                  width: 2,
+                  borderRadius: 999,
+                  background: bar.ok === false ? colors.amber : colors.blue,
+                  opacity: 0.9,
+                }}
+              />
+            </span>
           )
         })}
         {ticks.map((tick, index) => (
@@ -486,14 +564,15 @@ function TimelineLane({
             title={`Realtime event\n${formatTimelineClock(tick, wallClockOffset, true)}`}
             style={{
               position: 'absolute',
-              top: 7,
+              top: 9,
               left: timeToPixels(tick, layout.start),
               width: 7,
               height: 7,
-              marginLeft: -3,
-              borderRadius: 999,
+              marginLeft: -4,
+              borderRadius: 2,
               background: colors.blue,
-              boxShadow: `0 0 0 2px ${colors.bg}`,
+              boxShadow: `0 0 0 1px ${colors.bg}`,
+              transform: 'rotate(45deg)',
             }}
           />
         ))}
