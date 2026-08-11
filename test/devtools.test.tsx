@@ -673,7 +673,7 @@ test('extension bridge starts debug collection only while connected', t => {
       __FIGBIRD_DEVTOOLS__: {
         connect(): { sessionId: string } | null
         disconnect(sessionId: string): void
-        readJson(sessionId: string): string | null
+        readJson(sessionId: string, version: number | null): string | null
       }
     }
   ).__FIGBIRD_DEVTOOLS__
@@ -681,15 +681,19 @@ test('extension bridge starts debug collection only while connected', t => {
   t.truthy(connection)
   t.is(inspectCalls, 0)
   t.is(eventSubscriptions, 1)
-  const read = bridgeState.readJson(connection!.sessionId)
+  const read = bridgeState.readJson(connection!.sessionId, null)
   t.truthy(read)
   const envelope = JSON.parse(read!)
-  t.is(envelope.protocol, 1)
+  t.is(envelope.protocol, 2)
   t.true(Array.isArray(envelope.read.queries))
+  t.is(inspectCalls, 1)
+  const unchanged = JSON.parse(bridgeState.readJson(connection!.sessionId, envelope.version)!)
+  t.is(unchanged.version, envelope.version)
+  t.is(unchanged.read, null)
   t.is(inspectCalls, 1)
   bridgeState.disconnect(connection!.sessionId)
   t.is(eventSubscriptions, 0)
-  t.is(bridgeState.readJson(connection!.sessionId), null)
+  t.is(bridgeState.readJson(connection!.sessionId, envelope.version), null)
 })
 
 test('extension session disconnects when connection finishes after stop', async t => {
@@ -714,7 +718,7 @@ test('extension session disconnects when connection finishes after stop', async 
 
   session.start()
   session.stop()
-  resolveConnect({ instanceCount: 1, instanceId: 1, protocol: 1, sessionId: 'late' })
+  resolveConnect({ instanceCount: 1, instanceId: 1, protocol: 2, sessionId: 'late' })
   await disconnected
 
   t.true(expressions.some(expression => expression.includes('?.disconnect("late")')))
@@ -1025,6 +1029,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.is(timelineText.match(/issues realtime/g)?.length, 1)
   t.falsy($all('button').find(button => button.textContent === '30s'))
   t.truthy($('[aria-label="Timeline overview"]'))
+  t.truthy($('[aria-label="Timeline overview"] canvas'))
   const fetchMarks = $all('[data-timeline-fetch]')
   t.true(fetchMarks.length > 0)
   t.true(fetchMarks.every(mark => mark.getAttribute('style')?.includes('border-radius: 999px')))

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { QuerySpan } from './collector.js'
 import { useDevtoolsTheme } from './ui.js'
 
@@ -33,7 +34,19 @@ export function TimelineOverview({
   onNavigate: (ratio: number) => void
 }) {
   const { colors } = useDevtoolsTheme()
-  const laneHeight = (OVERVIEW_HEIGHT - 10) / Math.max(1, lanes.length)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || typeof CanvasRenderingContext2D === 'undefined') return
+    const draw = () => drawOverview(canvas, lanes, layout, nowPoint, viewport, colors)
+    draw()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(draw)
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [colors, lanes, layout, nowPoint, viewport])
+
   return (
     <div
       style={{
@@ -77,57 +90,13 @@ export function TimelineOverview({
           cursor: 'crosshair',
         }}
       >
-        {lanes.flatMap((lane, laneIndex) => {
-          const top = 5 + laneIndex * laneHeight + Math.max(0, (laneHeight - 3) / 2)
-          return lane.kind === 'query'
-            ? lane.bars.map((bar, index) => {
-                const endAt = bar.endAt ?? nowPoint
-                return (
-                  <span
-                    key={`${lane.id}:${bar.startAt}:${index}`}
-                    aria-hidden='true'
-                    style={{
-                      position: 'absolute',
-                      top,
-                      left: `${timelinePercent(bar.startAt, layout)}%`,
-                      width: `${Math.max(
-                        0.45,
-                        timelinePercent(endAt, layout) - timelinePercent(bar.startAt, layout),
-                      )}%`,
-                      height: Math.min(3, Math.max(1, laneHeight * 0.5)),
-                      borderRadius: 999,
-                      background: bar.ok === false ? colors.red : colors.green,
-                    }}
-                  />
-                )
-              })
-            : lane.ticks.map((tick, index) => (
-                <span
-                  key={`${lane.id}:${tick}:${index}`}
-                  aria-hidden='true'
-                  style={{
-                    position: 'absolute',
-                    top,
-                    left: `${timelinePercent(tick, layout)}%`,
-                    width: 2,
-                    height: Math.min(4, Math.max(2, laneHeight * 0.7)),
-                    borderRadius: 999,
-                    background: colors.blue,
-                  }}
-                />
-              ))
-        })}
-        <span
+        <canvas
+          ref={canvasRef}
           aria-hidden='true'
           style={{
-            position: 'absolute',
-            insetBlock: 0,
-            left: `${viewport.left * 100}%`,
-            width: `${viewport.width * 100}%`,
-            minWidth: 4,
-            borderInline: `1px solid ${colors.blue}`,
-            background: colors.activeButtonBg,
-            boxShadow: `inset 0 1px ${colors.blue}, inset 0 -1px ${colors.blue}`,
+            display: 'block',
+            width: '100%',
+            height: OVERVIEW_HEIGHT,
             pointerEvents: 'none',
           }}
         />
@@ -136,6 +105,55 @@ export function TimelineOverview({
   )
 }
 
-function timelinePercent(value: number, layout: TimelineOverviewLayout): number {
-  return Math.max(0, Math.min(100, ((value - layout.start) / (layout.end - layout.start)) * 100))
+function drawOverview(
+  canvas: HTMLCanvasElement,
+  lanes: TimelineOverviewLane[],
+  layout: TimelineOverviewLayout,
+  nowPoint: number,
+  viewport: TimelineViewport,
+  colors: ReturnType<typeof useDevtoolsTheme>['colors'],
+): void {
+  const width = canvas.clientWidth
+  const height = canvas.clientHeight
+  if (width <= 0 || height <= 0) return
+  const ratio = window.devicePixelRatio || 1
+  const pixelWidth = Math.max(1, Math.round(width * ratio))
+  const pixelHeight = Math.max(1, Math.round(height * ratio))
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight
+  const context = canvas.getContext('2d')
+  if (!context) return
+  context.setTransform(ratio, 0, 0, ratio, 0, 0)
+  context.clearRect(0, 0, width, height)
+
+  const laneHeight = (height - 10) / Math.max(1, lanes.length)
+  for (const [laneIndex, lane] of lanes.entries()) {
+    const markHeight = Math.min(3, Math.max(1, laneHeight * 0.5))
+    const top = 5 + laneIndex * laneHeight + Math.max(0, (laneHeight - markHeight) / 2)
+    if (lane.kind === 'query') {
+      for (const bar of lane.bars) {
+        const left = timelineRatio(bar.startAt, layout) * width
+        const right = timelineRatio(bar.endAt ?? nowPoint, layout) * width
+        context.fillStyle = bar.ok === false ? colors.red : colors.green
+        context.fillRect(left, top, Math.max(1, right - left), markHeight)
+      }
+    } else {
+      context.fillStyle = colors.blue
+      for (const tick of lane.ticks) {
+        context.fillRect(timelineRatio(tick, layout) * width, top, 2, markHeight)
+      }
+    }
+  }
+
+  const viewportLeft = viewport.left * width
+  const viewportWidth = Math.max(4, viewport.width * width)
+  context.fillStyle = colors.activeButtonBg
+  context.fillRect(viewportLeft, 0, viewportWidth, height)
+  context.strokeStyle = colors.blue
+  context.lineWidth = 1
+  context.strokeRect(viewportLeft + 0.5, 0.5, Math.max(0, viewportWidth - 1), height - 1)
+}
+
+function timelineRatio(value: number, layout: TimelineOverviewLayout): number {
+  return Math.max(0, Math.min(1, (value - layout.start) / (layout.end - layout.start)))
 }

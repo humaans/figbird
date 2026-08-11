@@ -38,7 +38,6 @@ export interface TimelineLayout {
 
 interface RenderedTimelineLayout extends TimelineLayout {
   end: number
-  ticks: number[]
 }
 
 export function TimelineCanvas({
@@ -60,7 +59,7 @@ export function TimelineCanvas({
   const verticalScrollRef = useRef<HTMLDivElement>(null)
   const trackScrollRef = useRef<HTMLDivElement>(null)
   const axisScrollRef = useRef<HTMLDivElement>(null)
-  const [viewport, setViewport] = useState<TimelineViewport>({ left: 0, width: 1 })
+  const [viewport, setViewport] = useState<TimelineViewport>({ left: 0, width: 0 })
   const [availableTrackWidth, setAvailableTrackWidth] = useState(0)
   const hasLayout = layout !== null
   const trackWidth = layout ? Math.max(layout.trackWidth, availableTrackWidth) : undefined
@@ -70,7 +69,6 @@ export function TimelineCanvas({
           ...layout,
           end: layout.start + (trackWidth / TIMELINE_PIXELS_PER_SECOND) * 1_000,
           trackWidth,
-          ticks: timelineAxisTicks(layout.start, trackWidth),
         }
       : null
   const updateViewport = useCallback(() => {
@@ -179,7 +177,11 @@ export function TimelineCanvas({
           aria-hidden='true'
           style={{ overflow: 'hidden', borderBottom: `1px solid ${colors.border}` }}
         >
-          <TimelineAxis layout={renderedLayout} wallClockOffset={wallClockOffset} />
+          <TimelineAxis
+            layout={renderedLayout}
+            viewport={viewport}
+            wallClockOffset={wallClockOffset}
+          />
         </div>
       </div>
       <div
@@ -244,9 +246,11 @@ export function TimelineCanvas({
 
 function TimelineAxis({
   layout,
+  viewport,
   wallClockOffset,
 }: {
   layout: RenderedTimelineLayout
+  viewport: TimelineViewport
   wallClockOffset: number
 }) {
   const { colors } = useDevtoolsTheme()
@@ -259,7 +263,7 @@ function TimelineAxis({
         ...timelineGridStyle(colors),
       }}
     >
-      {layout.ticks.map(tick => (
+      {timelineAxisTicks(layout.start, layout.trackWidth, viewport).map(tick => (
         <span
           key={tick}
           style={{
@@ -454,10 +458,21 @@ function formatTimelineOffset(value: number): string {
   return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`
 }
 
-function timelineAxisTicks(start: number, trackWidth: number): number[] {
-  const duration = (trackWidth / TIMELINE_PIXELS_PER_SECOND) * 1_000
-  const count = Math.floor(duration / GRID_TICK_MS)
-  return Array.from({ length: count + 1 }, (_, index) => start + GRID_TICK_MS * index)
+function timelineAxisTicks(
+  start: number,
+  trackWidth: number,
+  viewport: TimelineViewport,
+): number[] {
+  const tickWidth = TIMELINE_PIXELS_PER_SECOND * (GRID_TICK_MS / 1_000)
+  const first = Math.max(0, Math.floor((viewport.left * trackWidth) / tickWidth) - 1)
+  const last = Math.min(
+    Math.floor(trackWidth / tickWidth),
+    Math.ceil(((viewport.left + viewport.width) * trackWidth) / tickWidth) + 1,
+  )
+  return Array.from(
+    { length: Math.max(0, last - first + 1) },
+    (_, index) => start + (first + index) * GRID_TICK_MS,
+  )
 }
 
 function timelineGridStyle(colors: DevtoolsColors) {
