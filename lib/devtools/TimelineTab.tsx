@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DevtoolsSnapshot, QueryRecord, QuerySpan } from './collector.js'
 import { compactJson, formatClock, formatMs, now } from './format.js'
 import type { DevtoolsModel, EventQueryScope } from './model.js'
-import { useDevtoolsTheme } from './ui.js'
+import { buttonStyle, useDevtoolsTheme } from './ui.js'
 
-export type TimelineRange = 30_000 | 120_000 | 'all'
+const LABEL_WIDTH = 220
+const MIN_TRACK_WIDTH = 680
+const PIXELS_PER_SECOND = 64
+const END_GUTTER_MS = 1_000
+const GRID_TICK_MS = 5_000
+const FOLLOW_THRESHOLD = 24
 
 type RawTimelineLane =
   | {
@@ -13,6 +18,7 @@ type RawTimelineLane =
       label: string
       context: string
       detail: string
+      firstAt: number
       query: QueryRecord
     }
   | {
@@ -20,6 +26,7 @@ type RawTimelineLane =
       id: string
       label: string
       detail: string
+      firstAt: number
       ticks: number[]
     }
 
@@ -30,7 +37,7 @@ type VisibleTimelineLane =
       label: string
       context: string
       detail: string
-      serviceName: string
+      firstAt: number
       bars: QuerySpan[]
     }
   | {
@@ -38,69 +45,70 @@ type VisibleTimelineLane =
       id: string
       label: string
       detail: string
+      firstAt: number
       ticks: number[]
     }
 
-export function TimelineRangeControl({
+interface TimelineLayout {
+  start: number
+  end: number
+  trackWidth: number
+  ticks: number[]
+}
+
+export function TimelineFollowControl({
   value,
   onChange,
 }: {
-  value: TimelineRange
-  onChange: (value: TimelineRange) => void
+  value: boolean
+  onChange: (value: boolean) => void
 }) {
   const { colors } = useDevtoolsTheme()
-  const options: Array<{ label: string; value: TimelineRange }> = [
-    { label: '30s', value: 30_000 },
-    { label: '2m', value: 120_000 },
-    { label: 'All', value: 'all' },
-  ]
   return (
-    <span
-      aria-label='Timeline range'
+    <button
+      type='button'
+      aria-label={value ? 'Pause live timeline' : 'Resume live timeline'}
+      aria-pressed={value}
+      onClick={() => onChange(!value)}
+      title={
+        value
+          ? 'Following new timeline activity. Scroll left or click to pause.'
+          : 'Return to the latest timeline activity.'
+      }
       style={{
+        ...buttonStyle(colors, value),
         display: 'inline-flex',
-        border: `1px solid ${colors.border}`,
-        borderRadius: 4,
-        overflow: 'hidden',
+        alignItems: 'center',
+        gap: 6,
       }}
     >
-      {options.map(option => {
-        const active = option.value === value
-        return (
-          <button
-            key={option.label}
-            type='button'
-            onClick={() => onChange(option.value)}
-            style={{
-              border: 0,
-              borderLeft: option === options[0] ? 0 : `1px solid ${colors.border}`,
-              background: active ? colors.activeButtonBg : colors.panel,
-              color: active ? colors.blue : colors.muted,
-              padding: '4px 7px',
-              font: 'inherit',
-              fontWeight: active ? 700 : 500,
-              cursor: 'pointer',
-            }}
-          >
-            {option.label}
-          </button>
-        )
-      })}
-    </span>
+      <span
+        aria-hidden='true'
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 999,
+          background: value ? colors.green : colors.faint,
+        }}
+      />
+      {value ? 'Live' : 'Resume live'}
+    </button>
   )
 }
 
 export function TimelineTab({
   snapshot,
   model,
-  range,
+  follow,
+  onFollowChange,
 }: {
   snapshot: DevtoolsSnapshot
   model: DevtoolsModel
-  range: TimelineRange
+  follow: boolean
+  onFollowChange: (value: boolean) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
-  const nowPoint = useTimelineNow(range !== 'all')
+  const scrollRef = useRef<HTMLDivElement>(null)
   const rawLanes = useMemo(() => {
     const realtimeByService = new Map<string, number[]>()
     for (const item of snapshot.timeline.realtime) {
@@ -118,6 +126,7 @@ export function TimelineTab({
           label: `${query.serviceName}.${query.method}`,
           context: timelineScopeLabel(scopes),
           detail: timelineQueryDetail(query, scopes),
+          firstAt: Math.min(...query.spans.map(span => span.startAt)),
           query,
         }
       })
@@ -126,89 +135,87 @@ export function TimelineTab({
       id: `realtime:${serviceName}`,
       label: `${serviceName} realtime`,
       detail: `All retained realtime events emitted by ${serviceName}`,
+      firstAt: Math.min(...ticks),
       ticks,
     }))
     return [...queryLanes, ...realtimeLanes]
   }, [model.scopesByQueryId, snapshot.queries, snapshot.timeline.realtime])
-  const bounds = timelineBounds(rawLanes, range, nowPoint)
-  const lanes: VisibleTimelineLane[] = bounds
-    ? rawLanes
-        .map(lane => ({
-          ...(lane.kind === 'query'
-            ? {
-                kind: lane.kind,
-                id: lane.id,
-                label: lane.label,
-                context: lane.context,
-                detail: lane.detail,
-                serviceName: lane.query.serviceName,
-                bars: lane.query.spans.filter(
-                  span => (span.endAt ?? nowPoint) >= bounds.start && span.startAt <= bounds.end,
-                ),
-              }
-            : {
-                kind: lane.kind,
-                id: lane.id,
-                label: lane.label,
-                detail: lane.detail,
-                ticks: lane.ticks.filter(tick => tick >= bounds.start && tick <= bounds.end),
-              }),
-        }))
-        .filter(lane => (lane.kind === 'query' ? lane.bars.length > 0 : lane.ticks.length > 0))
-    : []
+  const hasInFlight = rawLanes.some(
+    lane => lane.kind === 'query' && lane.query.spans.some(span => span.endAt === undefined),
+  )
+  const nowPoint = useTimelineNow(hasInFlight)
+  const wallClockOffset = Date.now() - now()
+  const layout = timelineLayout(rawLanes, snapshot.timeline.startedAt, nowPoint)
+  const lanes: VisibleTimelineLane[] = rawLanes.map(lane =>
+    lane.kind === 'query'
+      ? {
+          kind: lane.kind,
+          id: lane.id,
+          label: lane.label,
+          context: lane.context,
+          detail: lane.detail,
+          firstAt: lane.firstAt,
+          bars: lane.query.spans,
+        }
+      : lane,
+  )
+  const laneOrder = new Map(snapshot.timeline.laneOrder.map((id, index) => [id, index]))
   lanes.sort((a, b) => {
-    const latest = timelineLaneLatest(b) - timelineLaneLatest(a)
-    if (latest !== 0) return latest
+    const recordedOrder =
+      (laneOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+      (laneOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+    if (recordedOrder !== 0) return recordedOrder
+    const first = a.firstAt - b.firstAt
+    if (first !== 0) return first
     return a.id.localeCompare(b.id)
   })
-  const axisTicks = bounds ? timelineAxisTicks(bounds.start, bounds.end) : []
+  const trackWidth = layout?.trackWidth
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll || !follow || trackWidth === undefined) return
+    scroll.scrollLeft = Math.max(0, scroll.scrollWidth - scroll.clientWidth)
+  }, [follow, lanes.length, trackWidth])
+
   return (
     <section style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={styles.scroll}>
-        {bounds ? (
-          <div style={styles.timeline}>
-            <TimelineAxis
-              start={bounds.start}
-              end={bounds.end}
-              ticks={axisTicks}
-              nowPoint={nowPoint}
-              range={range}
-            />
-            {lanes.map(lane =>
-              lane.kind === 'query' ? (
-                <TimelineLane
-                  key={lane.id}
-                  label={lane.label}
-                  context={lane.context}
-                  detail={lane.detail}
-                  start={bounds.start}
-                  end={bounds.end}
-                  bars={lane.bars}
-                  gridTicks={axisTicks}
-                  nowPoint={nowPoint}
-                />
-              ) : (
-                <TimelineLane
-                  key={lane.id}
-                  label={lane.label}
-                  detail={lane.detail}
-                  start={bounds.start}
-                  end={bounds.end}
-                  bars={[]}
-                  ticks={lane.ticks}
-                  gridTicks={axisTicks}
-                  nowPoint={nowPoint}
-                />
-              ),
-            )}
-            {lanes.length === 0 ? (
-              <div style={{ padding: '18px 0 18px 220px', color: colors.muted }}>
-                No activity in this time range. Choose All to inspect retained history.
-              </div>
-            ) : null}
+      <div
+        ref={scrollRef}
+        style={styles.scroll}
+        onScroll={event => {
+          if (!follow) return
+          const scroll = event.currentTarget
+          const distanceFromEnd = scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft
+          if (distanceFromEnd > FOLLOW_THRESHOLD) onFollowChange(false)
+        }}
+      >
+        {layout ? (
+          <div
+            style={{
+              ...styles.timeline,
+              width: LABEL_WIDTH + layout.trackWidth,
+              minWidth: LABEL_WIDTH + layout.trackWidth,
+            }}
+          >
+            <TimelineAxis layout={layout} wallClockOffset={wallClockOffset} />
+            {lanes.map(lane => (
+              <TimelineLane
+                key={lane.id}
+                label={lane.label}
+                {...(lane.kind === 'query' ? { context: lane.context } : {})}
+                detail={lane.detail}
+                layout={layout}
+                bars={lane.kind === 'query' ? lane.bars : []}
+                ticks={lane.kind === 'realtime' ? lane.ticks : []}
+                nowPoint={nowPoint}
+                wallClockOffset={wallClockOffset}
+              />
+            ))}
           </div>
         ) : (
-          <div style={{ padding: 16, color: colors.muted }}>No query timeline yet.</div>
+          <div style={{ padding: 16, color: colors.muted }}>
+            No timeline activity yet. Recording continues until you press Clear.
+          </div>
         )}
       </div>
     </section>
@@ -227,71 +234,77 @@ function useTimelineNow(running: boolean): number {
 }
 
 function TimelineAxis({
-  start,
-  end,
-  ticks,
-  nowPoint,
-  range,
+  layout,
+  wallClockOffset,
 }: {
-  start: number
-  end: number
-  ticks: number[]
-  nowPoint: number
-  range: TimelineRange
+  layout: TimelineLayout
+  wallClockOffset: number
 }) {
   const { colors } = useDevtoolsTheme()
-  const duration = Math.max(1, end - start)
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', minHeight: 38 }}>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `${LABEL_WIDTH}px ${layout.trackWidth}px`,
+        minHeight: 38,
+      }}
+    >
       <div
+        title={`Recording started ${formatTimelineClock(layout.start, wallClockOffset, true)}`}
         style={{
+          position: 'sticky',
+          left: 0,
+          zIndex: 2,
           color: colors.muted,
           padding: '7px 12px 0 0',
           borderBottom: `1px solid ${colors.border}`,
+          background: colors.bg,
         }}
       >
         <TimelineLegend />
       </div>
-      <div style={{ position: 'relative', borderBottom: `1px solid ${colors.border}` }}>
-        {ticks.map((tick, index) => {
-          const isLast = index === ticks.length - 1
-          return (
+      <div
+        style={{
+          position: 'relative',
+          width: layout.trackWidth,
+          borderBottom: `1px solid ${colors.border}`,
+        }}
+      >
+        {layout.ticks.map(tick => (
+          <span
+            key={tick}
+            style={{
+              position: 'absolute',
+              left: timeToPixels(tick, layout.start),
+              top: 0,
+              bottom: 0,
+              borderLeft: `1px solid ${colors.rowBorder}`,
+            }}
+          >
             <span
-              key={tick}
               style={{
                 position: 'absolute',
-                left: `${((tick - start) / duration) * 100}%`,
-                top: 0,
-                bottom: 0,
-                borderLeft: `1px solid ${colors.rowBorder}`,
+                top: 9,
+                left: 6,
+                color: colors.muted,
+                whiteSpace: 'nowrap',
               }}
+              title={formatTimelineClock(tick, wallClockOffset, true)}
             >
-              <span
-                style={{
-                  position: 'absolute',
-                  top: 9,
-                  left: isLast ? undefined : 6,
-                  right: isLast ? 0 : undefined,
-                  color: colors.muted,
-                  whiteSpace: 'nowrap',
-                }}
-                title={formatTimelineClock(tick, nowPoint, true)}
-              >
-                {isLast && range !== 'all' ? 'now' : formatTimelineClock(tick, nowPoint, false)}
-              </span>
+              {formatTimelineOffset(tick - layout.start)}
             </span>
-          )
-        })}
+          </span>
+        ))}
       </div>
     </div>
   )
 }
 
-function timelineBounds(
+function timelineLayout(
   lanes: RawTimelineLane[],
-  range: TimelineRange,
+  startedAt: number,
   nowPoint: number,
-): { start: number; end: number } | null {
+): TimelineLayout | null {
   const points: number[] = []
   for (const lane of lanes) {
     if (lane.kind === 'query') {
@@ -303,19 +316,14 @@ function timelineBounds(
     }
   }
   if (points.length === 0) return null
-  if (range !== 'all') {
-    return { start: Math.max(0, nowPoint - range), end: nowPoint }
-  }
-  const min = Math.min(...points)
-  const max = Math.max(...points)
-  const pad = Math.max(100, (max - min) * 0.025)
-  return { start: Math.max(0, min - pad), end: max + pad }
-}
-
-function timelineLaneLatest(lane: VisibleTimelineLane): number {
-  return lane.kind === 'query'
-    ? Math.max(...lane.bars.map(span => span.endAt ?? span.startAt))
-    : Math.max(...lane.ticks)
+  const earliest = Math.min(...points)
+  const start = startedAt > 0 ? Math.min(startedAt, earliest) : earliest
+  const latest = Math.max(...points)
+  const minimumDuration = (MIN_TRACK_WIDTH / PIXELS_PER_SECOND) * 1_000
+  const duration = Math.max(minimumDuration, latest - start + END_GUTTER_MS)
+  const end = start + duration
+  const trackWidth = Math.ceil((duration / 1_000) * PIXELS_PER_SECOND)
+  return { start, end, trackWidth, ticks: timelineAxisTicks(start, end) }
 }
 
 function timelineQueryDetail(
@@ -341,9 +349,16 @@ function timelineScopeLabel(scopes: readonly EventQueryScope[] | undefined): str
 }
 
 function timelineAxisTicks(start: number, end: number): number[] {
-  const ticks = 5
-  const duration = Math.max(1, end - start)
-  return Array.from({ length: ticks }, (_, index) => start + (duration * index) / (ticks - 1))
+  const count = Math.floor((end - start) / GRID_TICK_MS)
+  return Array.from({ length: count + 1 }, (_, index) => start + GRID_TICK_MS * index)
+}
+
+function formatTimelineOffset(value: number): string {
+  const seconds = Math.round(value / 1_000)
+  if (seconds < 60) return seconds === 0 ? '0s' : `+${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return remainder === 0 ? `+${minutes}m` : `+${minutes}m ${remainder}s`
 }
 
 function TimelineLegend() {
@@ -387,28 +402,41 @@ function TimelineLane({
   label,
   context,
   detail,
-  start,
-  end,
+  layout,
   bars,
-  ticks = [],
-  gridTicks,
+  ticks,
   nowPoint,
+  wallClockOffset,
 }: {
   label: string
   context?: string
   detail: string
-  start: number
-  end: number
+  layout: TimelineLayout
   bars: Array<{ startAt: number; endAt?: number; ok?: boolean }>
-  ticks?: number[]
-  gridTicks: number[]
+  ticks: number[]
   nowPoint: number
+  wallClockOffset: number
 }) {
   const { colors, styles } = useDevtoolsTheme()
-  const duration = Math.max(1, end - start)
   return (
-    <div style={styles.lane}>
-      <div style={styles.laneLabel} title={detail ? `${label} ${detail}` : label}>
+    <div
+      data-timeline-lane={label}
+      style={{
+        ...styles.lane,
+        gridTemplateColumns: `${LABEL_WIDTH}px ${layout.trackWidth}px`,
+        width: LABEL_WIDTH + layout.trackWidth,
+      }}
+    >
+      <div
+        style={{
+          ...styles.laneLabel,
+          position: 'sticky',
+          left: 0,
+          zIndex: 1,
+          background: colors.bg,
+        }}
+        title={detail ? `${label} ${detail}` : label}
+      >
         <span style={{ color: colors.text, fontWeight: 600 }}>{label}</span>
         {context ? (
           <span style={{ color: colors.faint, marginLeft: 6, whiteSpace: 'nowrap' }}>
@@ -416,40 +444,38 @@ function TimelineLane({
           </span>
         ) : null}
       </div>
-      <div style={styles.laneTrack}>
-        {gridTicks.map(tick => (
+      <div style={{ ...styles.laneTrack, width: layout.trackWidth }}>
+        {layout.ticks.map(tick => (
           <span
             key={tick}
             aria-hidden='true'
             style={{
               position: 'absolute',
               insetBlock: 0,
-              left: `${((tick - start) / duration) * 100}%`,
+              left: timeToPixels(tick, layout.start),
               borderLeft: `1px solid ${colors.rowBorder}`,
             }}
           />
         ))}
         {bars.map((bar, index) => {
-          const barEnd = bar.endAt ?? end
-          const left = `${Math.max(0, ((bar.startAt - start) / duration) * 100)}%`
-          const width = `${Math.max(0.35, ((barEnd - bar.startAt) / duration) * 100)}%`
+          const barEnd = bar.endAt ?? nowPoint
+          const left = timeToPixels(bar.startAt, layout.start)
+          const width = Math.max(18, timeToPixels(barEnd, bar.startAt))
           return (
             <span
               key={`${bar.startAt}:${index}`}
               title={[
                 `${bar.ok === false ? 'Failed fetch' : 'Fetch'} · ${formatMs(barEnd - bar.startAt)}`,
-                formatTimelineClock(bar.startAt, nowPoint, true),
+                formatTimelineClock(bar.startAt, wallClockOffset, true),
               ].join('\n')}
               style={{
                 position: 'absolute',
                 top: 16,
                 left,
                 width,
-                minWidth: 18,
                 height: 10,
                 borderRadius: 1,
                 background: bar.ok === false ? colors.red : colors.green,
-                transition: 'left 1100ms linear, width 1100ms linear',
               }}
             />
           )
@@ -457,18 +483,17 @@ function TimelineLane({
         {ticks.map((tick, index) => (
           <span
             key={`${tick}:${index}`}
-            title={`Realtime event\n${formatTimelineClock(tick, nowPoint, true)}`}
+            title={`Realtime event\n${formatTimelineClock(tick, wallClockOffset, true)}`}
             style={{
               position: 'absolute',
               top: 7,
-              left: `${Math.max(0, Math.min(100, ((tick - start) / duration) * 100))}%`,
+              left: timeToPixels(tick, layout.start),
               width: 7,
               height: 7,
               marginLeft: -3,
               borderRadius: 999,
               background: colors.blue,
               boxShadow: `0 0 0 2px ${colors.bg}`,
-              transition: 'left 1100ms linear',
             }}
           />
         ))}
@@ -477,8 +502,14 @@ function TimelineLane({
   )
 }
 
-function formatTimelineClock(value: number, nowPoint: number, milliseconds: boolean): string {
-  // Timeline positions use the monotonic clock; convert to wall time for display.
-  const wallAt = Date.now() - Math.max(0, nowPoint - value)
-  return formatClock(wallAt, { milliseconds })
+function timeToPixels(value: number, start: number): number {
+  return Math.max(0, ((value - start) / 1_000) * PIXELS_PER_SECOND)
+}
+
+function formatTimelineClock(
+  value: number,
+  wallClockOffset: number,
+  milliseconds: boolean,
+): string {
+  return formatClock(wallClockOffset + value, { milliseconds })
 }

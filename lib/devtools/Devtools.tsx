@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { EventsTab } from './EventsTab.js'
 import { QueriesTab } from './QueriesTab.js'
-import { TimelineRangeControl, TimelineTab, type TimelineRange } from './TimelineTab.js'
+import { TimelineFollowControl, TimelineTab } from './TimelineTab.js'
 import { WritesTab } from './WritesTab.js'
 import type { Collector } from './collector.js'
 import { buildDevtoolsModel } from './model.js'
@@ -63,7 +63,7 @@ export function FigbirdDevtoolsPanel({
   const [queryFilter, setQueryFilter] = useState('')
   const [queryActiveOnly, setQueryActiveOnly] = useState(true)
   const [eventFilter, setEventFilter] = useState('')
-  const [timelineRange, setTimelineRange] = useState<TimelineRange>(30_000)
+  const [timelineFollow, setTimelineFollow] = useState(true)
 
   useEffect(() => {
     collector.start()
@@ -83,11 +83,15 @@ export function FigbirdDevtoolsPanel({
   const timelineEmpty =
     snapshot.timeline.realtime.length === 0 &&
     snapshot.queries.every(query => query.spans.length === 0)
+  const clearTimeline = useCallback(() => {
+    collector.clearTimeline()
+    setTimelineFollow(true)
+  }, [collector])
   const clearAction =
     tab === 'events'
       ? { disabled: snapshot.events.length === 0, run: () => collector.clearEvents() }
       : tab === 'timeline'
-        ? { disabled: timelineEmpty, run: () => collector.clearTimeline() }
+        ? { disabled: timelineEmpty, run: clearTimeline }
         : tab === 'writes'
           ? { disabled: snapshot.writes.length === 0, run: () => collector.clearWrites() }
           : null
@@ -198,7 +202,7 @@ export function FigbirdDevtoolsPanel({
             />
           ) : null}
           {tab === 'timeline' ? (
-            <TimelineRangeControl value={timelineRange} onChange={setTimelineRange} />
+            <TimelineFollowControl value={timelineFollow} onChange={setTimelineFollow} />
           ) : null}
           {clearAction ? (
             <ClearButton disabled={clearAction.disabled} onClick={clearAction.run} />
@@ -218,7 +222,12 @@ export function FigbirdDevtoolsPanel({
             />
           ) : null}
           {tab === 'timeline' ? (
-            <TimelineTab snapshot={snapshot} model={model} range={timelineRange} />
+            <TimelineTab
+              snapshot={snapshot}
+              model={model}
+              follow={timelineFollow}
+              onFollowChange={setTimelineFollow}
+            />
           ) : null}
           {tab === 'events' ? (
             <EventsTab

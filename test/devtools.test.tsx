@@ -154,7 +154,10 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.true(row?.lastDurationMs !== undefined)
   t.true(snapshot.events.length > 0)
   t.true(snapshot.events.every(event => event.wallAt !== undefined))
+  t.true(snapshot.timeline.startedAt > 0)
   t.true(snapshot.timeline.realtime.length > 0)
+  t.true(snapshot.timeline.laneOrder.includes(`query:${row?.queryId}`))
+  t.true(snapshot.timeline.laneOrder.includes('realtime:notes'))
   t.is(collector.getSnapshot(), snapshot)
 
   collector.clearEvents()
@@ -174,6 +177,8 @@ test('collector records fetch spans and keeps event and timeline history indepen
   const clearedTimeline = collector.getSnapshot()
   const clearedRow = clearedTimeline.queries.find(query => query.serviceName === 'notes')
   t.is(clearedTimeline.events.length, beforeTimelineClear.events.length)
+  t.true(clearedTimeline.timeline.startedAt >= beforeTimelineClear.timeline.startedAt)
+  t.deepEqual(clearedTimeline.timeline.laneOrder, [])
   t.is(clearedTimeline.timeline.realtime.length, 0)
   t.is(clearedRow?.spans.length, 0)
   t.is(clearedRow?.realtimeSeen, beforeTimelineClearRow?.realtimeSeen)
@@ -619,7 +624,7 @@ test('devtools model keeps operation identity separate from shared fetch identit
       },
     ],
     events: [],
-    timeline: { realtime: [] },
+    timeline: { startedAt: 0, laneOrder: [], realtime: [] },
     writes: [],
     inFlightWrites: 0,
   }
@@ -867,7 +872,11 @@ test('panel shows root queries and nests relation fetches in details', async t =
       },
     ],
     events: [],
-    timeline: { realtime: [{ at: timelineAt - 3, serviceName: 'issues' }] },
+    timeline: {
+      startedAt: timelineAt - 25,
+      laneOrder: ['query:root', 'query:labels', 'realtime:issues'],
+      realtime: [{ at: timelineAt - 3, serviceName: 'issues' }],
+    },
     writes: [],
     inFlightWrites: 0,
   }
@@ -1014,6 +1023,16 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.true(timelineText.includes('issues.find'))
   t.true(timelineText.includes('issueLabels.find'))
   t.is(timelineText.match(/issues realtime/g)?.length, 1)
+  t.falsy($all('button').find(button => button.textContent === '30s'))
+  const liveTimelineButton = $('[aria-label="Pause live timeline"]')
+  t.truthy(liveTimelineButton)
+  click(liveTimelineButton!)
+  t.truthy($('[aria-label="Resume live timeline"]'))
+
+  const timelineLanes = $all('[data-timeline-lane]').map(lane =>
+    lane.getAttribute('data-timeline-lane'),
+  )
+  t.deepEqual(timelineLanes, ['issues.find', 'issueLabels.find', 'issues realtime'])
 
   const largeElement = window.document.createElement('div')
   const largeHostFiber: Record<string, unknown> = { stateNode: largeElement }

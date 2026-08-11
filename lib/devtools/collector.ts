@@ -62,6 +62,8 @@ export interface TimelineRealtimeEvent {
 }
 
 export interface DevtoolsTimeline {
+  startedAt: number
+  laneOrder: string[]
   realtime: TimelineRealtimeEvent[]
 }
 
@@ -135,7 +137,7 @@ const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
   queries: [],
   relational: [],
   events: [],
-  timeline: { realtime: [] },
+  timeline: { startedAt: 0, laneOrder: [], realtime: [] },
   writes: [],
   inFlightWrites: 0,
 }
@@ -311,7 +313,9 @@ class FigbirdCollector implements Collector {
   #relational: Map<string, InternalRelationalQuery> = new Map()
   #events: DevtoolsEvent[] = []
   #timelineRealtime: TimelineRealtimeEvent[] = []
-  #timelineStartedAt: number | null = null
+  #timelineStartedAt = now()
+  #timelineLaneOrder: string[] = []
+  #timelineLaneIds = new Set<string>()
   #nextEventId = 1
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
@@ -384,7 +388,11 @@ class FigbirdCollector implements Collector {
       queries,
       relational: [...this.#relational.values()].map(record => record.inspected),
       events: [...this.#events],
-      timeline: { realtime: [...this.#timelineRealtime] },
+      timeline: {
+        startedAt: this.#timelineStartedAt,
+        laneOrder: [...this.#timelineLaneOrder],
+        realtime: [...this.#timelineRealtime],
+      },
       writes,
       inFlightWrites: this.#figbird.mutating?.getSnapshot().length ?? 0,
     }
@@ -400,6 +408,8 @@ class FigbirdCollector implements Collector {
   clearTimeline(): void {
     this.#timelineRealtime = []
     this.#timelineStartedAt = now()
+    this.#timelineLaneOrder = []
+    this.#timelineLaneIds.clear()
     for (const record of this.#queries.values()) {
       record.metrics.spans = []
     }
@@ -436,13 +446,16 @@ class FigbirdCollector implements Collector {
 
     switch (event.kind) {
       case 'fetch:start':
+        this.#recordTimelineLane(`query:${event.queryId}`)
         this.#recordFetchStart(event, at)
         break
       case 'fetch:end':
       case 'fetch:error':
+        this.#recordTimelineLane(`query:${event.queryId}`)
         this.#finishFetch(event, at)
         break
       case 'realtime':
+        this.#recordTimelineLane(`realtime:${event.serviceName}`)
         pushCapped(this.#timelineRealtime, { at, serviceName: event.serviceName }, this.#eventLimit)
         this.#realtimeByService.set(
           event.serviceName,
@@ -467,6 +480,12 @@ class FigbirdCollector implements Collector {
         this.#recordAction(event, at)
         break
     }
+  }
+
+  #recordTimelineLane(id: string): void {
+    if (this.#timelineLaneIds.has(id)) return
+    this.#timelineLaneIds.add(id)
+    this.#timelineLaneOrder.push(id)
   }
 
   #refreshQueries(): void {
@@ -603,10 +622,7 @@ class FigbirdCollector implements Collector {
     }
 
     const observedStartAt = at - event.durationMs
-    const startAt =
-      this.#timelineStartedAt === null
-        ? observedStartAt
-        : Math.max(observedStartAt, this.#timelineStartedAt)
+    const startAt = Math.max(observedStartAt, this.#timelineStartedAt)
     pushCapped(metrics.spans, { startAt, endAt: at, ok }, this.#spanLimit)
 
     const currentMatches = record.current?.generation === event.generation
