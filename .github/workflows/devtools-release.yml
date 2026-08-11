@@ -46,7 +46,7 @@ jobs:
           AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
           AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
-          web-ext sign \
+          npm exec -- web-ext sign \
             --source-dir extensions/build/firefox \
             --artifacts-dir extensions/build/firefox-signed \
             --channel unlisted \

@@ -10,6 +10,8 @@ import { decodeEvent, parseConnection, parseWireRead } from './protocol.js'
 const POLL_INTERVAL_MS = 250
 const BRIDGE_EXPRESSION = 'globalThis["__FIGBIRD_DEVTOOLS__"]'
 
+type Evaluate = (expression: string) => Promise<unknown>
+
 interface InspectedWindowApi {
   eval(
     expression: string,
@@ -74,13 +76,20 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
 
 export class ExtensionSession {
   readonly figbird = new RemoteFigbird()
-  readonly inspection = new ExtensionInspectionSession(evaluate, () => this.#connection !== null)
+  readonly inspection: ExtensionInspectionSession
 
   #connection: DevtoolsBridgeConnection | null = null
+  #evaluate: Evaluate
+  #generation = 0
   #polling = false
   #status = 'Waiting for Figbird'
   #statusListeners = new Set<() => void>()
   #timer: ReturnType<typeof setInterval> | null = null
+
+  constructor(evaluate: Evaluate = evaluateInspectedWindow) {
+    this.#evaluate = evaluate
+    this.inspection = new ExtensionInspectionSession(evaluate, () => this.#connection !== null)
+  }
 
   getStatus = (): string => this.#status
 
@@ -91,25 +100,31 @@ export class ExtensionSession {
 
   start(): void {
     if (this.#timer) return
-    void this.#poll()
-    this.#timer = setInterval(() => void this.#poll(), POLL_INTERVAL_MS)
+    const generation = ++this.#generation
+    void this.#poll(generation)
+    this.#timer = setInterval(() => void this.#poll(generation), POLL_INTERVAL_MS)
   }
 
   stop(): void {
+    this.#generation++
     if (this.#timer) clearInterval(this.#timer)
     this.#timer = null
     this.inspection.stop()
     const sessionId = this.#connection?.sessionId
     this.#connection = null
-    if (sessionId) void evaluate(`${BRIDGE_EXPRESSION}?.disconnect(${JSON.stringify(sessionId)})`)
+    if (sessionId) void this.#disconnect(sessionId)
   }
 
-  async #poll(): Promise<void> {
+  async #poll(generation: number): Promise<void> {
     if (this.#polling) return
     this.#polling = true
     try {
       if (!this.#connection) {
-        const connection = parseConnection(await evaluate(`${BRIDGE_EXPRESSION}?.connect()`))
+        const connection = parseConnection(await this.#evaluate(`${BRIDGE_EXPRESSION}?.connect()`))
+        if (generation !== this.#generation) {
+          if (connection) await this.#disconnect(connection.sessionId)
+          return
+        }
         if (!connection) {
           this.#setStatus('Waiting for Figbird')
           return
@@ -123,10 +138,11 @@ export class ExtensionSession {
       }
 
       const read = parseWireRead(
-        await evaluate(
+        await this.#evaluate(
           `${BRIDGE_EXPRESSION}?.readJson(${JSON.stringify(this.#connection.sessionId)})`,
         ),
       )
+      if (generation !== this.#generation) return
       if (!read) {
         this.#connection = null
         this.inspection.reset()
@@ -136,12 +152,19 @@ export class ExtensionSession {
       this.figbird.update(read)
       await this.inspection.refresh()
     } catch {
+      if (generation !== this.#generation) return
       this.#connection = null
       this.inspection.reset()
       this.#setStatus('Cannot inspect this page')
     } finally {
       this.#polling = false
     }
+  }
+
+  async #disconnect(sessionId: string): Promise<void> {
+    await this.#evaluate(`${BRIDGE_EXPRESSION}?.disconnect(${JSON.stringify(sessionId)})`).catch(
+      () => {},
+    )
   }
 
   #setStatus(status: string): void {
@@ -151,7 +174,7 @@ export class ExtensionSession {
   }
 }
 
-function evaluate(expression: string): Promise<unknown> {
+function evaluateInspectedWindow(expression: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     chrome.devtools.inspectedWindow.eval(expression, (result, exceptionInfo) => {
       if (exceptionInfo?.isException) {

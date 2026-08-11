@@ -13,6 +13,7 @@ import {
 } from '../lib/devtools/collector.js'
 import { ExtensionInspectionSession } from '../extensions/src/inspection.js'
 import { inspectQueryArea } from '../extensions/src/inspectionPage.js'
+import { ExtensionSession } from '../extensions/src/remote.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
 import { createTestApp, dom } from './helpers.js'
 
@@ -684,6 +685,35 @@ test('extension bridge starts debug collection only while connected', t => {
   bridgeState.disconnect(connection!.sessionId)
   t.is(eventSubscriptions, 0)
   t.is(bridgeState.readJson(connection!.sessionId), null)
+})
+
+test('extension session disconnects when connection finishes after stop', async t => {
+  let resolveConnect!: (connection: unknown) => void
+  const connect = new Promise<unknown>(resolve => {
+    resolveConnect = resolve
+  })
+  let resolveDisconnect!: () => void
+  const disconnected = new Promise<void>(resolve => {
+    resolveDisconnect = resolve
+  })
+  const expressions: string[] = []
+  const session = new ExtensionSession(async expression => {
+    expressions.push(expression)
+    if (expression.endsWith('?.connect()')) return connect
+    if (expression.includes('?.disconnect(')) {
+      resolveDisconnect()
+      return undefined
+    }
+    throw new Error(`Unexpected expression: ${expression}`)
+  })
+
+  session.start()
+  session.stop()
+  resolveConnect({ instanceCount: 1, instanceId: 1, protocol: 1, sessionId: 'late' })
+  await disconnected
+
+  t.true(expressions.some(expression => expression.includes('?.disconnect("late")')))
+  t.false(expressions.some(expression => expression.includes('?.readJson(')))
 })
 
 test('extension inspection waits for picker startup before refreshing', async t => {
