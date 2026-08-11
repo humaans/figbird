@@ -10,6 +10,7 @@ import {
 import { registerDevtoolsInstance } from './devtoolsBridge.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
+import { MutationQueue, type MutationQueueConfig, type MutationQueueHost } from './mutationQueue.js'
 import type { MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
@@ -77,6 +78,20 @@ export type {
   MutationsHandle,
   MutationsProxy,
 } from './mutations.js'
+export {
+  MutationQueueDiscardedError,
+  MutationSupersededError,
+  isMutationSupersededError,
+} from './mutationQueue.js'
+export type {
+  MutationQueueConfig,
+  MutationQueueOperation,
+  MutationQueueRetry,
+  MutationQueueRetryDelay,
+  MutationQueueSnapshot,
+  MutationQueueStatus,
+  MutationSchedule,
+} from './mutationQueue.js'
 export type { InFlightMutation, MutationActivity } from './mutationTracker.js'
 export {
   defineQuery,
@@ -579,6 +594,7 @@ export class Figbird<
     data: ServiceUpdate<S, N>
     params?: AdapterParams<A>
     optimistic?: boolean | ServiceItem<S, N>
+    optimisticPatch?: Partial<ServiceItem<S, N>>
   }): Promise<ServiceItem<S, N>>
 
   /** Patch an existing item by ID (partial update). */
@@ -589,6 +605,7 @@ export class Figbird<
     data: ServicePatch<S, N>
     params?: AdapterParams<A>
     optimistic?: boolean | ServiceItem<S, N>
+    optimisticPatch?: Partial<ServiceItem<S, N>>
   }): Promise<ServiceItem<S, N>>
 
   /** Remove an item by ID. */
@@ -657,8 +674,39 @@ export class Figbird<
   }
 
   /**
-   * Live view of in-flight mutations (CRUD and custom methods). Synchronously
-   * maintained — correct even for subscribers that attach mid-mutation — and
+   * Create an explicitly owned serial mutation queue. Calls made through the
+   * queue's `m` proxy project immediately, preserve queue order across records,
+   * and still share Figbird's global per-record mutation lanes with ordinary
+   * `figbird.m` calls.
+   */
+  createMutationQueue(config: MutationQueueConfig = {}): MutationQueue<S> {
+    const host: MutationQueueHost = {
+      registerMutation: (desc, control) => {
+        const resolve = (value: MutationDescriptor): MutationDescriptor => ({
+          ...value,
+          serviceName: resolveServicePath(this.schema, value.serviceName),
+        })
+        const registration = this.queryStore.registerMutation(resolve(desc), control)
+        return {
+          promise: registration.promise,
+          update: next => registration.update(resolve(next)),
+          cancel: error => registration.cancel(error),
+        }
+      },
+      registerCall: (serviceName, method, args, control) =>
+        this.queryStore.registerCall(
+          resolveServicePath(this.schema, serviceName),
+          method,
+          args,
+          control,
+        ),
+    }
+    return new MutationQueue<S>(host, config)
+  }
+
+  /**
+   * Live view of active mutations, including scheduled queue work (CRUD and
+   * custom methods). Synchronously maintained — correct even for subscribers — and
    * shaped for `useSyncExternalStore`. `useMutating` is the React binding.
    */
   get mutating(): MutationActivity {

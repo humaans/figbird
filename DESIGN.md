@@ -639,7 +639,7 @@ The replacement factors each granularity to the layer that owns it:
   flashing fallbacks; the `pending` flip stays urgent so labels swap immediately. The reads-side
   rule "params changes are transitions" gets its write-side mirror made literal: reads suspend,
   writes are transitions.
-- **`useMutating(filter?)`** — entity/service/instance-level in-flight state. Deliberately NOT
+- **`useMutating(filter?)`** — entity/service/instance-level active mutation state. Deliberately NOT
   built on the events channel: event delivery is deferred to a microtask and events never replay,
   so a subscriber mounting mid-mutation would report a false negative. A synchronous
   `MutationTracker` in the core (updated at the mutate call sites, exposed as `figbird.mutating`)
@@ -667,6 +667,28 @@ server truth — server windows, authoritative queries, and relational-filter in
 collected by the lane and released once when the lane drains. Relational assembly itself needs no
 mutation-specific path: its ordinary root and relation query inputs already rebuild from projected
 events.
+
+**Explicit serial mutation queues.** A feature can create one long-lived queue through
+`figbird.createMutationQueue(config)` or `useMutationQueue(config)` and issue writes through its
+typed `queue.m` proxy. The queue adds a serial predecessor and a scheduling deadline to each write;
+the store still registers every write immediately in its global `(service, id)` lane. Transport
+starts only after both constraints clear. This preserves scoped/unscoped interleaving on one record
+without serializing unrelated records across the application.
+
+The queue coalesces only compatible, consecutive, unsent patches. Coalescing never crosses another
+operation and never changes an in-flight request. Queue failures pause transport while optimistic
+intents remain projected; retry resumes the failed attempt and discard removes the failed and later
+intents. A remove is a record-lifetime boundary: success supersedes later old-lifetime patches,
+while failure restores and replays them. Queues provide ordering, not atomic commit or durable
+offline delivery.
+
+Projected relational-filter dependencies now trigger a local membership pass immediately. The
+projection event is retained by its record lane and released as a settled signal when the lane
+drains, allowing one server reconciliation without a refetch for each intermediate keystroke.
+
+`optimisticPatch` separates the record fragment used for local projection from the adapter payload.
+This covers domain translations such as projecting `{ status: 'completed' }` while sending
+`{ isCompleted: true }`, without forcing callers to synthesize a complete `optimisticItem`.
 
 `mutate:*` events gained a `mutationId` correlating one mutation's lifecycle, and their `method`
 widened to admit custom method names.

@@ -46,6 +46,12 @@ export interface MutationCallOptions<TItem = unknown> {
    * `confirmed` handles, which never show unconfirmed state.
    */
   optimisticItem?: TItem
+  /**
+   * Partial record to merge into the optimistic projection when the server
+   * payload uses a different shape. For example, send `{ isCompleted: true }`
+   * while projecting `{ status: 'completed' }` locally.
+   */
+  optimisticPatch?: Partial<TItem>
 }
 
 export type MethodArgs<TMethod> = TMethod extends (
@@ -168,6 +174,9 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         data,
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
+        ...(options?.optimisticPatch !== undefined
+          ? { optimisticPatch: options.optimisticPatch }
+          : {}),
       }),
     patch: (id: string | number, data: unknown, options?: MutationCallOptions) =>
       host.mutate({
@@ -177,6 +186,9 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         data,
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
+        ...(options?.optimisticPatch !== undefined
+          ? { optimisticPatch: options.optimisticPatch }
+          : {}),
       }),
     remove: (id: string | number, options?: MutationCallOptions) =>
       host.mutate({

@@ -9,6 +9,11 @@ import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
 import { FigbirdEventEmitter } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
+import {
+  MutationSupersededError,
+  type RegisteredMutation,
+  type ScheduledMutationControl,
+} from './mutationQueue.js'
 import { sortRowsLocally } from './sort.js'
 import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchRebase.js'
 import {
@@ -27,6 +32,7 @@ import {
   groupQueuedEvents,
   isUnfilteredFindQuery,
   replayFetchedQueryFromEvents,
+  reapplyQueryFromEntities,
   removeQueryFromItemIndex,
   splitWindow,
   updateQueriesFromEvents,
@@ -92,9 +98,13 @@ interface MutationGate {
 
 interface QueuedMutation {
   desc: MutationDescriptor
-  args: readonly unknown[]
+  args: unknown[]
   optimistic: boolean
   gate: MutationGate
+  control?: ScheduledMutationControl
+  readyUnsub: (() => void) | undefined
+  attempt: number
+  active: boolean
 }
 
 interface AppliedEventEffect {
@@ -235,7 +245,7 @@ export class QueryStore<
     return this.#events
   }
 
-  /** The instance's in-flight mutation tracker — the store is its single owner. */
+  /** The instance's active mutation tracker — the store is its single owner. */
   get mutations(): MutationTracker {
     return this.#mutations
   }
@@ -351,6 +361,26 @@ export class QueryStore<
     }
   }
 
+  /** Re-evaluate one cached query after a projected relational dependency changed. */
+  reapplyQuery(queryId: string): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (!serviceName) return
+    const modified = this.#transactOverServiceByName(serviceName, (service, touch) => {
+      reapplyQueryFromEntities({
+        service,
+        queryId,
+        serviceName,
+        touch,
+        getId: this.#getIdReader(serviceName),
+        itemAdded: meta => this.#adapter.itemAdded(meta),
+        itemRemoved: meta => this.#adapter.itemRemoved(meta),
+        defaultSort: this.#defaultSort,
+      })
+    })
+    for (const modifiedQueryId of modified) this.#invokeListeners(modifiedQueryId)
+    if (modified.size > 0) this.#invokeGlobalListeners()
+  }
+
   /**
    * Ensure a realtime subscription exists for a service even before any query
    * against it is subscribed. Used by relational-filter invalidation, which needs
@@ -438,6 +468,14 @@ export class QueryStore<
 
   /** Perform a service mutation and update the store from the result. */
   mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+    return this.registerMutation(desc).promise as Promise<InferMutationData<S, D>>
+  }
+
+  /** Register a mutation with an optional transport scheduler. @internal */
+  registerMutation(
+    desc: MutationDescriptor,
+    control?: ScheduledMutationControl,
+  ): RegisteredMutation {
     const { serviceName, method, optimistic } = desc
     // For creates, track by the client-generated id — this is what lets
     // `useMutating({ id })` cover the create→navigate→act-before-ack window.
@@ -468,7 +506,7 @@ export class QueryStore<
     // creates keep the direct path because one request cannot belong to one entity
     // lane without a multi-key transaction primitive.
     if (id !== undefined && !(method === 'create' && Array.isArray(desc.data))) {
-      return this.#enqueueMutation(desc, id, isOptimistic, args) as Promise<InferMutationData<S, D>>
+      return this.#enqueueMutation(desc, id, isOptimistic, args, control)
     }
 
     // Every update, patch, and remove has an id and therefore took the lane path.
@@ -477,17 +515,28 @@ export class QueryStore<
     if (method !== 'create') {
       throw new Error(`figbird: ${method} mutation is missing its entity id`)
     }
-    return this.#mutateUnkeyedCreate(desc, args, isOptimistic) as Promise<InferMutationData<S, D>>
+    return this.#mutateUnkeyedCreate(desc, args, isOptimistic, control)
   }
 
   #mutateUnkeyedCreate(
     desc: CreateMutationDescriptor,
-    args: readonly unknown[],
+    args: unknown[],
     optimistic: boolean,
-  ): Promise<unknown> {
+    control?: ScheduledMutationControl,
+  ): RegisteredMutation {
     const optimisticItem =
       desc.optimistic !== true && desc.optimistic !== false ? desc.optimistic : desc.data
-    return this.#trackMutation(
+    let active = true
+    let started = false
+    let readyUnsub: (() => void) | undefined
+    let resolve!: (value: unknown) => void
+    let reject!: (error: unknown) => void
+    const gate = new Promise<unknown>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+
+    const tracked = this.#trackMutation(
       {
         serviceName: desc.serviceName,
         method: desc.method,
@@ -498,7 +547,7 @@ export class QueryStore<
         if (optimistic) {
           this.#processEvent(desc.serviceName, { type: 'created', item: optimisticItem })
         }
-        return this.#adapter.mutate(desc.serviceName, desc.method, [...args])
+        return gate
       },
       {
         // Apply the cache update before ending the tracker entry, so by the time a
@@ -516,6 +565,45 @@ export class QueryStore<
         },
       },
     )
+
+    const run = () => {
+      if (!active || started) return
+      if (control && !control.isReady()) {
+        readyUnsub ??= control.subscribeReady(run)
+        return
+      }
+      readyUnsub?.()
+      readyUnsub = undefined
+      started = true
+      this.#runControlledAttempt(control, () =>
+        this.#adapter.mutate(desc.serviceName, desc.method, [...args]),
+      ).then(resolve, reject)
+    }
+    run()
+
+    tracked.then(
+      () => {
+        active = false
+        readyUnsub?.()
+      },
+      () => {
+        active = false
+        readyUnsub?.()
+      },
+    )
+
+    return {
+      promise: tracked,
+      update: () => {
+        throw new Error('figbird: create mutations cannot be coalesced')
+      },
+      cancel: error => {
+        if (!active || started) return
+        active = false
+        readyUnsub?.()
+        reject(error)
+      },
+    }
   }
 
   /** Queue one keyed CRUD call behind earlier calls for the same service entity. */
@@ -523,8 +611,9 @@ export class QueryStore<
     desc: MutationDescriptor,
     id: ItemId,
     optimistic: boolean,
-    args: readonly unknown[],
-  ): Promise<unknown> {
+    args: unknown[],
+    control?: ScheduledMutationControl,
+  ): RegisteredMutation {
     const lane = this.#mutationLanes.ensure(
       desc.serviceName,
       id,
@@ -542,6 +631,10 @@ export class QueryStore<
       args,
       optimistic,
       gate: { promise, resolve, reject },
+      ...(control ? { control } : {}),
+      readyUnsub: undefined,
+      attempt: 0,
+      active: true,
     }
 
     const tracked = this.#trackMutation(
@@ -571,24 +664,134 @@ export class QueryStore<
     )
 
     this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true)
+    const head = this.#mutationLanes.peekNext(lane)
+    if (head && head !== entry && !control && head.control && !head.control.isReady()) {
+      head.control.expedite()
+    }
     this.#drainMutationLane(lane)
-    return tracked
+    return {
+      promise: tracked,
+      update: next => {
+        if (!entry.active || entry.attempt > 0) {
+          throw new Error('figbird: cannot coalesce a mutation after transport has started')
+        }
+        entry.desc = next
+        entry.args = this.#buildMutationArgs(next)
+        this.#applyProjection(this.#mutationLanes.update(lane, entry), true)
+      },
+      cancel: error => this.#cancelQueuedMutation(lane, entry, error),
+    }
   }
 
   #drainMutationLane(lane: MutationLane): void {
+    const pending = this.#mutationLanes.peekNext(lane)
+    if (pending?.control && !pending.control.isReady()) {
+      pending.readyUnsub ??= pending.control.subscribeReady(() => {
+        pending.readyUnsub?.()
+        pending.readyUnsub = undefined
+        this.#drainMutationLane(lane)
+      })
+      return
+    }
+
     const entry = this.#mutationLanes.takeNext(lane)
     if (!entry) {
       this.#releaseMutationLane(lane)
       return
     }
+    entry.readyUnsub?.()
+    entry.readyUnsub = undefined
+    this.#runQueuedMutationAttempt(lane, entry)
+  }
+
+  #runQueuedMutationAttempt(lane: MutationLane, entry: QueuedMutation): void {
+    if (!entry.active) return
+    entry.attempt += 1
+    entry.control?.onAttemptStart()
+
     let request: Promise<unknown>
     try {
-      request = this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args])
+      request = Promise.resolve(
+        this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args]),
+      )
     } catch (error) {
-      entry.gate.reject(error)
-      return
+      request = Promise.reject(error)
     }
-    request.then(entry.gate.resolve, entry.gate.reject)
+
+    this.#withMutationTimeout(request, entry.control?.timeout).then(
+      entry.gate.resolve,
+      async error => {
+        const normalized = error instanceof Error ? error : new Error(String(error))
+        if (!entry.control) {
+          entry.gate.reject(normalized)
+          return
+        }
+        const decision = await entry.control.onAttemptFailure(normalized, entry.attempt)
+        if (!entry.active) return
+        if (decision === 'retry') {
+          this.#runQueuedMutationAttempt(lane, entry)
+        } else {
+          entry.gate.reject(normalized)
+        }
+      },
+    )
+  }
+
+  async #runControlledAttempt(
+    control: ScheduledMutationControl | undefined,
+    run: () => Promise<unknown>,
+  ): Promise<unknown> {
+    let attempt = 0
+    while (true) {
+      attempt += 1
+      control?.onAttemptStart()
+      let request: Promise<unknown>
+      try {
+        request = Promise.resolve(run())
+      } catch (error) {
+        request = Promise.reject(error)
+      }
+      try {
+        return await this.#withMutationTimeout(request, control?.timeout)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error))
+        if (!control || (await control.onAttemptFailure(normalized, attempt)) === 'discard') {
+          throw normalized
+        }
+      }
+    }
+  }
+
+  #withMutationTimeout(request: Promise<unknown>, timeout: number | undefined): Promise<unknown> {
+    if (timeout === undefined) return request
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const error = new Error(`figbird: mutation timed out after ${timeout}ms`)
+        error.name = 'MutationTimeoutError'
+        reject(error)
+      }, timeout)
+      request.then(
+        value => {
+          clearTimeout(timer)
+          resolve(value)
+        },
+        error => {
+          clearTimeout(timer)
+          reject(error)
+        },
+      )
+    })
+  }
+
+  #cancelQueuedMutation(lane: MutationLane, entry: QueuedMutation, error: Error): void {
+    if (!entry.active || entry.attempt > 0) return
+    entry.active = false
+    entry.readyUnsub?.()
+    entry.readyUnsub = undefined
+    const projection = this.#mutationLanes.cancel(lane, entry)
+    if (projection) this.#applyProjection(projection, true)
+    entry.gate.reject(error)
+    this.#drainMutationLane(lane)
   }
 
   #settleQueuedMutation(
@@ -598,6 +801,8 @@ export class QueryStore<
   ): void {
     const settlement = this.#mutationLanes.settle(lane, entry, outcome)
     if (!settlement) return
+    entry.active = false
+    entry.readyUnsub?.()
 
     // A mutation acknowledgement is authoritative even when remaining overlays
     // keep the visible projection unchanged. Recording it protects fetches that
@@ -609,12 +814,20 @@ export class QueryStore<
     this.#applyProjection(settlement.projection, true)
 
     if (settlement.cancelled.length > 0) {
-      const dependencyError = new Error(
-        `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ` +
-          'because its create mutation failed.',
-        { cause: outcome.ok ? undefined : outcome.error },
-      )
-      for (const queued of settlement.cancelled) queued.gate.reject(dependencyError)
+      const reason = outcome.ok
+        ? 'because the record was removed'
+        : entry.desc.method === 'create'
+          ? 'because its create mutation failed'
+          : 'because the preceding remove mutation failed'
+      for (const queued of settlement.cancelled) {
+        queued.active = false
+        queued.readyUnsub?.()
+        queued.gate.reject(
+          new MutationSupersededError(
+            `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ${reason}`,
+          ),
+        )
+      }
     }
 
     this.#drainMutationLane(lane)
@@ -641,7 +854,11 @@ export class QueryStore<
     const effects = this.#mutationLanes.release(lane)
     if (!effects) return
 
-    for (const event of effects.processedEvents) this.#emitProcessedEvent(event)
+    for (const event of effects.processedEvents) {
+      this.#emitProcessedEvent(
+        event.origin === 'projection' ? { ...event, projectionSettled: true } : event,
+      )
+    }
     for (const queryId of effects.queryIds) this.#requestReconcile(queryId)
   }
 
@@ -659,9 +876,68 @@ export class QueryStore<
    * are positional and opaque.
    */
   call(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
-    return this.#trackMutation({ serviceName, method, optimistic: false, args }, () =>
-      this.#adapter.mutate(serviceName, method, args),
+    return this.registerCall(serviceName, method, args).promise
+  }
+
+  /** Register a custom method call with an optional transport scheduler. @internal */
+  registerCall(
+    serviceName: string,
+    method: string,
+    args: unknown[],
+    control?: ScheduledMutationControl,
+  ): RegisteredMutation {
+    let active = true
+    let started = false
+    let readyUnsub: (() => void) | undefined
+    let resolve!: (value: unknown) => void
+    let reject!: (error: unknown) => void
+    const gate = new Promise<unknown>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    const tracked = this.#trackMutation(
+      { serviceName, method, optimistic: false, args },
+      () => gate,
     )
+
+    const run = () => {
+      if (!active || started) return
+      if (control && !control.isReady()) {
+        readyUnsub ??= control.subscribeReady(run)
+        return
+      }
+      readyUnsub?.()
+      readyUnsub = undefined
+      started = true
+      this.#runControlledAttempt(control, () =>
+        this.#adapter.mutate(serviceName, method, args),
+      ).then(resolve, reject)
+    }
+    run()
+
+    tracked.then(
+      () => {
+        active = false
+        readyUnsub?.()
+      },
+      () => {
+        active = false
+        readyUnsub?.()
+      },
+    )
+
+    return {
+      promise: tracked,
+      update: () => {
+        throw new Error('figbird: custom mutation methods cannot be coalesced')
+      },
+      cancel: error => {
+        if (!active || started) return
+        active = false
+        readyUnsub?.()
+        reject(error)
+      },
+    }
   }
 
   /**
@@ -1518,10 +1794,13 @@ export class QueryStore<
         for (const queryId of reconcileQueryIds) immediateReconciles.add(queryId)
       }
 
-      const deferredEvent =
-        event.origin === 'projection' &&
+      // Relational filters need projected dependency changes immediately so
+      // they can recompute locally. Their listener distinguishes projections
+      // from authoritative events and only the latter may trigger a refetch.
+      if (event.origin === 'projection') {
         this.#mutationLanes.deferProcessedEvent(event.mutationLaneKey, event)
-      if (!deferredEvent) this.#emitProcessedEvent(event)
+      }
+      this.#emitProcessedEvent(event)
     }
 
     const refetchService =

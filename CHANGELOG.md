@@ -1,5 +1,22 @@
 # Figbird Changelog
 
+## Unreleased
+
+- Move Figbird devtools from an embedded React drawer to Chrome and Firefox DevTools
+  extensions. Apps no longer mount `FigbirdDevtools` or use `figbird.devtools.enable()` /
+  `disable()`; the extension starts debug collection when its panel connects.
+- Add explicitly owned serial mutation queues through `figbird.createMutationQueue()` and
+  `useMutationQueue()`. Queue calls project immediately, preserve cross-record call order,
+  coalesce compatible unsent patches, and support scheduling, retry, timeout, flush, and
+  discard policies. Scoped and ordinary writes still share the same per-record lanes.
+- Add `optimisticPatch` for writes whose local projection differs from their server payload.
+  Projected relational-filter changes now resolve locally and reconcile once after the record
+  lane drains.
+- Retry failed query fetches up to three times with exponential backoff before exposing
+  the error. Configure the instance with `retry` and `retryDelay`; descriptor queries can
+  override both or disable retries with `retry: false`. Network errors, timeouts, `408`,
+  `429`, and `5xx` responses retry; other `4xx` responses fail immediately.
+
 ## 0.24.0
 
 The relational rewrite.

@@ -1,5 +1,5 @@
 /**
- * Synchronous registry of in-flight mutations.
+ * Synchronous registry of active mutations, including scheduled queue work.
  *
  * This deliberately does NOT ride on the observability events channel: event
  * delivery is deferred to a microtask and events never replay, so a subscriber
@@ -9,7 +9,7 @@
  * property `useMutating` (via `useSyncExternalStore`) depends on.
  */
 
-/** One in-flight mutation, as visible through `figbird.mutating`. */
+/** One active mutation, as visible through `figbird.mutating`. */
 export interface InFlightMutation {
   /** Monotonic per-instance id, also stamped on the `mutate:*` events. */
   readonly mutationId: number
@@ -29,7 +29,7 @@ export interface InFlightMutation {
  * are internal to the store.
  */
 export interface MutationActivity {
-  /** Notifies synchronously whenever the in-flight set changes. */
+  /** Notifies synchronously whenever the active set changes. */
   subscribe(listener: () => void): () => void
   /** Referentially stable between changes — safe for `useSyncExternalStore`. */
   getSnapshot(): readonly InFlightMutation[]

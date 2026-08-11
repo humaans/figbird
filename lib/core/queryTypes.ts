@@ -46,7 +46,12 @@ interface ProcessedEventBase {
 /** An authoritative or optimistic entity change after cache application. */
 export type ProcessedRealtimeEvent =
   | (ProcessedEventBase & { origin: 'authoritative' })
-  | (ProcessedEventBase & { origin: 'projection'; mutationLaneKey: string })
+  | (ProcessedEventBase & {
+      origin: 'projection'
+      mutationLaneKey: string
+      /** Set when the lane drains and server reconciliation may resume. */
+      projectionSettled?: true
+    })
 
 export type QueryStatus = 'loading' | 'success' | 'error'
 
@@ -327,6 +332,12 @@ interface BaseMutationDescriptor {
    * (typed per service by the `mutateDesc` overloads — this is the untyped base).
    */
   optimistic?: boolean | unknown
+  /**
+   * Partial record used for the optimistic projection when the wire payload and
+   * the local shape differ. Unlike `optimistic`, this is merged over the current
+   * projected record. It is meaningful for update/patch mutations only.
+   */
+  optimisticPatch?: unknown
 }
 
 /**

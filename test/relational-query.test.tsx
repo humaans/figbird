@@ -1781,6 +1781,156 @@ test('realtime: relation-path filters match root events through cached relations
   unmount()
 })
 
+test('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
+  interface FilterDocument {
+    id: number
+    title: string
+    personId: number
+  }
+  interface FilterPerson {
+    id: number
+    name: string
+    orgUnitId: number
+  }
+  interface FilterOrgUnit {
+    id: number
+    label: string
+  }
+
+  const filterSchema = createSchema({
+    services: {
+      documents: service<{ item: FilterDocument }>(),
+      people: service<{ item: FilterPerson }>(),
+      orgUnits: service<{ item: FilterOrgUnit }>(),
+    },
+    relationships: {
+      documents: ({ one }) => ({
+        person: one({ sourceField: 'personId', destService: 'people', destField: 'id' }),
+      }),
+      people: ({ one }) => ({
+        orgUnit: one({ sourceField: 'orgUnitId', destService: 'orgUnits', destField: 'id' }),
+      }),
+    },
+  })
+
+  const { App, figbird, feathers } = createTestApp(filterSchema, {
+    documents: { data: {} },
+    people: { data: { 1: { id: 1, name: 'Ari', orgUnitId: 1 } } },
+    orgUnits: {
+      data: {
+        1: { id: 1, label: 'Engineering' },
+        2: { id: 2, label: 'People' },
+      },
+    },
+  })
+  const { render, unmount, flush, act, $all } = dom()
+
+  function Documents() {
+    useStatusQuery(figbird.q.people.related('orgUnit'))
+    const documents = useStatusQuery(
+      figbird.q.documents
+        .where({ 'person.orgUnit.label': 'Engineering' })
+        .related('person', person => person.related('orgUnit')),
+    )
+    if (documents.status !== 'success') return <div>Loading</div>
+    return (
+      <ul>
+        {documents.data.map(document => (
+          <li className='document' key={document.id}>
+            {document.title}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  render(
+    <App>
+      <Documents />
+    </App>,
+  )
+  await flush()
+  await feathers.service('documents').create({ id: 1, title: 'Plan', personId: 1 })
+  await flush()
+  t.deepEqual(
+    $all('.document').map(node => node.innerHTML),
+    ['Plan'],
+  )
+
+  const findCount = feathers.service('documents').counts.find
+  let resolvePatch!: (item: FilterPerson) => void
+  feathers.service('people').patch = (() =>
+    new Promise(resolve => {
+      resolvePatch = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<FilterPerson>
+  act(() => {
+    pending = queue.m.people.patch(1, { orgUnitId: 2 })
+  })
+
+  t.deepEqual(
+    $all('.document').map(node => node.innerHTML),
+    [],
+  )
+  t.is(
+    feathers.service('documents').counts.find,
+    findCount,
+    'projected dependency changes are resolved from local entities',
+  )
+
+  await act(async () => {
+    queue.flush()
+    resolvePatch({ id: 1, name: 'Ari', orgUnitId: 2 })
+    await pending
+  })
+  t.is(
+    feathers.service('documents').counts.find,
+    findCount + 1,
+    'the relation-filtered root reconciles once after the mutation lane drains',
+  )
+  unmount()
+})
+
+test('optimistic queue: child patches update an assembled relation before transport', async t => {
+  const { App, figbird, feathers } = createApp()
+  const { render, unmount, flush, act, $ } = dom()
+
+  function IssueComments() {
+    const issue = useStatusQuery(figbird.q.issues.get(1).related('comments'))
+    if (issue.status !== 'success') return <div>Loading</div>
+    return <div className='body'>{issue.data!.comments[0]?.body}</div>
+  }
+
+  render(
+    <App>
+      <IssueComments />
+    </App>,
+  )
+  await flush()
+
+  let resolvePatch!: (item: Comment) => void
+  feathers.service('comments').patch = (() =>
+    new Promise(resolve => {
+      resolvePatch = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<Comment>
+  act(() => {
+    pending = queue.m.comments.patch(1, { body: 'Optimistic body' })
+  })
+
+  t.is($('.body')?.innerHTML, 'Optimistic body')
+  t.is(feathers.service('comments').counts.patch, 0)
+
+  await act(async () => {
+    queue.flush()
+    resolvePatch({ id: 1, issueId: 1, authorId: 2, body: 'Optimistic body' })
+    await pending
+  })
+  unmount()
+})
+
 test('realtime: child entity arrival on nested relation updates the assembled view', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()

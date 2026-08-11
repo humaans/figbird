@@ -92,6 +92,27 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return this.#reproject(state)
   }
 
+  peekNext(lane: MutationLane): TEntry | undefined {
+    return this.#require(lane).entries[0]
+  }
+
+  update(lane: MutationLane, entry: TEntry): ProjectionChange {
+    const state = this.#require(lane)
+    if (!state.entries.includes(entry)) {
+      throw new Error(`figbird: cannot update inactive mutation in lane ${lane.key}`)
+    }
+    return this.#reproject(state)
+  }
+
+  cancel(lane: MutationLane, entry: TEntry): ProjectionChange | null {
+    const state = this.#lanes.get(lane.key)
+    if (state !== lane) return null
+    const index = state.entries.indexOf(entry)
+    if (index === -1) return null
+    state.entries.splice(index, 1)
+    return this.#reproject(state)
+  }
+
   takeNext(lane: MutationLane): TEntry | undefined {
     const state = this.#require(lane)
     if (state.running) return undefined
@@ -114,7 +135,17 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     state.entries.splice(index, 1)
     state.running = false
 
-    const cancelled = !outcome.ok && entry.desc.method === 'create' ? state.entries.splice(0) : []
+    let cancelled: TEntry[] = []
+    if (!outcome.ok && entry.desc.method === 'create') {
+      cancelled = state.entries.splice(0)
+    } else if (!outcome.ok && entry.desc.method === 'remove') {
+      const nextCreate = state.entries.findIndex(queued => queued.desc.method === 'create')
+      if (nextCreate !== -1) cancelled = state.entries.splice(nextCreate)
+    } else if (outcome.ok && entry.desc.method === 'remove') {
+      const nextCreate = state.entries.findIndex(queued => queued.desc.method === 'create')
+      const end = nextCreate === -1 ? state.entries.length : nextCreate
+      cancelled = state.entries.splice(0, end)
+    }
     let authoritativeEvent: ProcessedRealtimeEvent | null = null
 
     if (outcome.ok) {
@@ -190,7 +221,20 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
   deferProcessedEvent(laneKey: string, event: ProcessedRealtimeEvent): boolean {
     const lane = this.#lanes.get(laneKey)
     if (!lane) return false
-    lane.deferredProcessedEvents.push(event)
+    const first = lane.deferredProcessedEvents[0]
+    if (!first) {
+      lane.deferredProcessedEvents.push(event)
+      return true
+    }
+
+    // A typing burst can produce hundreds of projections. Relational consumers
+    // need one cumulative transition when the lane drains, not the full history.
+    lane.deferredProcessedEvents[0] = {
+      ...event,
+      type:
+        event.type === 'removed' ? 'removed' : first.previousItem === null ? 'created' : 'patched',
+      previousItem: first.previousItem,
+    }
     return true
   }
 
@@ -265,7 +309,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       current !== ABSENT && current && typeof current === 'object'
         ? (current as Record<string, unknown>)
         : null
-    const data = desc.data as Record<string, unknown>
+    const data = (desc.optimisticPatch ?? desc.data) as Record<string, unknown>
     if (!currentRecord && this.#getId(data) === undefined) return current
     return { ...(currentRecord ?? {}), ...data }
   }

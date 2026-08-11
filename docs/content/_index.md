@@ -569,12 +569,56 @@ writes that depended on that identity.
 
 Different records still write in parallel. Confirmed keyed writes join the same queue so
 they cannot overtake optimistic writes. Id-less confirmed creates, batch creates, and
-custom methods are not keyed and therefore do not join a record queue. Coordinated
-writes across records or services need an explicit server transaction.
+custom methods are not keyed and therefore do not join a record queue. Use an explicitly
+owned mutation queue when one feature needs ordered writes across records or services; use
+a server transaction when the writes must commit atomically.
 
 Active optimistic projections are replayed over fetch responses. Locally decidable
 queries and relations update immediately; server-window, server-authoritative, and
 relational-filter reconciliations wait until the record queue settles, then refetch once.
+
+### Ordered autosave with mutation queues
+
+`m` sends independent records in parallel. A feature such as a workflow editor may instead
+need one open-ended stream: create an action, create a task that references it, then accept
+more edits in whatever order the user makes them. `useMutationQueue` owns that serial stream:
+
+```ts
+const sync = useMutationQueue({
+  schedule(operation) {
+    return isTextPatch(operation) ? { wait: 800, maxWait: 3200 } : { wait: 300 }
+  },
+  timeout: 25_000,
+  retry: 3,
+  retryDelay: 2500,
+})
+
+sync.m.actions.create({ id: actionId, title: 'Draft' })
+sync.m.tasks.create({ id: taskId, actionId, title: '' })
+sync.m.tasks.patch(taskId, { title: 'Write launch plan' })
+```
+
+Every call projects immediately. Adapter calls remain serial in registration order. Consecutive,
+unsent patches with the same queue, service, id, params, and optimism mode merge shallowly; later
+values win and all callers share the combined request promise. An intervening ordinary write,
+create, remove, custom method, or different record is a boundary.
+
+Queue writes also enter Figbird's per-record lanes. An ordinary `m.tasks.patch()` therefore cannot
+overtake an earlier `sync.m.tasks.patch()` on the same task. It can still run concurrently with
+queued work on another record when the queue's own ordering allows it.
+
+Use `sync.flush()` to skip current debounce delays. A terminal error pauses the queue with its
+optimistic state intact; inspect `sync.status`, `sync.pending`, and `sync.error`, then call
+`sync.retry()` or `sync.discard()`. Discard rolls back the failed operation and all later queued
+work. A successful remove cancels later patches from the deleted record lifetime; if the remove
+fails, old-lifetime patches become visible again and may proceed, while a queued same-ID recreate
+and its dependent writes are cancelled.
+
+Outside React, create the same object with `figbird.createMutationQueue(config)`. A mutation queue
+is ordered, not atomic or durable: it does not survive a page reload, and the application must
+register a parent create before a child create that references it. Hook configuration is read when
+the queue is first created. Timeouts cannot cancel an adapter request already on the wire, so retry
+creates only when the server accepts client IDs idempotently.
 
 ### Creates and ids: the id contract
 
@@ -614,6 +658,9 @@ variant, not per call:
 - `optimisticItem` — an explicit synthesized cache item when the payload doesn't carry
   computed fields: `patch(id, data, { optimisticItem: { ...item, computedField } })`.
   Ignored on `confirmed` handles, which never show unconfirmed state.
+- `optimisticPatch` — a partial local projection when the wire payload uses a different
+  shape: `patch(id, { isCompleted: true }, { optimisticPatch: { status: 'completed' } })`.
+  Ignored on `confirmed` handles.
 
 ### Per-action state: useAction
 
@@ -674,7 +721,7 @@ writes per record. Or express the change as data the server can apply idempotent
 
 ### Entity-level activity: useMutating
 
-`useMutating` answers "is any mutation in flight" for one entity, one service, or the
+`useMutating` answers "is any mutation active" for one entity, one service, or the
 whole instance, no matter where the mutation was fired from:
 
 ```ts
@@ -685,7 +732,8 @@ const anything = useMutating() // anywhere
 
 It's backed by a synchronous mutation tracker in the core (not the batched events
 channel), so it is correct even for components that mount _while_ a mutation is already
-in flight, and it sees writes from other components, route actions, and non-React code.
+already active, and it sees scheduled queue work plus writes from other components, route actions,
+and non-React code.
 
 Figbird serializes keyed server writes and rebases their optimistic projections. The
 canonical UI use for this hook is preventing duplicate or stale user intent: disable the
@@ -1377,7 +1425,7 @@ and the one-identity-one-call-site rule.
 ## useMutating
 
 ```ts
-useMutating() // any mutation in flight, anywhere
+useMutating() // any active mutation, anywhere
 useMutating({ service, id?, method? }) // narrowed; service accepts schema keys
 ```
 
@@ -1530,7 +1578,7 @@ const figbird = new Figbird({
 | `prefetch(definition, args, opts?)`               | Idempotent speculative warming. Call it on the explicit instance: `figbird.prefetch(...)`. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
-| `mutating`                                        | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                    |
+| `mutating`                                        | Synchronous active-mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                       |
 | `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
 | `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |

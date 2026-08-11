@@ -525,6 +525,48 @@ export function updateQueriesFromEvents<TMeta>({
   }
 }
 
+/** Re-run one query's local membership test against every cached entity. */
+export function reapplyQueryFromEntities<TMeta>({
+  service,
+  queryId,
+  serviceName,
+  touch,
+  getId,
+  itemAdded,
+  itemRemoved,
+  defaultSort,
+}: {
+  service: ServiceState<TMeta>
+  queryId: string
+  serviceName: string
+  touch: (queryId: string) => void
+  getId: (item: unknown) => ItemId | undefined
+  itemAdded: (meta: TMeta) => TMeta
+  itemRemoved: (meta: TMeta) => TMeta
+  defaultSort?: Record<string, number> | undefined
+}): void {
+  const context: QueryEventContext<TMeta> = {
+    service,
+    touch,
+    getId,
+    itemAdded,
+    itemRemoved,
+    defaultSort,
+  }
+  for (const item of service.entities.values()) {
+    const itemId = getId(item)
+    if (itemId === undefined) continue
+    applyMergeEventToQuery(context, queryId, {
+      origin: 'authoritative',
+      serviceName,
+      type: 'patched',
+      item,
+      previousItem: item,
+      itemId,
+    })
+  }
+}
+
 /** Replay in-flight events over one fetched query without changing disabled snapshots. */
 export function replayFetchedQueryFromEvents<TMeta>({
   service,

@@ -65,6 +65,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   queryStore: {
     subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
     ensureRealtimeSubscription(serviceName: string): void
+    reapplyQuery(queryId: string): void
   }
   getState(): Map<string, ServiceState<TMeta>>
   /** Returns a QueryRef; typed loosely here and re-typed once at the engine's seam. */
@@ -1223,6 +1224,12 @@ export class RelationalQueryRef<
           event,
         )
       ) {
+        return
+      }
+      if (event.origin === 'projection' && !event.projectionSettled) {
+        for (const queryId of this.#root?.queryIds() ?? []) {
+          this.#host.queryStore.reapplyQuery(queryId)
+        }
         return
       }
       this.#queueRelationalFilterRefetch()
