@@ -600,8 +600,9 @@ sync.m.tasks.patch(taskId, { title: 'Write launch plan' })
 
 Every call projects immediately. Adapter calls remain serial in registration order. Consecutive,
 unsent patches with the same queue, service, id, params, and optimism mode merge shallowly; later
-values win and all callers share the combined request promise. An intervening ordinary write,
-create, remove, custom method, or different record is a boundary.
+values win and all callers share the combined request promise. Structurally equal plain-object
+params coalesce even when callers create a fresh object. An intervening ordinary write, create,
+remove, custom method, or different record is a boundary.
 
 Queue writes also enter Figbird's per-record lanes. An ordinary `m.tasks.patch()` therefore cannot
 overtake an earlier `sync.m.tasks.patch()` on the same task. It can still run concurrently with
@@ -616,9 +617,11 @@ and its dependent writes are cancelled.
 
 Outside React, create the same object with `figbird.createMutationQueue(config)`. A mutation queue
 is ordered, not atomic or durable: it does not survive a page reload, and the application must
-register a parent create before a child create that references it. Hook configuration is read when
-the queue is first created. Timeouts cannot cancel an adapter request already on the wire, so retry
-creates only when the server accepts client IDs idempotently.
+register a parent create before a child create that references it. `useMutationQueue` reads the
+latest rendered configuration when it registers new work. On unmount it flushes registered work;
+if that detached queue later exhausts its retries, it rolls back the failed and remaining work
+instead of pausing without an owner. Timeouts cannot cancel an adapter request already on the wire,
+so retry creates only when the server accepts client IDs idempotently.
 
 ### Creates and ids: the id contract
 

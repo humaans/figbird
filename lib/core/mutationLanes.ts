@@ -101,6 +101,12 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return this.#require(lane).entries[0]
   }
 
+  predecessors(lane: MutationLane, entry: TEntry): readonly TEntry[] {
+    const state = this.#require(lane)
+    const index = state.entries.indexOf(entry)
+    return index <= 0 ? [] : state.entries.slice(0, index)
+  }
+
   replaceTail(
     lane: MutationLane,
     entry: TEntry,
@@ -256,8 +262,8 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     }
   }
 
-  overlayEvents(serviceName: string): ProcessedRealtimeEvent[] {
-    const events: ProcessedRealtimeEvent[] = []
+  overlayEvents(serviceName: string): ProcessedProjectionEvent[] {
+    const events: ProcessedProjectionEvent[] = []
     for (const lane of this.#lanes.values()) {
       if (lane.serviceName !== serviceName || !lane.entries.some(entry => entry.optimistic))
         continue
@@ -329,11 +335,11 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
   }
 
   #key(serviceName: string, id: ItemId): string {
-    return JSON.stringify([serviceName, typeof id, id])
+    return JSON.stringify([serviceName, String(id)])
   }
 }
 
-const MUTATION_EVENT_TYPE = {
+export const MUTATION_EVENT_TYPE = {
   create: 'created',
   update: 'updated',
   patch: 'patched',

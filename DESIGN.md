@@ -676,11 +676,13 @@ starts only after both constraints clear. This preserves scoped/unscoped interle
 without serializing unrelated records across the application.
 
 The queue coalesces only compatible, consecutive, unsent patches. Coalescing never crosses another
-operation and never changes an in-flight request. Queue failures pause transport while optimistic
+operation and never changes an in-flight request. Plain-object params compare structurally so fresh
+but equal request options do not defeat coalescing. Queue failures pause transport while optimistic
 intents remain projected; retry resumes the failed attempt and discard removes the failed and later
-intents. A remove is a record-lifetime boundary: success supersedes later old-lifetime patches,
-while failure restores and replays them. Queues provide ordering, not atomic commit or durable
-offline delivery.
+intents. A component-owned queue flushes on unmount and automatically discards after a later
+terminal failure, because no UI remains to choose retry or discard. A remove is a record-lifetime
+boundary: success supersedes later old-lifetime patches, while failure restores and replays them.
+Queues provide ordering, not atomic commit or durable offline delivery.
 
 Projected relational-filter dependencies now trigger a local membership pass immediately. The
 record lane retains one cumulative transition and emits it through a separate settlement channel

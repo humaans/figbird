@@ -67,7 +67,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
     subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
     subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
     ensureRealtimeSubscription(serviceName: string): void
-    reapplyQuery(queryId: string): void
+    reapplyQuery(queryId: string, mutationLaneKeys: ReadonlySet<string>): void
   }
   getState(): Map<string, ServiceState<TMeta>>
   /** Returns a QueryRef; typed loosely here and re-typed once at the engine's seam. */
@@ -1228,8 +1228,9 @@ export class RelationalQueryRef<
     const unsubscribeEvents = this.#host.queryStore.subscribeToProcessedEvents(event => {
       if (!affectsFilter(event)) return
       if (event.origin === 'projection') {
+        const laneKeys = new Set([event.mutationLaneKey])
         for (const queryId of this.#root?.queryIds() ?? []) {
-          this.#host.queryStore.reapplyQuery(queryId)
+          this.#host.queryStore.reapplyQuery(queryId, laneKeys)
         }
         return
       }

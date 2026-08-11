@@ -92,6 +92,18 @@ function isSameId(a: ItemId, b: ItemId): boolean {
   return String(a) === String(b)
 }
 
+/** Keep the first cache-key representation when route and server id types differ. */
+export function findStoredItemId<TMeta>(
+  service: ServiceState<TMeta>,
+  itemId: ItemId,
+): ItemId | undefined {
+  if (service.entities.has(itemId)) return itemId
+  for (const storedId of service.entities.keys()) {
+    if (isSameId(storedId, itemId)) return storedId
+  }
+  return undefined
+}
+
 // `$sort` doesn't affect which rows are fetched, so a sorted-but-unfiltered
 // allPages query still proves the complete row set.
 export function isUnfilteredFindQuery(params: unknown): boolean {
@@ -165,8 +177,9 @@ export function applyEventsToService<TMeta>({
     const { type, items } = event
     for (const item of items) {
       if (type === 'created') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
+        const incomingId = getId(item)
+        if (incomingId !== undefined) {
+          const itemId = findStoredItemId(service, incomingId) ?? incomingId
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.set(itemId, item)
           processedEvents.push({
@@ -181,8 +194,9 @@ export function applyEventsToService<TMeta>({
           })
         }
       } else if (type === 'updated' || type === 'patched') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
+        const incomingId = getId(item)
+        if (incomingId !== undefined) {
+          const itemId = findStoredItemId(service, incomingId) ?? incomingId
           const currItem = service.entities.get(itemId)
           if (event.origin === 'projection' || !currItem || !isItemStale(currItem, item)) {
             service.entities.set(itemId, item)
@@ -199,8 +213,9 @@ export function applyEventsToService<TMeta>({
           }
         }
       } else if (type === 'removed') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
+        const incomingId = getId(item)
+        if (incomingId !== undefined) {
+          const itemId = findStoredItemId(service, incomingId) ?? incomingId
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.delete(itemId)
           processedEvents.push({
@@ -525,11 +540,12 @@ export function updateQueriesFromEvents<TMeta>({
   }
 }
 
-/** Re-run one query's local membership test against every cached entity. */
+export type QueryReapplyResult = 'applied' | 'reconcile' | 'ignored'
+
+/** Rebuild one locally decidable find from the entity cache. */
 export function reapplyQueryFromEntities<TMeta>({
   service,
   queryId,
-  serviceName,
   touch,
   getId,
   itemAdded,
@@ -538,33 +554,82 @@ export function reapplyQueryFromEntities<TMeta>({
 }: {
   service: ServiceState<TMeta>
   queryId: string
-  serviceName: string
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
   defaultSort?: Record<string, number> | undefined
-}): void {
-  const context: QueryEventContext<TMeta> = {
-    service,
-    touch,
-    getId,
-    itemAdded,
-    itemRemoved,
-    defaultSort,
-  }
+}): QueryReapplyResult {
+  const query = service.queries.get(queryId)
+  if (!query || query.config.realtime !== 'merge') return 'ignored'
+  if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') return 'ignored'
+  if (isServerMaintained(query.classification)) return 'reconcile'
+  if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
+  if (!Array.isArray(query.state.data)) return 'ignored'
+
+  const candidates = new Map<string, { id: ItemId; item: unknown }>()
   for (const item of service.entities.values()) {
+    const incomingId = getId(item)
+    if (incomingId === undefined || !query.filterItem(item)) continue
+    const id = findStoredItemId(service, incomingId) ?? incomingId
+    candidates.set(String(id), { id, item })
+  }
+
+  const previousRows = query.state.data as unknown[]
+  const previousItemIds = new Map<string, ItemId>()
+  for (const item of previousRows) {
     const itemId = getId(item)
     if (itemId === undefined) continue
-    applyMergeEventToQuery(context, queryId, {
-      origin: 'authoritative',
-      serviceName,
-      type: 'patched',
-      item,
-      previousItem: item,
-      itemId,
-    })
+    const storedId = findStoredItemId(service, itemId) ?? itemId
+    previousItemIds.set(String(storedId), storedId)
   }
+
+  const retainedKeys = new Set<string>()
+  const nextRows: unknown[] = []
+  for (const item of previousRows) {
+    const itemId = getId(item)
+    if (itemId === undefined) continue
+    const key = String(findStoredItemId(service, itemId) ?? itemId)
+    const candidate = candidates.get(key)
+    if (!candidate) continue
+    retainedKeys.add(key)
+    nextRows.push(candidate.item)
+  }
+  for (const [key, candidate] of candidates) {
+    if (!retainedKeys.has(key)) nextRows.push(candidate.item)
+  }
+
+  const { sort } = splitWindow(queryOfParams(query.desc.params))
+  const effectiveSort = sort ?? defaultSort
+  if (effectiveSort) nextRows.sort(buildComparator(effectiveSort))
+
+  const previousKeys = new Set(previousItemIds.keys())
+  const nextKeys = new Set(candidates.keys())
+  const added = [...nextKeys].filter(key => !previousKeys.has(key))
+  const removed = [...previousKeys].filter(key => !nextKeys.has(key))
+  const dataChanged =
+    previousRows.length !== nextRows.length ||
+    previousRows.some((item, index) => item !== nextRows[index])
+  if (!dataChanged && added.length === 0 && removed.length === 0) return 'ignored'
+
+  for (const key of removed) {
+    const itemId = previousItemIds.get(key)
+    if (itemId !== undefined) removeQueryFromItemIndexById(service, itemId, queryId)
+  }
+  for (const key of added) {
+    const candidate = candidates.get(key)
+    if (candidate) addQueryToItemIndex(service, candidate.id, queryId)
+  }
+
+  let meta = query.state.meta
+  for (let index = 0; index < added.length; index += 1) meta = itemAdded(meta)
+  for (let index = 0; index < removed.length; index += 1) meta = itemRemoved(meta)
+  service.queries.set(queryId, {
+    ...query,
+    state: { ...query.state, data: nextRows, meta },
+  })
+  touch(queryId)
+  return 'applied'
 }
 
 /** Replay in-flight events over one fetched query without changing disabled snapshots. */

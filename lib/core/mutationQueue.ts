@@ -1,6 +1,7 @@
 import { createMutationsProxy, type MutationsProxy } from './mutations.js'
 import type { Schema } from './schema.js'
 import type { MutationDescriptor } from './queryTypes.js'
+import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
 
 export type MutationQueueStatus = 'idle' | 'scheduled' | 'saving' | 'retrying' | 'failed'
 
@@ -114,13 +115,14 @@ export class MutationQueue<S extends Schema> {
   readonly m: MutationsProxy<S>
 
   readonly #host: MutationQueueHost
-  readonly #config: MutationQueueConfig
+  #config: MutationQueueConfig
   readonly #items: QueueItem[] = []
   readonly #listeners = new Set<() => void>()
   #nextSequence = 1
   #snapshot: MutationQueueSnapshot = { status: 'idle', pending: 0, error: null }
   #failedDecision: ((decision: 'retry' | 'discard') => void) | null = null
   #flushThrough = 0
+  #detached = false
 
   constructor(host: MutationQueueHost, config: MutationQueueConfig = {}) {
     this.#host = host
@@ -145,11 +147,27 @@ export class MutationQueue<S extends Schema> {
     return this.#snapshot.error
   }
 
+  /** Update the policy used by operations registered after this call. */
+  setConfig(config: MutationQueueConfig): void {
+    this.#config = config
+  }
+
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener)
     return () => {
       this.#listeners.delete(listener)
     }
+  }
+
+  /**
+   * Relinquish interactive ownership: flush registered work, then discard from
+   * the first terminal failure so no queue can pause without an owner.
+   */
+  detach(): void {
+    if (this.#detached) return
+    this.#detached = true
+    if (this.#failedDecision) this.discard()
+    else this.flush()
   }
 
   /** Skip debounce delays for everything currently queued. */
@@ -162,7 +180,7 @@ export class MutationQueue<S extends Schema> {
 
   /** Retry the operation on which this queue is paused. */
   retry(): void {
-    if (!this.#failedDecision) return
+    if (this.#detached || !this.#failedDecision) return
     const decide = this.#failedDecision
     this.#failedDecision = null
     this.#setSnapshot({ status: 'scheduled', error: null })
@@ -172,16 +190,15 @@ export class MutationQueue<S extends Schema> {
   /** Roll back the failed operation and every later operation in this queue. */
   discard(): void {
     if (!this.#failedDecision) return
-    const [, ...pending] = this.#items
-    for (const item of pending) {
-      item.registration?.cancel(new MutationQueueDiscardedError())
-    }
+    const current = this.#items[0]
+    if (current) this.#discardAfter(current)
     const decide = this.#failedDecision
     this.#failedDecision = null
     decide('discard')
   }
 
   #enqueueMutation(desc: MutationDescriptor): Promise<unknown> {
+    if (this.#detached) throw new Error('figbird: cannot enqueue into a detached mutation queue')
     const tail = this.#items.at(-1)
     if (tail && this.#canCoalesce(tail, desc)) {
       const merged = this.#mergePatches(
@@ -224,10 +241,18 @@ export class MutationQueue<S extends Schema> {
   }
 
   #enqueueCall(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+    if (this.#detached) throw new Error('figbird: cannot enqueue into a detached mutation queue')
     const operation: MutationQueueOperation = { serviceName, method }
     const item = this.#createItem(operation, null)
     this.#items.push(item)
-    item.registration = this.#host.registerCall(serviceName, method, args, item)
+    try {
+      item.registration = this.#host.registerCall(serviceName, method, args, item)
+    } catch (error) {
+      this.#items.pop()
+      this.#changed()
+      this.#armCurrent()
+      throw error
+    }
     this.#observe(item)
     this.#changed()
     this.#armCurrent()
@@ -305,6 +330,11 @@ export class MutationQueue<S extends Schema> {
       return 'retry'
     }
 
+    if (this.#detached) {
+      this.#discardAfter(item)
+      return 'discard'
+    }
+
     this.#setSnapshot({ status: 'failed', error })
     return new Promise(resolve => {
       this.#failedDecision = resolve
@@ -320,7 +350,10 @@ export class MutationQueue<S extends Schema> {
 
   #retryDelay(attempt: number, error: Error, operation: MutationQueueOperation): number {
     const delay = this.#config.retryDelay ?? 0
-    return typeof delay === 'number' ? delay : delay(attempt, error, operation)
+    return resolveRetryDelay(
+      () => (typeof delay === 'number' ? delay : delay(attempt, error, operation)),
+      defaultRetryDelay(attempt),
+    )
   }
 
   #armCurrent(): void {
@@ -330,7 +363,9 @@ export class MutationQueue<S extends Schema> {
 
     const now = Date.now()
     let deadline = Math.min(current.dueAt, current.maxAt)
-    for (const item of this.#items) deadline = Math.min(deadline, item.dueAt, item.maxAt)
+    for (const item of this.#items) {
+      if (!item.settled) deadline = Math.min(deadline, item.dueAt, item.maxAt)
+    }
     if (current.sequence <= this.#flushThrough) deadline = now
     const delay = Math.max(0, deadline - now)
 
@@ -365,7 +400,13 @@ export class MutationQueue<S extends Schema> {
       return
     }
     this.#snapshot = next
-    for (const listener of this.#listeners) listener()
+    for (const listener of this.#listeners) {
+      try {
+        listener()
+      } catch {
+        // Listener errors must never alter mutation transport or settlement.
+      }
+    }
   }
 
   #schedule(operation: MutationQueueOperation): MutationSchedule {
@@ -391,7 +432,7 @@ export class MutationQueue<S extends Schema> {
     if (!current || current.method !== 'patch' || next.method !== 'patch') return false
     if (item.ready || item.settled) return false
     if (current.serviceName !== next.serviceName || current.id !== next.id) return false
-    if (!Object.is(current.params, next.params)) return false
+    if (!structurallyEqual(current.params, next.params)) return false
     if (typeof current.optimistic !== 'boolean' || typeof next.optimistic !== 'boolean')
       return false
     if (current.optimistic !== next.optimistic) return false
@@ -428,4 +469,49 @@ export class MutationQueue<S extends Schema> {
   #isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
   }
+
+  #discardAfter(item: QueueItem): void {
+    const index = this.#items.indexOf(item)
+    if (index === -1) return
+    for (const pending of this.#items.slice(index + 1)) {
+      pending.registration?.cancel(new MutationQueueDiscardedError())
+    }
+  }
+}
+
+function structurallyEqual(
+  left: unknown,
+  right: unknown,
+  seen: Map<object, object> = new Map(),
+): boolean {
+  if (Object.is(left, right)) return true
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false
+  if (left instanceof Date || right instanceof Date) {
+    return left instanceof Date && right instanceof Date && left.getTime() === right.getTime()
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    const previous = seen.get(left)
+    if (previous) return previous === right
+    seen.set(left, right)
+    return left.every((value, index) => structurallyEqual(value, right[index], seen))
+  }
+  if (Object.getPrototypeOf(left) !== Object.getPrototypeOf(right)) return false
+  const prototype = Object.getPrototypeOf(left)
+  if (prototype !== Object.prototype && prototype !== null) return false
+  const previous = seen.get(left)
+  if (previous) return previous === right
+  seen.set(left, right)
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const leftKeys = Object.keys(leftRecord)
+  const rightKeys = Object.keys(rightRecord)
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      key =>
+        Object.prototype.hasOwnProperty.call(rightRecord, key) &&
+        structurallyEqual(leftRecord[key], rightRecord[key], seen),
+    )
+  )
 }

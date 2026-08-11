@@ -1,4 +1,4 @@
-import { useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { MutationQueue, type MutationQueueConfig } from '../core/mutationQueue.js'
 import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
@@ -26,6 +26,7 @@ export function useMutationQueueImpl<S extends Schema>(
   config: MutationQueueConfig = {},
 ): MutationQueue<S> {
   const ref = useRef<{ host: MutationQueueHost<S>; queue: MutationQueue<S> } | null>(null)
+  const mountedQueues = useRef(new Set<MutationQueue<S>>())
   if (!ref.current || ref.current.host !== figbird) {
     ref.current = {
       host: figbird,
@@ -34,6 +35,17 @@ export function useMutationQueueImpl<S extends Schema>(
   }
 
   const queue = ref.current.queue
+  const activeQueues = mountedQueues.current
+  queue.setConfig(config)
   useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot)
+  useEffect(() => {
+    activeQueues.add(queue)
+    return () => {
+      activeQueues.delete(queue)
+      queueMicrotask(() => {
+        if (!activeQueues.has(queue)) queue.detach()
+      })
+    }
+  }, [activeQueues, queue])
   return queue
 }

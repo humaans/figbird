@@ -180,6 +180,50 @@ test('m: failed optimistic mutation reveals authoritative data fetched while pen
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'fetched while pending')
 })
 
+test('mutation lanes: overlay-only fetch replay reconciles its server window after settlement', async t => {
+  const initial = services()
+  const seeded = {
+    ...initial,
+    notes: { data: { ...initial.notes.data, 3: { id: 3, content: 'third' } } },
+  }
+  const { figbird, feathers } = createTestApp(schema, seeded)
+  const getRef = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  getRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const removeGate = deferred<MockItem>()
+  const notes = feathers.service('notes')
+  notes.remove = (() => removeGate.promise) as never
+  const removing = figbird.m.notes.remove(1)
+
+  const windowRef = figbird.queryDesc({
+    serviceName: 'notes',
+    method: 'find',
+    params: { query: { $sort: { id: 1 }, $limit: 2 } },
+  })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  windowRef.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    latest?.data?.map(note => note.id),
+    [2],
+  )
+  const findCount = notes.counts.find
+
+  delete notes.data[1]
+  removeGate.resolve({ id: 1, content: 'hello' })
+  await removing
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(notes.counts.find, findCount + 1)
+  t.deepEqual(
+    latest?.data?.map(note => note.id),
+    [2, 3],
+  )
+})
+
 test('mutation queue: buffered patches coalesce while every call projects immediately', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
@@ -231,6 +275,196 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   t.deepEqual(queue.getSnapshot(), { status: 'idle', pending: 0, error: null })
   unsubscribeEvents()
   unsubscribeSettlements()
+})
+
+test('mutation lanes: a batched projection still settles and refetches after its lane releases', async t => {
+  const { figbird, feathers } = createTestApp(schema, services(), { eventBatchInterval: 20 })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { realtime: 'refetch' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const initialFindCount = feathers.service('notes').counts.find
+
+  const patchGate = deferred<MockItem>()
+  const notes = feathers.service('notes')
+  notes.patch = (() => patchGate.promise) as never
+  let settlements = 0
+  figbird.queryStore.subscribeToProjectionSettlements(() => {
+    settlements += 1
+  })
+
+  const pending = figbird.m.notes.confirmed.patch(1, { content: 'mine' })
+  notes.data[1] = { id: 1, content: 'other client' }
+  notes.emit('patched', notes.data[1])
+  patchGate.reject(new Error('mine failed'))
+  await t.throwsAsync(() => pending, { message: 'mine failed' })
+  await new Promise(resolve => setTimeout(resolve, 40))
+
+  t.is(settlements, 1)
+  t.is(feathers.service('notes').counts.find, initialFindCount + 1)
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'other client')
+})
+
+test('mutation lanes: batch create acknowledgements advance lanes opened by later patches', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const createGate = deferred<MockItem[]>()
+  const patchGate = deferred<MockItem>()
+  feathers.service('notes').create = (() => createGate.promise) as never
+  feathers.service('notes').patch = (() => patchGate.promise) as never
+
+  const created = figbird.mutateDesc({
+    serviceName: 'notes',
+    method: 'create',
+    data: [{ id: 10, content: 'optimistic create' }],
+    optimistic: true,
+  })
+  const patched = figbird.m.notes.patch(10, { content: 'optimistic patch' })
+  createGate.resolve([{ id: 10, content: 'server create' }])
+  await created
+  patchGate.reject(new Error('patch failed'))
+  await t.throwsAsync(() => patched, { message: 'patch failed' })
+
+  t.is(latest?.data?.find(note => note.id === 10)?.content, 'server create')
+})
+
+test('mutation lanes: route-string ids and numeric server ids share one lane and cache key', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const patchGate = deferred<MockItem>()
+  const notes = feathers.service('notes')
+  notes.patch = (() => patchGate.promise) as never
+  const pending = figbird.m.notes.patch('1', { content: 'optimistic' })
+  notes.data[1] = { id: 1, content: 'numeric server event' }
+  notes.emit('patched', notes.data[1])
+  patchGate.reject(new Error('patch failed'))
+  await t.throwsAsync(() => pending, { message: 'patch failed' })
+
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'numeric server event')
+  t.is(latest?.data?.filter(note => String(note.id) === '1').length, 1)
+  t.is(figbird.getState().get('notes')?.entities.size, 2)
+})
+
+test('mutation lanes: removing an uncached row still invalidates refetch queries', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc(
+    {
+      serviceName: 'notes',
+      method: 'find',
+      params: { query: { $limit: 1 } },
+    },
+    { realtime: 'refetch' },
+  )
+  ref.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+  const initialFindCount = notes.counts.find
+  notes.remove = (() => {
+    const removed = notes.data[2]!
+    delete notes.data[2]
+    return Promise.resolve(removed)
+  }) as never
+
+  await figbird.m.notes.confirmed.remove(2)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(notes.counts.find, initialFindCount + 1)
+})
+
+test('mutations: null-id bulk removes apply every returned row', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const notes = feathers.service('notes')
+  notes.remove = (() => {
+    const removed = Object.values(notes.data)
+    notes.data = {}
+    return Promise.resolve(removed)
+  }) as never
+  await figbird.queryStore.mutate({
+    serviceName: 'notes',
+    method: 'remove',
+    id: null as never,
+    params: { query: { done: true } },
+    optimistic: false,
+  })
+
+  t.deepEqual(latest?.data, [])
+})
+
+test('mutation lanes: explicit optimistic create ids serialize dependent patches', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const createGate = deferred<MockItem>()
+  const patchGate = deferred<MockItem>()
+  const calls: string[] = []
+  feathers.service('notes').create = (() => {
+    calls.push('create')
+    return createGate.promise
+  }) as never
+  feathers.service('notes').patch = (() => {
+    calls.push('patch')
+    return patchGate.promise
+  }) as never
+
+  const created = figbird.m.notes.create(
+    { content: 'wire create' },
+    { optimisticItem: { id: 10, content: 'optimistic create' } },
+  )
+  const patched = figbird.m.notes.patch(10, { content: 'dependent patch' })
+  t.deepEqual(calls, ['create'])
+
+  createGate.resolve({ id: 10, content: 'server create' })
+  await created
+  t.deepEqual(calls, ['create', 'patch'])
+  patchGate.resolve({ id: 10, content: 'dependent patch' })
+  await patched
+})
+
+test('mutation lanes: raw confirmed creates with client ids serialize dependent patches', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const createGate = deferred<MockItem>()
+  const patchGate = deferred<MockItem>()
+  const calls: string[] = []
+  feathers.service('notes').create = (() => {
+    calls.push('create')
+    return createGate.promise
+  }) as never
+  feathers.service('notes').patch = (() => {
+    calls.push('patch')
+    return patchGate.promise
+  }) as never
+
+  const created = figbird.mutateDesc({
+    serviceName: 'notes',
+    method: 'create',
+    data: { id: 10, content: 'wire create' },
+  })
+  const patched = figbird.m.notes.patch(10, { content: 'dependent patch' })
+  t.deepEqual(calls, ['create'])
+
+  createGate.resolve({ id: 10, content: 'server create' })
+  await created
+  t.deepEqual(calls, ['create', 'patch'])
+  patchGate.resolve({ id: 10, content: 'dependent patch' })
+  await patched
 })
 
 test('mutation queue: ordinary writes preserve their interleaved record order', async t => {
@@ -315,6 +549,146 @@ test('mutation queue: ordinary same-record writes prevent backward coalescing', 
 
   gates[3]!.resolve({ id: 1, content: 'queued three' })
   await last
+})
+
+test('mutation queue: an immediate write expedites every debounced lane predecessor', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const gates = [deferred<MockItem>(), deferred<MockItem>(), deferred<MockItem>()]
+  const calls: string[] = []
+  feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
+    const gate = gates[calls.length]!
+    calls.push(data.content!)
+    return gate.promise
+  }) as never
+
+  const running = figbird.m.notes.patch(1, { content: 'running' })
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const queued = queue.m.notes.patch(1, { content: 'debounced predecessor' })
+  const immediate = figbird.m.notes.patch(1, { content: 'immediate follower' })
+
+  gates[0]!.resolve({ id: 1, content: 'running' })
+  await running
+  t.deepEqual(calls, ['running', 'debounced predecessor'])
+  gates[1]!.resolve({ id: 1, content: 'debounced predecessor' })
+  await queued
+  t.deepEqual(calls, ['running', 'debounced predecessor', 'immediate follower'])
+  gates[2]!.resolve({ id: 1, content: 'immediate follower' })
+  await immediate
+})
+
+test('mutation queue: flushing a second queue expedites debounced same-record predecessors', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const gates = [deferred<MockItem>(), deferred<MockItem>()]
+  const calls: string[] = []
+  feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
+    const gate = gates[calls.length]!
+    calls.push(data.content!)
+    return gate.promise
+  }) as never
+
+  const firstQueue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const secondQueue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const first = firstQueue.m.notes.patch(1, { content: 'first queue' })
+  const second = secondQueue.m.notes.patch(1, { content: 'second queue' })
+  secondQueue.flush()
+
+  t.deepEqual(calls, ['first queue'])
+  gates[0]!.resolve({ id: 1, content: 'first queue' })
+  await first
+  t.deepEqual(calls, ['first queue', 'second queue'])
+  gates[1]!.resolve({ id: 1, content: 'second queue' })
+  await second
+})
+
+test('mutation queue: structurally equal params still coalesce patches', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const gate = deferred<MockItem>()
+  const calls: Array<[Partial<Note>, unknown]> = []
+  feathers.service('notes').patch = ((_id: number, data: Partial<Note>, params: unknown) => {
+    calls.push([data, params])
+    return gate.promise
+  }) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+
+  const first = queue.m.notes.patch(
+    1,
+    { content: 'a' },
+    { params: { query: { $select: ['content'] } } },
+  )
+  const second = queue.m.notes.patch(
+    1,
+    { content: 'ab' },
+    { params: { query: { $select: ['content'] } } },
+  )
+  t.is(first, second)
+  queue.flush()
+  t.is(calls.length, 1)
+  t.deepEqual(calls[0]?.[0], { content: 'ab' })
+  gate.resolve({ id: 1, content: 'ab' })
+  await second
+})
+
+test('mutation queue: cancelled non-head items cannot shorten the head deadline', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const removeGate = deferred<MockItem>()
+  const patchGate = deferred<MockItem>()
+  const calls: string[] = []
+  feathers.service('notes').remove = (() => removeGate.promise) as never
+  feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
+    calls.push(data.content!)
+    return patchGate.promise
+  }) as never
+
+  const removing = figbird.m.notes.remove(1)
+  const queue = figbird.createMutationQueue({
+    schedule: operation => ({ wait: operation.id === 2 ? 500 : 40 }),
+  })
+  const head = queue.m.notes.patch(2, { content: 'slow head' })
+  const cancelled = queue.m.notes.patch(1, { content: 'cancelled follower' })
+  const cancelledError = t.throwsAsync(() => cancelled)
+
+  removeGate.resolve({ id: 1, content: 'hello' })
+  await removing
+  t.true(isMutationSupersededError(await cancelledError))
+  await new Promise(resolve => setTimeout(resolve, 80))
+  t.deepEqual(calls, [])
+
+  queue.flush()
+  t.deepEqual(calls, ['slow head'])
+  patchGate.resolve({ id: 2, content: 'slow head' })
+  await head
+})
+
+test('mutation queue: throwing subscribers cannot fail transport', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const queue = figbird.createMutationQueue()
+  queue.subscribe(() => {
+    throw new Error('subscriber failed')
+  })
+
+  const result = await queue.m.notes.patch(1, { content: 'saved' })
+  t.is(result.content, 'saved')
+  t.is(feathers.service('notes').counts.patch, 1)
+  t.is(queue.status, 'idle')
+})
+
+test('mutation queue: a throwing retryDelay cannot replace the transport failure', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  let calls = 0
+  feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
+    calls += 1
+    return calls === 1 ? Promise.reject(new Error('offline')) : Promise.resolve({ id: 1, ...data })
+  }) as never
+  const queue = figbird.createMutationQueue({
+    retry: 1,
+    retryDelay: () => {
+      throw new Error('bad timing hook')
+    },
+  })
+
+  const result = await queue.m.notes.patch(1, { content: 'retried' })
+  t.is(result.content, 'retried')
+  t.is(calls, 2)
 })
 
 test('mutation queue: a successful remove cancels a later patch in the old lifetime', async t => {
@@ -982,6 +1356,74 @@ test('useAction: run works as a React 19 <form action>', async t => {
 
   t.deepEqual(received, ['hello form'])
   t.is(pendingText, 'false')
+})
+
+// ----- useMutationQueue -----
+
+test('useMutationQueue: later renders update queue policy without replacing the queue', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, services())
+  const { useMutationQueue: useQueue } = createHooks(figbird)
+  const d = dom()
+  let queue!: ReturnType<typeof useQueue>
+  let makeImmediate!: () => void
+
+  function Probe() {
+    const [immediate, setImmediate] = useState(false)
+    queue = useQueue({ schedule: () => ({ wait: immediate ? 0 : 10_000 }) })
+    makeImmediate = () => setImmediate(true)
+    return <div className='status'>{queue.status}</div>
+  }
+
+  d.render(
+    <App>
+      <Probe />
+    </App>,
+  )
+  const originalQueue = queue
+  await d.flush(() => makeImmediate())
+  t.is(queue, originalQueue)
+
+  await d.flush(async () => {
+    await queue.m.notes.patch(1, { content: 'uses latest config' })
+  })
+  t.is(feathers.service('notes').counts.patch, 1)
+})
+
+test('useMutationQueue: unmount flushes work and cannot strand a failed optimistic lane', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, services())
+  const { useMutationQueue: useQueue } = createHooks(figbird)
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  feathers.service('notes').patch = (() => Promise.reject(new Error('offline'))) as never
+
+  const d = dom()
+  let queue!: ReturnType<typeof useQueue>
+  function Probe() {
+    queue = useQueue({ schedule: () => ({ wait: 10_000 }) })
+    return null
+  }
+  d.render(
+    <App>
+      <Probe />
+    </App>,
+  )
+
+  let pending!: Promise<Note>
+  await d.act(() => {
+    pending = queue.m.notes.patch(1, { content: 'unsaved' })
+  })
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'unsaved')
+  d.unmount()
+  await t.throwsAsync(() => pending, { message: 'offline' })
+  await Promise.resolve()
+
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'hello')
+  t.is(figbird.mutating.getSnapshot().length, 0)
+  t.is(queue.status, 'idle')
 })
 
 // ----- useMutating -----
