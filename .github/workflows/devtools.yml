@@ -3,6 +3,7 @@ name: Browser devtools
 on:
   pull_request:
     paths:
+      - .github/workflows/devtools-release.yml
       - .github/workflows/devtools.yml
       - extensions/**
       - lib/**
@@ -16,6 +17,7 @@ on:
     branches:
       - master
     paths:
+      - .github/workflows/devtools-release.yml
       - .github/workflows/devtools.yml
       - extensions/**
       - lib/**

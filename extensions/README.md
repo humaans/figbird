@@ -44,7 +44,13 @@ The command creates:
 
 The Chrome and unsigned Firefox archives have `manifest.json` at their root. The source
 archive lets Mozilla reproduce the minified Firefox build. Firefox users need the signed
-XPI produced by Mozilla, not the unsigned ZIP.
+XPI produced by Mozilla, not the unsigned ZIP. A local build cannot create that signed XPI,
+and `npm run devtools:build` recreates `extensions/build`, so do not keep signed artifacts
+there permanently.
+
+The release workflow uploads the Mozilla-signed file to the matching
+`devtools-v<version>` GitHub prerelease as `figbird-devtools-firefox-signed.xpi`. That release
+asset is the stable team download; the workflow artifact is retained as a build record.
 
 The shared browser extension version lives in `extensions/version.json`. See
 `extensions/RELEASING.md` for publisher setup and release instructions.

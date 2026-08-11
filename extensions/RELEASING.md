@@ -53,7 +53,8 @@ Mozilla exposes the secret only when it is created. Store it directly in GitHub 
 
 Open **Actions → Release browser devtools → Run workflow** on the default branch.
 
-- **Sign Firefox** submits the unlisted build and source archive to Mozilla, then saves the signed XPI as a workflow artifact.
+- **Sign Firefox** submits the unlisted build and source archive to Mozilla, then saves the
+  signed XPI as both a workflow artifact and a `devtools-v<version>` GitHub prerelease asset.
 - **Upload Chrome** uploads the new ZIP but leaves it in the dashboard for inspection.
 - **Submit Chrome** uploads and submits it for private-store review. It also enables **Upload Chrome** automatically.
 
