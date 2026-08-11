@@ -1432,8 +1432,7 @@ returns `undefined` instead.
 
 ## Browser devtools extension
 
-Figbird devtools run as a Chrome or Firefox DevTools extension. Apps do not import or
-mount a component, and there is no `figbird.devtools.enable()` or `disable()` API.
+Figbird devtools run as a Chrome or Firefox DevTools extension.
 
 Build the extensions from this repository:
 
