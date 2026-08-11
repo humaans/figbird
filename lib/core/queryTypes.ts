@@ -43,15 +43,15 @@ interface ProcessedEventBase {
   itemId: string | number
 }
 
+/** An optimistic entity change after cache application. */
+export type ProcessedProjectionEvent = ProcessedEventBase & {
+  origin: 'projection'
+  mutationLaneKey: string
+}
+
 /** An authoritative or optimistic entity change after cache application. */
 export type ProcessedRealtimeEvent =
-  | (ProcessedEventBase & { origin: 'authoritative' })
-  | (ProcessedEventBase & {
-      origin: 'projection'
-      mutationLaneKey: string
-      /** Set when the lane drains and server reconciliation may resume. */
-      projectionSettled?: true
-    })
+  (ProcessedEventBase & { origin: 'authoritative' }) | ProcessedProjectionEvent
 
 export type QueryStatus = 'loading' | 'success' | 'error'
 

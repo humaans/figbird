@@ -689,7 +689,7 @@ export class Figbird<
         const registration = this.queryStore.registerMutation(resolve(desc), control)
         return {
           promise: registration.promise,
-          update: next => registration.update(resolve(next)),
+          tryUpdate: next => registration.tryUpdate(resolve(next)),
           cancel: error => registration.cancel(error),
         }
       },

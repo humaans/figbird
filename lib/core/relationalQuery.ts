@@ -5,6 +5,7 @@ import type { QueryAST } from './queryBuilder.js'
 import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
 import type {
+  ProcessedProjectionEvent,
   ProcessedRealtimeEvent,
   QueryConfig,
   QueryDescriptor,
@@ -64,6 +65,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   }
   queryStore: {
     subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
+    subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
     ensureRealtimeSubscription(serviceName: string): void
     reapplyQuery(queryId: string): void
   }
@@ -1213,20 +1215,19 @@ export class RelationalQueryRef<
       this.#host.queryStore.ensureRealtimeSubscription(dependency.serviceName)
     }
 
-    this.#processedEventUnsub = this.#host.queryStore.subscribeToProcessedEvents(event => {
-      if (
-        !shouldRefetchRelationalFilterQuery(
-          this.#schema,
-          this.#host.getState(),
-          this.#ast,
-          paths,
-          dependencies,
-          event,
-        )
-      ) {
-        return
-      }
-      if (event.origin === 'projection' && !event.projectionSettled) {
+    const affectsFilter = (event: ProcessedRealtimeEvent) =>
+      shouldRefetchRelationalFilterQuery(
+        this.#schema,
+        this.#host.getState(),
+        this.#ast,
+        paths,
+        dependencies,
+        event,
+      )
+
+    const unsubscribeEvents = this.#host.queryStore.subscribeToProcessedEvents(event => {
+      if (!affectsFilter(event)) return
+      if (event.origin === 'projection') {
         for (const queryId of this.#root?.queryIds() ?? []) {
           this.#host.queryStore.reapplyQuery(queryId)
         }
@@ -1234,6 +1235,13 @@ export class RelationalQueryRef<
       }
       this.#queueRelationalFilterRefetch()
     })
+    const unsubscribeSettlements = this.#host.queryStore.subscribeToProjectionSettlements(event => {
+      if (affectsFilter(event)) this.#queueRelationalFilterRefetch()
+    })
+    this.#processedEventUnsub = () => {
+      unsubscribeEvents()
+      unsubscribeSettlements()
+    }
   }
 
   #queueRelationalFilterRefetch(): void {

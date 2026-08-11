@@ -683,8 +683,9 @@ while failure restores and replays them. Queues provide ordering, not atomic com
 offline delivery.
 
 Projected relational-filter dependencies now trigger a local membership pass immediately. The
-projection event is retained by its record lane and released as a settled signal when the lane
-drains, allowing one server reconciliation without a refetch for each intermediate keystroke.
+record lane retains one cumulative transition and emits it through a separate settlement channel
+when the lane drains, allowing one server reconciliation without a refetch for each intermediate
+keystroke.
 
 `optimisticPatch` separates the record fragment used for local projection from the adapter payload.
 This covers domain translations such as projecting `{ status: 'completed' }` while sending

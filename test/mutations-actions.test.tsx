@@ -199,12 +199,22 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   const queue = figbird.createMutationQueue({
     schedule: () => ({ wait: 10_000, maxWait: 20_000 }),
   })
+  let projectionEvents = 0
+  let projectionSettlements = 0
+  const unsubscribeEvents = figbird.queryStore.subscribeToProcessedEvents(event => {
+    if (event.origin === 'projection' && event.itemId === 1) projectionEvents += 1
+  })
+  const unsubscribeSettlements = figbird.queryStore.subscribeToProjectionSettlements(event => {
+    if (event.itemId === 1) projectionSettlements += 1
+  })
   const first = queue.m.notes.patch(1, { content: 'e' })
   const second = queue.m.notes.patch(1, { content: 'edited' })
 
   t.is(first, second, 'coalesced callers share the outgoing request')
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'edited')
   t.is(calls.length, 0)
+  t.is(projectionEvents, 2)
+  t.is(projectionSettlements, 0)
   t.deepEqual(queue.getSnapshot(), { status: 'scheduled', pending: 1, error: null })
 
   queue.flush()
@@ -212,7 +222,15 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
 
   gate.resolve({ id: 1, content: 'edited' })
   await second
+  t.is(
+    projectionEvents,
+    3,
+    'two local projections and the server acknowledgement are each emitted once',
+  )
+  t.is(projectionSettlements, 1)
   t.deepEqual(queue.getSnapshot(), { status: 'idle', pending: 0, error: null })
+  unsubscribeEvents()
+  unsubscribeSettlements()
 })
 
 test('mutation queue: ordinary writes preserve their interleaved record order', async t => {
@@ -244,6 +262,59 @@ test('mutation queue: ordinary writes preserve their interleaved record order', 
 
   gates[2]!.resolve({ id: 1, content: 'workflow four' })
   await fourth
+})
+
+test('mutation queue: ordinary same-record writes prevent backward coalescing', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const gates = [
+    deferred<MockItem>(),
+    deferred<MockItem>(),
+    deferred<MockItem>(),
+    deferred<MockItem>(),
+  ]
+  const calls: Array<[number, string]> = []
+  feathers.service('notes').patch = ((id: number, data: Partial<Note>) => {
+    const gate = gates[calls.length]!
+    calls.push([id, data.content!])
+    return gate.promise
+  }) as never
+
+  const blocker = queue.m.notes.patch(2, { content: 'other record' })
+  const first = queue.m.notes.patch(1, { content: 'queued one' })
+  const ordinary = figbird.m.notes.patch(1, { content: 'ordinary' })
+  const last = queue.m.notes.patch(1, { content: 'queued three' })
+  queue.flush()
+
+  t.not(first, last, 'the ordinary lane entry is a coalescing boundary')
+  t.deepEqual(calls, [[2, 'other record']])
+
+  gates[0]!.resolve({ id: 2, content: 'other record' })
+  await blocker
+  t.deepEqual(calls, [
+    [2, 'other record'],
+    [1, 'queued one'],
+  ])
+
+  gates[1]!.resolve({ id: 1, content: 'queued one' })
+  await first
+  t.deepEqual(calls, [
+    [2, 'other record'],
+    [1, 'queued one'],
+    [1, 'ordinary'],
+  ])
+
+  gates[2]!.resolve({ id: 1, content: 'ordinary' })
+  await ordinary
+  t.deepEqual(calls, [
+    [2, 'other record'],
+    [1, 'queued one'],
+    [1, 'ordinary'],
+    [1, 'queued three'],
+  ])
+
+  gates[3]!.resolve({ id: 1, content: 'queued three' })
+  await last
 })
 
 test('mutation queue: a successful remove cancels a later patch in the old lifetime', async t => {

@@ -75,7 +75,7 @@ export interface ScheduledMutationControl {
 /** @internal */
 export interface RegisteredMutation {
   readonly promise: Promise<unknown>
-  update(desc: MutationDescriptor): void
+  tryUpdate(desc: MutationDescriptor): boolean
   cancel(error: Error): void
 }
 
@@ -121,7 +121,6 @@ export class MutationQueue<S extends Schema> {
   #snapshot: MutationQueueSnapshot = { status: 'idle', pending: 0, error: null }
   #failedDecision: ((decision: 'retry' | 'discard') => void) | null = null
   #flushThrough = 0
-  #discarding = false
 
   constructor(host: MutationQueueHost, config: MutationQueueConfig = {}) {
     this.#host = host
@@ -173,15 +172,13 @@ export class MutationQueue<S extends Schema> {
   /** Roll back the failed operation and every later operation in this queue. */
   discard(): void {
     if (!this.#failedDecision) return
-    this.#discarding = true
-    const [current, ...pending] = this.#items
+    const [, ...pending] = this.#items
     for (const item of pending) {
       item.registration?.cancel(new MutationQueueDiscardedError())
     }
     const decide = this.#failedDecision
     this.#failedDecision = null
     decide('discard')
-    if (!current) this.#discarding = false
   }
 
   #enqueueMutation(desc: MutationDescriptor): Promise<unknown> {
@@ -191,19 +188,22 @@ export class MutationQueue<S extends Schema> {
         tail.desc as Extract<MutationDescriptor, { method: 'patch' }>,
         desc as Extract<MutationDescriptor, { method: 'patch' }>,
       )
-      tail.desc = merged
-      tail.operation = this.#operationFromDesc(merged)
-      tail.schedule = this.#schedule(tail.operation)
-      tail.dueAt = Date.now() + tail.schedule.wait
-      tail.maxAt = Math.min(
-        tail.maxAt,
-        tail.schedule.maxWait === undefined
-          ? Number.POSITIVE_INFINITY
-          : tail.enqueuedAt + tail.schedule.maxWait,
-      )
-      tail.registration!.update(merged)
-      this.#armCurrent()
-      return tail.registration!.promise
+      const operation = this.#operationFromDesc(merged)
+      const schedule = this.#schedule(operation)
+      if (tail.registration!.tryUpdate(merged)) {
+        tail.desc = merged
+        tail.operation = operation
+        tail.schedule = schedule
+        tail.dueAt = Date.now() + schedule.wait
+        tail.maxAt = Math.min(
+          tail.maxAt,
+          schedule.maxWait === undefined
+            ? Number.POSITIVE_INFINITY
+            : tail.enqueuedAt + schedule.maxWait,
+        )
+        this.#armCurrent()
+        return tail.registration!.promise
+      }
     }
 
     const operation = this.#operationFromDesc(desc)
@@ -273,19 +273,7 @@ export class MutationQueue<S extends Schema> {
   #observe(item: QueueItem): void {
     item.registration!.promise.then(
       () => this.#settled(item),
-      error => {
-        // Superseded/discarded entries are expected queue transitions, not a
-        // second failure that should pause the queue.
-        if (
-          isMutationSupersededError(error) ||
-          error instanceof MutationQueueDiscardedError ||
-          this.#discarding
-        ) {
-          this.#settled(item)
-          return
-        }
-        this.#settled(item)
-      },
+      () => this.#settled(item),
     )
   }
 
@@ -296,7 +284,6 @@ export class MutationQueue<S extends Schema> {
 
     while (this.#items[0]?.settled) this.#items.shift()
     if (this.#items.length === 0) {
-      this.#discarding = false
       this.#flushThrough = 0
       this.#setSnapshot({ status: 'idle', pending: 0, error: null })
       return

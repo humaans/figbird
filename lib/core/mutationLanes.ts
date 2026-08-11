@@ -1,4 +1,9 @@
-import type { EventType, MutationDescriptor, ProcessedRealtimeEvent } from './queryTypes.js'
+import type {
+  EventType,
+  MutationDescriptor,
+  ProcessedProjectionEvent,
+  ProcessedRealtimeEvent,
+} from './queryTypes.js'
 
 export type ItemId = string | number
 
@@ -24,7 +29,7 @@ interface MutationLaneState<TEntry extends MutationLaneEntry> extends MutationLa
   entries: TEntry[]
   running: boolean
   deferredQueryIds: Set<string>
-  deferredProcessedEvents: ProcessedRealtimeEvent[]
+  deferredProjection: ProcessedProjectionEvent | null
 }
 
 export interface ProjectionChange {
@@ -47,7 +52,7 @@ export interface LaneSettlement<TEntry extends MutationLaneEntry> {
 }
 
 export interface ReleasedLaneEffects {
-  processedEvents: readonly ProcessedRealtimeEvent[]
+  projection: ProcessedProjectionEvent | null
   queryIds: ReadonlySet<string>
 }
 
@@ -80,7 +85,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       entries: [],
       running: false,
       deferredQueryIds: new Set(),
-      deferredProcessedEvents: [],
+      deferredProjection: null,
     }
     this.#lanes.set(key, lane)
     return lane
@@ -96,11 +101,14 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return this.#require(lane).entries[0]
   }
 
-  update(lane: MutationLane, entry: TEntry): ProjectionChange {
+  replaceTail(
+    lane: MutationLane,
+    entry: TEntry,
+    desc: MutationDescriptor,
+  ): ProjectionChange | null {
     const state = this.#require(lane)
-    if (!state.entries.includes(entry)) {
-      throw new Error(`figbird: cannot update inactive mutation in lane ${lane.key}`)
-    }
+    if (state.entries.at(-1) !== entry) return null
+    entry.desc = desc
     return this.#reproject(state)
   }
 
@@ -218,18 +226,18 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return true
   }
 
-  deferProcessedEvent(laneKey: string, event: ProcessedRealtimeEvent): boolean {
+  deferProjection(laneKey: string, event: ProcessedProjectionEvent): boolean {
     const lane = this.#lanes.get(laneKey)
     if (!lane) return false
-    const first = lane.deferredProcessedEvents[0]
+    const first = lane.deferredProjection
     if (!first) {
-      lane.deferredProcessedEvents.push(event)
+      lane.deferredProjection = event
       return true
     }
 
     // A typing burst can produce hundreds of projections. Relational consumers
     // need one cumulative transition when the lane drains, not the full history.
-    lane.deferredProcessedEvents[0] = {
+    lane.deferredProjection = {
       ...event,
       type:
         event.type === 'removed' ? 'removed' : first.previousItem === null ? 'created' : 'patched',
@@ -243,7 +251,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     if (state.running || state.entries.length > 0) return null
     this.#lanes.delete(state.key)
     return {
-      processedEvents: state.deferredProcessedEvents,
+      projection: state.deferredProjection,
       queryIds: state.deferredQueryIds,
     }
   }
