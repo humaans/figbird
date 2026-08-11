@@ -7,12 +7,14 @@ on:
       - .github/workflows/devtools.yml
       - extensions/**
       - lib/**
+      - Makefile
       - package-lock.json
       - package.json
       - tasks/build-devtools.js
       - tasks/lint-firefox-devtools.js
       - tasks/package-devtools.js
       - tasks/publish-chrome-devtools.js
+      - tasks/release-devtools.js
   push:
     branches:
       - master
@@ -21,12 +23,14 @@ on:
       - .github/workflows/devtools.yml
       - extensions/**
       - lib/**
+      - Makefile
       - package-lock.json
       - package.json
       - tasks/build-devtools.js
       - tasks/lint-firefox-devtools.js
       - tasks/package-devtools.js
       - tasks/publish-chrome-devtools.js
+      - tasks/release-devtools.js
 
 permissions:
   contents: read

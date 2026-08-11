@@ -8,11 +8,10 @@ Keep store ownership and automation under organization accounts. Do not use pers
 
 ## Prepare a release
 
-1. Increase the version in `extensions/version.json`. Browser extension versions can contain one to four dot-separated integers.
-2. Update the extension code and listing or privacy copy if its behavior changed.
-3. Run `npm test` and `npm run devtools:check`.
-4. QA the unpacked Chrome and Firefox builds using `extensions/README.md`.
-5. Merge the reviewed version change before running the release workflow.
+1. Update the extension code and listing or privacy copy if its behavior changed.
+2. Run `npm test` and `npm run devtools:check`.
+3. QA the unpacked Chrome and Firefox builds using `extensions/README.md`.
+4. Merge the reviewed extension changes.
 
 ## One-time publisher setup
 
@@ -49,9 +48,25 @@ Add these secrets to the protected `extension-release` GitHub environment:
 
 Mozilla exposes the secret only when it is created. Store it directly in GitHub Actions and rotate it if it is ever copied elsewhere.
 
-## Run the workflow
+## Release both extensions
 
-Open **Actions → Release browser devtools → Run workflow** on the default branch.
+After merging the extension changes, run:
+
+```sh
+make release-extensions
+```
+
+The command increases the patch component in `extensions/version.json`, creates a release branch,
+commits and pushes it, and opens a version-bump PR. It does not change the current working tree.
+Use `make release-extensions VERSION=0.2.0` to choose a different version.
+
+The command checks the publisher configuration and version before creating the PR. Approve and
+merge the PR to submit the Firefox extension for Mozilla signing and the private Chrome extension
+for review. The release workflow saves the signed Firefox XPI in the matching
+`devtools-v<version>` GitHub prerelease.
+
+To release only one browser, open **Actions → Release browser devtools → Run workflow** on the
+default branch and select the required inputs.
 
 - **Sign Firefox** submits the unlisted build and source archive to Mozilla, then saves the
   signed XPI as both a workflow artifact and a `devtools-v<version>` GitHub prerelease asset.
