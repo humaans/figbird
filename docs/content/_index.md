@@ -140,9 +140,7 @@ const schema = createSchema({
     tasks: service<TaskService>(),
     people: service<PersonService>({ path: 'api/people' }),
   },
-  relationships: {
-    /* per-service factories — see Relations */
-  },
+  relationships: {/* per-service factories — see Relations */},
 })
 ```
 
@@ -1432,34 +1430,29 @@ returns `undefined` instead.
 
 # API: Observability
 
-## Built-in devtools
+## Browser devtools extension
 
-Mount the devtools once near the root of the app:
+Figbird devtools run as a Chrome or Firefox DevTools extension.
 
-```tsx
-import { FigbirdDevtools } from 'figbird/devtools'
+Build the extensions from this repository:
 
-function AppDevtools() {
-  return <FigbirdDevtools figbird={figbird} enabledByDefault={import.meta.env.DEV} />
-}
+```sh
+npm run devtools:build
 ```
 
-Press `Cmd+Shift+.` on macOS or `Ctrl+Shift+.` elsewhere to open or close them. The
-component does not render a launcher button.
+- Chrome: open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
+  and select `extensions/build/chrome`.
+- Firefox: open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**,
+  and select `extensions/build/firefox/manifest.json`.
 
-`enabledByDefault` should use the app bundler's development flag. In production the
-component stays locked and does not collect events until the app enables it:
+Open the browser developer tools and select the **Figbird** panel. The panel connects to
+the newest Figbird instance on the inspected page and starts debug collection. Closing the
+panel drops the connection; without a connection, Figbird does not retain devtools history
+or subscribe to its event stream.
 
-```ts
-figbird.devtools.enable()
-figbird.devtools.disable()
-```
-
-Both calls take effect immediately and store the choice in `localStorage` for that origin.
-The stored choice overrides `enabledByDefault`. Disabling the devtools also closes an open
-drawer or popout and stops collection. This is a discoverability gate, not an authorization
-boundary: the production devtools must not expose data or actions that the signed-in user
-could not otherwise access.
+Run `npm run devtools:package` to produce Chrome and Firefox zip archives under
+`extensions/build/` for store upload or direct distribution. See `extensions/README.md`
+for QA and packaging details.
 
 ## figbird.explain
 
@@ -1507,7 +1500,7 @@ start/end/error/rollback, and their `method` is a CRUD name or a custom method n
 named `useAction` hooks and speak the app's vocabulary ("reassign · 340ms"), with the
 `mutate:*` rows they wrap alongside.
 
-The built-in devtools retain bounded query, event, and write history while they are enabled.
+The extension retains bounded query, event, and write history while its panel is connected.
 
 ## useFeathers
 

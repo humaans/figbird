@@ -52,8 +52,8 @@ If you're here to learn figbird, read in this order — each file teaches one id
    component.
 7. **`src/components/NewIssueModal.tsx`** — optimistic create with a client-generated id.
 8. **`src/components/DemoControls.tsx`** — demo-server switches for latency, background
-   traffic, forced failures, socket reconnects, and resets. Figbird's built-in devtools
-   provide the query, timeline, event, and write views.
+   traffic, forced failures, socket reconnects, and resets. The Figbird browser
+   extension provides the query, timeline, event, and write views.
 
 Structure rule: `src/` root is wiring (`main`, `figbird`, `demoControl`, `App`);
 `src/components/` is the shell UI the workspace composes; `src/pages/` is routed screens.
@@ -74,9 +74,9 @@ The bottom-right **Demo controls** menu changes server behavior:
 - **Drop socket** — kills the transport; socket.io auto-reconnects and figbird refetches
   every active query (and the materialized reference sets) to reconcile anything missed.
 
-Figbird's built-in drawer is enabled by default in development. It exposes live queries,
-the fetch timeline, events, writes, and the element inspector without a second demo-only
-implementation.
+Install the extension from `extensions/build/chrome` or `extensions/build/firefox`, open
+the browser's developer tools, and select the **Figbird** panel. It exposes live queries,
+the fetch timeline, events, writes, and the element inspector without any demo-only code.
 
 ## Where each feature lives
 

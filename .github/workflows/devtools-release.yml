@@ -1,0 +1,101 @@
+name: Release browser devtools
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign_firefox:
+        description: Submit an unlisted build to Mozilla and download the signed XPI
+        type: boolean
+        default: true
+      upload_chrome:
+        description: Upload the Chrome ZIP without submitting it for review
+        type: boolean
+        default: false
+      submit_chrome:
+        description: Upload and submit the private Chrome item for review
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    environment: extension-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          cache: npm
+          node-version: 22
+      - run: npm ci
+      - run: npm run devtools:check
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          if-no-files-found: error
+          name: figbird-devtools-release-inputs
+          path: |
+            extensions/build/figbird-devtools-chrome.zip
+            extensions/build/figbird-devtools-firefox-unsigned.zip
+            extensions/build/figbird-devtools-source.zip
+      - name: Sign the unlisted Firefox extension
+        if: inputs.sign_firefox
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          npm exec -- web-ext sign \
+            --source-dir extensions/build/firefox \
+            --artifacts-dir extensions/build/firefox-signed \
+            --channel unlisted \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET" \
+            --upload-source-code extensions/build/figbird-devtools-source.zip \
+            --approval-timeout 900000 \
+            --timeout 900000
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: inputs.sign_firefox
+        with:
+          if-no-files-found: error
+          name: figbird-devtools-firefox-signed
+          path: extensions/build/firefox-signed/*.xpi
+      - name: Publish the signed Firefox extension
+        if: inputs.sign_firefox
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          signed_xpi=$(find extensions/build/firefox-signed -maxdepth 1 -type f -name '*.xpi' -print -quit)
+          test -n "$signed_xpi"
+          asset=extensions/build/figbird-devtools-firefox-signed.xpi
+          cp "$signed_xpi" "$asset"
+
+          version=$(node -p "require('./extensions/version.json').version")
+          tag="devtools-v${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "Figbird Devtools ${version}" \
+              --notes "Mozilla-signed Firefox build for self-distribution. Download the XPI in Firefox and approve the installation prompt."
+          fi
+      - id: google-auth
+        if: inputs.upload_chrome || inputs.submit_chrome
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          service_account: ${{ vars.CHROME_SERVICE_ACCOUNT }}
+          token_format: access_token
+          workload_identity_provider: ${{ vars.CHROME_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Upload the Chrome extension
+        if: inputs.upload_chrome || inputs.submit_chrome
+        env:
+          CHROME_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          CHROME_EXTENSION_ARCHIVE: extensions/build/figbird-devtools-chrome.zip
+          CHROME_EXTENSION_ID: ${{ vars.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ vars.CHROME_PUBLISHER_ID }}
+          CHROME_SUBMIT: ${{ inputs.submit_chrome }}
+        run: node tasks/publish-chrome-devtools.js

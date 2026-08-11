@@ -1,205 +1,83 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-  type MouseEvent as ReactMouseEvent,
-} from 'react'
-import { createPortal } from 'react-dom'
-import { createCollector, type FigbirdLikeForDevtools } from './collector.js'
-import { inspectQueryArea, useElementPicker, type InspectedQueryArea } from './inspector.js'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { EventsTab } from './EventsTab.js'
 import { QueriesTab } from './QueriesTab.js'
 import { TimelineRangeControl, TimelineTab, type TimelineRange } from './TimelineTab.js'
-import { EventsTab } from './EventsTab.js'
 import { WritesTab } from './WritesTab.js'
+import type { Collector } from './collector.js'
 import { buildDevtoolsModel } from './model.js'
 import {
   ThemeContext,
   buttonStyle,
   darkColors,
-  iconButtonStyle,
   lightColors,
   makeStyles,
   useDevtoolsTheme,
-  usePopoutDocument,
   usePreferredColorScheme,
+  type DevtoolsThemeMode,
 } from './ui.js'
-
-export interface FigbirdDevtoolsProps {
-  figbird: FigbirdLikeForDevtools
-  defaultOpen?: boolean
-  /** Used only when enable() or disable() has not stored an explicit preference. */
-  enabledByDefault?: boolean
-  theme?: 'system' | 'light' | 'dark'
-}
 
 type Tab = 'queries' | 'timeline' | 'events' | 'writes'
 
-const STORAGE_KEY = 'figbird:devtools'
-const MIN_HEIGHT = 220
-const DEFAULT_HEIGHT = 360
+export type DevtoolsInspectionSnapshot =
+  | { kind: 'idle'; version: number }
+  | { kind: 'picking'; version: number }
+  | {
+      kind: 'selected'
+      label: string
+      queryCounts: ReadonlyMap<string, number>
+      supported: boolean
+      truncated: boolean
+      version: number
+    }
 
-export function FigbirdDevtools(props: FigbirdDevtoolsProps) {
-  const { figbird, enabledByDefault = false } = props
-  const subscribe = useCallback(
-    (listener: () => void) => figbird.devtools?.subscribe(listener) ?? (() => {}),
-    [figbird.devtools],
-  )
-  const getSnapshot = useCallback(() => figbird.devtools?.getSnapshot(), [figbird.devtools])
-  const preference = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-
-  if (!(preference ?? enabledByDefault)) return null
-  return <DevtoolsSession {...props} />
+export interface DevtoolsInspectionController {
+  getSnapshot(): DevtoolsInspectionSnapshot
+  start(): void
+  stop(): void
+  subscribe(listener: () => void): () => void
 }
 
-function DevtoolsSession({ figbird, defaultOpen = false, theme = 'system' }: FigbirdDevtoolsProps) {
-  const activeCollector = useMemo(() => createCollector(figbird), [figbird])
+export interface FigbirdDevtoolsPanelProps {
+  collector: Collector
+  inspection?: DevtoolsInspectionController
+  status?: string
+  theme?: DevtoolsThemeMode
+}
+
+const EMPTY_INSPECTION: DevtoolsInspectionSnapshot = { kind: 'idle', version: 0 }
+const subscribeToNothing = () => () => {}
+const getEmptyInspection = () => EMPTY_INSPECTION
+
+/** The browser-extension panel. Apps do not render this component. */
+export function FigbirdDevtoolsPanel({
+  collector,
+  inspection,
+  status,
+  theme = 'system',
+}: FigbirdDevtoolsPanelProps) {
   const colorScheme = usePreferredColorScheme(theme)
   const colors = colorScheme === 'dark' ? darkColors : lightColors
   const styles = useMemo(() => makeStyles(colors), [colors])
   const themeValue = useMemo(() => ({ colors, styles }), [colors, styles])
-  const [open, setOpen] = useState(defaultOpen)
   const [tab, setTab] = useState<Tab>('queries')
-  const [height, setHeight] = useState(readStoredHeight)
   const [queryFilter, setQueryFilter] = useState('')
   const [queryActiveOnly, setQueryActiveOnly] = useState(true)
   const [eventFilter, setEventFilter] = useState('')
   const [timelineRange, setTimelineRange] = useState<TimelineRange>(30_000)
-  const [popoutWindow, setPopoutWindow] = useState<Window | null>(null)
-  const [inspecting, setInspecting] = useState(false)
-  const [inspectedArea, setInspectedArea] = useState<InspectedQueryArea | null>(null)
-
-  const startInspecting = useCallback(() => {
-    setTab('queries')
-    setInspecting(true)
-    if (popoutWindow) window.focus()
-  }, [popoutWindow])
-
-  const finishInspecting = useCallback((area: InspectedQueryArea | null) => {
-    if (area) setInspectedArea(area)
-    setInspecting(false)
-  }, [])
-  useElementPicker(inspecting, colors.blue, finishInspecting)
-  usePopoutDocument(popoutWindow, colorScheme, colors)
-
-  const closeDevtools = useCallback(() => {
-    if (popoutWindow && !popoutWindow.closed) popoutWindow.close()
-    setPopoutWindow(null)
-    setOpen(false)
-  }, [popoutWindow])
-
-  const toggleDevtools = useCallback(() => {
-    if (open) {
-      closeDevtools()
-    } else {
-      setOpen(true)
-    }
-  }, [closeDevtools, open])
-
-  const dockDevtools = useCallback(() => {
-    if (popoutWindow && !popoutWindow.closed) popoutWindow.close()
-    setPopoutWindow(null)
-  }, [popoutWindow])
-
-  const popOutDevtools = useCallback(() => {
-    if (popoutWindow && !popoutWindow.closed) {
-      popoutWindow.focus()
-      return
-    }
-    const width = Math.min(1400, window.screen.availWidth || 1400)
-    const height = Math.min(900, window.screen.availHeight || 900)
-    const popup = window.open(
-      '',
-      'figbird-devtools',
-      `popup=yes,width=${width},height=${height},resizable=yes,scrollbars=yes`,
-    )
-    if (!popup) return
-    popup.document.title = 'Figbird devtools'
-    popup.focus()
-    setPopoutWindow(popup)
-  }, [popoutWindow])
 
   useEffect(() => {
-    activeCollector.start()
-    return () => activeCollector.stop()
-  }, [activeCollector])
+    collector.start()
+    return () => collector.stop()
+  }, [collector])
 
-  useEffect(() => {
-    const onShortcut = (event: KeyboardEvent) => {
-      if (!isDevtoolsShortcut(event)) return
-      event.preventDefault()
-      event.stopPropagation()
-      toggleDevtools()
-    }
-    window.addEventListener('keydown', onShortcut)
-    if (popoutWindow) popoutWindow.addEventListener('keydown', onShortcut)
-    return () => {
-      window.removeEventListener('keydown', onShortcut)
-      if (popoutWindow) popoutWindow.removeEventListener('keydown', onShortcut)
-    }
-  }, [popoutWindow, toggleDevtools])
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeDevtools()
-    }
-    const targetWindow = popoutWindow ?? window
-    targetWindow.addEventListener('keydown', onKey)
-    return () => targetWindow.removeEventListener('keydown', onKey)
-  }, [closeDevtools, open, popoutWindow])
-
-  useEffect(() => {
-    if (!popoutWindow) return
-    const handleClosed = () => {
-      setPopoutWindow(current => (current === popoutWindow ? null : current))
-    }
-    popoutWindow.addEventListener('beforeunload', handleClosed)
-    return () => {
-      popoutWindow.removeEventListener('beforeunload', handleClosed)
-      if (!popoutWindow.closed) popoutWindow.close()
-    }
-  }, [popoutWindow])
-
-  useEffect(() => {
-    writeStoredHeight(height)
-  }, [height])
-
-  const subscribe = useCallback(
-    (fn: () => void) => activeCollector.subscribe(fn),
-    [activeCollector],
-  )
-  const getSnapshot = useCallback(() => activeCollector.getSnapshot(), [activeCollector])
+  const subscribe = useCallback((fn: () => void) => collector.subscribe(fn), [collector])
+  const getSnapshot = useCallback(() => collector.getSnapshot(), [collector])
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-
-  useEffect(() => {
-    setInspectedArea(current => {
-      if (!current) return current
-      if (!current.element.isConnected) return null
-      const next = inspectQueryArea(current.element)
-      return sameQueryCounts(current, next) ? current : next
-    })
-  }, [snapshot])
-
-  const onResizeStart = (event: ReactMouseEvent) => {
-    event.preventDefault()
-    const startY = event.clientY
-    const startHeight = height
-    const onMove = (move: MouseEvent) => {
-      const next = Math.max(
-        MIN_HEIGHT,
-        Math.min(window.innerHeight - 48, startHeight + startY - move.clientY),
-      )
-      setHeight(next)
-    }
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
+  const inspectionSnapshot = useSyncExternalStore(
+    inspection ? listener => inspection.subscribe(listener) : subscribeToNothing,
+    inspection ? () => inspection.getSnapshot() : getEmptyInspection,
+    getEmptyInspection,
+  )
 
   const model = useMemo(() => buildDevtoolsModel(snapshot), [snapshot])
   const timelineEmpty =
@@ -207,177 +85,173 @@ function DevtoolsSession({ figbird, defaultOpen = false, theme = 'system' }: Fig
     snapshot.queries.every(query => query.spans.length === 0)
   const clearAction =
     tab === 'events'
-      ? {
-          disabled: snapshot.events.length === 0,
-          run: () => activeCollector.clearEvents(),
-        }
+      ? { disabled: snapshot.events.length === 0, run: () => collector.clearEvents() }
       : tab === 'timeline'
-        ? {
-            disabled: timelineEmpty,
-            run: () => activeCollector.clearTimeline(),
-          }
+        ? { disabled: timelineEmpty, run: () => collector.clearTimeline() }
         : tab === 'writes'
-          ? {
-              disabled: snapshot.writes.length === 0,
-              run: () => activeCollector.clearWrites(),
-            }
+          ? { disabled: snapshot.writes.length === 0, run: () => collector.clearWrites() }
           : null
-
-  const drawer = (
-    <section
-      data-figbird-devtools='drawer'
-      style={{
-        ...styles.drawer,
-        height: popoutWindow ? '100vh' : height,
-        ...(popoutWindow ? { top: 0, borderTop: 'none', boxShadow: 'none', fontSize: 11 } : {}),
-      }}
-      aria-label='Figbird devtools'
-    >
-      {!popoutWindow ? <div style={styles.resize} onMouseDown={onResizeStart} /> : null}
-      <header style={styles.header}>
-        <span style={styles.brand}>figbird</span>
-        {(['queries', 'timeline', 'events', 'writes'] as const).map(item => (
-          <TabButton
-            key={item}
-            active={tab === item}
-            onClick={() => setTab(item)}
-            label={
-              item === 'writes' && snapshot.inFlightWrites > 0
-                ? `writes (${snapshot.inFlightWrites})`
-                : item
-            }
-          />
-        ))}
-        {tab === 'queries' ? (
-          <>
-            <input
-              style={styles.input}
-              value={queryFilter}
-              onChange={event => setQueryFilter(event.currentTarget.value)}
-              placeholder='Filter service or query'
-            />
-            <label
-              style={{
-                color: colors.muted,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              <input
-                type='checkbox'
-                checked={queryActiveOnly}
-                onChange={event => setQueryActiveOnly(event.currentTarget.checked)}
-              />
-              active only
-            </label>
-            <button
-              type='button'
-              style={buttonStyle(colors, inspecting)}
-              onClick={inspecting ? () => setInspecting(false) : startInspecting}
-              title='Pick an area of the app and show only its mounted queries'
-            >
-              {inspecting ? 'Cancel' : 'Inspect'}
-            </button>
-            {inspectedArea ? (
-              <button
-                type='button'
-                onClick={() => setInspectedArea(null)}
-                title={
-                  inspectedArea.supported
-                    ? inspectedArea.truncated
-                      ? `Clear partial area filter: inspection reached its safety limit after finding ${inspectedArea.queryCounts.size} query roots in ${inspectedArea.label}`
-                      : `Clear area filter: ${inspectedArea.queryCounts.size} query roots mounted in ${inspectedArea.label}`
-                    : 'React component ownership is unavailable for this element'
-                }
-                style={{
-                  ...buttonStyle(colors, true),
-                  color: !inspectedArea.supported
-                    ? colors.red
-                    : inspectedArea.truncated
-                      ? colors.amber
-                      : colors.blue,
-                  maxWidth: 145,
-                  display: 'flex',
-                  minWidth: 0,
-                  alignItems: 'center',
-                  gap: 4,
-                }}
-              >
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {inspectedArea.label}
-                </span>
-                <span style={{ flexShrink: 0 }}>
-                  ·{' '}
-                  {inspectedArea.supported
-                    ? `${inspectedArea.queryCounts.size}${inspectedArea.truncated ? '+' : ''}`
-                    : 'unavailable'}
-                </span>
-              </button>
-            ) : null}
-          </>
-        ) : null}
-        {tab === 'events' ? (
-          <input
-            style={styles.input}
-            value={eventFilter}
-            onChange={event => setEventFilter(event.currentTarget.value)}
-            placeholder='Filter events'
-          />
-        ) : null}
-        {tab === 'timeline' ? (
-          <TimelineRangeControl value={timelineRange} onChange={setTimelineRange} />
-        ) : null}
-        {clearAction ? (
-          <ClearButton disabled={clearAction.disabled} onClick={clearAction.run} />
-        ) : null}
-        <span style={styles.spacer} />
-        <button
-          type='button'
-          style={buttonStyle(colors, false)}
-          onClick={popoutWindow ? dockDevtools : popOutDevtools}
-          title={popoutWindow ? 'Move devtools back into the app' : 'Open devtools in a new window'}
-        >
-          {popoutWindow ? 'Dock' : 'Pop out'}
-        </button>
-        <button
-          type='button'
-          aria-label='Close'
-          title='Close devtools'
-          style={iconButtonStyle(colors)}
-          onClick={closeDevtools}
-        >
-          ×
-        </button>
-      </header>
-      <main style={styles.body}>
-        {tab === 'queries' ? (
-          <QueriesTab
-            model={model}
-            filter={queryFilter}
-            activeOnly={queryActiveOnly}
-            inspectedQueryCounts={inspectedArea?.queryCounts ?? null}
-          />
-        ) : null}
-        {tab === 'timeline' ? (
-          <TimelineTab snapshot={snapshot} model={model} range={timelineRange} />
-        ) : null}
-        {tab === 'events' ? (
-          <EventsTab events={snapshot.events} filter={eventFilter} scopes={model.scopesByQueryId} />
-        ) : null}
-        {tab === 'writes' ? (
-          <WritesTab writes={snapshot.writes} inFlight={snapshot.inFlightWrites} />
-        ) : null}
-      </main>
-    </section>
-  )
+  const inspected = inspectionSnapshot.kind === 'selected' ? inspectionSnapshot : null
 
   return (
     <ThemeContext.Provider value={themeValue}>
-      {open ? (popoutWindow ? createPortal(drawer, popoutWindow.document.body) : drawer) : null}
+      <section
+        data-figbird-devtools='panel'
+        aria-label='Figbird devtools'
+        style={{
+          ...styles.drawer,
+          position: 'relative',
+          width: '100%',
+          height: '100vh',
+          borderTop: 0,
+          boxShadow: 'none',
+        }}
+      >
+        <header style={styles.header}>
+          <span style={styles.brand}>figbird</span>
+          {(['queries', 'timeline', 'events', 'writes'] as const).map(item => (
+            <TabButton
+              key={item}
+              active={tab === item}
+              onClick={() => setTab(item)}
+              label={
+                item === 'writes' && snapshot.inFlightWrites > 0
+                  ? `writes (${snapshot.inFlightWrites})`
+                  : item
+              }
+            />
+          ))}
+          {tab === 'queries' ? (
+            <>
+              <input
+                style={styles.input}
+                value={queryFilter}
+                onChange={event => setQueryFilter(event.currentTarget.value)}
+                placeholder='Filter service or query'
+              />
+              <label
+                style={{
+                  color: colors.muted,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <input
+                  type='checkbox'
+                  checked={queryActiveOnly}
+                  onChange={event => setQueryActiveOnly(event.currentTarget.checked)}
+                />
+                active only
+              </label>
+              {inspection ? (
+                <button
+                  type='button'
+                  style={buttonStyle(colors, inspectionSnapshot.kind === 'picking')}
+                  onClick={
+                    inspectionSnapshot.kind === 'picking' ? inspection.stop : inspection.start
+                  }
+                  title='Pick an area of the inspected page and show its mounted queries'
+                >
+                  {inspectionSnapshot.kind === 'picking' ? 'Cancel' : 'Inspect'}
+                </button>
+              ) : null}
+              {inspected ? (
+                <button
+                  type='button'
+                  onClick={inspection!.stop}
+                  title={inspectionTitle(inspected)}
+                  style={{
+                    ...buttonStyle(colors, true),
+                    color: !inspected.supported
+                      ? colors.red
+                      : inspected.truncated
+                        ? colors.amber
+                        : colors.blue,
+                    maxWidth: 145,
+                    display: 'flex',
+                    minWidth: 0,
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {inspected.label}
+                  </span>
+                  <span style={{ flexShrink: 0 }}>
+                    ·{' '}
+                    {inspected.supported
+                      ? `${inspected.queryCounts.size}${inspected.truncated ? '+' : ''}`
+                      : 'unavailable'}
+                  </span>
+                </button>
+              ) : null}
+            </>
+          ) : null}
+          {tab === 'events' ? (
+            <input
+              style={styles.input}
+              value={eventFilter}
+              onChange={event => setEventFilter(event.currentTarget.value)}
+              placeholder='Filter events'
+            />
+          ) : null}
+          {tab === 'timeline' ? (
+            <TimelineRangeControl value={timelineRange} onChange={setTimelineRange} />
+          ) : null}
+          {clearAction ? (
+            <ClearButton disabled={clearAction.disabled} onClick={clearAction.run} />
+          ) : null}
+          <span style={styles.spacer} />
+          {status ? (
+            <span style={{ color: colors.muted, whiteSpace: 'nowrap' }}>{status}</span>
+          ) : null}
+        </header>
+        <main style={styles.body}>
+          {tab === 'queries' ? (
+            <QueriesTab
+              model={model}
+              filter={queryFilter}
+              activeOnly={queryActiveOnly}
+              inspectedQueryCounts={inspected?.queryCounts ?? null}
+            />
+          ) : null}
+          {tab === 'timeline' ? (
+            <TimelineTab snapshot={snapshot} model={model} range={timelineRange} />
+          ) : null}
+          {tab === 'events' ? (
+            <EventsTab
+              events={snapshot.events}
+              filter={eventFilter}
+              scopes={model.scopesByQueryId}
+            />
+          ) : null}
+          {tab === 'writes' ? (
+            <WritesTab writes={snapshot.writes} inFlight={snapshot.inFlightWrites} />
+          ) : null}
+        </main>
+      </section>
     </ThemeContext.Provider>
   )
+}
+
+function inspectionTitle({
+  label,
+  queryCounts,
+  supported,
+  truncated,
+}: {
+  label: string
+  queryCounts: ReadonlyMap<string, number>
+  supported: boolean
+  truncated: boolean
+}): string {
+  if (!supported) return 'React component ownership is unavailable for this element'
+  if (truncated) {
+    return `Clear partial area filter: inspection reached its safety limit after finding ${queryCounts.size} query roots in ${label}`
+  }
+  return `Clear area filter: ${queryCounts.size} query roots mounted in ${label}`
 }
 
 function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
@@ -385,61 +259,13 @@ function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => 
   return (
     <button
       type='button'
-      style={{
-        ...buttonStyle(colors, false),
-        opacity: disabled ? 0.55 : 1,
-      }}
+      style={{ ...buttonStyle(colors, false), opacity: disabled ? 0.55 : 1 }}
       disabled={disabled}
       onClick={onClick}
     >
       Clear
     </button>
   )
-}
-
-function isDevtoolsShortcut(event: KeyboardEvent): boolean {
-  return (
-    event.code === 'Period' &&
-    event.shiftKey &&
-    (event.metaKey || event.ctrlKey) &&
-    !event.altKey &&
-    !event.repeat
-  )
-}
-
-function sameQueryCounts(a: InspectedQueryArea, b: InspectedQueryArea): boolean {
-  if (
-    a.label !== b.label ||
-    a.supported !== b.supported ||
-    a.truncated !== b.truncated ||
-    a.queryCounts.size !== b.queryCounts.size
-  ) {
-    return false
-  }
-  for (const [key, count] of a.queryCounts) {
-    if (b.queryCounts.get(key) !== count) return false
-  }
-  return true
-}
-
-function readStoredHeight(): number {
-  try {
-    if (typeof window === 'undefined') return DEFAULT_HEIGHT
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    const parsed = raw ? Number(raw) : NaN
-    return Number.isFinite(parsed) ? Math.max(MIN_HEIGHT, parsed) : DEFAULT_HEIGHT
-  } catch {
-    return DEFAULT_HEIGHT
-  }
-}
-
-function writeStoredHeight(height: number): void {
-  try {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(STORAGE_KEY, String(Math.round(height)))
-  } catch {
-    // The drawer still works when storage is unavailable.
-  }
 }
 
 function TabButton({

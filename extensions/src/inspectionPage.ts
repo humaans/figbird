@@ -1,6 +1,3 @@
-import { useEffect } from 'react'
-import { RelationalQueryRef } from '../core/relationalQuery.js'
-
 interface FiberLike {
   alternate?: FiberLike | null
   child?: FiberLike | null
@@ -13,6 +10,12 @@ interface FiberLike {
 interface HookLike {
   memoizedState?: unknown
   next?: HookLike | null
+}
+
+interface InspectionBudget {
+  fibers: number
+  hookValues: number
+  truncated: boolean
 }
 
 export interface InspectedQueryArea {
@@ -28,107 +31,100 @@ const MAX_FIBERS = 20_000
 const MAX_HOOK_VALUES = 20_000
 const MAX_VALUE_DEPTH = 4
 
-interface InspectionBudget {
-  fibers: number
-  hookValues: number
-  truncated: boolean
-}
-
-export function useElementPicker(
-  active: boolean,
+export function installElementPicker(
   accent: string,
   onPick: (area: InspectedQueryArea | null) => void,
-): void {
-  useEffect(() => {
-    if (!active) return
-    const appDocument = window.document
-    const overlay = appDocument.createElement('div')
-    const label = appDocument.createElement('div')
-    let hovered: Element | null = null
-    const previousCursor = appDocument.documentElement.style.cursor
+): () => void {
+  const overlay = document.createElement('div')
+  const label = document.createElement('div')
+  let hovered: Element | null = null
+  const previousCursor = document.documentElement.style.cursor
 
+  Object.assign(overlay.style, {
+    position: 'fixed',
+    zIndex: '2147483647',
+    pointerEvents: 'none',
+    border: `2px solid ${accent}`,
+    background: 'rgba(29, 101, 216, .10)',
+    boxSizing: 'border-box',
+    display: 'none',
+  })
+  Object.assign(label.style, {
+    position: 'absolute',
+    left: '-2px',
+    bottom: '100%',
+    maxWidth: '320px',
+    padding: '3px 6px',
+    background: accent,
+    color: '#fff',
+    font: '11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  })
+  overlay.append(label)
+  document.body.append(overlay)
+  document.documentElement.style.cursor = 'crosshair'
+
+  const updateOverlay = () => {
+    if (!hovered || !hovered.isConnected) {
+      overlay.style.display = 'none'
+      return
+    }
+    const rect = hovered.getBoundingClientRect()
     Object.assign(overlay.style, {
-      position: 'fixed',
-      zIndex: '2147483647',
-      pointerEvents: 'none',
-      border: `2px solid ${accent}`,
-      background: 'rgba(29, 101, 216, .10)',
-      boxSizing: 'border-box',
-      display: 'none',
+      display: 'block',
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
     })
-    Object.assign(label.style, {
-      position: 'absolute',
-      left: '-2px',
-      bottom: '100%',
-      maxWidth: '320px',
-      padding: '3px 6px',
-      background: accent,
-      color: '#fff',
-      font: '11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-    })
-    overlay.append(label)
-    appDocument.body.append(overlay)
-    appDocument.documentElement.style.cursor = 'crosshair'
+  }
+  const selectableTarget = (event: Event): Element | null => {
+    const target = event.target
+    if (!(target instanceof window.Element) || target.closest('[data-figbird-devtools]')) {
+      return null
+    }
+    return target
+  }
+  const onPointerMove = (event: PointerEvent) => {
+    hovered = selectableTarget(event)
+    if (hovered) label.textContent = describeElement(hovered)
+    updateOverlay()
+  }
+  const cleanup = () => {
+    document.removeEventListener('pointermove', onPointerMove, true)
+    document.removeEventListener('click', onClick, true)
+    document.removeEventListener('keydown', onKeyDown, true)
+    window.removeEventListener('scroll', updateOverlay, true)
+    window.removeEventListener('resize', updateOverlay)
+    document.documentElement.style.cursor = previousCursor
+    overlay.remove()
+  }
+  const onClick = (event: MouseEvent) => {
+    const target = selectableTarget(event)
+    if (!target) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    const result = inspectQueryArea(target)
+    cleanup()
+    onPick(result)
+  }
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    cleanup()
+    onPick(null)
+  }
 
-    const updateOverlay = () => {
-      if (!hovered || !hovered.isConnected) {
-        overlay.style.display = 'none'
-        return
-      }
-      const rect = hovered.getBoundingClientRect()
-      Object.assign(overlay.style, {
-        display: 'block',
-        left: `${rect.left}px`,
-        top: `${rect.top}px`,
-        width: `${rect.width}px`,
-        height: `${rect.height}px`,
-      })
-    }
-    const selectableTarget = (event: Event): Element | null => {
-      const target = event.target
-      if (!(target instanceof window.Element) || target.closest('[data-figbird-devtools]')) {
-        return null
-      }
-      return target
-    }
-    const onPointerMove = (event: PointerEvent) => {
-      hovered = selectableTarget(event)
-      if (hovered) label.textContent = describeElement(hovered)
-      updateOverlay()
-    }
-    const onClick = (event: MouseEvent) => {
-      const target = selectableTarget(event)
-      if (!target) return
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      onPick(inspectQueryArea(target))
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      event.stopPropagation()
-      onPick(null)
-    }
-
-    appDocument.addEventListener('pointermove', onPointerMove, true)
-    appDocument.addEventListener('click', onClick, true)
-    appDocument.addEventListener('keydown', onKeyDown, true)
-    window.addEventListener('scroll', updateOverlay, true)
-    window.addEventListener('resize', updateOverlay)
-    return () => {
-      appDocument.removeEventListener('pointermove', onPointerMove, true)
-      appDocument.removeEventListener('click', onClick, true)
-      appDocument.removeEventListener('keydown', onKeyDown, true)
-      window.removeEventListener('scroll', updateOverlay, true)
-      window.removeEventListener('resize', updateOverlay)
-      appDocument.documentElement.style.cursor = previousCursor
-      overlay.remove()
-    }
-  }, [accent, active, onPick])
+  document.addEventListener('pointermove', onPointerMove, true)
+  document.addEventListener('click', onClick, true)
+  document.addEventListener('keydown', onKeyDown, true)
+  window.addEventListener('scroll', updateOverlay, true)
+  window.addEventListener('resize', updateOverlay)
+  return cleanup
 }
 
 export function inspectQueryArea(element: Element): InspectedQueryArea {
@@ -192,7 +188,7 @@ export function inspectQueryArea(element: Element): InspectedQueryArea {
   }
 }
 
-export function describeElement(element: Element): string {
+function describeElement(element: Element): string {
   const tag = element.tagName.toLowerCase()
   if (element.id) return `${tag}#${element.id}`
   const classes = Array.from(element.classList).slice(0, 2)
@@ -231,7 +227,7 @@ function queryKeysInHooks(value: unknown, budget: InspectionBudget): Set<string>
   while (hook && hooksSeen < 1_000 && !budget.truncated) {
     scanHookValue(hook.memoizedState, keys, visited, budget, 0)
     hook = isHook(hook.next) ? hook.next : null
-    hooksSeen += 1
+    hooksSeen++
   }
   return keys
 }
@@ -248,7 +244,7 @@ function scanHookValue(
   depth: number,
 ): void {
   if (!takeHookValue(budget)) return
-  if (value instanceof RelationalQueryRef) {
+  if (isRelationalQueryRef(value)) {
     keys.add(value.details().queryId)
     return
   }
@@ -290,6 +286,16 @@ function scanHookValue(
   }
 }
 
+function isRelationalQueryRef(value: unknown): value is { details(): { queryId: string } } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    value.constructor.name === 'RelationalQueryRef' &&
+    'details' in value &&
+    typeof value.details === 'function'
+  )
+}
+
 function fiberOutputIsInside(
   fiber: FiberLike,
   selected: Element,
@@ -307,7 +313,6 @@ function fiberOutputIsInside(
     if (current.stateNode instanceof ElementConstructor) {
       foundHost = true
       if (current.stateNode !== selected && !selected.contains(current.stateNode)) return false
-      // Descendant host nodes are necessarily inside this host element.
       if (current.stateNode !== selected) continue
     }
     if (current.sibling && current !== fiber) stack.push(current.sibling)

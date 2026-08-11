@@ -13,7 +13,6 @@
     "isolatedModules": true,
     "noEmit": true,
     "paths": {
-      "figbird/devtools": ["../lib/devtools.ts"],
       "figbird": ["../lib/index.ts"]
     }
   },

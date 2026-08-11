@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Move Figbird devtools from an embedded React drawer to Chrome and Firefox DevTools
+  extensions. Apps no longer mount `FigbirdDevtools` or use `figbird.devtools.enable()` /
+  `disable()`; the extension starts debug collection when its panel connects.
 - Retry failed query fetches up to three times with exponential backoff before exposing
   the error. Configure the instance with `retry` and `retryDelay`; descriptor queries can
   override both or disable retries with `retry: false`.
@@ -23,8 +26,8 @@ return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
 
 Also included:
 
-- Opt-in `figbird/devtools` for inspecting queries, fetches, realtime events, and
-  writes, plus richer lifecycle and payload details through `figbird.events`.
+- Devtools for inspecting queries, fetches, realtime events, and writes, plus richer
+  lifecycle and payload details through `figbird.events`.
 - `matcherKey` for explicitly sharing queries that use equivalent custom matchers.
 - `reconnectJitter` for staggering reconnect refetches, defaulting to `[0, 3000]` ms.
 - Reliable ordering for materialized finds: queries use the network unless `$sort` or
