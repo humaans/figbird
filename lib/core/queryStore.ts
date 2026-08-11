@@ -543,7 +543,7 @@ export class QueryStore<
         !query ||
         this.#queryGenerations.get(queryId) !== generation ||
         !this.#hasRetryOwner(queryId) ||
-        !this.#shouldRetry(query, retryAttempt)
+        !this.#shouldRetry(query, retryAttempt, outcome.error)
       ) {
         if (query && this.#queryGenerations.get(queryId) === generation) {
           this.#fetchFailed({ queryId, error: outcome.error })
@@ -639,9 +639,11 @@ export class QueryStore<
     }
   }
 
-  #shouldRetry(query: Query<unknown, TMeta, unknown>, retryAttempt: number): boolean {
+  #shouldRetry(query: Query<unknown, TMeta, unknown>, retryAttempt: number, error: Error): boolean {
     const retry = this.#normalizeRetry(query.config.retry ?? this.#retry)
-    return retry !== false && retryAttempt < retry
+    return (
+      retry !== false && retryAttempt < retry && (this.#adapter.isRetryableError?.(error) ?? true)
+    )
   }
 
   #normalizeRetry(retry: number | false): number | false {

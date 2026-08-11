@@ -783,6 +783,9 @@ The query stays in its fetching state between attempts, so a cold query keeps su
 and a background refetch keeps showing its cached data. Only the final failure enters the
 error state.
 
+Retries apply to network failures, timeouts, `408`, `429`, and `5xx` responses. Other
+`4xx` responses fail immediately because repeating the same request will not fix them.
+
 Configure the policy on the instance:
 
 ```ts
@@ -1017,6 +1020,8 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
 2. Support the operations `find`, `get`, `create`, `update`, `patch`, `remove`
 3. For realtime, emit `created`, `patched`, `updated`, `removed` events after mutations
 4. Optionally implement `subscribeToReconnect` so active queries refetch after connectivity gaps
+5. Optionally implement `isRetryableError` to return `false` for errors that another query
+   attempt cannot fix; adapters without it treat all query errors as retryable
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 

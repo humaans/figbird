@@ -91,21 +91,41 @@ test('failed fetches retry with backoff before exposing an error', async t => {
   unsub()
 })
 
-test('retry exhaustion exposes the final error and per-query retry false opts out', async t => {
+test('retry policy handles server errors, client errors, and per-query opt-out', async t => {
   const { figbird, notes } = createApp({}, { retry: 2, retryDelay: 0 })
   notes.find = async () => {
     notes.counts.find++
-    throw new Error('still offline')
+    throw Object.assign(new Error('server unavailable'), { code: 503 })
   }
 
   const retried = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsubRetried = retried.subscribe(() => {})
   await waitFor(() => retried.getSnapshot()?.status === 'error', 'retry exhaustion')
   t.is(notes.counts.find, 3)
-  t.is(retried.getSnapshot()?.error?.message, 'still offline')
+  t.is(retried.getSnapshot()?.error?.message, 'server unavailable')
   unsubRetried()
 
   notes.counts.find = 0
+  notes.find = async () => {
+    notes.counts.find++
+    throw Object.assign(new Error('bad request'), { code: 400 })
+  }
+  const clientError = figbird.queryDesc({
+    serviceName: 'notes',
+    method: 'find',
+    params: { query: { invalid: true } },
+  })
+  const unsubClientError = clientError.subscribe(() => {})
+  await waitFor(() => clientError.getSnapshot()?.status === 'error', 'client error')
+  t.is(notes.counts.find, 1)
+  t.is(clientError.getSnapshot()?.error?.message, 'bad request')
+  unsubClientError()
+
+  notes.counts.find = 0
+  notes.find = async () => {
+    notes.counts.find++
+    throw new Error('offline')
+  }
   const noRetry = figbird.queryDesc(
     { serviceName: 'notes', method: 'find', params: { query: { disabled: true } } },
     { retry: false },
