@@ -1,20 +1,21 @@
 import { spawnSync } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { setTimeout as wait } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const environment = 'extension-release'
-const workflow = 'devtools-release.yml'
+const releaseWorkflow = 'devtools-release.yml'
 
 try {
-  await release()
+  await prepareRelease()
 } catch (error) {
   console.error(`\n${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1
 }
 
-async function release() {
+async function prepareRelease() {
   run('gh', ['auth', 'status', '--hostname', 'github.com'])
   run('git', ['fetch', '--quiet', 'origin', 'master'])
 
@@ -26,14 +27,15 @@ async function release() {
     '--jq',
     '.nameWithOwner',
   ])
-  const masterSha = capture('git', ['rev-parse', 'origin/master'])
-  const version = readMasterVersion()
+  const currentVersion = readMasterVersion()
+  const version = requestedVersion(currentVersion)
   const tag = `devtools-v${version}`
+  const branch = `release/${tag}`
   const secrets = listNames('secret', repository)
-  const variables = listVariables(repository)
+  const variables = listNames('variable', repository)
   const problems = [
     ...missingNames('GitHub environment secret', secrets, ['AMO_JWT_ISSUER', 'AMO_JWT_SECRET']),
-    ...missingNames('GitHub environment variable', variables.keys(), [
+    ...missingNames('GitHub environment variable', variables, [
       'CHROME_EXTENSION_ID',
       'CHROME_PUBLISHER_ID',
       'CHROME_SERVICE_ACCOUNT',
@@ -41,60 +43,74 @@ async function release() {
     ]),
   ]
 
-  const existingRelease = run('gh', ['release', 'view', tag, '--repo', repository], {
-    allowFailure: true,
-  })
-  if (existingRelease.status === 0) {
-    problems.push(
-      `GitHub release ${tag} already exists; increase extensions/version.json and merge it first`,
-    )
+  if (
+    run('gh', ['release', 'view', tag, '--repo', repository], { allowFailure: true }).status === 0
+  ) {
+    problems.push(`GitHub release ${tag} already exists`)
+  }
+  if (
+    run('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { allowFailure: true })
+      .status === 0
+  ) {
+    problems.push(`local branch ${branch} already exists`)
+  }
+  if (
+    run('git', ['ls-remote', '--exit-code', '--heads', 'origin', branch], { allowFailure: true })
+      .status === 0
+  ) {
+    problems.push(`remote branch ${branch} already exists`)
   }
 
   if (problems.length > 0) {
     throw new Error(
-      `Cannot release Figbird Devtools ${version}:\n\n${problems
+      `Cannot prepare Figbird Devtools ${version}:\n\n${problems
         .map(problem => `- ${problem}`)
         .join('\n')}\n\nSee extensions/RELEASING.md for setup instructions.`,
     )
   }
 
-  run('gh', ['workflow', 'view', workflow, '--repo', repository])
-  console.log(`Releasing Figbird Devtools ${version} from origin/master (${masterSha.slice(0, 7)})`)
+  run('gh', ['workflow', 'view', releaseWorkflow, '--repo', repository])
+  const pullRequest = await createVersionPullRequest({ branch, repository, version })
+  console.log(`\nFigbird Devtools ${version}: ${pullRequest}`)
+  console.log('Approve and merge this PR to release Firefox and submit Chrome for review.')
+}
 
-  const dispatchedAt = Date.now()
-  const dispatch = run('gh', [
-    'workflow',
-    'run',
-    workflow,
-    '--repo',
-    repository,
-    '--ref',
-    'master',
-    '-f',
-    'sign_firefox=true',
-    '-f',
-    'upload_chrome=false',
-    '-f',
-    'submit_chrome=true',
-  ])
-  const runDetails =
-    parseRunUrl(dispatch.stdout) ?? (await findDispatchedRun(repository, masterSha, dispatchedAt))
+async function createVersionPullRequest({ branch, repository, version }) {
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'figbird-devtools-release-'))
+  const worktree = path.join(temporaryRoot, 'worktree')
+  let addedWorktree = false
+  try {
+    run('git', ['worktree', 'add', '--quiet', '-b', branch, worktree, 'origin/master'])
+    addedWorktree = true
+    await writeFile(
+      path.join(worktree, 'extensions', 'version.json'),
+      `${JSON.stringify({ version }, null, 2)}\n`,
+    )
+    run('git', ['add', 'extensions/version.json'], { cwd: worktree })
+    run('git', ['commit', '-m', `Release Figbird Devtools ${version}`], { cwd: worktree })
+    run('git', ['push', '-u', 'origin', branch], { cwd: worktree })
 
-  console.log(`Release workflow: ${runDetails.url}`)
-  const watched = run(
-    'gh',
-    ['run', 'watch', String(runDetails.id), '--repo', repository, '--compact', '--exit-status'],
-    { inherit: true },
-  )
-  if (watched.status !== 0) throw new Error(`Extension release failed: ${runDetails.url}`)
-
-  const publisherId = variables.get('CHROME_PUBLISHER_ID')
-  const extensionId = variables.get('CHROME_EXTENSION_ID')
-  console.log(`\nFirefox: https://github.com/${repository}/releases/tag/${tag}`)
-  console.log(
-    `Chrome: https://chrome.google.com/webstore/devconsole/${publisherId}/${extensionId}/edit/package`,
-  )
-  console.log('Chrome may remain under review after this command finishes.')
+    const output = capture('gh', [
+      'pr',
+      'create',
+      '--repo',
+      repository,
+      '--base',
+      'master',
+      '--head',
+      branch,
+      '--title',
+      `Release Figbird Devtools ${version}`,
+      '--body',
+      `Bump the shared browser extension version to ${version}.\n\nMerging this PR automatically signs and publishes the Firefox XPI, then submits the private Chrome extension for review.`,
+    ])
+    return output.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0] ?? output
+  } finally {
+    if (addedWorktree) {
+      run('git', ['worktree', 'remove', '--force', worktree], { allowFailure: true })
+    }
+    await rm(temporaryRoot, { force: true, recursive: true })
+  }
 }
 
 function readMasterVersion() {
@@ -103,7 +119,49 @@ function readMasterVersion() {
   if (typeof parsed.version !== 'string') {
     throw new Error('origin/master extensions/version.json does not contain a version')
   }
+  validateVersion(parsed.version, 'Current')
   return parsed.version
+}
+
+function requestedVersion(currentVersion) {
+  const version = process.env.VERSION || incrementVersion(currentVersion)
+  validateVersion(version, 'Requested')
+  if (compareVersions(version, currentVersion) <= 0) {
+    throw new Error(`Requested extension version ${version} must be newer than ${currentVersion}`)
+  }
+  return version
+}
+
+function incrementVersion(version) {
+  const components = version.split('.').map(Number)
+  const last = components.length - 1
+  if (components[last] === 65_535) {
+    throw new Error(
+      `Cannot automatically increase ${version}; run make release-extensions VERSION=x.y.z`,
+    )
+  }
+  components[last]++
+  return components.join('.')
+}
+
+function validateVersion(version, label) {
+  const components = version.split('.')
+  const valid =
+    components.length >= 1 &&
+    components.length <= 4 &&
+    components.some(component => component !== '0') &&
+    components.every(component => /^(?:0|[1-9]\d*)$/.test(component) && Number(component) <= 65_535)
+  if (!valid) throw new Error(`${label} extension version is invalid: ${version}`)
+}
+
+function compareVersions(left, right) {
+  const a = left.split('.').map(Number)
+  const b = right.split('.').map(Number)
+  for (let index = 0; index < 4; index++) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return 0
 }
 
 function listNames(kind, repository) {
@@ -120,57 +178,8 @@ function listNames(kind, repository) {
   return new Set(JSON.parse(output).map(item => item.name))
 }
 
-function listVariables(repository) {
-  const output = capture('gh', [
-    'variable',
-    'list',
-    '--env',
-    environment,
-    '--repo',
-    repository,
-    '--json',
-    'name,value',
-  ])
-  return new Map(JSON.parse(output).map(item => [item.name, item.value]))
-}
-
 function missingNames(label, present, required) {
-  const available = new Set(present)
-  return required.filter(name => !available.has(name)).map(name => `missing ${label} ${name}`)
-}
-
-function parseRunUrl(output) {
-  const match = output.match(/https:\/\/github\.com\/[^\s]+\/actions\/runs\/(\d+)/)
-  return match ? { id: Number(match[1]), url: match[0] } : null
-}
-
-async function findDispatchedRun(repository, masterSha, dispatchedAt) {
-  const login = capture('gh', ['api', 'user', '--jq', '.login'])
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const output = capture('gh', [
-      'run',
-      'list',
-      '--repo',
-      repository,
-      '--workflow',
-      workflow,
-      '--commit',
-      masterSha,
-      '--event',
-      'workflow_dispatch',
-      '--user',
-      login,
-      '--limit',
-      '10',
-      '--json',
-      'createdAt,databaseId,url',
-    ])
-    const runs = JSON.parse(output)
-    const run = runs.find(item => Date.parse(item.createdAt) >= dispatchedAt - 5_000)
-    if (run) return { id: run.databaseId, url: run.url }
-    await wait(1_000)
-  }
-  throw new Error('Release was dispatched, but its workflow run could not be found')
+  return required.filter(name => !present.has(name)).map(name => `missing ${label} ${name}`)
 }
 
 function capture(command, args) {
@@ -178,19 +187,13 @@ function capture(command, args) {
   return result.stdout.trim()
 }
 
-function run(command, args, { allowFailure = false, inherit = false } = {}) {
-  const result = spawnSync(command, args, {
-    cwd: root,
-    encoding: 'utf8',
-    stdio: inherit ? 'inherit' : 'pipe',
-  })
+function run(command, args, { allowFailure = false, cwd = root } = {}) {
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8' })
   if (result.error) {
-    if (result.error.code === 'ENOENT') {
-      throw new Error(`Required command not found: ${command}`)
-    }
+    if (result.error.code === 'ENOENT') throw new Error(`Required command not found: ${command}`)
     throw result.error
   }
-  if (result.status !== 0 && !allowFailure && !inherit) {
+  if (result.status !== 0 && !allowFailure) {
     const detail = (result.stderr || result.stdout).trim()
     throw new Error(`${command} ${args.join(' ')} failed${detail ? `:\n${detail}` : ''}`)
   }
