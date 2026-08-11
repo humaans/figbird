@@ -94,21 +94,21 @@ function createPaginateApp(opts: PaginateAppOptions = {}) {
 // QueryBuilder unit tests
 // ============================================================================
 
-test('QueryBuilder.paginate: sets kind=paginate, pageSize, returnTotal in AST', t => {
+test('QueryBuilder.paginate: sets kind=paginate, pageSize, includeTotal in AST', t => {
   const { figbird } = createPaginateApp()
-  const ast = figbird.q.issues.paginate({ pageSize: 4, returnTotal: true }).toAST()
+  const ast = figbird.q.issues.paginate({ pageSize: 4, includeTotal: true }).toAST()
   t.is(ast.kind, 'paginate')
   t.is(ast.pageSize, 4)
-  t.is(ast.returnTotal, true)
+  t.is(ast.includeTotal, true)
   t.is(ast.cardinality, 'many')
 })
 
-test('QueryBuilder.paginate: returnTotal defaults to omitted (undefined)', t => {
+test('QueryBuilder.paginate: includeTotal defaults to omitted (undefined)', t => {
   const { figbird } = createPaginateApp()
   const ast = figbird.q.issues.paginate({ pageSize: 4 }).toAST()
   t.is(ast.kind, 'paginate')
   t.is(ast.pageSize, 4)
-  t.is(ast.returnTotal, undefined)
+  t.is(ast.includeTotal, undefined)
 })
 
 test('QueryBuilder.paginate: requires a positive integer pageSize', t => {
@@ -130,13 +130,13 @@ test('QueryBuilder.paginate: composes with where and orderBy before paginate', t
   t.deepEqual(ast.query, { status: 'open', $sort: { rank: -1 } })
 })
 
-test('QueryBuilder.paginate: hash differs by pageSize and returnTotal', t => {
+test('QueryBuilder.paginate: hash differs by pageSize and includeTotal', t => {
   const { figbird } = createPaginateApp()
   const a = figbird.q.issues.paginate({ pageSize: 4 })
   const b = figbird.q.issues.paginate({ pageSize: 5 })
-  const c = figbird.q.issues.paginate({ pageSize: 4, returnTotal: true })
+  const c = figbird.q.issues.paginate({ pageSize: 4, includeTotal: true })
   t.not(a.hash(), b.hash(), 'pageSize must affect hash')
-  t.not(a.hash(), c.hash(), 'returnTotal must affect hash')
+  t.not(a.hash(), c.hash(), 'includeTotal must affect hash')
 })
 
 // ============================================================================
@@ -233,15 +233,15 @@ test('useQuery + paginate: loadMore appends the next page and flips hasMore fals
   unmount()
 })
 
-test('useQuery + paginate: returnTotal exposes totalCount from the first page meta', async t => {
+test('useQuery + paginate: includeTotal exposes total from the first page meta', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 12 })
 
   function IssueList() {
-    const { totalCount } = useQuery(
-      figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 4, returnTotal: true }),
+    const { total } = useQuery(
+      figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 4, includeTotal: true }),
     )
-    return <div className='issues' data-total={String(totalCount ?? 'unset')} />
+    return <div className='issues' data-total={String(total ?? 'unset')} />
   }
 
   render(
@@ -258,15 +258,15 @@ test('useQuery + paginate: returnTotal exposes totalCount from the first page me
   unmount()
 })
 
-test('useQuery + paginate: totalCount is undefined when adapter omits total', async t => {
+test('useQuery + paginate: total is undefined when adapter omits it', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 12, skipTotal: true })
 
   function IssueList() {
-    const { totalCount } = useQuery(
-      figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 4, returnTotal: true }),
+    const { total } = useQuery(
+      figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 4, includeTotal: true }),
     )
-    return <div className='issues' data-total={String(totalCount ?? 'unset')} />
+    return <div className='issues' data-total={String(total ?? 'unset')} />
   }
 
   render(
@@ -420,5 +420,41 @@ test('useQuery + paginate: realtime create that provably sorts into a page merge
   )
   t.is($('.issues')!.getAttribute('data-count'), '3')
 
+  unmount()
+})
+
+test('useQuery + paginate: .server() makes an offset page refetch on realtime', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 5 })
+
+  function IssueList() {
+    const { data } = useQuery(
+      figbird.q.issues.orderBy('rank', 'asc').server().paginate({ pageSize: 3 }),
+    )
+    return <div className='issues' data-titles={data.map(issue => issue.title).join(',')} />
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>...</div>}>
+        <IssueList />
+      </React.Suspense>
+    </App>,
+  )
+
+  await flush()
+  const findCountBefore = issuesService.counts.find
+
+  await flush(async () => {
+    await feathers.service('issues').create({
+      id: 99,
+      title: 'Inserted',
+      status: 'open',
+      rank: 0,
+    })
+  })
+
+  t.is(issuesService.counts.find, findCountBefore + 1)
+  t.is($('.issues')!.getAttribute('data-titles'), 'Inserted,Issue 1,Issue 2')
   unmount()
 })

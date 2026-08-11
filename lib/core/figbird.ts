@@ -694,8 +694,13 @@ export class Figbird<
     const builder = isQueryDefinition(queryOrBuilder)
       ? queryOrBuilder.build(queryOrBuilder.validate(args))
       : queryOrBuilder
-    const nodes = explainQuery(builder.toAST(), this.schema?.relationships, serviceName =>
-      locallySupportedOperators(this.adapter, resolveServicePath(this.schema, serviceName)),
+    const nodes = explainQuery(
+      builder.toAST(),
+      this.schema?.relationships,
+      serviceName =>
+        locallySupportedOperators(this.adapter, resolveServicePath(this.schema, serviceName)),
+      serviceName =>
+        this.adapter.pageSource?.(resolveServicePath(this.schema, serviceName)) !== undefined,
     )
     return { nodes }
   }

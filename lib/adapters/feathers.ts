@@ -109,6 +109,8 @@ export interface FeathersCursorPagination {
   pageInfo(response: unknown): PageInfo
   /** Largest page the cursor service accepts. */
   maxPageSize?: number
+  /** See `PageSource.cursorStability`. */
+  cursorStability?: 'ordering'
 }
 
 /** Select the built-in `$limit`/`$skip` behavior for a Feathers service. */
@@ -124,6 +126,12 @@ export interface CursorPaginationOptions {
    * this value, and larger explicit `.paginate()` page sizes fail locally.
    */
   maxPageSize?: number
+  /**
+   * Opt into local updates when explicit filter and sort inputs are unchanged.
+   * Use `ordering` only when cursors depend on result-set position rather than
+   * arbitrary row values or a mutable server snapshot.
+   */
+  cursorStability?: 'ordering'
   /**
    * Map Figbird's adapter-neutral request to Feathers query controls. Defaults
    * to `$limit`/`$after` and optional `$total`.
@@ -150,10 +158,11 @@ function isPageCursor(value: unknown): value is PageCursor {
  */
 export function cursorPagination({
   maxPageSize,
+  cursorStability,
   query = page => ({
     $limit: page.limit,
     $after: page.after ?? null,
-    ...(page.returnTotal ? { $total: true } : {}),
+    ...(page.includeTotal ? { $total: true } : {}),
   }),
   pageInfo = response => {
     const value = response as Record<string, unknown> | null
@@ -178,6 +187,7 @@ export function cursorPagination({
     query,
     pageInfo,
     ...(maxPageSize !== undefined ? { maxPageSize } : {}),
+    ...(cursorStability !== undefined ? { cursorStability } : {}),
   }
 }
 
@@ -448,6 +458,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     const pagination = this.#paginationFor(serviceName)
     if (!pagination || pagination.kind === 'offset') return undefined
     return {
+      ...(pagination.cursorStability !== undefined
+        ? { cursorStability: pagination.cursorStability }
+        : {}),
       find: (params, page) => this.#findPage(serviceName, pagination, params, page),
     }
   }
@@ -568,7 +581,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       const page = await this.#findPage(serviceName, pagination, params, {
         limit,
         ...(after !== undefined ? { after } : {}),
-        returnTotal: false,
+        includeTotal: false,
       })
       result.data.push(...page.data)
       const knownTotal = result.meta.total >= 0 ? result.meta.total : page.meta.total

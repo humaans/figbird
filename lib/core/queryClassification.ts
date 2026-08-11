@@ -42,7 +42,13 @@ export const SERVER_ONLY_QUERY_FILTERS = new Set(['$select'])
  * specific operator or filter that triggered it.
  */
 export interface ClassificationReason {
-  code: 'server-flag' | 'select-projection' | 'server-only-operator' | 'window-filter' | 'snapshot'
+  code:
+    | 'server-flag'
+    | 'native-pagination'
+    | 'select-projection'
+    | 'server-only-operator'
+    | 'window-filter'
+    | 'snapshot'
   detail?: string
 }
 
@@ -71,11 +77,13 @@ export function classifyQueryNode(query: unknown, options: ClassifyOptions = {})
 
 /** Explain-only affordances layered on top of classification. */
 export interface ExplainNodeOptions extends ClassifyOptions {
+  /** Override the default `.server()` reason when another plan owns server authority. */
+  serverReasons?: readonly ClassificationReason[] | undefined
   /** `.snapshot()` — appends the snapshot reason (class is unaffected; realtime is manual). */
   snapshot?: boolean | undefined
   /**
-   * A `.paginate()` root — each page runs as a `$limit`/`$skip` window, so an
-   * otherwise local-exact node reports server-window.
+   * An offset `.paginate()` root — each page runs as a `$limit`/`$skip` window,
+   * so an otherwise local-exact node reports server-window.
    */
   paginatedRoot?: boolean | undefined
 }
@@ -86,10 +94,21 @@ export interface ExplainNodeOptions extends ClassifyOptions {
  */
 export function explainQueryNode(
   query: unknown,
-  { server, allPages, localOperators, snapshot, paginatedRoot }: ExplainNodeOptions = {},
+  {
+    server,
+    serverReasons,
+    allPages,
+    localOperators,
+    snapshot,
+    paginatedRoot,
+  }: ExplainNodeOptions = {},
 ): { class: QueryNodeClass; reasons: ClassificationReason[] } {
   const authoritative: ClassificationReason[] = []
-  if (server) authoritative.push({ code: 'server-flag', detail: '.server()' })
+  if (server) {
+    authoritative.push(
+      ...(serverReasons ?? [{ code: 'server-flag' as const, detail: '.server()' }]),
+    )
+  }
 
   const window: ClassificationReason[] = []
   walkQueryKeys(query, (key, top) => {
@@ -173,6 +192,36 @@ export interface RelationPlan {
   windowed: boolean
   /** allPages for the destination fetch (a junction's first hop is always exhaustive). */
   allPages: boolean
+}
+
+/** One plan shared by paginated-root execution and static explanation. */
+export interface RootPaginationPlan {
+  kind: 'offset' | 'sequential'
+  /** Sequential continuations and explicit `.server()` roots are server-authoritative. */
+  server: boolean
+  /** Structured reasons used by `figbird.explain()`. */
+  serverReasons: ClassificationReason[]
+}
+
+export function planRootPagination(
+  nativeSequential: boolean,
+  explicitServer: boolean,
+): RootPaginationPlan {
+  const serverReasons: ClassificationReason[] = []
+  if (nativeSequential) {
+    serverReasons.push({
+      code: 'native-pagination',
+      detail: 'adapter-native sequential pagination',
+    })
+  }
+  if (explicitServer) {
+    serverReasons.push({ code: 'server-flag', detail: '.server()' })
+  }
+  return {
+    kind: nativeSequential ? 'sequential' : 'offset',
+    server: serverReasons.length > 0,
+    serverReasons,
+  }
 }
 
 /**
@@ -290,9 +339,10 @@ export function explainQuery(
   ast: QueryAST,
   relationships: SchemaRelationships | undefined,
   localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
+  hasNativePagination: (serviceName: string) => boolean,
 ): ExplainNode[] {
   const nodes: ExplainNode[] = []
-  explainAst(ast, '(root)', true, nodes, relationships, localOperatorsFor)
+  explainAst(ast, '(root)', true, nodes, relationships, localOperatorsFor, hasNativePagination)
   return nodes
 }
 
@@ -303,17 +353,24 @@ function explainAst(
   nodes: ExplainNode[],
   relationships: SchemaRelationships | undefined,
   localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
+  hasNativePagination: (serviceName: string) => boolean,
 ): void {
   const snapshot = Boolean(ast.snapshot)
+  const paginationPlan =
+    isRoot && ast.kind === 'paginate'
+      ? planRootPagination(hasNativePagination(ast.service), Boolean(ast.server))
+      : null
   // Root fetch shape comes from the same plan the runtime executes (rootAllPages):
   // .all() drains every page, so window filters ($sort — the builder refuses
-  // $limit/$skip) don't demote the class; a paginate root reports server-window.
+  // $limit/$skip) don't demote the class. Offset pagination is a server window;
+  // native sequential pagination is server-authoritative.
   const explained = explainQueryNode(ast.query, {
-    server: ast.server,
+    server: paginationPlan?.server ?? ast.server,
+    ...(paginationPlan ? { serverReasons: paginationPlan.serverReasons } : {}),
     allPages: rootAllPages(ast.kind),
     localOperators: localOperatorsFor(ast.service),
     snapshot,
-    paginatedRoot: isRoot && ast.kind === 'paginate',
+    paginatedRoot: paginationPlan?.kind === 'offset',
   })
 
   nodes.push({

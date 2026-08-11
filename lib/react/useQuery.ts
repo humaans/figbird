@@ -42,7 +42,7 @@ export interface PaginationControls {
   hasMore: boolean
   isLoadingMore: boolean
   loadMoreError: Error | null
-  totalCount: number | undefined
+  total: number | undefined
 }
 
 /**
@@ -134,8 +134,8 @@ const idleState: RelationalQueryState<null> = {
  * ```
  *
  * For paginated builders (`.paginate({ pageSize })`), the result widens to include
- * `loadMore`, `hasMore`, `isLoadingMore`, `loadMoreError`, and (if `returnTotal: true`
- * was set) `totalCount`. The pagination shape is selected by the second type
+ * `loadMore`, `hasMore`, `isLoadingMore`, `loadMoreError`, and (if `includeTotal: true`
+ * was set) `total`. The pagination shape is selected by the second type
  * parameter, which the hook infers from the builder's `TKind`.
  */
 export type SuspenseQueryResult<T, TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find'> = {
@@ -299,7 +299,7 @@ export const idlePagination: RelationalPaginationState = {
   hasMore: false,
   isLoadingMore: false,
   loadMoreError: null,
-  totalCount: undefined,
+  total: undefined,
 }
 
 /**

@@ -21,7 +21,7 @@ export interface PageRequest {
   /** Adapter-issued continuation from the preceding page. */
   after?: PageCursor
   /** Only the first page asks the server to calculate a total. */
-  returnTotal: boolean
+  includeTotal: boolean
 }
 
 /** Adapter-neutral page information consumed by the query engine. */
@@ -41,6 +41,13 @@ export type PageInfo = (
  * continuations, so later pages must be rebuilt after an earlier page changes.
  */
 export interface PageSource<TParams, TMeta> {
+  /**
+   * `ordering` promises that a cursor remains valid when every explicit filter
+   * and ordering input is unchanged. This enables visible, non-window-changing
+   * updates to merge locally; omit it for conservative reconciliation on every
+   * realtime event.
+   */
+  cursorStability?: 'ordering'
   find(params: TParams | undefined, page: PageRequest): Promise<PageResponse<unknown[], TMeta>>
 }
 

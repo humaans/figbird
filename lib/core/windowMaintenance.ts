@@ -320,6 +320,41 @@ function applyVisibleEventEffect<TMeta>(
   return true
 }
 
+/**
+ * Apply only the value-level effect of an already-processed event to one query.
+ * Cursor-prefix maintenance uses this after separately proving whether page
+ * membership and ordering are unchanged.
+ */
+export function applyVisibleEventToQuery<TMeta>({
+  service,
+  queryId,
+  event,
+  touch,
+  getId,
+  itemRemoved,
+}: {
+  service: ServiceState<TMeta>
+  queryId: string
+  event: ProcessedRealtimeEvent
+  touch: (queryId: string) => void
+  getId: (item: unknown) => ItemId | undefined
+  itemRemoved: (meta: TMeta) => TMeta
+}): boolean {
+  return applyVisibleEventEffect(
+    {
+      service,
+      touch,
+      getId,
+      itemAdded: meta => meta,
+      itemRemoved,
+      defaultSort: undefined,
+    },
+    queryId,
+    event,
+    event.type === 'removed' ? 'remove' : 'replace',
+  )
+}
+
 function applyMergeEventToQuery<TMeta>(
   context: QueryEventContext<TMeta>,
   queryId: string,

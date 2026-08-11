@@ -14,6 +14,7 @@ import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchR
 import {
   addQueryToItemIndex,
   applyEventsToService,
+  applyVisibleEventToQuery,
   createServiceState,
   diffCompleteSet,
   groupQueuedEvents,
@@ -144,6 +145,7 @@ export class QueryStore<
   #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
   #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
+  #reconnectQueryIds: Set<string> = new Set()
   #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
@@ -380,6 +382,35 @@ export class QueryStore<
         })
       })
     }
+  }
+
+  /** Route an event-driven refetch through cooldown and visibility handling. @internal */
+  reconcile(queryId: string): void {
+    this.#requestReconcile(queryId)
+  }
+
+  /** Replace/remove a row already visible in one query without changing membership. @internal */
+  applyVisibleEvent(queryId: string, event: ProcessedRealtimeEvent): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (!serviceName) return
+    const getId = this.#getIdReader(serviceName)
+    const touched = this.#transactOverServiceByName(serviceName, (service, touch) => {
+      applyVisibleEventToQuery({
+        service,
+        queryId,
+        event,
+        touch,
+        getId,
+        itemRemoved: meta => this.#adapter.itemRemoved(meta),
+      })
+    })
+    this.#notify(touched)
+  }
+
+  /** Keep a composite query's sentinel in the reconnect sweep while events are controller-owned. */
+  registerReconnectQuery(queryId: string): () => void {
+    this.#reconnectQueryIds.add(queryId)
+    return () => this.#reconnectQueryIds.delete(queryId)
   }
 
   /** Perform a service mutation and update the store from the result. */
@@ -1413,7 +1444,7 @@ export class QueryStore<
         if (query.queryId === service.materialized?.queryId) continue
         if (
           !query.config.skip &&
-          query.config.realtime !== 'disabled' &&
+          (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId)) &&
           this.#listenerCount(query.queryId) > 0
         ) {
           this.#requestReconcile(query.queryId)

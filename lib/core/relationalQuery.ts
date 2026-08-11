@@ -1,7 +1,8 @@
 import { hashObject } from './hash.js'
 import type { MatcherContext, PageSource } from '../adapters/adapter.js'
+import { cursorQueryInputsUnchanged } from './cursorMaintenance.js'
 import type { QueryAST } from './queryBuilder.js'
-import { planRelation, rootAllPages } from './queryClassification.js'
+import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
 import type {
   ProcessedRealtimeEvent,
@@ -683,10 +684,26 @@ export class RelationalQueryRef<
 
     if (this.#ast.kind === 'paginate') {
       const pageSize = this.#ast.pageSize!
-      const sequential = this.#host.adapter.pageSource?.(serviceName) !== undefined
+      const pageSource = this.#host.adapter.pageSource?.(serviceName)
+      const paginationPlan = planRootPagination(pageSource !== undefined, Boolean(this.#ast.server))
+      const sequential = paginationPlan.kind === 'sequential'
+      const cursorRealtime =
+        sequential && pageSource?.cursorStability === 'ordering' && !this.#ast.snapshot
+          ? {
+              subscribe: (fn: (event: ProcessedRealtimeEvent) => void) =>
+                this.#host.queryStore.subscribeToProcessedEvents(event => {
+                  if (event.serviceName === serviceName) fn(event)
+                }),
+              canKeepPrefix: (event: ProcessedRealtimeEvent) =>
+                !this.#ast.server &&
+                (event.type === 'patched' || event.type === 'updated') &&
+                event.previousItem !== null &&
+                cursorQueryInputsUnchanged(this.#ast.query, event.previousItem, event.item),
+            }
+          : undefined
       this.#pagedRoot = new PagedQueryRoot({
         pageSize,
-        returnTotal: Boolean(this.#ast.returnTotal),
+        includeTotal: Boolean(this.#ast.includeTotal),
         sequential,
         staleTime: this.#staleTime,
         makePageRef: (pageIndex, after) =>
@@ -699,7 +716,7 @@ export class RelationalQueryRef<
                   page: {
                     limit: pageSize,
                     ...(after !== undefined ? { after } : {}),
-                    returnTotal: Boolean(this.#ast.returnTotal) && pageIndex === 0,
+                    includeTotal: Boolean(this.#ast.includeTotal) && pageIndex === 0,
                   },
                 }
               : {
@@ -715,17 +732,20 @@ export class RelationalQueryRef<
                 },
             {
               realtime: sequential
-                ? !this.#ast.snapshot && pageIndex === 0
-                  ? 'refetch'
-                  : 'disabled'
+                ? cursorRealtime
+                  ? 'disabled'
+                  : !this.#ast.snapshot && pageIndex === 0
+                    ? 'refetch'
+                    : 'disabled'
                 : this.#realtimeMode,
               fetchPolicy: 'swr',
-              ...(sequential ? { server: true } : {}),
+              ...(paginationPlan.server ? { server: true } : {}),
               ...matcherConfig,
             },
           ),
         onRows,
         onChange,
+        ...(cursorRealtime ? { cursorRealtime } : {}),
       })
       this.#root = this.#pagedRoot
       return

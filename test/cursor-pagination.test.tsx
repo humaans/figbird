@@ -19,6 +19,8 @@ import { dom } from './helpers.js'
 interface Item {
   id: number
   rank: number
+  title?: string
+  virtualStatus?: string
 }
 
 interface ItemService {
@@ -44,11 +46,13 @@ function createCursorApp(
     retry,
     retryDelay,
     cursorMaxPageSize,
+    cursorStability = 'ordering',
   }: {
     visibility?: VisibilitySource
     retry?: number | false
     retryDelay?: number
     cursorMaxPageSize?: number
+    cursorStability?: 'ordering' | false
   } = {},
 ) {
   let serverRows = rows
@@ -107,6 +111,7 @@ function createCursorApp(
     pagination: {
       items: cursorPagination({
         ...(cursorMaxPageSize !== undefined ? { maxPageSize: cursorMaxPageSize } : {}),
+        ...(cursorStability ? { cursorStability } : {}),
       }),
     },
   })
@@ -186,7 +191,7 @@ test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full fi
 
   function List() {
     const result = useQuery(
-      figbird.q.items.where({ rank: { $gte: 1 } }).paginate({ pageSize: 3, returnTotal: true }),
+      figbird.q.items.where({ rank: { $gte: 1 } }).paginate({ pageSize: 3, includeTotal: true }),
     )
     loadMore = result.loadMore
     return (
@@ -194,7 +199,7 @@ test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full fi
         className='items'
         data-ids={result.data.map(item => item.id).join(',')}
         data-more={String(result.hasMore)}
-        data-total={String(result.totalCount)}
+        data-total={String(result.total)}
       />
     )
   }
@@ -228,6 +233,24 @@ test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full fi
     $after: 'cursor:3',
   })
   unmount()
+})
+
+test('cursor paginate: explain reports adapter-native pagination as server-authoritative', t => {
+  const { figbird } = createCursorApp(makeRows(3))
+
+  t.deepEqual(figbird.explain(figbird.q.items.paginate({ pageSize: 3 })).nodes[0], {
+    path: '(root)',
+    service: 'items',
+    kind: 'paginate',
+    class: 'server-authoritative',
+    reasons: [
+      {
+        code: 'native-pagination',
+        detail: 'adapter-native sequential pagination',
+      },
+    ],
+    realtime: 'refetch',
+  })
 })
 
 test('cursor all: drains every page without requesting a server total', async t => {
@@ -283,7 +306,7 @@ test('cursorPagination: validates and enforces the service maximum', async t => 
   })
   const pageSource = adapter.pageSource('items')
   if (!pageSource) return t.fail('expected items to expose native pagination')
-  await t.throwsAsync(pageSource.find(undefined, { limit: 3, returnTotal: false }), {
+  await t.throwsAsync(pageSource.find(undefined, { limit: 3, includeTotal: false }), {
     message: /accepts at most 2 rows per page, got 3/,
   })
   t.is(calls.length, 0)
@@ -321,6 +344,122 @@ test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor c
   t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
   const lastTwoCalls = cursorApp.calls.slice(-2).map(call => call.query.$after)
   t.deepEqual(lastTwoCalls, [null, 'cursor:3'])
+  unmount()
+})
+
+test('cursor paginate: stable visible updates merge locally; ordering changes rebuild', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const initialRows = makeRows(7).map(row => ({ ...row, title: `Item ${row.id}` }))
+  const cursorApp = createCursorApp(initialRows)
+  let loadMore: (() => void) | undefined
+
+  function List() {
+    const result = useQuery(
+      cursorApp.figbird.q.items.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
+    )
+    loadMore = result.loadMore
+    return (
+      <div
+        className='items'
+        data-rows={result.data.map(item => `${item.id}:${item.title}`).join(',')}
+      />
+    )
+  }
+
+  render(
+    <cursorApp.App>
+      <React.Suspense fallback={<div>loading</div>}>
+        <List />
+      </React.Suspense>
+    </cursorApp.App>,
+  )
+  await flush()
+  await flush(() => loadMore?.())
+
+  const callsBeforePatch = cursorApp.calls.length
+  const renamed = { ...initialRows[4]!, title: 'Renamed' }
+  cursorApp.replaceRows(initialRows.map(row => (row.id === renamed.id ? renamed : row)))
+  await flush(() => cursorApp.emit('patched', renamed))
+
+  t.is(cursorApp.calls.length, callsBeforePatch)
+  t.true($('.items')?.getAttribute('data-rows')?.includes('5:Renamed'))
+
+  const reordered = { ...renamed, rank: 0 }
+  cursorApp.replaceRows([reordered, ...initialRows.filter(row => row.id !== reordered.id)])
+  await flush(async () => {
+    cursorApp.emit('patched', reordered)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is(cursorApp.calls.length, callsBeforePatch + 2)
+  t.true($('.items')?.getAttribute('data-rows')?.startsWith('5:Renamed,1:Item 1'))
+  unmount()
+})
+
+test('cursor paginate: without a cursor stability contract, visible updates rebuild', async t => {
+  const { render, unmount, flush } = dom()
+  const initialRows = makeRows(3).map(row => ({ ...row, title: `Item ${row.id}` }))
+  const cursorApp = createCursorApp(initialRows, 3, { cursorStability: false })
+
+  function List() {
+    useQuery(cursorApp.figbird.q.items.orderBy('rank', 'asc').paginate({ pageSize: 3 }))
+    return null
+  }
+
+  render(
+    <cursorApp.App>
+      <React.Suspense fallback={<div>loading</div>}>
+        <List />
+      </React.Suspense>
+    </cursorApp.App>,
+  )
+  await flush()
+
+  const callsBeforePatch = cursorApp.calls.length
+  const renamed = { ...initialRows[1]!, title: 'Renamed' }
+  cursorApp.replaceRows(initialRows.map(row => (row.id === renamed.id ? renamed : row)))
+  await flush(async () => {
+    cursorApp.emit('patched', renamed)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is(cursorApp.calls.length, callsBeforePatch + 1)
+  unmount()
+})
+
+test('cursor paginate: missing server-only inputs make a visible update rebuild', async t => {
+  const { render, unmount, flush } = dom()
+  const initialRows = makeRows(3).map(row => ({ ...row, title: `Item ${row.id}` }))
+  const cursorApp = createCursorApp(initialRows)
+
+  function List() {
+    useQuery(
+      cursorApp.figbird.q.items
+        .where({ virtualStatus: 'visible' })
+        .orderBy('rank', 'asc')
+        .paginate({ pageSize: 3 }),
+    )
+    return null
+  }
+
+  render(
+    <cursorApp.App>
+      <React.Suspense fallback={<div>loading</div>}>
+        <List />
+      </React.Suspense>
+    </cursorApp.App>,
+  )
+  await flush()
+
+  const callsBeforePatch = cursorApp.calls.length
+  const renamed = { ...initialRows[1]!, title: 'Renamed' }
+  cursorApp.replaceRows(initialRows.map(row => (row.id === renamed.id ? renamed : row)))
+  await flush(async () => {
+    cursorApp.emit('patched', renamed)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is(cursorApp.calls.length, callsBeforePatch + 1)
   unmount()
 })
 
@@ -549,7 +688,7 @@ test('cursor pagination: rejects a response that cannot continue safely', async 
   const pageSource = adapter.pageSource('items')
   if (!pageSource) return t.fail('expected items to expose native pagination')
 
-  await t.throwsAsync(pageSource.find(undefined, { limit: 10, returnTotal: false }), {
+  await t.throwsAsync(pageSource.find(undefined, { limit: 10, includeTotal: false }), {
     message: /no endCursor/,
   })
 })

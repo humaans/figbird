@@ -1,6 +1,6 @@
 import type { PageCursor, PageInfo } from '../adapters/adapter.js'
 import type { QueryRef } from './queryRef.js'
-import type { QueryState } from './queryTypes.js'
+import type { ProcessedRealtimeEvent, QueryState } from './queryTypes.js'
 import type { AnySchema, Schema } from './schema.js'
 
 /** The relational engine's adapter-neutral view of its root rows. */
@@ -29,7 +29,7 @@ export interface RelationalPaginationState {
   isLoadingMore: boolean
   loadMoreError: Error | null
   /** Present when page one requested a total and the adapter supplied one. */
-  totalCount: number | undefined
+  total: number | undefined
 }
 
 export interface PaginatedRootSource extends RootSource {
@@ -185,7 +185,7 @@ export class PagedQueryRoot<
   #onRows: (rows: unknown[]) => void
   #onChange: () => void
   #pageSize: number
-  #returnTotal: boolean
+  #includeTotal: boolean
   #sequential: boolean
 
   #pageRefs: Array<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>> = []
@@ -198,18 +198,21 @@ export class PagedQueryRoot<
   #lastAllPagesData: unknown[] = []
   #reconcile: SequentialReconcileState = { phase: 'idle' }
   #lastPagination: RelationalPaginationState | null = null
+  #cursorEventUnsub: (() => void) | null = null
+  #cursorReconnectUnsub: (() => void) | null = null
 
   constructor({
     pageSize,
-    returnTotal,
+    includeTotal,
     sequential,
     makePageRef,
     onRows,
     onChange,
+    cursorRealtime,
     staleTime = 0,
   }: {
     pageSize: number
-    returnTotal: boolean
+    includeTotal: boolean
     sequential: boolean
     makePageRef: (
       pageIndex: number,
@@ -217,16 +220,30 @@ export class PagedQueryRoot<
     ) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
     onRows: (rows: unknown[]) => void
     onChange: () => void
+    cursorRealtime?: {
+      subscribe(fn: (event: ProcessedRealtimeEvent) => void): () => void
+      canKeepPrefix(event: ProcessedRealtimeEvent): boolean
+    }
     staleTime?: number
   }) {
     this.#pageSize = pageSize
-    this.#returnTotal = returnTotal
+    this.#includeTotal = includeTotal
     this.#sequential = sequential
     this.#makePageRef = makePageRef
     this.#onRows = onRows
     this.#onChange = onChange
     this.#staleTime = staleTime
     this.#setupPage(0)
+    if (cursorRealtime) {
+      this.#cursorReconnectUnsub = this.#pageRefs[0]?.registerReconnectReconciliation() ?? null
+      this.#cursorEventUnsub = cursorRealtime.subscribe(event => {
+        if (cursorRealtime.canKeepPrefix(event)) {
+          for (const pageRef of this.#pageRefs) pageRef.applyVisibleEvent(event)
+        } else {
+          this.#pageRefs[0]?.reconcile()
+        }
+      })
+    }
   }
 
   #setupPage(
@@ -372,18 +389,18 @@ export class PagedQueryRoot<
     const hasMore = this.#hasMoreSticky
     const isLoadingMore = this.#isLoadingMore
     const loadMoreError = this.#loadMoreError
-    const totalCount = this.#computeTotalCount()
+    const total = this.#computeTotal()
     const previous = this.#lastPagination
     if (
       previous &&
       previous.hasMore === hasMore &&
       previous.isLoadingMore === isLoadingMore &&
       previous.loadMoreError === loadMoreError &&
-      previous.totalCount === totalCount
+      previous.total === total
     ) {
       return previous
     }
-    const next = { hasMore, isLoadingMore, loadMoreError, totalCount }
+    const next = { hasMore, isLoadingMore, loadMoreError, total }
     this.#lastPagination = next
     return next
   }
@@ -400,6 +417,10 @@ export class PagedQueryRoot<
   }
 
   teardown(): void {
+    this.#cursorEventUnsub?.()
+    this.#cursorEventUnsub = null
+    this.#cursorReconnectUnsub?.()
+    this.#cursorReconnectUnsub = null
     for (const unsub of this.#pageUnsubs) unsub()
     this.#pageUnsubs.length = 0
     this.#pageRefs.length = 0
@@ -410,8 +431,8 @@ export class PagedQueryRoot<
     return this.#pageRefs.map(ref => ref.details().queryId)
   }
 
-  #computeTotalCount(): number | undefined {
-    if (!this.#returnTotal) return undefined
+  #computeTotal(): number | undefined {
+    if (!this.#includeTotal) return undefined
     const state = this.#pageRefs[0]?.getSnapshot()
     if (!state || state.status !== 'success') return undefined
     if (state.pageInfo && typeof state.pageInfo.total === 'number' && state.pageInfo.total >= 0) {
