@@ -49,9 +49,24 @@ Add these secrets to the protected `extension-release` GitHub environment:
 
 Mozilla exposes the secret only when it is created. Store it directly in GitHub Actions and rotate it if it is ever copied elsewhere.
 
-## Run the workflow
+## Release both extensions
 
-Open **Actions → Release browser devtools → Run workflow** on the default branch.
+After merging the version change, run:
+
+```sh
+make release-extensions
+```
+
+The command releases the version on `origin/master`, not local or unmerged code. It checks the
+publisher configuration and version first, submits the Firefox extension for Mozilla signing,
+submits the private Chrome extension for review, and waits for the GitHub Actions workflow to
+finish. It then prints the Firefox release and Chrome publisher links.
+
+The command stops if the matching `devtools-v<version>` GitHub release already exists. Increase
+`extensions/version.json` and merge that change before releasing again.
+
+To release only one browser, open **Actions → Release browser devtools → Run workflow** on the
+default branch and select the required inputs.
 
 - **Sign Firefox** submits the unlisted build and source archive to Mozilla, then saves the
   signed XPI as both a workflow artifact and a `devtools-v<version>` GitHub prerelease asset.
