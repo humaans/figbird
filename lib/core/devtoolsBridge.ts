@@ -2,6 +2,7 @@ import type { FigbirdEvent, FigbirdEvents } from './events.js'
 import type { InspectedQuery } from './figbird.js'
 import type { InspectedRelationalQuery } from './relationalQuery.js'
 import type { InFlightMutation, MutationActivity } from './mutationTracker.js'
+import { CappedBuffer } from './cappedBuffer.js'
 
 const BRIDGE_KEY = '__FIGBIRD_DEVTOOLS__'
 const SESSION_TIMEOUT_MS = 5_000
@@ -12,6 +13,7 @@ interface DevtoolsSource {
   mutating: MutationActivity
   inspect(): InspectedQuery[]
   inspectRelational(): InspectedRelationalQuery[]
+  subscribeToStateChanges(fn: (state: unknown) => void): () => void
 }
 
 export interface DevtoolsWireError {
@@ -33,7 +35,7 @@ export type DevtoolsWireQuery = Omit<InspectedQuery, 'fetchedAt' | 'query'> & {
 export interface DevtoolsBridgeConnection {
   instanceCount: number
   instanceId: number
-  protocol: 1
+  protocol: 2
   sessionId: string
 }
 
@@ -45,22 +47,24 @@ export interface DevtoolsWireRead {
 }
 
 export interface DevtoolsWireEnvelope {
-  protocol: 1
-  read: DevtoolsWireRead
+  protocol: 2
+  version: number
+  read: DevtoolsWireRead | null
 }
 
 interface DevtoolsBridgeSession {
-  events: FigbirdEvent[]
+  events: CappedBuffer<FigbirdEvent>
   expires: ReturnType<typeof setTimeout> | null
   source: DevtoolsSource
   unsubscribe: () => void
+  version: number
 }
 
 interface DevtoolsPageBridge {
-  protocol: 1
+  protocol: 2
   connect(instanceId?: number): DevtoolsBridgeConnection | null
   disconnect(sessionId: string): void
-  readJson(sessionId: string): string | null
+  readJson(sessionId: string, version: number | null): string | null
   register(source: DevtoolsSource): void
 }
 
@@ -96,7 +100,7 @@ function isPageBridge(value: unknown): value is DevtoolsPageBridge {
     typeof value === 'object' &&
     value !== null &&
     'protocol' in value &&
-    value.protocol === 1 &&
+    value.protocol === 2 &&
     'register' in value &&
     typeof value.register === 'function' &&
     'connect' in value &&
@@ -126,7 +130,7 @@ function createPageBridge(): DevtoolsPageBridge {
   }
 
   return {
-    protocol: 1,
+    protocol: 2,
 
     register(source) {
       instances.set(nextInstanceId++, new WeakRef(source))
@@ -139,23 +143,29 @@ function createPageBridge(): DevtoolsPageBridge {
       const [resolvedId, source] = instance
       const sessionId = `${Date.now().toString(36)}-${nextSessionId++}`
       const session: DevtoolsBridgeSession = {
-        events: [],
+        events: new CappedBuffer(EVENT_LIMIT),
         expires: null,
         source,
         unsubscribe: () => {},
+        version: 1,
       }
-      session.unsubscribe = source.events.subscribe(event => {
-        session.events.push(event)
-        if (session.events.length > EVENT_LIMIT) {
-          session.events.splice(0, session.events.length - EVENT_LIMIT)
-        }
-      })
+      const unsubscribers = [
+        source.events.subscribe(event => {
+          session.events.push(event)
+          session.version++
+        }),
+        source.mutating.subscribe(() => session.version++),
+        source.subscribeToStateChanges(() => session.version++),
+      ]
+      session.unsubscribe = () => {
+        for (const unsubscribe of unsubscribers) unsubscribe()
+      }
       sessions.set(sessionId, session)
       refreshExpiry(sessionId, session)
       return {
         instanceCount: instances.size,
         instanceId: resolvedId,
-        protocol: 1,
+        protocol: 2,
         sessionId,
       }
     },
@@ -164,14 +174,18 @@ function createPageBridge(): DevtoolsPageBridge {
       closeSession(sessionId)
     },
 
-    readJson(sessionId) {
+    readJson(sessionId, version) {
       const session = sessions.get(sessionId)
       if (!session) return null
       refreshExpiry(sessionId, session)
+      if (version === session.version) {
+        return `{"protocol":2,"version":${session.version},"read":null}`
+      }
       return serializeWireEnvelope({
-        protocol: 1,
+        protocol: 2,
+        version: session.version,
         read: {
-          events: session.events.splice(0).map(toWireEvent),
+          events: session.events.drain().map(toWireEvent),
           inFlightMutations: session.source.mutating.getSnapshot(),
           queries: session.source.inspect(),
           relational: session.source.inspectRelational(),

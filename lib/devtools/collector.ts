@@ -5,6 +5,7 @@ import type {
   InspectedRelationalQuery,
   MutationActivity,
 } from '../core/figbird.js'
+import { CappedBuffer } from '../core/cappedBuffer.js'
 import { now } from './format.js'
 
 export interface FigbirdLikeForDevtools {
@@ -62,6 +63,8 @@ export interface TimelineRealtimeEvent {
 }
 
 export interface DevtoolsTimeline {
+  startedAt: number
+  laneOrder: string[]
   realtime: TimelineRealtimeEvent[]
 }
 
@@ -114,7 +117,7 @@ interface QueryMetrics {
   lastError?: QueryRecord['lastError']
   reconciles: number
   realtimeSeen: number
-  spans: QuerySpan[]
+  spans: CappedBuffer<QuerySpan>
   totalDurationMs: number
 }
 
@@ -135,16 +138,9 @@ const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
   queries: [],
   relational: [],
   events: [],
-  timeline: { realtime: [] },
+  timeline: { startedAt: 0, laneOrder: [], realtime: [] },
   writes: [],
   inFlightWrites: 0,
-}
-
-function pushCapped<T>(items: T[], item: T, limit: number): void {
-  items.push(item)
-  if (items.length > limit) {
-    items.splice(0, items.length - limit)
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -168,6 +164,7 @@ function makeQueryRecord(
   row: InspectedQuery,
   serviceRealtimeBaseline: number,
   observedAt: number,
+  spanLimit: number,
 ): InternalQueryRecord {
   const state = queryState(row)
   return {
@@ -179,7 +176,7 @@ function makeQueryRecord(
       errorCount: row.errorCount,
       ...(row.lastDurationMs !== undefined ? { lastDurationMs: row.lastDurationMs } : {}),
       totalDurationMs: row.totalDurationMs,
-      spans: [],
+      spans: new CappedBuffer(spanLimit),
       realtimeSeen: 0,
       reconciles: 0,
     },
@@ -215,6 +212,7 @@ function makePlaceholderQueryRecord(
   serviceRealtimeBaseline: number,
   observedAt: number,
   present: boolean,
+  spanLimit: number,
 ): InternalQueryRecord {
   return {
     current: present ? state : null,
@@ -224,7 +222,7 @@ function makePlaceholderQueryRecord(
       fetchCount: 0,
       errorCount: 0,
       totalDurationMs: 0,
-      spans: [],
+      spans: new CappedBuffer(spanLimit),
       realtimeSeen: 0,
       reconciles: 0,
     },
@@ -258,7 +256,7 @@ function toPublicQueryRecord(record: InternalQueryRecord): QueryRecord {
     errorCount: metrics.errorCount,
     ...(metrics.lastDurationMs !== undefined ? { lastDurationMs: metrics.lastDurationMs } : {}),
     totalDurationMs: metrics.totalDurationMs,
-    spans: [...metrics.spans],
+    spans: metrics.spans.toArray(),
     realtimeSeen: metrics.realtimeSeen,
     reconciles: metrics.reconciles,
     ...(metrics.lastError ? { lastError: metrics.lastError } : {}),
@@ -292,7 +290,6 @@ type FetchTerminalEvent = Extract<FetchEvent, { kind: 'fetch:end' | 'fetch:error
 
 class FigbirdCollector implements Collector {
   #figbird: FigbirdLikeForDevtools
-  #eventLimit: number
   #heartbeatMs: number
   #queryHistoryLimit: number
   #spanLimit: number
@@ -309,20 +306,23 @@ class FigbirdCollector implements Collector {
 
   #queries: Map<string, InternalQueryRecord> = new Map()
   #relational: Map<string, InternalRelationalQuery> = new Map()
-  #events: DevtoolsEvent[] = []
-  #timelineRealtime: TimelineRealtimeEvent[] = []
-  #timelineStartedAt: number | null = null
+  #events: CappedBuffer<DevtoolsEvent>
+  #timelineRealtime: CappedBuffer<TimelineRealtimeEvent>
+  #timelineStartedAt = now()
+  #timelineLaneOrder: string[] = []
+  #timelineLaneIds = new Set<string>()
   #nextEventId = 1
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
 
   constructor(figbird: FigbirdLikeForDevtools, options: ResolvedCollectorOptions) {
     this.#figbird = figbird
-    this.#eventLimit = options.eventLimit
     this.#heartbeatMs = options.heartbeatMs
     this.#queryHistoryLimit = options.queryHistoryLimit
     this.#spanLimit = options.spanLimit
     this.#writeLimit = options.writeLimit
+    this.#events = new CappedBuffer(options.eventLimit)
+    this.#timelineRealtime = new CappedBuffer(options.eventLimit)
   }
 
   start(): void {
@@ -383,8 +383,12 @@ class FigbirdCollector implements Collector {
     this.#snapshot = {
       queries,
       relational: [...this.#relational.values()].map(record => record.inspected),
-      events: [...this.#events],
-      timeline: { realtime: [...this.#timelineRealtime] },
+      events: this.#events.toArray(),
+      timeline: {
+        startedAt: this.#timelineStartedAt,
+        laneOrder: [...this.#timelineLaneOrder],
+        realtime: this.#timelineRealtime.toArray(),
+      },
       writes,
       inFlightWrites: this.#figbird.mutating?.getSnapshot().length ?? 0,
     }
@@ -393,15 +397,17 @@ class FigbirdCollector implements Collector {
   }
 
   clearEvents(): void {
-    this.#events = []
+    this.#events.clear()
     this.#scheduleNotify()
   }
 
   clearTimeline(): void {
-    this.#timelineRealtime = []
+    this.#timelineRealtime.clear()
     this.#timelineStartedAt = now()
+    this.#timelineLaneOrder = []
+    this.#timelineLaneIds.clear()
     for (const record of this.#queries.values()) {
-      record.metrics.spans = []
+      record.metrics.spans.clear()
     }
     this.#scheduleNotify()
   }
@@ -428,22 +434,26 @@ class FigbirdCollector implements Collector {
 
   #recordEvent(event: FigbirdEvent): void {
     const at = now()
-    pushCapped(
-      this.#events,
-      { id: this.#nextEventId++, at, wallAt: Date.now(), event: this.#captureEvent(event) },
-      this.#eventLimit,
-    )
+    this.#events.push({
+      id: this.#nextEventId++,
+      at,
+      wallAt: Date.now(),
+      event: this.#captureEvent(event),
+    })
 
     switch (event.kind) {
       case 'fetch:start':
+        this.#recordTimelineLane(`query:${event.queryId}`)
         this.#recordFetchStart(event, at)
         break
       case 'fetch:end':
       case 'fetch:error':
+        this.#recordTimelineLane(`query:${event.queryId}`)
         this.#finishFetch(event, at)
         break
       case 'realtime':
-        pushCapped(this.#timelineRealtime, { at, serviceName: event.serviceName }, this.#eventLimit)
+        this.#recordTimelineLane(`realtime:${event.serviceName}`)
+        this.#timelineRealtime.push({ at, serviceName: event.serviceName })
         this.#realtimeByService.set(
           event.serviceName,
           (this.#realtimeByService.get(event.serviceName) ?? 0) + 1,
@@ -469,6 +479,12 @@ class FigbirdCollector implements Collector {
     }
   }
 
+  #recordTimelineLane(id: string): void {
+    if (this.#timelineLaneIds.has(id)) return
+    this.#timelineLaneIds.add(id)
+    this.#timelineLaneOrder.push(id)
+  }
+
   #refreshQueries(): void {
     const observedAt = now()
     const observedQueryIds = new Set<string>()
@@ -478,7 +494,8 @@ class FigbirdCollector implements Collector {
       const existing = this.#queries.get(row.queryId)
       const capturedRow = { ...row, query: snapshotValue(row.query) }
       const capturedState = queryState(capturedRow)
-      const record = existing ?? makeQueryRecord(capturedRow, serviceRealtime, observedAt)
+      const record =
+        existing ?? makeQueryRecord(capturedRow, serviceRealtime, observedAt, this.#spanLimit)
 
       if (existing && existing.lastKnown.generation === row.generation && row.subscriberCount > 0) {
         record.metrics.realtimeSeen += Math.max(0, serviceRealtime - record.serviceRealtimeBaseline)
@@ -581,6 +598,7 @@ class FigbirdCollector implements Collector {
       this.#realtimeByService.get(event.serviceName) ?? 0,
       at,
       present,
+      this.#spanLimit,
     )
     this.#queries.set(event.queryId, record)
     return record
@@ -603,11 +621,8 @@ class FigbirdCollector implements Collector {
     }
 
     const observedStartAt = at - event.durationMs
-    const startAt =
-      this.#timelineStartedAt === null
-        ? observedStartAt
-        : Math.max(observedStartAt, this.#timelineStartedAt)
-    pushCapped(metrics.spans, { startAt, endAt: at, ok }, this.#spanLimit)
+    const startAt = Math.max(observedStartAt, this.#timelineStartedAt)
+    metrics.spans.push({ startAt, endAt: at, ok })
 
     const currentMatches = record.current?.generation === event.generation
     const retainedMatches =

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { FigbirdDevtoolsPanel } from '../../lib/devtools/Devtools.js'
 import { createCollector } from '../../lib/devtools/collector.js'
+import { PANEL_VISIBILITY_CALLBACK, type DevtoolsPanelWindow } from './panelVisibility.js'
 import { ExtensionSession } from './remote.js'
 
 function Panel() {
@@ -10,8 +11,20 @@ function Panel() {
   const status = useSyncExternalStore(session.subscribeStatus, session.getStatus, session.getStatus)
 
   useEffect(() => {
-    session.start()
-    return () => session.stop()
+    const panelWindow = window as DevtoolsPanelWindow
+    const setVisible = (visible: boolean) => {
+      if (visible) session.start()
+      else session.stop()
+    }
+    const updateFromDocument = () => setVisible(document.visibilityState !== 'hidden')
+    panelWindow[PANEL_VISIBILITY_CALLBACK] = setVisible
+    updateFromDocument()
+    document.addEventListener('visibilitychange', updateFromDocument)
+    return () => {
+      document.removeEventListener('visibilitychange', updateFromDocument)
+      delete panelWindow[PANEL_VISIBILITY_CALLBACK]
+      session.stop()
+    }
   }, [session])
 
   return (

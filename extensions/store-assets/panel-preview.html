@@ -117,20 +117,18 @@
         relational: [],
       }
 
-      let firstRead = true
       globalThis.__FIGBIRD_DEVTOOLS__ = {
-        protocol: 1,
+        protocol: 2,
         connect: () => ({
           instanceCount: 1,
           instanceId: 1,
-          protocol: 1,
+          protocol: 2,
           sessionId: 'store-preview',
         }),
         disconnect: () => {},
-        readJson: () => {
-          const value = { ...read, events: firstRead ? read.events : [] }
-          firstRead = false
-          return JSON.stringify({ protocol: 1, read: value })
+        readJson: (_sessionId, version) => {
+          if (version === 1) return JSON.stringify({ protocol: 2, version: 1, read: null })
+          return JSON.stringify({ protocol: 2, version: 1, read })
         },
       }
 

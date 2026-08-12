@@ -25,9 +25,12 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
   #eventListeners = new Set<(event: FigbirdEvent) => void>()
   #mutatingListeners = new Set<() => void>()
   #mutations: readonly InFlightMutation[] = []
+  #pending: DevtoolsWireRead | null = null
   #queries: InspectedQuery[] = []
   #relational: InspectedRelationalQuery[] = []
+  #renderFrame: number | null = null
   #stateListeners = new Set<(state: unknown) => void>()
+  #taskVersion = 0
 
   readonly events: FigbirdEvents = {
     subscribe: listener => {
@@ -58,6 +61,39 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
   }
 
   update(read: DevtoolsWireRead): void {
+    this.#pending = this.#pending
+      ? {
+          ...read,
+          events: [...this.#pending.events, ...read.events],
+        }
+      : read
+    if (this.#renderFrame !== null) return
+    if (typeof requestAnimationFrame === 'function') {
+      this.#renderFrame = requestAnimationFrame(() => {
+        this.#renderFrame = null
+        this.#flush()
+      })
+      return
+    }
+    const taskVersion = ++this.#taskVersion
+    queueMicrotask(() => {
+      if (taskVersion === this.#taskVersion) this.#flush()
+    })
+  }
+
+  cancelPending(): void {
+    this.#taskVersion++
+    this.#pending = null
+    if (this.#renderFrame !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(this.#renderFrame)
+    }
+    this.#renderFrame = null
+  }
+
+  #flush(): void {
+    const read = this.#pending
+    this.#pending = null
+    if (!read) return
     this.#queries = read.queries.map(query => ({
       ...query,
       fetchedAt: query.fetchedAt,
@@ -85,6 +121,7 @@ export class ExtensionSession {
   #status = 'Waiting for Figbird'
   #statusListeners = new Set<() => void>()
   #timer: ReturnType<typeof setInterval> | null = null
+  #version: number | null = null
 
   constructor(evaluate: Evaluate = evaluateInspectedWindow) {
     this.#evaluate = evaluate
@@ -109,6 +146,8 @@ export class ExtensionSession {
     this.#generation++
     if (this.#timer) clearInterval(this.#timer)
     this.#timer = null
+    this.#version = null
+    this.figbird.cancelPending()
     this.inspection.stop()
     const sessionId = this.#connection?.sessionId
     this.#connection = null
@@ -137,23 +176,25 @@ export class ExtensionSession {
         )
       }
 
-      const read = parseWireRead(
-        await this.#evaluate(
-          `${BRIDGE_EXPRESSION}?.readJson(${JSON.stringify(this.#connection.sessionId)})`,
-        ),
+      const sessionId = JSON.stringify(this.#connection.sessionId)
+      const poll = parseWireRead(
+        await this.#evaluate(`${BRIDGE_EXPRESSION}?.readJson(${sessionId},${this.#version})`),
       )
       if (generation !== this.#generation) return
-      if (!read) {
+      if (!poll) {
         this.#connection = null
+        this.#version = null
         this.inspection.reset()
         this.#setStatus('Reconnecting')
         return
       }
-      this.figbird.update(read)
+      this.#version = poll.version
+      if (poll.read) this.figbird.update(poll.read)
       await this.inspection.refresh()
     } catch {
       if (generation !== this.#generation) return
       this.#connection = null
+      this.#version = null
       this.inspection.reset()
       this.#setStatus('Cannot inspect this page')
     } finally {
