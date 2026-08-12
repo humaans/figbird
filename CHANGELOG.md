@@ -1,15 +1,5 @@
 # Figbird Changelog
 
-## Unreleased
-
-- Move Figbird devtools from an embedded React drawer to Chrome and Firefox DevTools
-  extensions. Apps no longer mount `FigbirdDevtools` or use `figbird.devtools.enable()` /
-  `disable()`; the extension starts debug collection when its panel connects.
-- Retry failed query fetches up to three times with exponential backoff before exposing
-  the error. Configure the instance with `retry` and `retryDelay`; descriptor queries can
-  override both or disable retries with `retry: false`. Network errors, timeouts, `408`,
-  `429`, and `5xx` responses retry; other `4xx` responses fail immediately.
-
 ## 0.24.0
 
 The relational rewrite.
@@ -29,7 +19,7 @@ Also included:
 
 - Native cursor pagination for `.paginate()` and `.all()`, configured per Feathers
   service without adding cursor controls to logical queries.
-- Devtools for inspecting queries, fetches, realtime events, and writes, plus richer
+- Browser Devtools for inspecting queries, fetches, realtime events, and writes, plus richer
   lifecycle and payload details through `figbird.events`.
 - `matcherKey` for explicitly sharing queries that use equivalent custom matchers.
 - `reconnectJitter` for staggering reconnect refetches, defaulting to `[0, 3000]` ms.
@@ -37,6 +27,10 @@ Also included:
   `defaultSort` defines the order.
 - Package builds that no longer require a global React shim.
 - Subscriber errors no longer interrupt updates to other consumers.
+- Retry failed query fetches up to three times with exponential backoff before exposing
+  the error. Configure the instance with `retry` and `retryDelay`; descriptor queries can
+  override both or disable retries with `retry: false`. Network errors, timeouts, `408`,
+  `429`, and `5xx` responses retry; other `4xx` responses fail immediately.
 
 See the [docs](https://humaans.github.io/figbird) for the full story. The old hooks still work — see Deprecated below — so you can migrate gradually.
 
