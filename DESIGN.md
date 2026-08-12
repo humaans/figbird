@@ -1023,14 +1023,14 @@ checklist" in the docs that maps each failure mode to its tool.
 
 ## Instance Binding And Introspection
 
-**One instance, optional provider.** `createHooks(figbird)` returns the daily-use kit _bound_ to
-that instance — the hooks, `q` (the builder proxy), schema-typed `defineQuery`, and bound
-`prepare`/`prefetch` — so a singleton SPA needs no `FigbirdProvider` at all and imports everything
-from one module. Context, when
-present, overrides the bound instance — that is the injection point for per-request SSR trees and
-per-test instances — and a dev-mode error fires when a provider holds a _different_ instance than
-the bound one, because that divergence used to be silent (types from one instance, runtime from
-another).
+**One default instance, optional provider.** `createHooks(figbird)` returns the daily-use kit
+bound to that instance, so a singleton SPA needs no `FigbirdProvider`. The lazy
+`createHooks({ schema, getDefaultFigbird })` form binds types and `q` without constructing the
+default instance during module evaluation. In both forms, context overrides the default for
+hooks — the injection point for per-request SSR trees and per-test instances. Imperative APIs
+resolve the default only when called; provider-driven React code uses `useM()` when writes must
+follow context. The eager form emits a dev error when a provider holds a different instance,
+because that divergence used to be silent.
 
 **Classification must be visible.** Whether a query node is local-exact, server-window, or
 server-authoritative decides its entire realtime behavior, and it flips implicitly — adding

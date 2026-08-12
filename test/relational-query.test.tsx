@@ -1406,14 +1406,30 @@ test('useRelationalQuery: two components share cached data', async t => {
 // createHooks Tests
 // ============================================================================
 
-test('createHooks: useQuery with suspense:false is exported and works', async t => {
+test('createHooks: lazy bindings use the provider without resolving the default', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
-  // Create typed hooks from figbird instance
-  const { useQuery: useTypedQuery, q } = createHooks(figbird)
+  let defaultResolutions = 0
+  const {
+    useQuery: useTypedQuery,
+    useFigbird: useTypedFigbird,
+    useM,
+    q,
+  } = createHooks({
+    schema,
+    getDefaultFigbird: () => {
+      defaultResolutions++
+      return figbird
+    },
+  })
+
+  // Schema-only bindings are safe to create and read during module evaluation.
+  t.is(defaultResolutions, 0)
 
   function IssueWithCreator() {
+    const resolvedFigbird = useTypedFigbird()
+    const mutations = useM()
     // Use the typed hook - the query builder should be properly typed
     const issue = useTypedQuery(q.issues.get(1).related('creator'), {
       suspense: false,
@@ -1430,7 +1446,10 @@ test('createHooks: useQuery with suspense:false is exported and works', async t 
     const data = issue.data as Issue & { creator: User | null }
 
     return (
-      <div className='issue-detail'>
+      <div
+        className='issue-detail'
+        data-provider={resolvedFigbird === figbird && mutations === figbird.m}
+      >
         <div className='title'>{data.title}</div>
         <div className='creator'>{data.creator?.name ?? 'Unknown'}</div>
       </div>
@@ -1448,8 +1467,10 @@ test('createHooks: useQuery with suspense:false is exported and works', async t 
   await flush()
 
   t.truthy($('.issue-detail'))
+  t.is($('.issue-detail')!.getAttribute('data-provider'), 'true')
   t.is($('.title')!.innerHTML, 'First issue')
   t.is($('.creator')!.innerHTML, 'Alice')
+  t.is(defaultResolutions, 0)
 
   unmount()
 })
@@ -2741,10 +2762,19 @@ test('inspect: stable read-only projection of live queries', async t => {
   unsub()
 })
 
-test('createHooks: bound hooks and q work without a FigbirdProvider', async t => {
+test('createHooks: lazy hooks resolve the default without a FigbirdProvider', async t => {
   const { render, unmount, flush, $ } = dom()
   const { figbird } = createApp()
-  const { useQuery: useBoundQuery, q } = createHooks(figbird)
+  let defaultResolutions = 0
+  const { useQuery: useBoundQuery, q } = createHooks({
+    schema,
+    getDefaultFigbird: () => {
+      defaultResolutions++
+      return figbird
+    },
+  })
+
+  t.is(defaultResolutions, 0)
 
   function IssueList() {
     const { data } = useBoundQuery(q.issues.related('creator'))
@@ -2762,6 +2792,7 @@ test('createHooks: bound hooks and q work without a FigbirdProvider', async t =>
   await flush()
 
   t.is($('.count')!.innerHTML, '3')
+  t.true(defaultResolutions > 0)
 
   unmount()
 })
@@ -2968,16 +2999,20 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
 
 test('prepare and prefetch install staleTime before materializing a warm query', async t => {
   const { figbird, feathers } = createApp()
+  const { prepare, prefetch, q } = createHooks({
+    schema,
+    getDefaultFigbird: () => figbird,
+  })
   const issueDetail = defineQuery('preparedIssueStaleTime', ({ id }: { id: number }) =>
-    figbird.q.issues.get(id).related('creator'),
+    q.issues.get(id).related('creator'),
   )
 
-  const first = figbird.prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  const first = prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
   await first.promise
   first.release()
   await new Promise(resolve => setTimeout(resolve, 10))
 
-  const second = figbird.prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  const second = prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
   await second.promise
   await new Promise(resolve => setTimeout(resolve, 10))
 
@@ -2986,7 +3021,7 @@ test('prepare and prefetch install staleTime before materializing a warm query',
   second.release()
   await new Promise(resolve => setTimeout(resolve, 10))
 
-  figbird.prefetch(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  prefetch(issueDetail, { id: 1 }, { staleTime: 60_000 })
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.get, 1, 'prefetch must respect fresh root data')
   t.is(feathers.service('users').counts.find, 1, 'prefetch must respect fresh relation data')

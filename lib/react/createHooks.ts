@@ -12,7 +12,12 @@ import {
   type PreparedQuery,
   type QueryConfig,
 } from '../core/figbird.js'
-import type { AnyQueryBuilder } from '../core/queryBuilder.js'
+import { createMutationsProxy, type MutationsHost } from '../core/mutations.js'
+import {
+  createQueryBuilderProxy,
+  type AnyQueryBuilder,
+  type QueryBuilderProxy,
+} from '../core/queryBuilder.js'
 import type {
   Schema,
   ServiceCreate,
@@ -32,7 +37,6 @@ import { useFindImpl, useGetImpl, type QueryResult } from './useQueryByDesc.js'
 import { useQueriesImpl, type UseQueriesHook, type UseQueriesOptions } from './useQueries.js'
 import { useQueryImpl, type UseQueryHook, type UseQueryOptions } from './useQuery.js'
 import type { ArgsAndOptions, DefineQuery, QueryDefinition } from '../core/figbird.js'
-import type { QueryBuilderProxy } from '../core/queryBuilder.js'
 
 // NODE_ENV probe without depending on @types/node — the library targets browsers,
 // so its build must not need node globals to type-check. Emits nothing; bundlers
@@ -114,7 +118,49 @@ type InferParams<F> = AdapterParams<InferAdapter<F>>
 type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
 
 /**
- * Creates typed hooks for a specific schema.
+ * Bind hooks and schema-only helpers without constructing the default Figbird
+ * instance during module evaluation. Hooks prefer a FigbirdProvider when one is
+ * present; imperative APIs resolve this default when they are called.
+ */
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export interface CreateHooksOptions<F extends Figbird<any, any>> {
+  schema: InferSchema<F>
+  /** Return the stable default instance to use outside a provider. */
+  getDefaultFigbird: () => F
+}
+
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export interface FigbirdHooks<F extends Figbird<any, any>> {
+  useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
+  useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
+  /**
+   * @deprecated Superseded by the split write-side story: `m` for the stateless
+   * service handle, `useAction` for per-action pending/error state, `useMutating`
+   * for entity/service-level activity. Fully functional, but its single shared
+   * status slot forces hand-rolled state machines on multi-action screens.
+   */
+  useMutation: UseMutationForSchema<InferSchema<F>>
+  useFeathers: UseFeathersForSchema<InferSchema<F>>
+  /** Resolve the provider instance, falling back to the configured default. */
+  useFigbird: () => F
+  useQuery: UseQueryHook<InferSchema<F>>
+  useQueries: UseQueriesHook<InferSchema<F>>
+  q: QueryBuilderProxy<InferSchema<F>>
+  defineQuery: DefineQueryForSchema<InferSchema<F>>
+  prepare: PrepareForSchema<InferSchema<F>>
+  prefetch: PrefetchForSchema<InferSchema<F>>
+  /** Manual refetch escape hatch for eventless changes (see `figbird.refetch`). */
+  refetch: (serviceName?: ServiceNames<InferSchema<F>> | (string & {})) => void
+  /** Write proxy bound to the configured default instance. */
+  m: MutationsProxy<InferSchema<F>>
+  /** Write proxy resolved from the provider, falling back to the configured default. */
+  useM: () => MutationsProxy<InferSchema<F>>
+  useAction: UseActionHook
+  useMutating: UseMutatingForSchema<InferSchema<F>>
+}
+
+/**
+ * Creates typed hooks for a specific schema and default Figbird instance.
  *
  * Usage:
  * ```typescript
@@ -129,37 +175,47 @@ type InferMeta<F> = AdapterFindMeta<InferAdapter<F>>
  *   const { data: people } = useQuery(q.people) // fully typed from the schema
  * }
  * ```
+ *
+ * To keep module evaluation side-effect free, bind the schema eagerly and the
+ * default instance through a getter:
+ *
+ * ```typescript
+ * export const { useQuery, q, m } = createHooks({
+ *   schema,
+ *   getDefaultFigbird: () => getRuntime().figbird,
+ * })
+ * ```
  */
 
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export function createHooks<F extends Figbird<any, any>>(figbird: F): FigbirdHooks<F>
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export function createHooks<F extends Figbird<any, any>>(
-  figbird: F,
-): {
-  useGet: UseGetForSchema<InferSchema<F>, InferParams<F>>
-  useFind: UseFindForSchema<InferSchema<F>, InferParams<F>, InferMeta<F>>
-  /**
-   * @deprecated Superseded by the split write-side story: `m` for the stateless
-   * service handle, `useAction` for per-action pending/error state, `useMutating`
-   * for entity/service-level activity. Fully functional, but its single shared
-   * status slot forces hand-rolled state machines on multi-action screens.
-   */
-  useMutation: UseMutationForSchema<InferSchema<F>>
-  useFeathers: UseFeathersForSchema<InferSchema<F>>
-  useQuery: UseQueryHook<InferSchema<F>>
-  useQueries: UseQueriesHook<InferSchema<F>>
-  q: QueryBuilderProxy<InferSchema<F>>
-  defineQuery: DefineQueryForSchema<InferSchema<F>>
-  prepare: PrepareForSchema<InferSchema<F>>
-  prefetch: PrefetchForSchema<InferSchema<F>>
-  /** Manual refetch escape hatch for eventless changes (see `figbird.refetch`). */
-  refetch: (serviceName?: ServiceNames<InferSchema<F>> | (string & {})) => void
-  m: MutationsProxy<InferSchema<F>>
-  useAction: UseActionHook
-  useMutating: UseMutatingForSchema<InferSchema<F>>
-} {
+  options: CreateHooksOptions<F>,
+): FigbirdHooks<F>
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export function createHooks<F extends Figbird<any, any>>(
+  input: F | CreateHooksOptions<F>,
+): FigbirdHooks<F> {
   type S = InferSchema<F>
   type TParams = InferParams<F>
   type TMeta = InferMeta<F>
+
+  const options = 'getDefaultFigbird' in input ? input : undefined
+  const boundFigbird = options ? undefined : input
+  const getDefaultFigbird = options?.getDefaultFigbird ?? (() => boundFigbird as F)
+  const queryBuilderProxy = options ? createQueryBuilderProxy(options.schema) : undefined
+
+  const lazyMutationsHost: MutationsHost = {
+    mutate: desc => {
+      const figbird = getDefaultFigbird()
+      return Reflect.apply(figbird.mutateDesc, figbird, [desc]) as Promise<unknown>
+    },
+    call: (serviceName, method, args) => getDefaultFigbird().call(serviceName, method, ...args),
+  }
+  const lazyMutationsProxy = options
+    ? (createMutationsProxy(lazyMutationsHost) as MutationsProxy<S>)
+    : undefined
 
   // The internal implementations are weakly typed with `string` for serviceName.
   // The strong typing is enforced by the return type signature,
@@ -167,14 +223,15 @@ export function createHooks<F extends Figbird<any, any>>(
 
   /**
    * Resolve the instance these hooks operate on: a FigbirdProvider, when present,
-   * overrides the bound instance (per-request SSR trees and tests inject through it);
-   * otherwise the instance passed to createHooks is used directly — no provider needed.
+   * overrides the default instance (per-request SSR trees and tests inject through it);
+   * otherwise the configured default is resolved — no provider needed.
    */
   function useBoundFigbird(): F {
     const fromContext = useFigbirdMaybe()
     if (
       fromContext &&
-      (fromContext as unknown) !== (figbird as unknown) &&
+      boundFigbird &&
+      (fromContext as unknown) !== (boundFigbird as unknown) &&
       typeof process !== 'undefined' &&
       process.env?.NODE_ENV !== 'production'
     ) {
@@ -185,7 +242,11 @@ export function createHooks<F extends Figbird<any, any>>(
           'same instance to both.',
       )
     }
-    return (fromContext ?? figbird) as F
+    return (fromContext ?? getDefaultFigbird()) as F
+  }
+
+  function useTypedM(): MutationsProxy<S> {
+    return useBoundFigbird().m as MutationsProxy<S>
   }
 
   function useTypedGet<N extends ServiceNames<S>>(
@@ -237,7 +298,7 @@ export function createHooks<F extends Figbird<any, any>>(
 
   function useTypedFeathers() {
     // Resolved like every other hook: a FigbirdProvider in the tree overrides the
-    // bound instance, so SSR/test injection gets this instance's client too.
+    // default, so SSR/test injection gets the provider instance's client too.
     const bound = useBoundFigbird()
     const adapter = bound.adapter as { feathers?: FeathersClient }
     if (!adapter?.feathers) {
@@ -277,34 +338,47 @@ export function createHooks<F extends Figbird<any, any>>(
     return useQueriesImpl(useBoundFigbird(), queries, options)
   }
 
+  const prepare = ((...args: unknown[]) => {
+    const figbird = getDefaultFigbird()
+    return Reflect.apply(figbird.prepare, figbird, args)
+  }) as PrepareForSchema<S>
+
+  const prefetch = ((...args: unknown[]) => {
+    const figbird = getDefaultFigbird()
+    return Reflect.apply(figbird.prefetch, figbird, args)
+  }) as PrefetchForSchema<S>
+
+  const refetch = (serviceName?: ServiceNames<S> | (string & {})) =>
+    getDefaultFigbird().refetch(serviceName)
+
   return {
     useGet: useTypedGet as UseGetForSchema<S, TParams>,
     useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useTypedMutation as UseMutationForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
+    useFigbird: useBoundFigbird,
     // The typed schema binding is enforced via QueryBuilder<S, T> on the call signatures.
     useQuery: useTypedQuery as unknown as UseQueryHook<S>,
     useQueries: useTypedQueries as unknown as UseQueriesHook<S>,
-    // The builder proxy off the bound instance — `useQuery(q.issues.where(...))` with a
-    // single import. Lazy so schemaless instances only throw if actually accessed.
+    // `useQuery(q.issues.where(...))` with one import. The lazy form builds directly
+    // from its schema; the eager form defers schemaless errors until q is accessed.
     get q(): QueryBuilderProxy<S> {
-      return figbird.q as QueryBuilderProxy<S>
+      return queryBuilderProxy ?? (getDefaultFigbird().q as QueryBuilderProxy<S>)
     },
     // defineQuery is a pure factory — included so declaration files import everything
     // from one place, and typed so builders must come from this schema.
     defineQuery: baseDefineQuery as DefineQueryForSchema<S>,
-    // Instance-bound conveniences: same primitives as figbird.prepare/prefetch.
-    prepare: figbird.prepare.bind(figbird) as PrepareForSchema<S>,
-    prefetch: figbird.prefetch.bind(figbird) as PrefetchForSchema<S>,
+    // Instance-bound conveniences resolve the default only when called.
+    prepare,
+    prefetch,
     // Manual refetch escape hatch for eventless changes (see figbird.refetch).
-    refetch: figbird.refetch.bind(figbird) as (
-      serviceName?: ServiceNames<S> | (string & {}),
-    ) => void,
-    // The write proxy — not a hook; callable anywhere. Like prepare/prefetch,
-    // bound to the createHooks instance (a provider override can't reach non-hooks).
+    refetch,
+    // The write proxy — not a hook; callable anywhere and bound to the configured
+    // default (a provider override cannot reach non-hooks). useM is context-aware.
     get m(): MutationsProxy<S> {
-      return figbird.m as MutationsProxy<S>
+      return lazyMutationsProxy ?? (getDefaultFigbird().m as MutationsProxy<S>)
     },
+    useM: useTypedM,
     // Per-action state, reporting action:* events through the bound instance so
     // devtools speak the app's vocabulary.
     useAction: useTypedAction as UseActionHook,

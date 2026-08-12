@@ -98,6 +98,7 @@ export type {
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
+export type { CreateHooksOptions, FigbirdHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
 // The write-side story: m is the stateless write proxy (figbird.m / createHooks);
 // useAction carries per-action pending/error; useMutating answers entity/service-level

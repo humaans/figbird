@@ -1309,6 +1309,10 @@ only: `{ params?: AdapterParams, optimisticItem?: Item }`. Also available as `fi
 Like `q`, the proxy is callable for dynamic service names: `m(name)` is `m.<name>` with a
 string-typed door.
 
+When a `createHooks` kit uses `getDefaultFigbird`, imported `m` resolves that default
+only when a mutation method runs. A module-level value cannot read React context; use
+the kit's `useM()` inside provider-injected trees when writes must use the provider instance.
+
 ## useAction
 
 ```ts
@@ -1518,23 +1522,52 @@ Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, ski
 
 ## createHooks
 
-Binds a Figbird instance to typed React hooks:
+Binds a schema and default Figbird instance to typed React hooks:
 
 ```ts
 export const { useQuery, q, m, defineQuery, prepare, prefetch, refetch, useAction, useMutating } =
   createHooks(figbird)
 ```
 
+The lazy form keeps module evaluation side-effect free when creating the default client
+opens a connection, starts timers, or installs other process-wide resources:
+
+```ts
+export const {
+  useQuery,
+  useFigbird,
+  useM,
+  q,
+  m,
+  defineQuery,
+  prepare,
+  prefetch,
+  refetch,
+  useAction,
+  useMutating,
+} = createHooks({
+  schema,
+  getDefaultFigbird: () => getRuntime().figbird,
+})
+```
+
 Returns the daily-use kit: `useQuery`, `q` (the read proxy), schema-typed
 `defineQuery`, instance-bound `prepare`/`prefetch`, and the write side — `m` (the write
-proxy), `useAction` (per-action state), and `useMutating` (in-flight activity). Also
-includes `useFeathers` (the raw-client escape hatch) and the deprecated legacy hooks
-(`useMutation`, `useFind`, `useGet`) for older codebases.
+proxy), provider-aware `useM`, `useAction` (per-action state), and `useMutating`
+(in-flight activity). It also includes typed `useFigbird`, `useFeathers` (the raw-client
+escape hatch), and the deprecated legacy hooks (`useMutation`, `useFind`, `useGet`) for
+older codebases.
 
 Instance resolution: hooks use the bound instance directly, so no provider is required. If a
 `FigbirdProvider` is present in the tree, **it wins**; that's the injection point for
 per-request SSR instances and tests. A dev-mode error fires if a provider holds a _different_
 instance than the bound one.
+
+With the lazy form, `q` is built directly from `schema`. Creating the kit, reading `q`, and
+using hooks beneath a provider do not call `getDefaultFigbird`. Hooks call the getter only
+without a provider. Imperative `m`, `prepare`, `prefetch`, and `refetch` use the default
+instance and resolve it only when an operation runs. Because imported `m` cannot read React
+context, use `useM()` when a component's writes must follow provider injection.
 
 ## FigbirdProvider
 
@@ -1545,8 +1578,9 @@ instance into a subtree, like per-request instances in SSR or a fresh instance p
 <FigbirdProvider figbird={testFigbird}>{ui}</FigbirdProvider>
 ```
 
-`useFigbird()` reads the context instance (throws without a provider); `useFigbirdMaybe()`
-returns `undefined` instead.
+The standalone `useFigbird()` export reads only the context instance and throws without a
+provider; `useFigbirdMaybe()` returns `undefined` instead. `useFigbird` returned by a
+`createHooks` kit follows that kit's provider-first, default-second resolution.
 
 # API: Observability
 

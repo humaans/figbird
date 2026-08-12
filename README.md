@@ -54,6 +54,20 @@ function NoteRow({ note }: { note: Note & { author?: User } }) {
 No provider needed — the hooks are bound to the instance. Cold reads suspend into your `<Suspense>` boundary; warm reads render synchronously.
 Transient fetch failures retry up to three times with exponential backoff before Figbird exposes the error. Client errors fail immediately, except for `408` and `429` responses.
 
+If creating the default client has side effects, bind the schema separately and resolve
+the instance only when it is needed:
+
+```ts
+export const { useQuery, q, m, useM } = createHooks({
+  schema,
+  getDefaultFigbird: () => getRuntime().figbird,
+})
+```
+
+`q` and provider-backed hooks do not resolve the default. Imported `m` uses the default
+instance when a write runs; `useM()` uses the nearest provider and is the right choice
+for provider-injected React trees.
+
 ## Features
 
 - **Relational queries** — declare relations once, `.related()` assembles live entity graphs

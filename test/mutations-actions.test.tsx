@@ -64,11 +64,23 @@ function collectEvents(
 
 test('m: writes are optimistic by default; confirmed opts out per handle or inline', async t => {
   const { figbird } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  let defaultResolutions = 0
+  const { m } = createHooks({
+    schema,
+    getDefaultFigbird: () => {
+      defaultResolutions++
+      return figbird
+    },
+  })
   const events = collectEvents(figbird, 'mutate:')
 
-  const patched = await m.notes.patch(1, { content: 'updated' })
+  // Reading the proxy or a service handle does not initialize the default runtime.
+  const notes = m.notes
+  t.is(defaultResolutions, 0)
+
+  const patched = await notes.patch(1, { content: 'updated' })
   t.is(patched.content, 'updated')
+  t.is(defaultResolutions, 1)
 
   await m.notes.confirmed.patch(1, { content: 'again' })
 
