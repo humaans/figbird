@@ -32,9 +32,22 @@ export interface RelationalPaginationState {
   total: number | undefined
 }
 
+/** Stable, adapter-neutral pagination details exposed to devtools. */
+export interface InspectedPagination {
+  strategy: 'offset' | 'cursor'
+  realtime: 'manual' | 'merge-or-reconcile' | 'reconcile'
+  pageSize: number
+  includeTotal: boolean
+  loadedPages: number
+  hasMore: boolean
+  isLoadingMore: boolean
+  total?: number
+}
+
 export interface PaginatedRootSource extends RootSource {
   loadMore(): void
   pagination(): RelationalPaginationState
+  inspectPagination(): InspectedPagination
 }
 
 const EMPTY_ROWS: unknown[] = []
@@ -187,6 +200,7 @@ export class PagedQueryRoot<
   #pageSize: number
   #includeTotal: boolean
   #sequential: boolean
+  #realtime: InspectedPagination['realtime']
 
   #pageRefs: Array<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>> = []
   #pageUnsubs: Array<() => void> = []
@@ -209,6 +223,7 @@ export class PagedQueryRoot<
     onRows,
     onChange,
     cursorRealtime,
+    realtime,
     staleTime = 0,
   }: {
     pageSize: number
@@ -224,11 +239,13 @@ export class PagedQueryRoot<
       subscribe(fn: (event: ProcessedRealtimeEvent) => void): () => void
       canKeepPrefix(event: ProcessedRealtimeEvent): boolean
     }
+    realtime: InspectedPagination['realtime']
     staleTime?: number
   }) {
     this.#pageSize = pageSize
     this.#includeTotal = includeTotal
     this.#sequential = sequential
+    this.#realtime = realtime
     this.#makePageRef = makePageRef
     this.#onRows = onRows
     this.#onChange = onChange
@@ -403,6 +420,20 @@ export class PagedQueryRoot<
     const next = { hasMore, isLoadingMore, loadMoreError, total }
     this.#lastPagination = next
     return next
+  }
+
+  inspectPagination(): InspectedPagination {
+    const { hasMore, isLoadingMore, total } = this.pagination()
+    return {
+      strategy: this.#sequential ? 'cursor' : 'offset',
+      realtime: this.#realtime,
+      pageSize: this.#pageSize,
+      includeTotal: this.#includeTotal,
+      loadedPages: this.#pageRefs.length,
+      hasMore,
+      isLoadingMore,
+      ...(total !== undefined ? { total } : {}),
+    }
   }
 
   /** Manual refetch deliberately resets the cursor chain to page zero. */

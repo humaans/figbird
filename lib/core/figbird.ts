@@ -4,6 +4,8 @@ import {
   type AdapterFindMeta,
   type AdapterParams,
   type AdapterQuery,
+  type PageInfo,
+  type PageRequest,
 } from '../adapters/adapter.js'
 import { registerDevtoolsInstance } from './devtoolsBridge.js'
 import type { FigbirdEvents } from './events.js'
@@ -724,6 +726,14 @@ export class Figbird<
           method: query.desc.method,
           ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
           query: q,
+          ...(query.desc.method === 'find' && query.desc.page
+            ? {
+                page: {
+                  request: query.desc.page,
+                  ...(query.state.pageInfo ? { info: query.state.pageInfo } : {}),
+                },
+              }
+            : {}),
           classification: query.classification,
           status: query.state.status,
           isFetching: query.state.isFetching,
@@ -769,6 +779,8 @@ export interface InspectedQuery {
   method: 'find' | 'get'
   resourceId?: string | number
   query: Record<string, unknown> | undefined
+  /** Native adapter page details. Offset pages remain visible in `query` as `$skip`/`$limit`. */
+  page?: { request: PageRequest; info?: PageInfo }
   classification: QueryNodeClass | 'get'
   status: 'loading' | 'success' | 'error'
   isFetching: boolean

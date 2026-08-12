@@ -7,6 +7,7 @@ import {
 } from '../lib/devtools/Devtools.js'
 import {
   createCollector,
+  type Collector,
   type DevtoolsSnapshot,
   type FigbirdLikeForDevtools,
   type QueryRecord,
@@ -599,8 +600,24 @@ test('devtools model keeps operation identity separate from shared fetch identit
   const root = queryRecord('root', 'issues')
   const team = queryRecord('team', 'teams')
   const labels = queryRecord('labels', 'labels')
-  const page1 = queryRecord('page-1', 'issues', { itemCount: 25, fetchCount: 2 })
-  const page2 = queryRecord('page-2', 'issues', { itemCount: 10, fetchCount: 1 })
+  const page1 = queryRecord('page-1', 'issues', {
+    itemCount: 25,
+    fetchCount: 2,
+    classification: 'server-authoritative',
+    page: {
+      request: { limit: 25, includeTotal: true },
+      info: { hasMore: true, endCursor: 'cursor:25', total: 35 },
+    },
+  })
+  const page2 = queryRecord('page-2', 'issues', {
+    itemCount: 10,
+    fetchCount: 1,
+    classification: 'server-authoritative',
+    page: {
+      request: { limit: 25, after: 'cursor:25', includeTotal: false },
+      info: { hasMore: false },
+    },
+  })
   const snapshot: DevtoolsSnapshot = {
     queries: [root, team, labels, page1, page2],
     relational: [
@@ -616,6 +633,16 @@ test('devtools model keeps operation identity separate from shared fetch identit
           cardinality: 'many',
           pageSize: 25,
           related: {},
+        },
+        pagination: {
+          strategy: 'cursor',
+          realtime: 'merge-or-reconcile',
+          pageSize: 25,
+          includeTotal: true,
+          loadedPages: 2,
+          hasMore: false,
+          isLoadingMore: false,
+          total: 35,
         },
         nodes: [
           { path: '(root)', queryId: page1.queryId },
@@ -642,8 +669,91 @@ test('devtools model keeps operation identity separate from shared fetch identit
   t.is(pages?.rootFetches.length, 2)
   t.is(pages?.summary.itemCount, 35)
   t.is(pages?.summary.fetchCount, 3)
+  t.false(pages ? 'page' in pages.summary : true)
+  t.is(pages?.pagination?.strategy, 'cursor')
+  t.true(pages?.composition?.detail.includes('paginate(25) · cursor · 2 pages') ?? false)
+  t.is(pages?.rootFetches[1]?.page?.request.after, 'cursor:25')
   t.false(pages ? 'queryId' in pages.summary : true)
   t.is(model.scopesByQueryId.get(root.queryId)?.length, 2)
+})
+
+test('query details show a cursor operation as one inspectable page chain', t => {
+  const { render, unmount, click, $, $all } = dom()
+  const first = queryRecord('cursor-page-1', 'issues', {
+    classification: 'server-authoritative',
+    itemCount: 25,
+    page: {
+      request: { limit: 25, includeTotal: true },
+      info: { hasMore: true, endCursor: 'cursor:25', total: 35 },
+    },
+  })
+  const second = queryRecord('cursor-page-2', 'issues', {
+    classification: 'server-authoritative',
+    itemCount: 10,
+    page: {
+      request: { limit: 25, after: 'cursor:25', includeTotal: false },
+      info: { hasMore: false },
+    },
+  })
+  const snapshot: DevtoolsSnapshot = {
+    queries: [first, second],
+    relational: [
+      {
+        key: 'rq/cursor-pages',
+        service: 'issues',
+        ast: {
+          service: 'issues',
+          kind: 'paginate',
+          query: { status: 'open', $sort: { createdAt: -1 } },
+          cardinality: 'many',
+          pageSize: 25,
+          includeTotal: true,
+          related: {},
+        },
+        pagination: {
+          strategy: 'cursor',
+          realtime: 'merge-or-reconcile',
+          pageSize: 25,
+          includeTotal: true,
+          loadedPages: 2,
+          hasMore: false,
+          isLoadingMore: false,
+          total: 35,
+        },
+        nodes: [
+          { path: '(root)', queryId: first.queryId },
+          { path: '(root)', queryId: second.queryId },
+        ],
+      },
+    ],
+    events: [],
+    timeline: { startedAt: 0, laneOrder: [], realtime: [] },
+    writes: [],
+    inFlightWrites: 0,
+  }
+  const collector: Collector = {
+    start() {},
+    stop() {},
+    subscribe: () => () => {},
+    getSnapshot: () => snapshot,
+    clearEvents() {},
+    clearTimeline() {},
+    clearWrites() {},
+  }
+
+  render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
+  const row = $all('tbody tr')[0]
+  t.truthy(row)
+  t.true((row?.textContent ?? '').includes('paginate(25) · cursor · 2 pages'))
+  click(row!)
+
+  const details = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
+  t.true(details.includes('Cursor page chain'))
+  t.true(details.includes('merges stable updates'))
+  t.true(details.includes('after start · next "cursor:25"'))
+  t.true(details.includes('after "cursor:25" · end'))
+  t.true(details.includes('35 total'))
+  unmount()
 })
 
 test('extension bridge starts debug collection only while connected', t => {

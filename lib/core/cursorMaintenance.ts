@@ -21,6 +21,11 @@ export function cursorQueryInputsUnchanged(
   return true
 }
 
+/** Whether the query shape can ever support the stable-update proof. */
+export function cursorQueryCanKeepPrefix(query: unknown): boolean {
+  return collectCursorQueryInputPaths(query) !== null
+}
+
 function collectCursorQueryInputPaths(query: unknown): Set<string> | null {
   if (!isPlainRecord(query)) return null
   const paths = new Set<string>()

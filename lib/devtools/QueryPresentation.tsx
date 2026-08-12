@@ -7,7 +7,7 @@ export const QUERY_CLASS_DESCRIPTIONS: Record<string, string> = {
   'server-window':
     'This is a limited or sorted server result. Figbird merges provable changes and refetches when a change could affect the window.',
   'server-authoritative':
-    'The server decides which records belong in this result. Realtime changes trigger a server refetch.',
+    'The server decides which records belong in this result. Figbird normally refetches after realtime changes; a cursor query may merge a row update when it proves that page boundaries stay valid.',
   get: 'A direct record lookup by ID.',
 }
 

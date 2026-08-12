@@ -1,4 +1,5 @@
 import type { QueryAST } from '../core/queryBuilder.js'
+import type { InspectedRelationalQuery } from '../core/relationalQuery.js'
 import type { DevtoolsSnapshot, QueryRecord } from './collector.js'
 import { compactJson } from './format.js'
 
@@ -8,7 +9,9 @@ export interface UnderlyingFetch {
   query: QueryRecord
 }
 
-export type QuerySummary = Omit<QueryRecord, 'generation' | 'queryId'>
+export type QuerySummary = Omit<QueryRecord, 'generation' | 'page' | 'queryId'>
+
+export type OperationPagination = NonNullable<InspectedRelationalQuery['pagination']>
 
 export interface QueryComposition {
   detail: string
@@ -30,6 +33,7 @@ export interface DevtoolsOperation {
   rootFetches: QueryRecord[]
   underlying: UnderlyingFetch[]
   composition?: QueryComposition
+  pagination?: OperationPagination
 }
 
 export interface DevtoolsModel {
@@ -88,7 +92,8 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
       summary: summarizeRootFetches(rootFetches),
       rootFetches,
       underlying: [...underlyingByPath.values()],
-      composition: describeComposition(group.ast, group.name),
+      composition: describeComposition(group.ast, group.name, group.pagination),
+      ...(group.pagination ? { pagination: group.pagination } : {}),
     })
   }
 
@@ -150,6 +155,7 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
 
 function querySummary({
   generation: _generation,
+  page: _page,
   queryId: _queryId,
   ...summary
 }: QueryRecord): QuerySummary {
@@ -179,12 +185,17 @@ function addScope(
   scopes.set(queryId, current)
 }
 
-function describeComposition(ast: QueryAST, name?: string): QueryComposition {
+function describeComposition(
+  ast: QueryAST,
+  name?: string,
+  pagination?: OperationPagination,
+): QueryComposition {
   const head = formatAstHead(ast)
   const rootQuery = compactAstQuery(ast.query)
   const related = relationPaths(ast)
   const parts = [
     head,
+    pagination ? describePagination(pagination) : '',
     rootQuery,
     related.length > 0 ? `with ${formatList(related)}` : '',
     ast.server ? 'server' : '',
@@ -193,11 +204,19 @@ function describeComposition(ast: QueryAST, name?: string): QueryComposition {
   return {
     detail: parts.join(' · '),
     operation: `${ast.service}.${head}`,
-    planDetail: [rootQuery || 'all', related.length > 0 ? `with ${formatList(related)}` : '']
+    planDetail: [
+      pagination ? describePagination(pagination) : '',
+      rootQuery || 'all',
+      related.length > 0 ? `with ${formatList(related)}` : '',
+    ]
       .filter(Boolean)
       .join(' · '),
     title: [name, astToTitle(ast)].filter(Boolean).join('\n'),
   }
+}
+
+function describePagination(pagination: OperationPagination): string {
+  return `${pagination.strategy} · ${pagination.loadedPages} ${pagination.loadedPages === 1 ? 'page' : 'pages'}`
 }
 
 function astToTitle(ast: QueryAST, path = '(root)'): string {

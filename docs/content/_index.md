@@ -1570,6 +1570,11 @@ the newest Figbird instance on the inspected page and starts debug collection. C
 panel drops the connection; without a connection, Figbird does not retain devtools history
 or subscribe to its event stream.
 
+Paginated queries appear as one operation rather than one row per fetched page. Query
+details show whether the operation uses offset or cursor pagination. Cursor details show
+the loaded page chain, each opaque `after` and next cursor, completion state, total when
+requested, and whether realtime updates merge when stable or reconcile from the server.
+
 Run `npm run devtools:package` to produce Chrome and Firefox zip archives under
 `extensions/build/` for store upload or direct distribution. See `extensions/README.md`
 for QA and packaging details.
@@ -1592,7 +1597,7 @@ No fetching happens, so it's callable anywhere and assertable in tests. See
 ```ts
 figbird.inspect()
 // → [{ queryId, serviceName, method, query, classification,
-//      status, isFetching, itemCount, fetchedAt, subscriberCount }]
+//      page?, status, isFetching, itemCount, fetchedAt, subscriberCount }]
 ```
 
 Read-only snapshot of every query currently in the store: the stable projection to build

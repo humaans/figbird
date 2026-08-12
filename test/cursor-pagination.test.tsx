@@ -232,6 +232,31 @@ test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full fi
     $limit: 3,
     $after: 'cursor:3',
   })
+
+  const inspectedPages = figbird.inspect().filter(query => query.page)
+  t.deepEqual(
+    inspectedPages.map(query => query.page),
+    [
+      {
+        request: { limit: 3, includeTotal: true },
+        info: { hasMore: true, endCursor: 'cursor:3', total: 6 },
+      },
+      {
+        request: { limit: 3, after: 'cursor:3', includeTotal: false },
+        info: { hasMore: false },
+      },
+    ],
+  )
+  t.deepEqual(figbird.inspectRelational()[0]?.pagination, {
+    strategy: 'cursor',
+    realtime: 'reconcile',
+    pageSize: 3,
+    includeTotal: true,
+    loadedPages: 2,
+    hasMore: false,
+    isLoadingMore: false,
+    total: 6,
+  })
   unmount()
 })
 
@@ -377,6 +402,7 @@ test('cursor paginate: stable visible updates merge locally; ordering changes re
   await flush(() => loadMore?.())
 
   const callsBeforePatch = cursorApp.calls.length
+  t.is(cursorApp.figbird.inspectRelational()[0]?.pagination?.realtime, 'merge-or-reconcile')
   const renamed = { ...initialRows[4]!, title: 'Renamed' }
   cursorApp.replaceRows(initialRows.map(row => (row.id === renamed.id ? renamed : row)))
   await flush(() => cursorApp.emit('patched', renamed))

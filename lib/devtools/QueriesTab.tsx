@@ -27,7 +27,7 @@ const QUERY_COLUMNS = [
     label: 'class',
     width: '12%',
     description:
-      'How Figbird maintains the result.\nlocal-exact: membership and ordering are provable locally.\nserver-window: a limited or sorted server result; uncertain changes trigger a refetch.\nserver-authoritative: the server decides membership; realtime changes trigger a refetch.\nget: a direct lookup by ID.',
+      'How Figbird maintains the result.\nlocal-exact: membership and ordering are provable locally.\nserver-window: a limited or sorted server result; uncertain changes trigger a refetch.\nserver-authoritative: the server decides membership; cursor queries may still merge updates proven not to move page boundaries.\nget: a direct lookup by ID.',
   },
   {
     label: 'rows',

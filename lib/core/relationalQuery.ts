@@ -1,6 +1,6 @@
 import { hashObject } from './hash.js'
 import type { MatcherContext, PageSource } from '../adapters/adapter.js'
-import { cursorQueryInputsUnchanged } from './cursorMaintenance.js'
+import { cursorQueryCanKeepPrefix, cursorQueryInputsUnchanged } from './cursorMaintenance.js'
 import type { QueryAST } from './queryBuilder.js'
 import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
@@ -15,6 +15,7 @@ import {
   SingleQueryRoot,
   subscribeAndSeed,
   type PaginatedRootSource,
+  type InspectedPagination,
   type RelationalPaginationState,
   type RootSource,
 } from './queryRoots.js'
@@ -158,6 +159,7 @@ export interface InspectedRelationalQuery {
   name?: string
   service: string
   ast: QueryAST
+  pagination?: InspectedPagination
   nodes: Array<{
     path: string
     role?: 'junction'
@@ -296,6 +298,7 @@ export class RelationalQueryRef<
       ...(this.#name ? { name: this.#name } : {}),
       service: this.#ast.service,
       ast: this.#ast,
+      ...(this.#pagedRoot ? { pagination: this.#pagedRoot.inspectPagination() } : {}),
       nodes,
     }
   }
@@ -688,7 +691,11 @@ export class RelationalQueryRef<
       const paginationPlan = planRootPagination(pageSource !== undefined, Boolean(this.#ast.server))
       const sequential = paginationPlan.kind === 'sequential'
       const cursorRealtime =
-        sequential && pageSource?.cursorStability === 'ordering' && !this.#ast.snapshot
+        sequential &&
+        pageSource?.cursorStability === 'ordering' &&
+        !this.#ast.server &&
+        !this.#ast.snapshot &&
+        cursorQueryCanKeepPrefix(this.#ast.query)
           ? {
               subscribe: (fn: (event: ProcessedRealtimeEvent) => void) =>
                 this.#host.queryStore.subscribeToProcessedEvents(event => {
@@ -705,6 +712,13 @@ export class RelationalQueryRef<
         pageSize,
         includeTotal: Boolean(this.#ast.includeTotal),
         sequential,
+        realtime: this.#ast.snapshot
+          ? 'manual'
+          : sequential && !cursorRealtime
+            ? 'reconcile'
+            : this.#ast.server
+              ? 'reconcile'
+              : 'merge-or-reconcile',
         staleTime: this.#staleTime,
         makePageRef: (pageIndex, after) =>
           this.#query(
