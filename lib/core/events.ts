@@ -71,6 +71,16 @@ export type FigbirdEvent =
       args?: readonly unknown[]
     }
   | {
+      /** An unsent queued mutation was coalesced with newer arguments. */
+      kind: 'mutate:update'
+      mutationId: number
+      serviceName: string
+      method: MutationEventMethod
+      id?: string | number
+      optimistic: boolean
+      args: readonly unknown[]
+    }
+  | {
       kind: 'mutate:end'
       mutationId: number
       serviceName: string

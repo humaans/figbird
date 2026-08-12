@@ -109,6 +109,11 @@ interface MutationTrackingHooks<T> {
   onError?: (error: Error, mutationId: number) => void
 }
 
+interface TrackedMutation<T> {
+  mutationId: number
+  promise: Promise<T>
+}
+
 interface QueuedMutation {
   desc: MutationDescriptor
   args: unknown[]
@@ -664,13 +669,22 @@ export class QueryStore<
     })
     this.#drainMutationLane(lane)
     return {
-      promise: tracked,
+      promise: tracked.promise,
       tryUpdate: next => {
         if (!entry.attempt.pending) return false
         const projection = this.#mutationLanes.replaceTail(lane, entry, next)
         if (!projection) return false
         entry.args = this.#buildMutationArgs(next)
         this.#applyProjection(projection, true)
+        this.#events.emit({
+          kind: 'mutate:update',
+          mutationId: tracked.mutationId,
+          serviceName: next.serviceName,
+          method: next.method,
+          id,
+          optimistic,
+          args: entry.args,
+        })
         return true
       },
       cancel: error => this.#cancelQueuedMutation(lane, entry, error),
@@ -686,11 +700,9 @@ export class QueryStore<
       this.#releaseMutationLane(lane)
       return
     }
-    entry.attempt.start(onAttempt =>
-      this.#runControlledAttempt(
-        entry.attempt.control,
-        () => this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args]),
-        onAttempt,
+    entry.attempt.start(() =>
+      this.#runControlledAttempt(entry.attempt.control, () =>
+        this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args]),
       ),
     )
   }
@@ -705,12 +717,10 @@ export class QueryStore<
   async #runControlledAttempt(
     control: ScheduledMutationControl | undefined,
     run: () => Promise<unknown>,
-    onAttempt?: (attempt: number) => void,
   ): Promise<unknown> {
     let attempt = 0
     while (true) {
       attempt += 1
-      onAttempt?.(attempt)
       control?.onAttemptStart()
       let request: Promise<unknown>
       try {
@@ -876,12 +886,12 @@ export class QueryStore<
     )
 
     const start = () => {
-      attempt.start(onAttempt => this.#runControlledAttempt(control, run, onAttempt))
+      attempt.start(() => this.#runControlledAttempt(control, run))
     }
     attempt.whenReady(start)
 
     return {
-      promise: tracked,
+      promise: tracked.promise,
       tryUpdate: () => false,
       cancel: error => void attempt.cancel(error),
     }
@@ -902,7 +912,7 @@ export class QueryStore<
     entry: MutationTrackingEntry,
     run: () => Promise<T>,
     hooks?: MutationTrackingHooks<T>,
-  ): Promise<T> {
+  ): TrackedMutation<T> {
     const { serviceName, method, id, optimistic, args } = entry
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
@@ -916,7 +926,7 @@ export class QueryStore<
       optimistic,
       args,
     })
-    return run().then(
+    const promise = run().then(
       result => {
         hooks?.onSuccess?.(result)
         this.#mutations.end(mutationId)
@@ -948,6 +958,7 @@ export class QueryStore<
         throw error
       },
     )
+    return { mutationId, promise }
   }
 
   // Query lifecycle

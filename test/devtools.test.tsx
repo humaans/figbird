@@ -569,6 +569,19 @@ test('collector bounds inactive query and settled write history', t => {
     .events.find(item => item.event.kind === 'mutate:start' && item.event.mutationId === 7)
   t.false(retainedEvent ? 'args' in retainedEvent.event : true)
 
+  const updatedPayload = { content: 'coalesced' }
+  listeners.event?.({
+    kind: 'mutate:update',
+    mutationId: 7,
+    serviceName: 'notes',
+    method: 'patch',
+    optimistic: true,
+    args: [7, updatedPayload],
+  })
+  updatedPayload.content = 'changed later'
+  const updatedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
+  t.deepEqual(updatedWrite?.args, [7, { content: 'coalesced' }])
+
   listeners.event?.({
     kind: 'fetch:start',
     queryId: 'live-3',

@@ -45,6 +45,8 @@ If you're here to learn figbird, read in this order — each file teaches one id
    - `screen.tsx` — the `.get(id)` relational graph + the write-side story: one `useAction`
      per toolbar button, `useMutating` for the entity-wide disable
    - `Editable.tsx` — inline optimistic patch-and-rollback editing via `useAction`
+   - `Tasks.tsx` — one issue-local mutation queue for dependent creates, coalesced title
+     edits, assignments, completion, and removal
    - `Comments.tsx` — the local-exact realtime thread (unwindowed on purpose)
 5. **`src/pages/Teams/screen.tsx`** — windowed relations vs `embed()`, side by side on
    one card.
@@ -70,7 +72,8 @@ The bottom-right **Demo controls** menu changes server behavior:
 - **Teammate** — toggles the background traffic (on by default).
 - **Fail next mutation** — arms a one-shot server failure: your next action (comment,
   boost, title edit…) fails and figbird rolls the optimistic change back everywhere at
-  once, with the `mutate → rollback` sequence visible in Figbird's events view.
+  once, with the `mutate → rollback` sequence visible in Figbird's events view. A task
+  queue pauses instead, keeping its projection visible until you choose Retry or Discard.
 - **Drop socket** — kills the transport; socket.io auto-reconnects and figbird refetches
   every active query (and the materialized reference sets) to reconcile anything missed.
 
@@ -84,7 +87,7 @@ the fetch timeline, events, writes, and the element inspector without any demo-o
   shell (`src/figbird.ts`), so team chips, assignee lookups, and label relations are
   answered locally from the materialized cache with zero roundtrips — check the queries
   tab: they're all `local-exact`.
-- **Paginated live list** — one `.paginate({ pageSize: 25, returnTotal: true })` query
+- **Paginated live list** — one `.paginate({ pageSize: 25, includeTotal: true })` query
   ordered by recency. Comment counts come from `issue.commentIds`, a server-maintained id
   list — no comments are fetched for the list at all (the `embed` pattern).
 - **Server-authoritative search** — the search box sends `title.$regex`, which the local
@@ -106,6 +109,13 @@ the fetch timeline, events, writes, and the element inspector without any demo-o
   no handle setup. The cache updates in the same frame, rollback on failure (arm chaos in
   dev tools to see it); surfaces that must wait for the server ack use
   `m.<service>.confirmed`.
+- **Issue-local mutation queues** — every issue uses its id as a `useMutationQueue` key. Task
+  creates, edits, assignment changes, completion, and removal project immediately but reach the
+  server in order. Title-only patches debounce for 450ms and consecutive unsent patches to the
+  same task coalesce, so typing does not become one request per character. Press Enter in a task
+  to optimistically create and focus the next row while the earlier create or edit is still saving.
+  Navigate away and back to reconnect to the same pending or failed queue. The Writes tab labels
+  projected mutations and keeps a coalesced write's payload current.
 - **The id contract** — optimistic creates carry a client-generated id (the demo mints
   numeric ones; real apps use `crypto.randomUUID()`): identity is real from the first
   frame, so React keys are stable, the realtime echo dedupes by id, and the New Issue
@@ -129,13 +139,14 @@ the fetch timeline, events, writes, and the element inspector without any demo-o
 
 ## Data shape
 
-Seven services wired up relationally:
+Eight services wired up relationally:
 
 ```
 issues ── creator      → users ── team → teams
        ├─ assignee     → users
        ├─ team         → teams
        ├─ labels       → issueLabels ── label → labels   (two-hop junction)
+       ├─ tasks        → tasks ── assignee → users
        └─ comments     → comments
                            ├─ author    → users
                            └─ reactions → reactions

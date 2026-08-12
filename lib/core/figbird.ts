@@ -118,6 +118,15 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
   'query'
 > & { query?: ServiceQuery<S, N> }
 
+const KEYED_MUTATION_QUEUE_RETENTION_MS = 5 * 60_000
+
+interface KeyedMutationQueueEntry<S extends Schema> {
+  queue: MutationQueue<S>
+  owners: number
+  evictionTimer: ReturnType<typeof setTimeout> | null
+  unsubscribe: () => void
+}
+
 /**
     Usage:
 
@@ -159,6 +168,10 @@ export class Figbird<
   // (see RelationalQueryRef#cleanup).
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   #relationalQueryCache: Map<string, RelationalQueryRef<any, S, any, any, any>> = new Map()
+
+  // Keyed mutation queues outlive individual React owners while work remains,
+  // allowing a remounted feature to reconnect to its pending/error state.
+  #keyedMutationQueues = new Map<string, KeyedMutationQueueEntry<S>>()
 
   /**
    * Create a Figbird instance.
@@ -702,6 +715,68 @@ export class Figbird<
         ),
     }
     return new MutationQueue<S>(host, config)
+  }
+
+  /** Return the reconnectable mutation queue owned by this Figbird instance. @internal */
+  getMutationQueue(key: string, config: MutationQueueConfig = {}): MutationQueue<S> {
+    if (key.length === 0) throw new Error('figbird: mutation queue key must not be empty')
+    const existing = this.#keyedMutationQueues.get(key)
+    if (existing) return existing.queue
+
+    const queue = this.createMutationQueue(config)
+    const entry = {
+      queue,
+      owners: 0,
+      evictionTimer: null as ReturnType<typeof setTimeout> | null,
+      unsubscribe: () => {},
+    }
+    entry.unsubscribe = queue.subscribe(() => {
+      if (entry.owners === 0 && queue.status === 'idle') this.#evictMutationQueue(key, entry)
+    })
+    this.#keyedMutationQueues.set(key, entry)
+    this.#scheduleMutationQueueEviction(key, entry)
+    return queue
+  }
+
+  /** Retain a keyed queue for one committed React owner. @internal */
+  retainMutationQueue(key: string, queue: MutationQueue<S>): () => void {
+    const entry = this.#keyedMutationQueues.get(key)
+    if (!entry || entry.queue !== queue) {
+      throw new Error(`figbird: mutation queue "${key}" is no longer registered`)
+    }
+    entry.owners += 1
+    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    entry.evictionTimer = null
+
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      entry.owners = Math.max(0, entry.owners - 1)
+      queueMicrotask(() => {
+        if (entry.owners > 0 || this.#keyedMutationQueues.get(key) !== entry) return
+        if (entry.queue.status === 'idle') this.#evictMutationQueue(key, entry)
+        else this.#scheduleMutationQueueEviction(key, entry)
+      })
+    }
+  }
+
+  #scheduleMutationQueueEviction(key: string, entry: KeyedMutationQueueEntry<S>): void {
+    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    entry.evictionTimer = setTimeout(
+      () => this.#evictMutationQueue(key, entry),
+      KEYED_MUTATION_QUEUE_RETENTION_MS,
+    )
+    const timer = entry.evictionTimer as ReturnType<typeof setTimeout> & { unref?: () => void }
+    timer.unref?.()
+  }
+
+  #evictMutationQueue(key: string, entry: KeyedMutationQueueEntry<S>): void {
+    if (entry.owners > 0 || this.#keyedMutationQueues.get(key) !== entry) return
+    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    entry.unsubscribe()
+    this.#keyedMutationQueues.delete(key)
+    if (entry.queue.status !== 'idle') entry.queue.detach()
   }
 
   /**

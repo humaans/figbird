@@ -585,6 +585,7 @@ more edits in whatever order the user makes them. `useMutationQueue` owns that s
 
 ```ts
 const sync = useMutationQueue({
+  key: `workflow:${workflowId}`,
   schedule(operation) {
     return isTextPatch(operation) ? { wait: 800, maxWait: 3200 } : { wait: 300 }
   },
@@ -597,6 +598,13 @@ sync.m.actions.create({ id: actionId, title: 'Draft' })
 sync.m.tasks.create({ id: taskId, actionId, title: '' })
 sync.m.tasks.patch(taskId, { title: 'Write launch plan' })
 ```
+
+`key` is optional. Without it, the component owns the queue and unmounting flushes its work.
+With it, hooks on the same Figbird instance reconnect to one queue. This preserves pending,
+saving, and failed state when a screen unmounts and mounts again. Figbird removes an unowned
+keyed queue as soon as it becomes idle. It retains unfinished queues for five minutes, then
+detaches them so abandoned failures cannot remain paused forever. Components that share a key
+must also share its scheduling and retry policy; the latest mounted hook configures new work.
 
 Every call projects immediately. Adapter calls remain serial in registration order. Consecutive,
 unsent patches with the same queue, service, id, params, and optimism mode merge shallowly; later
@@ -616,10 +624,10 @@ fails, old-lifetime patches become visible again and may proceed, while a queued
 and its dependent writes are cancelled.
 
 Outside React, create the same object with `figbird.createMutationQueue(config)`. A mutation queue
-is ordered, not atomic or durable: it does not survive a page reload, and the application must
-register a parent create before a child create that references it. `useMutationQueue` reads the
-latest rendered configuration when it registers new work. On unmount it flushes registered work;
-if that detached queue later exhausts its retries, it rolls back the failed and remaining work
+is ordered, not atomic or durable: keyed queues survive component navigation, but no queue survives
+a page reload. The application must register a parent create before a child create that references
+it. `useMutationQueue` applies the latest committed configuration to new work. An unkeyed queue
+flushes on unmount; if it later exhausts its retries, it rolls back the failed and remaining work
 instead of pausing without an owner. Timeouts cannot cancel an adapter request already on the wire,
 so retry creates only when the server accepts client IDs idempotently.
 

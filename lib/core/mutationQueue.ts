@@ -91,13 +91,20 @@ export interface MutationQueueHost {
   ): RegisteredMutation
 }
 
+/** Attempt policy captured while an item is still eligible for coalescing. */
+interface MutationQueuePolicy {
+  retry: MutationQueueRetry
+  retryDelay: MutationQueueRetryDelay
+  timeout: number | undefined
+}
+
 interface QueueItem extends ScheduledMutationControl {
   readonly sequence: number
   readonly enqueuedAt: number
   operation: MutationQueueOperation
   desc: MutationDescriptor | null
   registration: RegisteredMutation | null
-  schedule: MutationSchedule
+  policy: MutationQueuePolicy
   dueAt: number
   maxAt: number
   ready: boolean
@@ -207,10 +214,11 @@ export class MutationQueue<S extends Schema> {
       )
       const operation = this.#operationFromDesc(merged)
       const schedule = this.#schedule(operation)
+      const policy = this.#capturePolicy()
       if (tail.registration!.tryUpdate(merged)) {
         tail.desc = merged
         tail.operation = operation
-        tail.schedule = schedule
+        tail.policy = policy
         tail.dueAt = Date.now() + schedule.wait
         tail.maxAt = Math.min(
           tail.maxAt,
@@ -263,13 +271,14 @@ export class MutationQueue<S extends Schema> {
     const sequence = this.#nextSequence++
     const enqueuedAt = Date.now()
     const schedule = this.#schedule(operation)
+    const policy = this.#capturePolicy()
     const item: QueueItem = {
       sequence,
       enqueuedAt,
       operation,
       desc,
       registration: null,
-      schedule,
+      policy,
       dueAt: enqueuedAt + schedule.wait,
       maxAt:
         schedule.maxWait === undefined ? Number.POSITIVE_INFINITY : enqueuedAt + schedule.maxWait,
@@ -277,7 +286,9 @@ export class MutationQueue<S extends Schema> {
       settled: false,
       timer: null,
       listeners: new Set(),
-      timeout: this.#config.timeout,
+      get timeout() {
+        return item.policy.timeout
+      },
       isReady: () => item.ready,
       subscribeReady: listener => {
         item.listeners.add(listener)
@@ -323,9 +334,9 @@ export class MutationQueue<S extends Schema> {
     error: Error,
     attempt: number,
   ): Promise<'retry' | 'discard'> {
-    if (this.#shouldRetry(error, attempt, item.operation)) {
+    if (this.#shouldRetry(item.policy.retry, error, attempt, item.operation)) {
       this.#setSnapshot({ status: 'retrying', error })
-      const delay = this.#retryDelay(attempt, error, item.operation)
+      const delay = this.#retryDelay(item.policy.retryDelay, attempt, error, item.operation)
       if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
       return 'retry'
     }
@@ -341,15 +352,23 @@ export class MutationQueue<S extends Schema> {
     })
   }
 
-  #shouldRetry(error: Error, attempt: number, operation: MutationQueueOperation): boolean {
-    const retry = this.#config.retry ?? false
+  #shouldRetry(
+    retry: MutationQueueRetry,
+    error: Error,
+    attempt: number,
+    operation: MutationQueueOperation,
+  ): boolean {
     if (retry === false) return false
     if (typeof retry === 'number') return attempt <= retry
     return retry(error, attempt, operation)
   }
 
-  #retryDelay(attempt: number, error: Error, operation: MutationQueueOperation): number {
-    const delay = this.#config.retryDelay ?? 0
+  #retryDelay(
+    delay: MutationQueueRetryDelay,
+    attempt: number,
+    error: Error,
+    operation: MutationQueueOperation,
+  ): number {
     return resolveRetryDelay(
       () => (typeof delay === 'number' ? delay : delay(attempt, error, operation)),
       defaultRetryDelay(attempt),
@@ -414,6 +433,14 @@ export class MutationQueue<S extends Schema> {
     return {
       wait: Math.max(0, schedule.wait),
       ...(schedule.maxWait === undefined ? {} : { maxWait: Math.max(0, schedule.maxWait) }),
+    }
+  }
+
+  #capturePolicy(): MutationQueuePolicy {
+    return {
+      retry: this.#config.retry ?? false,
+      retryDelay: this.#config.retryDelay ?? 0,
+      timeout: this.#config.timeout,
     }
   }
 

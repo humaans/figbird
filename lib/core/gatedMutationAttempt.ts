@@ -8,7 +8,6 @@ export class GatedMutationAttempt {
   readonly promise: Promise<unknown>
 
   #state: AttemptState = 'pending'
-  #attempt = 0
   #readyUnsub: (() => void) | undefined
   #resolve!: (value: unknown) => void
   #reject!: (error: unknown) => void
@@ -29,10 +28,6 @@ export class GatedMutationAttempt {
     return !this.control || this.control.isReady()
   }
 
-  get attempt(): number {
-    return this.#attempt
-  }
-
   whenReady(listener: () => void): void {
     if (!this.pending) return
     if (this.ready) {
@@ -45,13 +40,11 @@ export class GatedMutationAttempt {
     })
   }
 
-  start(run: (onAttempt: (attempt: number) => void) => Promise<unknown>): boolean {
+  start(run: () => Promise<unknown>): boolean {
     if (!this.pending || !this.ready) return false
     this.#state = 'running'
     this.#clearReadyListener()
-    run(attempt => {
-      this.#attempt = attempt
-    }).then(
+    run().then(
       value => {
         this.#state = 'settled'
         this.#resolve(value)

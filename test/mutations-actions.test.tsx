@@ -245,6 +245,8 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   })
   let projectionEvents = 0
   let projectionSettlements = 0
+  const mutationEvents: FigbirdEvent[] = []
+  const unsubscribeMutationEvents = figbird.events.subscribe(event => mutationEvents.push(event))
   const unsubscribeEvents = figbird.queryStore.subscribeToProcessedEvents(event => {
     if (event.origin === 'projection' && event.itemId === 1) projectionEvents += 1
   })
@@ -253,6 +255,7 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   })
   const first = queue.m.notes.patch(1, { content: 'e' })
   const second = queue.m.notes.patch(1, { content: 'edited' })
+  await Promise.resolve()
 
   t.is(first, second, 'coalesced callers share the outgoing request')
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'edited')
@@ -260,6 +263,11 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   t.is(projectionEvents, 2)
   t.is(projectionSettlements, 0)
   t.deepEqual(queue.getSnapshot(), { status: 'scheduled', pending: 1, error: null })
+  const coalesced = mutationEvents.find(event => event.kind === 'mutate:update')
+  t.deepEqual(coalesced && 'args' in coalesced ? coalesced.args : undefined, [
+    1,
+    { content: 'edited' },
+  ])
 
   queue.flush()
   t.deepEqual(calls, [[1, { content: 'edited' }]])
@@ -275,6 +283,7 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   t.deepEqual(queue.getSnapshot(), { status: 'idle', pending: 0, error: null })
   unsubscribeEvents()
   unsubscribeSettlements()
+  unsubscribeMutationEvents()
 })
 
 test('mutation lanes: a batched projection still settles and refetches after its lane releases', async t => {
@@ -689,6 +698,34 @@ test('mutation queue: a throwing retryDelay cannot replace the transport failure
   const result = await queue.m.notes.patch(1, { content: 'retried' })
   t.is(result.content, 'retried')
   t.is(calls, 2)
+})
+
+test('mutation queue: each item keeps the retry policy captured at registration', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const firstAttempt = deferred<MockItem>()
+  let calls = 0
+  feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
+    calls += 1
+    if (calls === 1) return firstAttempt.promise
+    if (calls === 2) return Promise.reject(new Error('offline again'))
+    return Promise.resolve({ id: 1, ...data })
+  }) as never
+
+  const queue = figbird.createMutationQueue({ retry: false })
+  const first = queue.m.notes.patch(1, { content: 'do not retry' })
+  const firstRejected = t.throwsAsync(() => first, { message: 'offline' })
+  queue.setConfig({ retry: 1 })
+  firstAttempt.reject(new Error('offline'))
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  t.is(queue.status, 'failed')
+  t.is(calls, 1)
+  queue.discard()
+  await firstRejected
+
+  const second = await queue.m.notes.patch(1, { content: 'retry this one' })
+  t.is(second.content, 'retry this one')
+  t.is(calls, 3)
 })
 
 test('mutation queue: a successful remove cancels a later patch in the old lifetime', async t => {
@@ -1360,7 +1397,7 @@ test('useAction: run works as a React 19 <form action>', async t => {
 
 // ----- useMutationQueue -----
 
-test('useMutationQueue: later renders update queue policy without replacing the queue', async t => {
+test('useMutationQueue: updates policy and reconnects keyed owners while work remains', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useMutationQueue: useQueue } = createHooks(figbird)
   const d = dom()
@@ -1387,6 +1424,57 @@ test('useMutationQueue: later renders update queue policy without replacing the 
     await queue.m.notes.patch(1, { content: 'uses latest config' })
   })
   t.is(feathers.service('notes').counts.patch, 1)
+  d.unmount()
+
+  const gate = deferred<MockItem>()
+  feathers.service('notes').patch = (() => gate.promise) as never
+  let keyedQueue!: ReturnType<typeof useQueue>
+  function KeyedProbe() {
+    keyedQueue = useQueue({ key: 'note-editor', schedule: () => ({ wait: 0 }) })
+    return <div className='status'>{keyedQueue.status}</div>
+  }
+
+  const firstOwner = dom()
+  firstOwner.render(
+    <App>
+      <KeyedProbe />
+    </App>,
+  )
+  const originalKeyedQueue = keyedQueue
+  let pending!: Promise<Note>
+  await firstOwner.act(() => {
+    pending = keyedQueue.m.notes.patch(1, { content: 'survives navigation' })
+  })
+  t.is(keyedQueue.status, 'saving')
+  firstOwner.unmount()
+  await Promise.resolve()
+
+  const secondOwner = dom()
+  secondOwner.render(
+    <App>
+      <KeyedProbe />
+    </App>,
+  )
+  t.is(keyedQueue, originalKeyedQueue)
+  t.is(keyedQueue.pending, 1)
+  t.is(keyedQueue.status, 'saving')
+
+  await secondOwner.act(async () => {
+    gate.resolve({ id: 1, content: 'survives navigation' })
+    await pending
+  })
+  t.is(keyedQueue.status, 'idle')
+  secondOwner.unmount()
+  await Promise.resolve()
+
+  const thirdOwner = dom()
+  thirdOwner.render(
+    <App>
+      <KeyedProbe />
+    </App>,
+  )
+  t.not(keyedQueue, originalKeyedQueue, 'an unowned idle keyed queue is evicted')
+  thirdOwner.unmount()
 })
 
 test('useMutationQueue: unmount flushes work and cannot strand a failed optimistic lane', async t => {

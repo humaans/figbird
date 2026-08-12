@@ -20,6 +20,7 @@ import { StatusDot } from '../../components/ui'
 import { CommentsPanel } from './Comments'
 import { EditableDescription, EditableTitle } from './Editable'
 import { issueDetailQuery } from './queries'
+import { TasksPanel } from './Tasks'
 
 function Sep() {
   return (
@@ -176,6 +177,8 @@ queries: ({ params }) => [
       </header>
 
       <EditableDescription issueId={issue.id} description={issue.description} />
+
+      <TasksPanel key={issue.id} issueId={issue.id} users={users} />
 
       <div className='action-toolbar'>
         <button className='link' onClick={reassign.run} disabled={busy}>
