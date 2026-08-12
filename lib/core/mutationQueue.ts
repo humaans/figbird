@@ -123,6 +123,9 @@ export interface MutationQueueHost {
   ): RegisteredMutation
 }
 
+/** Internal capability used by React-owned queues whose policy follows renders. */
+export const CREATE_DYNAMIC_MUTATION_QUEUE = Symbol('figbird.createDynamicMutationQueue')
+
 /** Attempt policy captured while an item is still eligible for coalescing. */
 interface MutationQueuePolicy {
   retry: MutationQueueRetry
@@ -154,7 +157,7 @@ export class MutationQueue<S extends Schema> {
   readonly m: MutationsProxy<S>
 
   readonly #host: MutationQueueHost
-  #config: MutationQueueConfig
+  readonly #readConfig: () => MutationQueueConfig
   readonly #items: QueueItem[] = []
   readonly #listeners = new Set<() => void>()
   #nextSequence = 1
@@ -163,9 +166,9 @@ export class MutationQueue<S extends Schema> {
   #flushThrough = 0
   #detached = false
 
-  constructor(host: MutationQueueHost, config: MutationQueueConfig = {}) {
+  constructor(host: MutationQueueHost, readConfig: () => MutationQueueConfig) {
     this.#host = host
-    this.#config = config
+    this.#readConfig = readConfig
     this.m = createMutationsProxy({
       mutate: desc => this.#enqueueMutation(desc),
       call: (serviceName, method, args) => this.#enqueueCall(serviceName, method, args),
@@ -184,11 +187,6 @@ export class MutationQueue<S extends Schema> {
 
   get error(): Error | null {
     return this.#snapshot.error
-  }
-
-  /** Update the policy used by operations registered after this call. */
-  setConfig(config: MutationQueueConfig): void {
-    this.#config = config
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -245,8 +243,9 @@ export class MutationQueue<S extends Schema> {
         desc as Extract<MutationDescriptor, { method: 'patch' }>,
       )
       const operation = this.#operationFromDesc(merged)
-      const schedule = this.#schedule(operation)
-      const policy = this.#capturePolicy()
+      const config = this.#readConfig()
+      const schedule = this.#schedule(operation, config)
+      const policy = this.#capturePolicy(config)
       if (tail.registration!.tryUpdate(merged)) {
         tail.desc = merged
         tail.operation = operation
@@ -302,8 +301,9 @@ export class MutationQueue<S extends Schema> {
   #createItem(operation: MutationQueueOperation, desc: MutationDescriptor | null): QueueItem {
     const sequence = this.#nextSequence++
     const enqueuedAt = Date.now()
-    const schedule = this.#schedule(operation)
-    const policy = this.#capturePolicy()
+    const config = this.#readConfig()
+    const schedule = this.#schedule(operation, config)
+    const policy = this.#capturePolicy(config)
     const item: QueueItem = {
       sequence,
       enqueuedAt,
@@ -466,19 +466,19 @@ export class MutationQueue<S extends Schema> {
     }
   }
 
-  #schedule(operation: MutationQueueOperation): MutationSchedule {
-    const schedule = this.#config.schedule?.(operation) ?? { wait: 0 }
+  #schedule(operation: MutationQueueOperation, config: MutationQueueConfig): MutationSchedule {
+    const schedule = config.schedule?.(operation) ?? { wait: 0 }
     return {
       wait: Math.max(0, schedule.wait),
       ...(schedule.maxWait === undefined ? {} : { maxWait: Math.max(0, schedule.maxWait) }),
     }
   }
 
-  #capturePolicy(): MutationQueuePolicy {
+  #capturePolicy(config: MutationQueueConfig): MutationQueuePolicy {
     return {
-      retry: this.#config.retry ?? false,
-      retryDelay: this.#config.retryDelay ?? 0,
-      timeout: this.#config.timeout,
+      retry: config.retry ?? false,
+      retryDelay: config.retryDelay ?? 0,
+      timeout: config.timeout,
     }
   }
 

@@ -1,6 +1,10 @@
 import test from 'ava'
 import type { FigbirdEvent, QueryState } from '../lib'
 import { isMutationSupersededError } from '../lib'
+import {
+  CREATE_DYNAMIC_MUTATION_QUEUE,
+  type MutationQueueConfig,
+} from '../lib/core/mutationQueue.js'
 import { createTestApp } from './helpers'
 import { deferred, schema, services, type MockItem, type Note } from './mutation-test-helpers'
 
@@ -319,10 +323,11 @@ test('mutation queue: each item keeps the retry policy captured at registration'
     return Promise.resolve({ id: 1, ...data })
   }) as never
 
-  const queue = figbird.createMutationQueue({ retry: false })
+  let config: MutationQueueConfig = { retry: false }
+  const queue = figbird[CREATE_DYNAMIC_MUTATION_QUEUE](() => config)
   const first = queue.m.notes.patch(1, { content: 'do not retry' })
   const firstRejected = t.throwsAsync(() => first, { message: 'offline' })
-  queue.setConfig({ retry: 1 })
+  config = { retry: 1 }
   firstAttempt.reject(new Error('offline'))
   await new Promise(resolve => setTimeout(resolve, 0))
 

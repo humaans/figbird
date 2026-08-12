@@ -177,15 +177,44 @@ export interface RebasedResponse {
   readonly itemIds: ReadonlySet<ItemId>
 }
 
+export type FetchResponseMode = 'entity' | 'projection' | 'snapshot'
+
+function overlayProjectionItem(
+  responseItem: unknown,
+  event: ProcessedRealtimeEvent,
+): unknown | undefined {
+  if (event.type === 'removed') return undefined
+  if (
+    !responseItem ||
+    typeof responseItem !== 'object' ||
+    Array.isArray(responseItem) ||
+    !event.item ||
+    typeof event.item !== 'object' ||
+    Array.isArray(event.item)
+  ) {
+    return responseItem
+  }
+
+  const response = responseItem as Record<string, unknown>
+  const projected = { ...response }
+  const authoritative = event.item as Record<string, unknown>
+  for (const key of Object.keys(response)) {
+    if (Object.prototype.hasOwnProperty.call(authoritative, key)) {
+      projected[key] = authoritative[key]
+    }
+  }
+  return projected
+}
+
 /**
  * Rebase response values over newer cached entities for realtime-aware queries.
- * Some queries must keep their server response items unchanged: snapshots preserve
- * exact values, while projections preserve a partial row shape. Cache protection
- * remains a separate store concern.
+ * Snapshots preserve exact server values. Entity responses may reuse newer cached
+ * rows. Projections apply known newer values only within the server-returned shape;
+ * a partial row must never be promoted to canonical entity authority.
  */
 export function rebaseResponseData({
   data,
-  preserveResponseItems,
+  mode,
   latestEventById,
   entities,
   getId,
@@ -193,7 +222,7 @@ export function rebaseResponseData({
   canKeepCurrentItem,
 }: {
   data: unknown
-  preserveResponseItems: boolean
+  mode: FetchResponseMode
   latestEventById: ReadonlyMap<ItemId, ProcessedRealtimeEvent>
   entities: ReadonlyMap<ItemId, unknown>
   getId: (item: unknown) => ItemId | undefined
@@ -201,13 +230,17 @@ export function rebaseResponseData({
   canKeepCurrentItem: (item: unknown) => boolean
 }): RebasedResponse {
   const rebaseItem = (item: unknown): unknown | undefined => {
-    if (preserveResponseItems) return item
+    if (mode === 'snapshot') return item
 
     const itemId = getId(item)
     if (itemId === undefined) return item
 
-    const currentItem = entities.get(itemId)
     const journalEvent = latestEventById.get(itemId)
+    if (mode === 'projection') {
+      return journalEvent ? overlayProjectionItem(item, journalEvent) : item
+    }
+
+    const currentItem = entities.get(itemId)
     if (journalEvent) {
       // Preserve response membership until ordered replay updates meta and get
       // errors. The stale response value itself never replaces the cache value.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import {
+  CREATE_DYNAMIC_MUTATION_QUEUE,
   isMutationQueueDefinition,
   MutationQueue,
   type MutationQueueConfig,
@@ -10,6 +11,7 @@ import { useFigbird } from './context.js'
 
 export interface MutationQueueHost<S extends Schema> {
   createMutationQueue(config?: MutationQueueConfig): MutationQueue<S>
+  [CREATE_DYNAMIC_MUTATION_QUEUE](readConfig: () => MutationQueueConfig): MutationQueue<S>
   getMutationQueue(definition: MutationQueueDefinition, key: string): MutationQueue<S>
   retainMutationQueue(
     definition: MutationQueueDefinition,
@@ -60,6 +62,8 @@ export function useMutationQueueImpl<S extends Schema>(
   const config: MutationQueueConfig | undefined = definition
     ? undefined
     : (definitionOrConfig as MutationQueueConfig)
+  const configRef = useRef(config ?? {})
+  configRef.current = config ?? {}
   const ref = useRef<{
     host: MutationQueueHost<S>
     definition: MutationQueueDefinition | undefined
@@ -79,16 +83,13 @@ export function useMutationQueueImpl<S extends Schema>(
       key,
       queue: definition
         ? figbird.getMutationQueue(definition, key as string)
-        : figbird.createMutationQueue(config),
+        : figbird[CREATE_DYNAMIC_MUTATION_QUEUE](() => configRef.current),
     }
   }
 
   const queue = ref.current.queue
   const activeQueues = mountedQueues.current
   useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot)
-  useEffect(() => {
-    if (!definition) queue.setConfig(config ?? {})
-  }, [config, definition, queue])
   useEffect(() => {
     if (definition) return figbird.retainMutationQueue(definition, key as string, queue)
     activeQueues.add(queue)

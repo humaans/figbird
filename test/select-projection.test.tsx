@@ -7,6 +7,7 @@ import test from 'ava'
 import { createSchema, FeathersAdapter, Figbird, service } from '../lib'
 import type { MockFeathers, TestItem } from '../lib/testing.js'
 import { mockFeathers } from './helpers'
+import { deferred } from './mutation-test-helpers'
 
 interface Note {
   id: number
@@ -221,6 +222,54 @@ test('a realtime race never widens a $select result with canonical entities', as
     { id: 2, title: 'Second', updatedAt },
   ])
   t.deepEqual(figbird.getState().get('notes')!.entities.get(1), patched)
+
+  unsubSelect()
+  unsubAll()
+})
+
+test('an optimistic patch survives a $select fetch without becoming its lane base', async t => {
+  const { figbird, notes } = createApp()
+
+  const allRef = figbird.query(figbird.q.notes.all())
+  const unsubAll = allRef.subscribe(() => {})
+  await settle()
+
+  const patchGate = deferred<TestItem>()
+  notes.patch = (() => patchGate.promise) as never
+  const pending = figbird.m.notes.patch(1, { title: 'Optimistic' })
+  const rejected = t.throwsAsync(() => pending, { message: 'offline' })
+
+  notes.setDelay(40)
+  const selectRef = figbird.query(figbird.q.notes.where({ $select: ['id', 'title', 'updatedAt'] }))
+  const unsubSelect = selectRef.subscribe(() => {})
+  await settle(60)
+
+  t.deepEqual(selectRef.getSnapshot().data, [
+    { id: 1, title: 'Optimistic', updatedAt },
+    { id: 2, title: 'Second', updatedAt },
+  ])
+  t.deepEqual(figbird.getState().get('notes')!.entities.get(1), {
+    id: 1,
+    title: 'Optimistic',
+    body: 'First body',
+    updatedAt,
+  })
+
+  notes.setDelay(0)
+  patchGate.reject(new Error('offline'))
+  await rejected
+  await settle(20)
+
+  t.deepEqual(figbird.getState().get('notes')!.entities.get(1), {
+    id: 1,
+    title: 'First',
+    body: 'First body',
+    updatedAt,
+  })
+  t.deepEqual(selectRef.getSnapshot().data, [
+    { id: 1, title: 'First', updatedAt },
+    { id: 2, title: 'Second', updatedAt },
+  ])
 
   unsubSelect()
   unsubAll()

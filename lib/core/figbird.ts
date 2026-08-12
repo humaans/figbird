@@ -11,6 +11,7 @@ import { registerDevtoolsInstance } from './devtoolsBridge.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
 import {
+  CREATE_DYNAMIC_MUTATION_QUEUE,
   MutationQueue,
   mutationQueueDefinitionConfig,
   type MutationQueueConfig,
@@ -701,6 +702,16 @@ export class Figbird<
    * `figbird.m` calls.
    */
   createMutationQueue(config: MutationQueueConfig = {}): MutationQueue<S> {
+    const fixedConfig = { ...config }
+    return this.#createMutationQueue(() => fixedConfig)
+  }
+
+  /** Create a component-owned queue whose policy follows its owner's renders. @internal */
+  [CREATE_DYNAMIC_MUTATION_QUEUE](readConfig: () => MutationQueueConfig): MutationQueue<S> {
+    return this.#createMutationQueue(readConfig)
+  }
+
+  #createMutationQueue(readConfig: () => MutationQueueConfig): MutationQueue<S> {
     const host: MutationQueueHost = {
       registerMutation: (desc, control) => {
         const resolve = (value: MutationDescriptor): MutationDescriptor => ({
@@ -722,7 +733,7 @@ export class Figbird<
           control,
         ),
     }
-    return new MutationQueue<S>(host, config)
+    return new MutationQueue<S>(host, readConfig)
   }
 
   /** Return one reconnectable instance of an immutable queue definition. @internal */

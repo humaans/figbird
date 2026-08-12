@@ -16,7 +16,12 @@ import {
   type ScheduledMutationControl,
 } from './mutationQueue.js'
 import { sortRowsLocally } from './sort.js'
-import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchRebase.js'
+import {
+  FetchEventJournal,
+  planFetchRebase,
+  rebaseResponseData,
+  type FetchResponseMode,
+} from './fetchRebase.js'
 import {
   ABSENT,
   MUTATION_EVENT_TYPE,
@@ -1274,6 +1279,9 @@ export class QueryStore<
       const getId = this.#getIdReader(query.desc.serviceName)
       const data = result.data
       const responseItems = Array.isArray(data) ? data : data == null ? [] : [data]
+      const isProjection = isProjectionQuery(queryOfParams(query.desc.params))
+      const responseMode: FetchResponseMode =
+        query.config.realtime === 'disabled' ? 'snapshot' : isProjection ? 'projection' : 'entity'
       const rebasePlan = planFetchRebase({
         responseItems,
         journalEvents,
@@ -1281,13 +1289,15 @@ export class QueryStore<
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
       const fetchedProjectionEvents: QueuedEvent[] = []
-      for (const item of responseItems) {
-        const itemId = getId(item)
-        if (itemId === undefined || rebasePlan.itemIds.has(itemId)) continue
-        const accepted = this.#acceptLaneAuthoritative(query.desc.serviceName, 'updated', item)
-        if (!accepted.handled || !accepted.projection) continue
-        const projectionEvent = this.#queuedProjectionEvent(accepted.projection)
-        if (projectionEvent) fetchedProjectionEvents.push(projectionEvent)
+      if (responseMode === 'entity') {
+        for (const item of responseItems) {
+          const itemId = getId(item)
+          if (itemId === undefined || rebasePlan.itemIds.has(itemId)) continue
+          const accepted = this.#acceptLaneAuthoritative(query.desc.serviceName, 'updated', item)
+          if (!accepted.handled || !accepted.projection) continue
+          const projectionEvent = this.#queuedProjectionEvent(accepted.projection)
+          if (projectionEvent) fetchedProjectionEvents.push(projectionEvent)
+        }
       }
 
       if (fetchedProjectionEvents.length > 0) {
@@ -1327,13 +1337,11 @@ export class QueryStore<
         isUnfilteredFindQuery(query.desc.params)
       const previousEntities =
         isCompleteSet && !findConfig.server ? new Map(service.entities) : null
-      const isProjection = isProjectionQuery(queryOfParams(query.desc.params))
-
       const meta = (result as { meta?: TMeta }).meta
       const pageInfo = 'pageInfo' in result ? result.pageInfo : undefined
       const rebasedResponse = rebaseResponseData({
         data,
-        preserveResponseItems: query.config.realtime === 'disabled' || isProjection,
+        mode: responseMode,
         latestEventById,
         entities: service.entities,
         getId,
@@ -1428,11 +1436,7 @@ export class QueryStore<
         )
       }
 
-      if (
-        effectiveJournalEvents.length > 0 &&
-        query.config.realtime !== 'disabled' &&
-        !isProjection
-      ) {
+      if (effectiveJournalEvents.length > 0 && responseMode === 'entity') {
         replayFetchedQueryFromEvents({
           service,
           queryId,
