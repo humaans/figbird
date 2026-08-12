@@ -192,6 +192,53 @@ test('query reapply rebuilds membership directly and keeps meta totals exact', a
   unsub()
 })
 
+test('query reapply preserves numeric item identity stored under a string key', async t => {
+  const { figbird } = createApp()
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { tag: 'x' } } },
+    { realtime: 'merge' },
+  )
+  const unsub = ref.subscribe(() => {})
+  await settle()
+  const queryId = ref.details().queryId
+  const serviceState = figbird.getState().get('notes')!
+  serviceState.entities.delete(1)
+  serviceState.entities.set('1', {
+    id: 1,
+    text: 'string-keyed',
+    rank: 1,
+    tag: 'x',
+    updatedAt: 2,
+  })
+
+  figbird.queryStore.reapplyQuery(queryId, new Set())
+  let state = ref.getSnapshot()
+  if (!state || state.status !== 'success') {
+    t.fail('expected a successful query snapshot')
+    return
+  }
+  t.deepEqual(
+    (state.data as Note[]).map(note => note.id),
+    [1, 2, 3, 4],
+  )
+  t.is((state.data as Note[])[0]?.text, 'string-keyed')
+
+  serviceState.entities.delete('1')
+  figbird.queryStore.reapplyQuery(queryId, new Set())
+  state = ref.getSnapshot()
+  if (!state || state.status !== 'success') {
+    t.fail('expected a successful query snapshot after removal')
+    return
+  }
+  t.deepEqual(
+    (state.data as Note[]).map(note => note.id),
+    [2, 3, 4],
+  )
+  t.false(serviceState.itemQueryIndex.get(1)?.has(queryId) ?? false)
+  t.false(serviceState.itemQueryIndex.get('1')?.has(queryId) ?? false)
+  unsub()
+})
+
 test('query reapply routes server-maintained queries to reconciliation', async t => {
   const { figbird, notes } = createApp()
   const ref = figbird.queryDesc(

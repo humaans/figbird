@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import {
   CREATE_DYNAMIC_MUTATION_QUEUE,
   isMutationQueueDefinition,
@@ -27,6 +27,8 @@ export interface UseMutationQueueHook<S extends Schema> {
   (config?: UseMutationQueueConfig): MutationQueue<S>
   (definition: MutationQueueDefinition, key: string): MutationQueue<S>
 }
+
+const EMPTY_MUTATION_QUEUE_CONFIG: MutationQueueConfig = {}
 
 /**
  * Create a serial mutation queue for the lifetime of the calling component.
@@ -62,8 +64,7 @@ export function useMutationQueueImpl<S extends Schema>(
   const config: MutationQueueConfig | undefined = definition
     ? undefined
     : (definitionOrConfig as MutationQueueConfig)
-  const configRef = useRef(config ?? {})
-  configRef.current = config ?? {}
+  const committedConfigRef = useRef(config ?? EMPTY_MUTATION_QUEUE_CONFIG)
   const ref = useRef<{
     host: MutationQueueHost<S>
     definition: MutationQueueDefinition | undefined
@@ -83,13 +84,16 @@ export function useMutationQueueImpl<S extends Schema>(
       key,
       queue: definition
         ? figbird.getMutationQueue(definition, key as string)
-        : figbird[CREATE_DYNAMIC_MUTATION_QUEUE](() => configRef.current),
+        : figbird[CREATE_DYNAMIC_MUTATION_QUEUE](() => committedConfigRef.current),
     }
   }
 
   const queue = ref.current.queue
   const activeQueues = mountedQueues.current
   useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot)
+  useLayoutEffect(() => {
+    if (!definition) committedConfigRef.current = config ?? EMPTY_MUTATION_QUEUE_CONFIG
+  }, [config, definition])
   useEffect(() => {
     if (definition) return figbird.retainMutationQueue(definition, key as string, queue)
     activeQueues.add(queue)

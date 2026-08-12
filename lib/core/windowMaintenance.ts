@@ -567,20 +567,25 @@ export function reapplyQueryFromEntities<TMeta>({
   if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
   if (!Array.isArray(query.state.data)) return 'ignored'
 
+  const firstStoredIdByKey = new Map<string, ItemId>()
   const candidates = new Map<string, { id: ItemId; item: unknown }>()
-  for (const item of service.entities.values()) {
+  for (const [storedId, item] of service.entities) {
+    const key = String(storedId)
+    if (!firstStoredIdByKey.has(key)) firstStoredIdByKey.set(key, storedId)
     const incomingId = getId(item)
     if (incomingId === undefined || !query.filterItem(item)) continue
-    const id = findStoredItemId(service, incomingId) ?? incomingId
-    candidates.set(String(id), { id, item })
+    candidates.set(key, { id: storedId, item })
   }
+
+  const resolveStoredId = (itemId: ItemId): ItemId =>
+    service.entities.has(itemId) ? itemId : (firstStoredIdByKey.get(String(itemId)) ?? itemId)
 
   const previousRows = query.state.data as unknown[]
   const previousItemIds = new Map<string, ItemId>()
   for (const item of previousRows) {
     const itemId = getId(item)
     if (itemId === undefined) continue
-    const storedId = findStoredItemId(service, itemId) ?? itemId
+    const storedId = resolveStoredId(itemId)
     previousItemIds.set(String(storedId), storedId)
   }
 
@@ -589,7 +594,7 @@ export function reapplyQueryFromEntities<TMeta>({
   for (const item of previousRows) {
     const itemId = getId(item)
     if (itemId === undefined) continue
-    const key = String(findStoredItemId(service, itemId) ?? itemId)
+    const key = String(resolveStoredId(itemId))
     const candidate = candidates.get(key)
     if (!candidate) continue
     retainedKeys.add(key)

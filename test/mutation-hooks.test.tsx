@@ -346,6 +346,61 @@ test('useMutationQueue: updates unkeyed policy and reconnects definition-keyed o
   thirdOwner.unmount()
 })
 
+test('useMutationQueue: abandoned renders cannot change an unkeyed queue policy', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, services())
+  const { useMutationQueue: useQueue } = createHooks(figbird)
+  const suspended = deferred<void>()
+  const d = dom()
+  let allowImmediate = false
+  let queue!: ReturnType<typeof useQueue>
+  let makeImmediate!: () => void
+
+  function SuspendWhileImmediate({ immediate }: { immediate: boolean }) {
+    if (immediate && !allowImmediate) throw suspended.promise
+    return null
+  }
+
+  function Probe() {
+    const [immediate, setImmediate] = useState(false)
+    queue = useQueue({ schedule: () => ({ wait: immediate ? 0 : 10_000 }) })
+    makeImmediate = () => {
+      React.startTransition(() => setImmediate(true))
+    }
+    return (
+      <div>
+        <span className='policy'>{immediate ? 'immediate' : 'delayed'}</span>
+        <SuspendWhileImmediate immediate={immediate} />
+      </div>
+    )
+  }
+
+  d.render(
+    <App>
+      <React.Suspense fallback={<span className='fallback'>loading</span>}>
+        <Probe />
+      </React.Suspense>
+    </App>,
+  )
+  const previousActEnvironment = globalThis.IS_REACT_ACT_ENVIRONMENT
+  t.teardown(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
+  })
+  globalThis.IS_REACT_ACT_ENVIRONMENT = false
+  makeImmediate()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(d.$('.policy')?.textContent, 'delayed', 'the immediate render did not commit')
+
+  const pending = queue.m.notes.patch(1, { content: 'still delayed' })
+  t.is(feathers.service('notes').counts.patch, 0, 'the committed delay policy still owns new work')
+
+  queue.flush()
+  await pending
+  globalThis.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
+  allowImmediate = true
+  await d.flush(() => suspended.resolve())
+  d.unmount()
+})
+
 test('useMutationQueue: unmount flushes work and cannot strand a failed optimistic lane', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useMutationQueue: useQueue } = createHooks(figbird)
