@@ -2279,7 +2279,7 @@ test('useFind recovers gracefully from errors on refetch', async t => {
   unmount()
 })
 
-test('concurrent mutations on one record settle in call order', async t => {
+test('legacy useMutation preserves concurrent transport behavior', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, useMutation, feathers } = app()
   let hasFiredMutations = false
@@ -2327,10 +2327,10 @@ test('concurrent mutations on one record settle in call order', async t => {
     await new Promise(resolve => setTimeout(resolve, 50))
   })
 
-  // Per-record mutation lanes send update2 only after update1 settles, so call
-  // order wins even though update2 has the shorter individual delay.
+  // Deprecated useMutation does not enter record lanes. The later transport
+  // response wins, preserving its timeout-and-retry compatibility behavior.
   t.is($all('.note').length, 1)
-  t.is($all('.note')[0]?.innerHTML, 'update2')
+  t.is($all('.note')[0]?.innerHTML, 'update1')
 
   unmount()
 })

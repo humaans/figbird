@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import { resolveServicePath, type Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
 
 // Public untyped mutation hook intentionally returns `any` for backwards compatibility.
@@ -39,8 +40,9 @@ export interface UseMutationResult<
  * by the caller. As you create/update/patch/remove
  * entities using this helper, the entities cache gets updated.
  *
- * Writes are non-optimistic: the cache reflects the change once the server acks.
- * Optimistic writes are a feature of the current write API (`m`).
+ * Writes are non-optimistic and retain their legacy concurrent transport behavior:
+ * the cache reflects each change once the server acks, and same-record calls are
+ * not serialized. Optimistic ordered writes are a feature of the current `m` API.
  *
  * Returns untyped data. For type-safe mutations, use createHooks(schema).
  *
@@ -62,7 +64,10 @@ export function useMutation(
 
 /** The slice of a Figbird instance the mutation hook needs. @internal */
 interface MutatingFigbird {
-  mutateDesc(desc: UntypedData): Promise<UntypedData>
+  schema: Schema | undefined
+  queryStore: {
+    mutateConfirmedDirect(desc: UntypedData): Promise<UntypedData>
+  }
 }
 
 /**
@@ -106,29 +111,34 @@ export function useMutationImpl(
     [dispatch, mountedRef],
   )
 
+  const mutate = useCallback(
+    (desc: UntypedData) =>
+      figbird.queryStore.mutateConfirmedDirect({
+        ...desc,
+        serviceName: resolveServicePath(figbird.schema, serviceName),
+      }),
+    [figbird, serviceName],
+  )
+
   const create = useCallback(
     (data: UntypedData, params?: unknown) =>
-      executeMutation(figbird.mutateDesc({ serviceName, method: 'create' as const, data, params })),
-    [executeMutation, figbird, serviceName],
+      executeMutation(mutate({ method: 'create' as const, data, params })),
+    [executeMutation, mutate],
   )
   const update = useCallback(
     (id: string | number, data: UntypedData, params?: unknown) =>
-      executeMutation(
-        figbird.mutateDesc({ serviceName, method: 'update' as const, id, data, params }),
-      ),
-    [executeMutation, figbird, serviceName],
+      executeMutation(mutate({ method: 'update' as const, id, data, params })),
+    [executeMutation, mutate],
   )
   const patch = useCallback(
     (id: string | number, data: UntypedData, params?: unknown) =>
-      executeMutation(
-        figbird.mutateDesc({ serviceName, method: 'patch' as const, id, data, params }),
-      ),
-    [executeMutation, figbird, serviceName],
+      executeMutation(mutate({ method: 'patch' as const, id, data, params })),
+    [executeMutation, mutate],
   )
   const remove = useCallback(
     (id: string | number, params?: unknown) =>
-      executeMutation(figbird.mutateDesc({ serviceName, method: 'remove' as const, id, params })),
-    [executeMutation, figbird, serviceName],
+      executeMutation(mutate({ method: 'remove' as const, id, params })),
+    [executeMutation, mutate],
   )
 
   return useMemo(

@@ -509,6 +509,33 @@ export class QueryStore<
     return this.registerMutation(desc).promise as Promise<InferMutationData<S, D>>
   }
 
+  /**
+   * Run one confirmed mutation without record-lane scheduling. This preserves the
+   * transport behavior of deprecated `useMutation`: a caller may time out a hung
+   * request and start another request for the same record. @internal
+   */
+  mutateConfirmedDirect<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+    const { serviceName, method } = desc
+    const id = method === 'create' ? this.#peekId(desc.data) : desc.id
+    const args = this.#buildMutationArgs(desc)
+    const registration = this.#registerUnkeyedMutation({
+      tracking: {
+        serviceName,
+        method,
+        ...(id !== undefined ? { id } : {}),
+        optimistic: false,
+        args,
+      },
+      control: undefined,
+      run: () => this.#adapter.mutate(serviceName, method, [...args]),
+      hooks: {
+        onSuccess: item =>
+          this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item }),
+      },
+    })
+    return registration.promise as Promise<InferMutationData<S, D>>
+  }
+
   /** Register a mutation with an optional transport scheduler. @internal */
   registerMutation(
     desc: MutationDescriptor,
