@@ -8,7 +8,7 @@
  */
 
 import { useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import type { MutationQueueConfig } from 'figbird'
+import { defineMutationQueue, type MutationQueueConfig } from 'figbird'
 import { useMutationQueue, useQuery, type Task, type User } from '../../figbird'
 import { Explain } from '../../components/Explain'
 import { issueTasksQuery } from './queries'
@@ -31,6 +31,8 @@ const taskQueueConfig: MutationQueueConfig = {
   },
 }
 
+const issueTaskQueue = defineMutationQueue(taskQueueConfig)
+
 let lastClientTaskId = 0
 
 function nextClientTaskId(): number {
@@ -46,7 +48,7 @@ function ignoreQueueResult(promise: Promise<unknown>): void {
 
 export function TasksPanel({ issueId, users }: { issueId: number; users: User[] }) {
   const { data: tasks } = useQuery(issueTasksQuery, { id: issueId })
-  const queue = useMutationQueue({ key: `issue:${issueId}:tasks`, ...taskQueueConfig })
+  const queue = useMutationQueue(issueTaskQueue, `issue:${issueId}:tasks`)
   const [focusTaskId, setFocusTaskId] = useState<number | null>(null)
 
   const createTask = (after?: Task) => {
@@ -80,12 +82,13 @@ export function TasksPanel({ issueId, users }: { issueId: number; users: User[] 
         <div className='tasks-actions'>
           <Explain
             label='Per-issue optimistic queue'
-            query={`const sync = useMutationQueue({
-  key: 'issue:' + issueId + ':tasks',
+            query={`const taskSync = defineMutationQueue({
   schedule: op => titleOnly(op)
     ? { wait: 450, maxWait: 1500 }
     : { wait: 0 },
 })
+
+const sync = useMutationQueue(taskSync, 'issue:' + issueId + ':tasks')
 
 // one reconnectable lane for this issue:
 sync.m.tasks.create({ id, issueId, title: '' })

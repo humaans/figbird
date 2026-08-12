@@ -1,5 +1,6 @@
 // core
 export {
+  defineMutationQueue,
   Figbird,
   defineQuery,
   QUERY_DEFINITION_BRAND,
@@ -23,6 +24,7 @@ export type {
   MutationEventMethod,
   MutationMethod,
   MutationQueueConfig,
+  MutationQueueDefinition,
   MutationQueueOperation,
   MutationQueueRetry,
   MutationQueueRetryDelay,

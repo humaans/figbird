@@ -37,6 +37,7 @@ import {
   type UseMutationQueueConfig,
   type UseMutationQueueHook,
 } from './useMutationQueue.js'
+import type { MutationQueueDefinition } from '../core/mutationQueue.js'
 import { useFind, useGet, type QueryResult } from './useQueryByDesc.js'
 import { useQueries, type UseQueriesHook } from './useQueries.js'
 import { useQuery, type UseQueryHook } from './useQuery.js'
@@ -169,8 +170,11 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
     return useMutatingImpl(useBoundFigbird(), filter)
   }
 
-  function useTypedMutationQueue(config?: UseMutationQueueConfig) {
-    return useMutationQueueImpl(useBoundFigbird(), config)
+  function useTypedMutationQueue(
+    definitionOrConfig?: MutationQueueDefinition | UseMutationQueueConfig,
+    key?: string,
+  ) {
+    return useMutationQueueImpl(useBoundFigbird(), definitionOrConfig, key)
   }
   function useTypedFeathers() {
     const adapter = useBoundFigbird().adapter as { feathers?: FeathersClient }

@@ -109,13 +109,14 @@ the fetch timeline, events, writes, and the element inspector without any demo-o
   no handle setup. The cache updates in the same frame, rollback on failure (arm chaos in
   dev tools to see it); surfaces that must wait for the server ack use
   `m.<service>.confirmed`.
-- **Issue-local mutation queues** — every issue uses its id as a `useMutationQueue` key. Task
-  creates, edits, assignment changes, completion, and removal project immediately but reach the
-  server in order. Title-only patches debounce for 450ms and consecutive unsent patches to the
-  same task coalesce, so typing does not become one request per character. Press Enter in a task
-  to optimistically create and focus the next row while the earlier create or edit is still saving.
-  Navigate away and back to reconnect to the same pending or failed queue. The Writes tab labels
-  projected mutations and keeps a coalesced write's payload current.
+- **Issue-local mutation queues** — one `defineMutationQueue` owns the task policy, and every issue
+  uses its id to select a reconnectable instance. Task creates, edits, assignment changes,
+  completion, and removal project immediately but reach the server in order. Title-only patches
+  debounce for 450ms and consecutive unsent patches to the same task coalesce, so typing does not
+  become one request per character. Press Enter in a task to optimistically create and focus the
+  next row while the earlier create or edit is still saving. Navigate away and back to reconnect
+  to the same pending or failed queue. The Writes tab labels projected mutations and keeps a
+  coalesced write's payload current.
 - **The id contract** — optimistic creates carry a client-generated id (the demo mints
   numeric ones; real apps use `crypto.randomUUID()`): identity is real from the first
   frame, so React keys are stable, the realtime echo dedupes by id, and the New Issue

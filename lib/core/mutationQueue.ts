@@ -37,6 +37,38 @@ export interface MutationQueueConfig {
   timeout?: number
 }
 
+const MUTATION_QUEUE_DEFINITION_CONFIG = Symbol('figbird.mutationQueueDefinitionConfig')
+
+/** Immutable policy identity for reconnectable mutation queues. */
+export interface MutationQueueDefinition {
+  readonly [MUTATION_QUEUE_DEFINITION_CONFIG]: MutationQueueConfig
+}
+
+/**
+ * Define the policy and namespace for a family of reconnectable mutation queues.
+ * Keep the returned value at module scope, then select an instance with
+ * `useMutationQueue(definition, key)`.
+ */
+export function defineMutationQueue(config: MutationQueueConfig = {}): MutationQueueDefinition {
+  return Object.freeze({
+    [MUTATION_QUEUE_DEFINITION_CONFIG]: Object.freeze({ ...config }),
+  })
+}
+
+/** @internal */
+export function mutationQueueDefinitionConfig(
+  definition: MutationQueueDefinition,
+): MutationQueueConfig {
+  return definition[MUTATION_QUEUE_DEFINITION_CONFIG]
+}
+
+/** @internal */
+export function isMutationQueueDefinition(value: unknown): value is MutationQueueDefinition {
+  return Boolean(
+    value && typeof value === 'object' && MUTATION_QUEUE_DEFINITION_CONFIG in (value as object),
+  )
+}
+
 export interface MutationQueueSnapshot {
   readonly status: MutationQueueStatus
   readonly pending: number
@@ -360,7 +392,13 @@ export class MutationQueue<S extends Schema> {
   ): boolean {
     if (retry === false) return false
     if (typeof retry === 'number') return attempt <= retry
-    return retry(error, attempt, operation)
+    try {
+      return retry(error, attempt, operation)
+    } catch {
+      // Policy code must not replace the transport error or bypass the queue's
+      // terminal retry/discard decision.
+      return false
+    }
   }
 
   #retryDelay(

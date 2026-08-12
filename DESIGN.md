@@ -669,10 +669,14 @@ mutation-specific path: its ordinary root and relation query inputs already rebu
 events.
 
 **Explicit serial mutation queues.** A feature can create one long-lived queue through
-`figbird.createMutationQueue(config)` or `useMutationQueue(config)` and issue writes through its
-typed `queue.m` proxy. The queue adds a serial predecessor and a scheduling deadline to each write;
-the store still registers every write immediately in its global `(service, id)` lane. Transport
-starts only after both constraints clear. This preserves scoped/unscoped interleaving on one record
+`figbird.createMutationQueue(config)` or a component-owned queue through `useMutationQueue(config)`
+and issue writes through its typed `queue.m` proxy. Reconnectable hooks use a module-level
+`defineMutationQueue(config)` plus an instance key. The definition owns immutable policy and its
+registry namespace; the key only selects one queue within that definition. This prevents two
+owners from racing to configure one queue and prevents unrelated features with equal string keys
+from colliding. The queue adds a serial predecessor and a scheduling deadline to each write; the
+store still registers every write immediately in its global `(service, id)` lane. Transport starts
+only after both constraints clear. This preserves scoped/unscoped interleaving on one record
 without serializing unrelated records across the application.
 
 The queue coalesces only compatible, consecutive, unsent patches. Coalescing never crosses another

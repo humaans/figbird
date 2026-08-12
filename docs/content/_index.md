@@ -581,11 +581,11 @@ relational-filter reconciliations wait until the record queue settles, then refe
 
 `m` sends independent records in parallel. A feature such as a workflow editor may instead
 need one open-ended stream: create an action, create a task that references it, then accept
-more edits in whatever order the user makes them. `useMutationQueue` owns that serial stream:
+more edits in whatever order the user makes them. Define its policy once, then select one
+reconnectable instance per workflow:
 
 ```ts
-const sync = useMutationQueue({
-  key: `workflow:${workflowId}`,
+const workflowSync = defineMutationQueue({
   schedule(operation) {
     return isTextPatch(operation) ? { wait: 800, maxWait: 3200 } : { wait: 300 }
   },
@@ -594,17 +594,22 @@ const sync = useMutationQueue({
   retryDelay: 2500,
 })
 
-sync.m.actions.create({ id: actionId, title: 'Draft' })
-sync.m.tasks.create({ id: taskId, actionId, title: '' })
-sync.m.tasks.patch(taskId, { title: 'Write launch plan' })
+function WorkflowEditor({ workflowId }) {
+  const sync = useMutationQueue(workflowSync, `workflow:${workflowId}`)
+
+  sync.m.actions.create({ id: actionId, title: 'Draft' })
+  sync.m.tasks.create({ id: taskId, actionId, title: '' })
+  sync.m.tasks.patch(taskId, { title: 'Write launch plan' })
+}
 ```
 
-`key` is optional. Without it, the component owns the queue and unmounting flushes its work.
-With it, hooks on the same Figbird instance reconnect to one queue. This preserves pending,
-saving, and failed state when a screen unmounts and mounts again. Figbird removes an unowned
-keyed queue as soon as it becomes idle. It retains unfinished queues for five minutes, then
-detaches them so abandoned failures cannot remain paused forever. Components that share a key
-must also share its scheduling and retry policy; the latest mounted hook configures new work.
+For a component-owned queue, pass the policy directly to `useMutationQueue(policy)`; unmounting
+flushes its work. For a reconnectable queue, `defineMutationQueue(policy)` owns an immutable
+policy and namespace, while the hook's key selects one instance. Hooks using the same definition,
+key, and Figbird instance reconnect to the same pending, saving, or failed state. Equal keys from
+different definitions cannot collide. Figbird removes an unowned keyed queue as soon as it becomes
+idle. It retains unfinished queues for five minutes, then detaches them so abandoned failures
+cannot remain paused forever.
 
 Every call projects immediately. Adapter calls remain serial in registration order. Consecutive,
 unsent patches with the same queue, service, id, params, and optimism mode merge shallowly; later
@@ -626,8 +631,8 @@ and its dependent writes are cancelled.
 Outside React, create the same object with `figbird.createMutationQueue(config)`. A mutation queue
 is ordered, not atomic or durable: keyed queues survive component navigation, but no queue survives
 a page reload. The application must register a parent create before a child create that references
-it. `useMutationQueue` applies the latest committed configuration to new work. An unkeyed queue
-flushes on unmount; if it later exhausts its retries, it rolls back the failed and remaining work
+it. An unkeyed queue applies the latest committed configuration to new work and flushes on unmount;
+if it later exhausts its retries, it rolls back the failed and remaining work
 instead of pausing without an owner. Timeouts cannot cancel an adapter request already on the wire,
 so retry creates only when the server accepts client IDs idempotently.
 

@@ -8,7 +8,9 @@
 - Add explicitly owned serial mutation queues through `figbird.createMutationQueue()` and
   `useMutationQueue()`. Queue calls project immediately, preserve cross-record call order,
   coalesce compatible unsent patches, and support scheduling, retry, timeout, flush, and
-  discard policies. Scoped and ordinary writes still share the same per-record lanes.
+  discard policies. `defineMutationQueue(policy)` gives reconnectable React queues an immutable
+  policy namespace, so hooks reconnect by definition and key without cross-feature policy races.
+  Scoped and ordinary writes still share the same per-record lanes.
 - Add `optimisticPatch` for writes whose local projection differs from their server payload.
   Projected relational-filter changes now resolve locally and reconcile once after the record
   lane drains.

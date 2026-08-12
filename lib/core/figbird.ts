@@ -10,7 +10,13 @@ import {
 import { registerDevtoolsInstance } from './devtoolsBridge.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
-import { MutationQueue, type MutationQueueConfig, type MutationQueueHost } from './mutationQueue.js'
+import {
+  MutationQueue,
+  mutationQueueDefinitionConfig,
+  type MutationQueueConfig,
+  type MutationQueueDefinition,
+  type MutationQueueHost,
+} from './mutationQueue.js'
 import type { MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
@@ -79,12 +85,14 @@ export type {
   MutationsProxy,
 } from './mutations.js'
 export {
+  defineMutationQueue,
   MutationQueueDiscardedError,
   MutationSupersededError,
   isMutationSupersededError,
 } from './mutationQueue.js'
 export type {
   MutationQueueConfig,
+  MutationQueueDefinition,
   MutationQueueOperation,
   MutationQueueRetry,
   MutationQueueRetryDelay,
@@ -171,7 +179,7 @@ export class Figbird<
 
   // Keyed mutation queues outlive individual React owners while work remains,
   // allowing a remounted feature to reconnect to its pending/error state.
-  #keyedMutationQueues = new Map<string, KeyedMutationQueueEntry<S>>()
+  #keyedMutationQueues = new Map<MutationQueueDefinition, Map<string, KeyedMutationQueueEntry<S>>>()
 
   /**
    * Create a Figbird instance.
@@ -717,13 +725,14 @@ export class Figbird<
     return new MutationQueue<S>(host, config)
   }
 
-  /** Return the reconnectable mutation queue owned by this Figbird instance. @internal */
-  getMutationQueue(key: string, config: MutationQueueConfig = {}): MutationQueue<S> {
+  /** Return one reconnectable instance of an immutable queue definition. @internal */
+  getMutationQueue(definition: MutationQueueDefinition, key: string): MutationQueue<S> {
     if (key.length === 0) throw new Error('figbird: mutation queue key must not be empty')
-    const existing = this.#keyedMutationQueues.get(key)
+    let queues = this.#keyedMutationQueues.get(definition)
+    const existing = queues?.get(key)
     if (existing) return existing.queue
 
-    const queue = this.createMutationQueue(config)
+    const queue = this.createMutationQueue(mutationQueueDefinitionConfig(definition))
     const entry = {
       queue,
       owners: 0,
@@ -731,16 +740,26 @@ export class Figbird<
       unsubscribe: () => {},
     }
     entry.unsubscribe = queue.subscribe(() => {
-      if (entry.owners === 0 && queue.status === 'idle') this.#evictMutationQueue(key, entry)
+      if (entry.owners === 0 && queue.status === 'idle') {
+        this.#evictMutationQueue(definition, key, entry)
+      }
     })
-    this.#keyedMutationQueues.set(key, entry)
-    this.#scheduleMutationQueueEviction(key, entry)
+    if (!queues) {
+      queues = new Map()
+      this.#keyedMutationQueues.set(definition, queues)
+    }
+    queues.set(key, entry)
+    this.#scheduleMutationQueueEviction(definition, key, entry)
     return queue
   }
 
   /** Retain a keyed queue for one committed React owner. @internal */
-  retainMutationQueue(key: string, queue: MutationQueue<S>): () => void {
-    const entry = this.#keyedMutationQueues.get(key)
+  retainMutationQueue(
+    definition: MutationQueueDefinition,
+    key: string,
+    queue: MutationQueue<S>,
+  ): () => void {
+    const entry = this.#keyedMutationQueues.get(definition)?.get(key)
     if (!entry || entry.queue !== queue) {
       throw new Error(`figbird: mutation queue "${key}" is no longer registered`)
     }
@@ -754,28 +773,39 @@ export class Figbird<
       released = true
       entry.owners = Math.max(0, entry.owners - 1)
       queueMicrotask(() => {
-        if (entry.owners > 0 || this.#keyedMutationQueues.get(key) !== entry) return
-        if (entry.queue.status === 'idle') this.#evictMutationQueue(key, entry)
-        else this.#scheduleMutationQueueEviction(key, entry)
+        if (entry.owners > 0 || this.#keyedMutationQueues.get(definition)?.get(key) !== entry)
+          return
+        if (entry.queue.status === 'idle') this.#evictMutationQueue(definition, key, entry)
+        else this.#scheduleMutationQueueEviction(definition, key, entry)
       })
     }
   }
 
-  #scheduleMutationQueueEviction(key: string, entry: KeyedMutationQueueEntry<S>): void {
+  #scheduleMutationQueueEviction(
+    definition: MutationQueueDefinition,
+    key: string,
+    entry: KeyedMutationQueueEntry<S>,
+  ): void {
     if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
     entry.evictionTimer = setTimeout(
-      () => this.#evictMutationQueue(key, entry),
+      () => this.#evictMutationQueue(definition, key, entry),
       KEYED_MUTATION_QUEUE_RETENTION_MS,
     )
     const timer = entry.evictionTimer as ReturnType<typeof setTimeout> & { unref?: () => void }
     timer.unref?.()
   }
 
-  #evictMutationQueue(key: string, entry: KeyedMutationQueueEntry<S>): void {
-    if (entry.owners > 0 || this.#keyedMutationQueues.get(key) !== entry) return
+  #evictMutationQueue(
+    definition: MutationQueueDefinition,
+    key: string,
+    entry: KeyedMutationQueueEntry<S>,
+  ): void {
+    const queues = this.#keyedMutationQueues.get(definition)
+    if (entry.owners > 0 || queues?.get(key) !== entry) return
     if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
     entry.unsubscribe()
-    this.#keyedMutationQueues.delete(key)
+    queues.delete(key)
+    if (queues.size === 0) this.#keyedMutationQueues.delete(definition)
     if (entry.queue.status !== 'idle') entry.queue.detach()
   }
 

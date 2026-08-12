@@ -1,53 +1,85 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { MutationQueue, type MutationQueueConfig } from '../core/mutationQueue.js'
+import {
+  isMutationQueueDefinition,
+  MutationQueue,
+  type MutationQueueConfig,
+  type MutationQueueDefinition,
+} from '../core/mutationQueue.js'
 import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
 
 export interface MutationQueueHost<S extends Schema> {
   createMutationQueue(config?: MutationQueueConfig): MutationQueue<S>
-  getMutationQueue(key: string, config?: MutationQueueConfig): MutationQueue<S>
-  retainMutationQueue(key: string, queue: MutationQueue<S>): () => void
+  getMutationQueue(definition: MutationQueueDefinition, key: string): MutationQueue<S>
+  retainMutationQueue(
+    definition: MutationQueueDefinition,
+    key: string,
+    queue: MutationQueue<S>,
+  ): () => void
 }
 
-export interface UseMutationQueueConfig extends MutationQueueConfig {
-  /** Reconnect components using the same Figbird instance and queue key. */
-  key?: string
-}
+/** Configuration for a component-owned, unkeyed mutation queue. */
+export type UseMutationQueueConfig = MutationQueueConfig
 
-export type UseMutationQueueHook<S extends Schema> = (
-  config?: UseMutationQueueConfig,
-) => MutationQueue<S>
+export interface UseMutationQueueHook<S extends Schema> {
+  (config?: UseMutationQueueConfig): MutationQueue<S>
+  (definition: MutationQueueDefinition, key: string): MutationQueue<S>
+}
 
 /**
- * Create one serial mutation queue for the lifetime of the calling component.
- * Share the returned object through feature context when several components
- * contribute to the same stream of edits. Pass a key to reconnect components
- * on the same Figbird instance while that queue still has unfinished work.
+ * Create a serial mutation queue for the lifetime of the calling component.
+ * Pass a queue definition and key to reconnect to unfinished work after a
+ * remount. The definition owns policy; the key only selects an instance.
  */
-export function useMutationQueue(config: UseMutationQueueConfig = {}): MutationQueue<Schema> {
-  return useMutationQueueImpl(useFigbird(), config)
+export function useMutationQueue(config?: UseMutationQueueConfig): MutationQueue<Schema>
+export function useMutationQueue(
+  definition: MutationQueueDefinition,
+  key: string,
+): MutationQueue<Schema>
+export function useMutationQueue(
+  definitionOrConfig: MutationQueueDefinition | UseMutationQueueConfig = {},
+  key?: string,
+): MutationQueue<Schema> {
+  return useMutationQueueImpl(useFigbird(), definitionOrConfig, key)
 }
 
 /** Instance-taking implementation used by createHooks. @internal */
 export function useMutationQueueImpl<S extends Schema>(
   figbird: MutationQueueHost<S>,
-  config: UseMutationQueueConfig = {},
+  definitionOrConfig: MutationQueueDefinition | UseMutationQueueConfig = {},
+  key?: string,
 ): MutationQueue<S> {
-  const { key, ...queueConfig } = config
+  const definition = isMutationQueueDefinition(definitionOrConfig) ? definitionOrConfig : undefined
+  if (definition && key === undefined) {
+    throw new Error('figbird: reconnectable mutation queues need an instance key')
+  }
+  if (!definition && key !== undefined) {
+    throw new Error('figbird: mutation queue keys need a definition from defineMutationQueue()')
+  }
+
+  const config: MutationQueueConfig | undefined = definition
+    ? undefined
+    : (definitionOrConfig as MutationQueueConfig)
   const ref = useRef<{
     host: MutationQueueHost<S>
+    definition: MutationQueueDefinition | undefined
     key: string | undefined
     queue: MutationQueue<S>
   } | null>(null)
   const mountedQueues = useRef(new Set<MutationQueue<S>>())
-  if (!ref.current || ref.current.host !== figbird || ref.current.key !== key) {
+  if (
+    !ref.current ||
+    ref.current.host !== figbird ||
+    ref.current.definition !== definition ||
+    ref.current.key !== key
+  ) {
     ref.current = {
       host: figbird,
+      definition,
       key,
-      queue:
-        key === undefined
-          ? figbird.createMutationQueue(queueConfig)
-          : figbird.getMutationQueue(key, queueConfig),
+      queue: definition
+        ? figbird.getMutationQueue(definition, key as string)
+        : figbird.createMutationQueue(config),
     }
   }
 
@@ -55,10 +87,10 @@ export function useMutationQueueImpl<S extends Schema>(
   const activeQueues = mountedQueues.current
   useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot)
   useEffect(() => {
-    queue.setConfig(queueConfig)
-  }, [queue, queueConfig])
+    if (!definition) queue.setConfig(config ?? {})
+  }, [config, definition, queue])
   useEffect(() => {
-    if (key !== undefined) return figbird.retainMutationQueue(key, queue)
+    if (definition) return figbird.retainMutationQueue(definition, key as string, queue)
     activeQueues.add(queue)
     return () => {
       activeQueues.delete(queue)
@@ -66,6 +98,6 @@ export function useMutationQueueImpl<S extends Schema>(
         if (!activeQueues.has(queue)) queue.detach()
       })
     }
-  }, [activeQueues, figbird, key, queue])
+  }, [activeQueues, definition, figbird, key, queue])
   return queue
 }
