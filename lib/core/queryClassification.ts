@@ -155,6 +155,15 @@ function walkQueryKeysAtDepth(
   }
 }
 
+/** True when the query projects rows (`$select` anywhere) — its results are partial rows, not full entities. */
+export function isProjectionQuery(query: unknown): boolean {
+  let found = false
+  walkQueryKeys(query, key => {
+    if (SERVER_ONLY_QUERY_FILTERS.has(key)) found = true
+  })
+  return found
+}
+
 /** True when the query uses `$limit`/`$skip`/`$sort` anywhere. */
 export function hasWindowFilters(value: unknown): boolean {
   let found = false

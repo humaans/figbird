@@ -20,6 +20,7 @@ import {
 } from './windowMaintenance.js'
 import {
   classifyStoredQuery,
+  isProjectionQuery,
   isServerMaintained,
   type StoredQueryClass,
 } from './queryClassification.js'
@@ -882,10 +883,16 @@ export class QueryStore<
       // rows. This avoids scanning every id ever seen on the service per fetch.
       removeQueryFromItemIndex({ service, query, queryId, getId })
 
+      // Projected (`$select`) rows are correct for this query's own result but are
+      // not full entities — never write them to the entity cache, which must hold
+      // only complete rows for the materialized local-answer paths to be sound
+      // (isItemStale can't catch a projection: same updatedAt as the row it shadows).
+      const isProjection = isProjectionQuery(queryOfParams(query.desc.params))
+
       for (const item of rebasedResponse.items) {
         const itemId = getId(item)
         if (itemId !== undefined) {
-          if (!journaledItemIds.has(itemId)) {
+          if (!isProjection && !journaledItemIds.has(itemId)) {
             const currentItem = service.entities.get(itemId)
             if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
               service.entities.set(itemId, item)
