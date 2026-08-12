@@ -183,6 +183,49 @@ test('a $select refetch triggered by realtime does not re-poison the cache', asy
   unsubAll()
 })
 
+test('a realtime race never widens a $select result with canonical entities', async t => {
+  const { figbird, notes } = createApp()
+
+  const allRef = figbird.query(figbird.q.notes.all())
+  const unsubAll = allRef.subscribe(() => {})
+  await settle()
+
+  const selectRef = figbird.query(figbird.q.notes.where({ $select: ['id', 'title', 'updatedAt'] }))
+  const observedKeys: string[][] = []
+  const unsubSelect = selectRef.subscribe(() => {
+    const data = selectRef.getSnapshot().data
+    if (Array.isArray(data) && data[0]) observedKeys.push(Object.keys(data[0]).sort())
+  })
+  await settle()
+
+  notes.setDelay(40)
+  selectRef.refetch()
+  const patched = {
+    id: 1,
+    title: 'Renamed',
+    body: 'Changed body',
+    updatedAt: updatedAt + 1,
+  }
+  notes.data = { ...notes.data, 1: patched }
+  notes.emit('patched', patched)
+  await settle(100)
+
+  t.true(observedKeys.length > 0)
+  t.deepEqual(
+    observedKeys,
+    observedKeys.map(() => ['id', 'title', 'updatedAt']),
+    'every successful snapshot keeps the server projection',
+  )
+  t.deepEqual(selectRef.getSnapshot().data, [
+    { id: 1, title: 'Renamed', updatedAt: updatedAt + 1 },
+    { id: 2, title: 'Second', updatedAt },
+  ])
+  t.deepEqual(figbird.getState().get('notes')!.entities.get(1), patched)
+
+  unsubSelect()
+  unsubAll()
+})
+
 test('a $select-only allPages find does not materialize the service', async t => {
   const { figbird, notes } = createApp()
 

@@ -860,11 +860,12 @@ export class QueryStore<
         isUnfilteredFindQuery(query.desc.params)
       const previousEntities =
         isCompleteSet && !findConfig.server ? new Map(service.entities) : null
+      const isProjection = isProjectionQuery(queryOfParams(query.desc.params))
 
       const meta = (result as { meta?: TMeta }).meta
       const rebasedResponse = rebaseResponseData({
         data,
-        preserveSnapshot: query.config.realtime === 'disabled',
+        preserveResponseItems: query.config.realtime === 'disabled' || isProjection,
         latestEventById: rebasePlan.latestEventById,
         entities: service.entities,
         getId,
@@ -887,8 +888,6 @@ export class QueryStore<
       // not full entities — never write them to the entity cache, which must hold
       // only complete rows for the materialized local-answer paths to be sound
       // (isItemStale can't catch a projection: same updatedAt as the row it shadows).
-      const isProjection = isProjectionQuery(queryOfParams(query.desc.params))
-
       for (const item of rebasedResponse.items) {
         const itemId = getId(item)
         if (itemId !== undefined) {
@@ -971,6 +970,7 @@ export class QueryStore<
           service,
           queryId,
           events: effectiveJournalEvents,
+          preserveResponseItems: isProjection,
           touch,
           getId,
           itemAdded: meta => this.#adapter.itemAdded(meta),

@@ -179,12 +179,13 @@ export interface RebasedResponse {
 
 /**
  * Rebase response values over newer cached entities for realtime-aware queries.
- * Snapshot queries deliberately keep the exact fetched values; cache protection
+ * Some queries must keep their server response items unchanged: snapshots preserve
+ * exact values, while projections preserve a partial row shape. Cache protection
  * remains a separate store concern.
  */
 export function rebaseResponseData({
   data,
-  preserveSnapshot,
+  preserveResponseItems,
   latestEventById,
   entities,
   getId,
@@ -192,7 +193,7 @@ export function rebaseResponseData({
   canKeepCurrentItem,
 }: {
   data: unknown
-  preserveSnapshot: boolean
+  preserveResponseItems: boolean
   latestEventById: ReadonlyMap<ItemId, ProcessedRealtimeEvent>
   entities: ReadonlyMap<ItemId, unknown>
   getId: (item: unknown) => ItemId | undefined
@@ -200,7 +201,7 @@ export function rebaseResponseData({
   canKeepCurrentItem: (item: unknown) => boolean
 }): RebasedResponse {
   const rebaseItem = (item: unknown): unknown | undefined => {
-    if (preserveSnapshot) return item
+    if (preserveResponseItems) return item
 
     const itemId = getId(item)
     if (itemId === undefined) return item
