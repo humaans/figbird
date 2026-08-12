@@ -350,11 +350,11 @@ avoid: multiple `{ suspense: false }` `useQuery` calls already run in parallel.
 `.paginate()` turns a query into an infinite-scroll accumulator. Each loaded page is its own window on the server, and `data` is the concatenation of all loaded pages:
 
 ```tsx
-const { data, loadMore, hasMore, isLoadingMore, loadMoreError, totalCount } = useQuery(
+const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQuery(
   q.issues
     .where({ status: 'open' })
     .orderBy('updatedAt', 'desc')
-    .paginate({ pageSize: 25, returnTotal: true })
+    .paginate({ pageSize: 25, includeTotal: true })
     .related('creator'),
 )
 ```
@@ -362,10 +362,124 @@ const { data, loadMore, hasMore, isLoadingMore, loadMoreError, totalCount } = us
 - `loadMore()` appends the next page (no-op while one is in flight or when done)
 - `hasMore` is sticky during loads so the button doesn't flicker
 - `loadMoreError` reports a failed page load; calling `loadMore()` again retries the same page
-- `totalCount` comes from the first page's meta when `returnTotal: true`
+- `total` comes from the first page's metadata when `includeTotal: true`
 - `refetch()` re-fetches page 0 in place and drops follow-up pages (the dataset may have shifted)
 
-Realtime events on a paginated query refetch the affected pages rather than merging locally. An inserted row may displace a page boundary invisibly, so the server stays the source of truth.
+The server owns page boundaries. Figbird merges a realtime event locally only when it
+can prove that the event leaves the current window unchanged; otherwise it refetches.
+
+### Cursor pagination
+
+Pagination uses `$limit` and `$skip` by default. Configure cursor-backed Feathers
+services once on the adapter; query builders and hook results stay the same:
+
+```ts
+import { cursorPagination, FeathersAdapter, offsetPagination } from 'figbird'
+
+const cursor100 = cursorPagination({
+  maxPageSize: 100,
+  cursorStability: 'ordering',
+})
+
+const adapter = new FeathersAdapter(feathers, {
+  defaultPagination: cursor100,
+  pagination: {
+    'api/legacy-reports': offsetPagination(),
+  },
+})
+```
+
+Without `defaultPagination`, services use offset pagination. List cursor services in
+`pagination` when cursor support is the exception:
+
+```ts
+const adapter = new FeathersAdapter(feathers, {
+  pagination: {
+    'api/documents': cursor100,
+    'api/identity-documents': cursor100,
+  },
+})
+```
+
+The default mapping matches this protocol:
+
+```ts
+// request query
+{
+  $limit: 25,
+  $after: null, // an opaque endCursor on later pages
+  $total: true, // page one of paginate({ includeTotal: true }) only
+}
+
+// response
+{
+  data: [...],
+  total: 123, // optional; normally returned on page one
+  limit: 25,
+  hasPreviousPage: false,
+  hasNextPage: true,
+  startCursor: 'first-opaque-token',
+  endCursor: 'last-opaque-token',
+}
+```
+
+Figbird treats the cursor as opaque and chains pages sequentially. `hasNextPage` is
+authoritative, so a full-sized final page still stops correctly. `.all()` drains the
+same cursor chain without requesting a server count; once complete, the row count is
+exact. `maxPageSize` caps `.all()` batches and rejects larger explicit `.paginate()`
+page sizes before a request reaches Feathers. For `.paginate()`, realtime changes
+normally rebuild the currently loaded prefix with fresh cursors while the old rows
+remain visible, then replace the prefix in one update.
+
+`cursorStability: 'ordering'` opts a service into a narrower local fast path. It
+promises that cursors remain valid when result-set membership and ordering inputs
+are unchanged, as they do for ordinary keyset cursors. An updated or patched row is
+then replaced locally across the loaded prefix when every explicit filter and sort
+field is present and unchanged. An explicit `$sort` is required for that proof.
+Creates, removals, changed inputs, implicit ordering, `.server()`, unknown query
+controls, and unavailable virtual fields still rebuild from page one. Omit
+`cursorStability` for snapshot/version cursors or any protocol invalidated by
+arbitrary row changes.
+
+An explicit `refetch()` keeps the usual behavior: discard later pages and restart at
+page one.
+
+For a different server protocol, override the two mappings:
+
+```ts
+cursorPagination({
+  query: ({ limit, after, includeTotal }) => ({
+    first: limit,
+    ...(after !== undefined ? { after } : {}),
+    ...(includeTotal ? { includeCount: true } : {}),
+  }),
+  pageInfo: response => {
+    const result = response as {
+      page: { more: boolean; next?: string; count?: number }
+    }
+    if (!result.page.more) {
+      return { hasMore: false, total: result.page.count }
+    }
+    if (!result.page.next) {
+      throw new Error('Missing cursor for the next page')
+    }
+    return {
+      hasMore: true,
+      endCursor: result.page.next,
+      total: result.page.count,
+    }
+  },
+})
+```
+
+Cursor controls live outside the logical Figbird query. They therefore never become
+filters, never need custom matcher support, and do not affect realtime query
+classification.
+
+Custom adapters choose pagination directly; they do not use these Feathers options.
+Implement `pageSource(serviceName)` for services with adapter-native sequential
+pagination, or return `undefined` to keep the query engine's `$limit`/`$skip` path.
+The adapter's `findAll` implementation owns exhaustive reads in either case.
 
 ## Mutations
 
@@ -1119,17 +1233,17 @@ q('issues') // dynamic service name
 
 The full builder surface:
 
-| Method                                  | Meaning                                                                                                           |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `.where(filters)`                       | Merge filter conditions (deep-merged across calls); typed against the item, admits dotted paths and `$` operators |
-| `.orderBy(field, dir?)`                 | Add a sort clause; calls accumulate                                                                               |
-| `.limit(n)` / `.skip(n)`                | Window the result (`$limit` / `$skip`)                                                                            |
-| `.get(id)`                              | Resource fetch by pk (`GET /:service/:id`); `.where()` after it rides along as `params.query`                     |
-| `.related(name, refine?)`               | Attach a schema relation; the refine callback filters/windows/nests the related query                             |
-| `.paginate({ pageSize, returnTotal? })` | Infinite-scroll accumulator — the hook result widens with `loadMore`/`hasMore`/`totalCount`                       |
-| `.server()`                             | Mark server-maintained: realtime events refetch instead of merging locally                                        |
-| `.snapshot()`                           | Freeze as point-in-time: realtime is ignored; only `refetch()` moves it                                           |
-| `.all()`                                | Preload the complete set; later reads against the service answer locally                                          |
+| Method                                   | Meaning                                                                                                           |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `.where(filters)`                        | Merge filter conditions (deep-merged across calls); typed against the item, admits dotted paths and `$` operators |
+| `.orderBy(field, dir?)`                  | Add a sort clause; calls accumulate                                                                               |
+| `.limit(n)` / `.skip(n)`                 | Window the result (`$limit` / `$skip`)                                                                            |
+| `.get(id)`                               | Resource fetch by pk (`GET /:service/:id`); `.where()` after it rides along as `params.query`                     |
+| `.related(name, refine?)`                | Attach a schema relation; the refine callback filters/windows/nests the related query                             |
+| `.paginate({ pageSize, includeTotal? })` | Infinite-scroll accumulator — the hook result widens with `loadMore`/`hasMore`/`total`                            |
+| `.server()`                              | Mark server-maintained: realtime events refetch instead of merging locally                                        |
+| `.snapshot()`                            | Freeze as point-in-time: realtime is ignored; only `refetch()` moves it                                           |
+| `.all()`                                 | Preload the complete set; later reads against the service answer locally                                          |
 
 Builders are immutable values identified by a stable content hash, so constructing them
 inline in render needs no dependency arrays. Also available as `figbird.q`.
@@ -1142,8 +1256,8 @@ const { data, error, isFetching, refetch } = useQuery(builder)
 const { data } = useQuery(definition, args)
 
 // Paginated builders widen the result
-const { data, loadMore, hasMore, isLoadingMore, loadMoreError, totalCount } = useQuery(
-  q.issues.paginate({ pageSize: 25, returnTotal: true }),
+const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQuery(
+  q.issues.paginate({ pageSize: 25, includeTotal: true }),
 )
 
 // Tagged union, never suspends or throws
@@ -1397,6 +1511,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `updatedAtField` — string or function, defaults to `item => item.updatedAt || item.updated_at`; used to avoid overwriting newer cached data with older data when requests race
   - `defaultPageSize` — default `query.$limit` when fetching, unset by default so the server decides
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
+  - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
@@ -1455,6 +1570,11 @@ the newest Figbird instance on the inspected page and starts debug collection. C
 panel drops the connection; without a connection, Figbird does not retain devtools history
 or subscribe to its event stream.
 
+Paginated queries appear as one operation rather than one row per fetched page. Query
+details show whether the operation uses offset or cursor pagination. Cursor details show
+the loaded page chain, each opaque `after` and next cursor, completion state, total when
+requested, and whether realtime updates merge when stable or reconcile from the server.
+
 Run `npm run devtools:package` to produce Chrome and Firefox zip archives under
 `extensions/build/` for store upload or direct distribution. See `extensions/README.md`
 for QA and packaging details.
@@ -1477,7 +1597,7 @@ No fetching happens, so it's callable anywhere and assertable in tests. See
 ```ts
 figbird.inspect()
 // → [{ queryId, serviceName, method, query, classification,
-//      status, isFetching, itemCount, fetchedAt, subscriberCount }]
+//      page?, status, isFetching, itemCount, fetchedAt, subscriberCount }]
 ```
 
 Read-only snapshot of every query currently in the store: the stable projection to build

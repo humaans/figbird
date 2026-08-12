@@ -1,4 +1,14 @@
-import type { Adapter, EventHandlers, MatcherContext, QueryResponse } from './adapter.js'
+import type {
+  Adapter,
+  EventHandlers,
+  MatcherContext,
+  PageCursor,
+  PageInfo,
+  PageRequest,
+  PageResponse,
+  PageSource,
+  QueryResponse,
+} from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type {
   Schema,
@@ -83,14 +93,117 @@ export interface FeathersFindMeta {
   [key: string]: unknown
 }
 
+type FeathersFindResult =
+  | {
+      data: unknown[]
+      total?: number
+      limit?: number
+      skip?: number
+    }
+  | unknown[]
+
+/** Request/response mapping for a cursor-paginated Feathers service. */
+export interface FeathersCursorPagination {
+  kind: 'cursor'
+  query(page: PageRequest): Record<string, unknown>
+  pageInfo(response: unknown): PageInfo
+  /** Largest page the cursor service accepts. */
+  maxPageSize?: number
+  /** See `PageSource.cursorStability`. */
+  cursorStability?: 'ordering'
+}
+
+/** Select the built-in `$limit`/`$skip` behavior for a Feathers service. */
+export interface FeathersOffsetPagination {
+  kind: 'offset'
+}
+
+export type FeathersPagination = FeathersCursorPagination | FeathersOffsetPagination
+
+export interface CursorPaginationOptions {
+  /**
+   * Largest page the cursor service accepts. `.all()` caps its batch size at
+   * this value, and larger explicit `.paginate()` page sizes fail locally.
+   */
+  maxPageSize?: number
+  /**
+   * Opt into local updates when explicit filter and sort inputs are unchanged.
+   * Use `ordering` only when cursors depend on result-set position rather than
+   * arbitrary row values or a mutable server snapshot.
+   */
+  cursorStability?: 'ordering'
+  /**
+   * Map Figbird's adapter-neutral request to Feathers query controls. Defaults
+   * to `$limit`/`$after` and optional `$total`.
+   */
+  query?: (page: PageRequest) => Record<string, unknown>
+  /**
+   * Read continuation information from the raw service response. Defaults to
+   * top-level `{ hasNextPage, endCursor, total? }` fields.
+   */
+  pageInfo?: (response: unknown) => PageInfo
+}
+
+function isPageCursor(value: unknown): value is PageCursor {
+  return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
+}
+
+/**
+ * Configure one Feathers service to use opaque cursor pagination.
+ *
+ * @example
+ * new FeathersAdapter(client, {
+ *   pagination: { 'api/documents': cursorPagination() },
+ * })
+ */
+export function cursorPagination({
+  maxPageSize,
+  cursorStability,
+  query = page => ({
+    $limit: page.limit,
+    $after: page.after ?? null,
+    ...(page.includeTotal ? { $total: true } : {}),
+  }),
+  pageInfo = response => {
+    const value = response as Record<string, unknown> | null
+    if (!value || typeof value.hasNextPage !== 'boolean') {
+      throw new Error('Cursor-paginated Feathers response must include hasNextPage')
+    }
+    const total = typeof value.total === 'number' ? { total: value.total } : {}
+    if (!value.hasNextPage) return { hasMore: false, ...total }
+    if (!isPageCursor(value.endCursor)) {
+      throw new Error('Cursor-paginated Feathers response has more pages but no endCursor')
+    }
+    return { hasMore: true, endCursor: value.endCursor, ...total }
+  },
+}: CursorPaginationOptions = {}): FeathersCursorPagination {
+  if (maxPageSize !== undefined && (!Number.isInteger(maxPageSize) || maxPageSize <= 0)) {
+    throw new Error(
+      `cursorPagination(): maxPageSize must be a positive integer, got ${maxPageSize}`,
+    )
+  }
+  return {
+    kind: 'cursor',
+    query,
+    pageInfo,
+    ...(maxPageSize !== undefined ? { maxPageSize } : {}),
+    ...(cursorStability !== undefined ? { cursorStability } : {}),
+  }
+}
+
+const OFFSET_PAGINATION: FeathersOffsetPagination = { kind: 'offset' }
+
+/** Explicitly keep one Feathers service on the built-in `$limit`/`$skip` path. */
+export function offsetPagination(): FeathersOffsetPagination {
+  return OFFSET_PAGINATION
+}
+
 /**
  * Feathers service interface
  */
 export interface FeathersService {
   get(id: string | number, params?: FeathersParams): Promise<unknown>
-  find(
-    params?: FeathersParams,
-  ): Promise<{ data: unknown[]; total?: number; limit?: number; skip?: number } | unknown[]>
+  find(params?: FeathersParams): Promise<FeathersFindResult>
   create(data: unknown, params?: FeathersParams): Promise<unknown>
   create(data: unknown[], params?: FeathersParams): Promise<unknown[]>
   update(id: string | number, data: unknown, params?: FeathersParams): Promise<unknown>
@@ -209,6 +322,10 @@ export interface FeathersAdapterOptions {
    * }
    */
   operators?: Record<string, CustomOperatorRegistration>
+  /** Pagination used when a service has no entry in `pagination`. Defaults to offset. */
+  defaultPagination?: FeathersPagination
+  /** Pagination overrides selected by Feathers service path. */
+  pagination?: Record<string, FeathersPagination>
 }
 
 /**
@@ -234,6 +351,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #defaultPageSize: number | undefined
   #defaultPageSizeWhenFetchingAll: number | undefined
   #operators: Record<string, CustomOperatorRegistration>
+  #defaultPagination: FeathersPagination | undefined
+  #pagination: Record<string, FeathersPagination>
 
   /** Names of custom operators registered for every service. */
   get customOperators(): readonly string[] {
@@ -279,6 +398,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
       operators = {},
+      defaultPagination,
+      pagination = {},
     }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
@@ -287,6 +408,12 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#defaultPageSize = defaultPageSize
     this.#defaultPageSizeWhenFetchingAll = defaultPageSizeWhenFetchingAll
     this.#operators = operators
+    this.#defaultPagination = defaultPagination
+    this.#pagination = pagination
+  }
+
+  #paginationFor(serviceName: string): FeathersPagination | undefined {
+    return this.#pagination[serviceName] ?? this.#defaultPagination
   }
 
   #service(serviceName: string): FeathersService {
@@ -313,11 +440,68 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const res = await this.#service(serviceName).find(params as FeathersParams)
+    return this.#normalizeFind(res)
+  }
+
+  #normalizeFind(res: FeathersFindResult): QueryResponse<unknown[], FeathersFindMeta> {
     if (Array.isArray(res)) {
       return { data: res, meta: { total: -1, limit: res.length, skip: 0 } }
     } else {
       const { data, total = -1, limit = data.length, skip = 0, ...rest } = res
       return { data, meta: { total, limit, skip, ...rest } }
+    }
+  }
+
+  pageSource(
+    serviceName: string,
+  ): PageSource<FeathersParams<TQuery>, FeathersFindMeta> | undefined {
+    const pagination = this.#paginationFor(serviceName)
+    if (!pagination || pagination.kind === 'offset') return undefined
+    return {
+      ...(pagination.cursorStability !== undefined
+        ? { cursorStability: pagination.cursorStability }
+        : {}),
+      find: (params, page) => this.#findPage(serviceName, pagination, params, page),
+    }
+  }
+
+  async #findPage(
+    serviceName: string,
+    pagination: FeathersCursorPagination,
+    params: FeathersParams<TQuery> | undefined,
+    page: PageRequest,
+  ): Promise<PageResponse<unknown[], FeathersFindMeta>> {
+    if (!Number.isInteger(page.limit) || page.limit <= 0) {
+      throw new Error(
+        `Cursor pagination for "${serviceName}" requires a positive integer page size, got ${page.limit}`,
+      )
+    }
+    if (pagination.maxPageSize !== undefined && page.limit > pagination.maxPageSize) {
+      throw new Error(
+        `Cursor pagination for "${serviceName}" accepts at most ${pagination.maxPageSize} rows per page, got ${page.limit}`,
+      )
+    }
+    const raw = await this.#service(serviceName).find(
+      this.#mergeQueryParams(params, pagination.query(page)) as FeathersParams,
+    )
+    const normalized = this.#normalizeFind(raw)
+    const pageInfo = pagination.pageInfo(raw)
+    if (typeof pageInfo.hasMore !== 'boolean') {
+      throw new Error(`Cursor pagination for "${serviceName}" did not return hasMore`)
+    }
+    if (pageInfo.hasMore && !isPageCursor(pageInfo.endCursor)) {
+      throw new Error(`Cursor pagination for "${serviceName}" returned an invalid endCursor`)
+    }
+    if (pageInfo.hasMore && Object.is(page.after, pageInfo.endCursor)) {
+      throw new Error(`Cursor pagination for "${serviceName}" returned the same cursor twice`)
+    }
+    return {
+      ...normalized,
+      pageInfo,
+      meta:
+        pageInfo.total === undefined
+          ? normalized.meta
+          : { ...normalized.meta, total: pageInfo.total },
     }
   }
 
@@ -339,6 +523,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     serviceName: string,
     params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
+    const pagination = this.#paginationFor(serviceName)
+    if (pagination?.kind === 'cursor') {
+      return this.#findAllByCursor(serviceName, pagination, params)
+    }
     const defaultPageSize = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize
     const queryLimit = (params?.query as Record<string, unknown>)?.$limit
     const baseParams =
@@ -370,6 +558,39 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       if (done) return result
 
       $skip = result.data.length
+    }
+  }
+
+  async #findAllByCursor(
+    serviceName: string,
+    pagination: FeathersCursorPagination,
+    params?: FeathersParams<TQuery>,
+  ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
+    const preferredLimit = this.#defaultPageSizeWhenFetchingAll || this.#defaultPageSize || 50
+    const limit =
+      pagination.maxPageSize === undefined
+        ? preferredLimit
+        : Math.min(preferredLimit, pagination.maxPageSize)
+    const result: QueryResponse<unknown[], FeathersFindMeta> = {
+      data: [],
+      meta: { total: -1, limit, skip: 0 },
+    }
+    let after: PageCursor | undefined = undefined
+
+    while (true) {
+      const page = await this.#findPage(serviceName, pagination, params, {
+        limit,
+        ...(after !== undefined ? { after } : {}),
+        includeTotal: false,
+      })
+      result.data.push(...page.data)
+      const knownTotal = result.meta.total >= 0 ? result.meta.total : page.meta.total
+      result.meta = { ...result.meta, ...page.meta, total: knownTotal, limit, skip: 0 }
+      if (!page.pageInfo.hasMore) {
+        result.meta = { ...result.meta, total: result.data.length }
+        return result
+      }
+      after = page.pageInfo.endCursor
     }
   }
 

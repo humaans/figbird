@@ -71,7 +71,7 @@ export interface QueryAST {
   /** Point-in-time result: fetched once, untouched by realtime; refetch() only. */
   snapshot?: boolean
   pageSize?: number
-  returnTotal?: boolean
+  includeTotal?: boolean
 }
 
 /**
@@ -116,7 +116,7 @@ interface QueryBuilderState {
   server: boolean
   snapshot: boolean
   pageSize?: number
-  returnTotal?: boolean
+  includeTotal?: boolean
 }
 
 /**
@@ -203,8 +203,8 @@ export class QueryBuilder<
       ast.pageSize = this.#state.pageSize
     }
 
-    if (this.#state.returnTotal) {
-      ast.returnTotal = true
+    if (this.#state.includeTotal) {
+      ast.includeTotal = true
     }
 
     return ast
@@ -352,7 +352,7 @@ export class QueryBuilder<
   /**
    * Switch this query into infinite-scroll / accumulator mode. The hook returns a
    * standard `data` array plus `loadMore()`, `hasMore`, `isLoadingMore`, and (when
-   * `returnTotal: true`) a `totalCount` field. Each call to `loadMore()` appends the
+   * `includeTotal: true`) a `total` field. Each call to `loadMore()` appends the
    * next `pageSize` rows to `data`.
    *
    * Realtime events on the underlying service refetch the loaded pages — local merge
@@ -367,17 +367,17 @@ export class QueryBuilder<
    */
   paginate(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
-    options: { pageSize: number; returnTotal?: boolean },
+    options: { pageSize: number; includeTotal?: boolean },
   ): QueryBuilder<S, TService, TItem, TRelated, 'many', 'paginate'> {
-    if (!Number.isFinite(options.pageSize) || options.pageSize <= 0) {
-      throw new Error(`paginate(): pageSize must be a positive number, got ${options.pageSize}`)
+    if (!Number.isInteger(options.pageSize) || options.pageSize <= 0) {
+      throw new Error(`paginate(): pageSize must be a positive integer, got ${options.pageSize}`)
     }
     return new QueryBuilder(this.#schema, this.#state.service, {
       ...this.#state,
       kind: 'paginate',
       cardinality: 'many',
       pageSize: options.pageSize,
-      ...(options.returnTotal !== undefined ? { returnTotal: options.returnTotal } : {}),
+      ...(options.includeTotal !== undefined ? { includeTotal: options.includeTotal } : {}),
     }) as QueryBuilder<S, TService, TItem, TRelated, 'many', 'paginate'>
   }
 

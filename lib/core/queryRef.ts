@@ -1,7 +1,12 @@
 import { createQueryId } from './queryIdentity.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryStore } from './queryStore.js'
-import type { QueryConfig, QueryDescriptor, QueryState } from './queryTypes.js'
+import type {
+  ProcessedRealtimeEvent,
+  QueryConfig,
+  QueryDescriptor,
+  QueryState,
+} from './queryTypes.js'
 
 // a lightweight query reference object to make it easy
 // subscribe to state changes and read query data
@@ -84,5 +89,23 @@ export class QueryRef<
   refetch(): void {
     this.#queryStore.materialize(this)
     return this.#queryStore.refetch(this.#queryId)
+  }
+
+  /** Route an event-driven refetch through the store's reconciliation gate. @internal */
+  reconcile(): void {
+    this.#queryStore.materialize(this)
+    this.#queryStore.reconcile(this.#queryId)
+  }
+
+  /** Apply a value-only update to an already-visible row. @internal */
+  applyVisibleEvent(event: ProcessedRealtimeEvent): void {
+    this.#queryStore.materialize(this)
+    this.#queryStore.applyVisibleEvent(this.#queryId, event)
+  }
+
+  /** Register this ref as a composite query's reconnect sentinel. @internal */
+  registerReconnectReconciliation(): () => void {
+    this.#queryStore.materialize(this)
+    return this.#queryStore.registerReconnectQuery(this.#queryId)
   }
 }

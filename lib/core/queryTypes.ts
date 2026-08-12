@@ -1,5 +1,6 @@
 import type { AnySchema, Schema, ServiceItem, ServiceNames } from './schema.js'
 import type { StoredQueryClass } from './queryClassification.js'
+import type { PageInfo, PageRequest } from '../adapters/adapter.js'
 
 /**
  * Event types supported by Figbird
@@ -68,6 +69,7 @@ export type QueryState<T, TMeta = Record<string, unknown>> =
       status: 'loading'
       data: null
       meta: TMeta
+      pageInfo?: PageInfo
       isFetching: boolean
       error: null
     }
@@ -75,6 +77,7 @@ export type QueryState<T, TMeta = Record<string, unknown>> =
       status: 'success'
       data: T
       meta: TMeta
+      pageInfo?: PageInfo
       isFetching: boolean
       error: null
     }
@@ -82,6 +85,7 @@ export type QueryState<T, TMeta = Record<string, unknown>> =
       status: 'error'
       data: null
       meta: TMeta
+      pageInfo?: PageInfo
       isFetching: boolean
       error: Error
     }
@@ -140,6 +144,8 @@ export interface FindDescriptor {
   serviceName: string
   method: 'find'
   params?: unknown
+  /** Internal adapter-managed page request. Kept outside params.query deliberately. */
+  page?: PageRequest
 }
 
 /**

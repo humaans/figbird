@@ -3,9 +3,53 @@
  * - For find-like operations, include meta (e.g. pagination info)
  * - For get-like operations, adapters may omit meta entirely
  */
-export type QueryResponse<TData, TMeta = undefined> = { data: TData } & (TMeta extends undefined
-  ? Record<never, never>
-  : { meta: TMeta })
+export type QueryResponse<TData, TMeta = undefined> = {
+  data: TData
+} & (TMeta extends undefined ? Record<never, never> : { meta: TMeta })
+
+/** A native page response always carries normalized continuation information. */
+export type PageResponse<TData, TMeta> = QueryResponse<TData, TMeta> & {
+  pageInfo: PageInfo
+}
+
+/** A stable, serializable token suitable for transport and query-cache identity. */
+export type PageCursor = string | number
+
+/** Opaque page request passed to adapters that support native pagination. */
+export interface PageRequest {
+  limit: number
+  /** Adapter-issued continuation from the preceding page. */
+  after?: PageCursor
+  /** Only the first page asks the server to calculate a total. */
+  includeTotal: boolean
+}
+
+/** Adapter-neutral page information consumed by the query engine. */
+export type PageInfo = (
+  | { hasMore: false }
+  | {
+      hasMore: true
+      /** Opaque continuation to pass to the next page request. */
+      endCursor: PageCursor
+    }
+) & {
+  total?: number
+}
+
+/**
+ * Service-level native pagination capability. Sequential sources issue opaque
+ * continuations, so later pages must be rebuilt after an earlier page changes.
+ */
+export interface PageSource<TParams, TMeta> {
+  /**
+   * `ordering` promises that a cursor remains valid when every explicit filter
+   * and ordering input is unchanged. This enables visible, non-window-changing
+   * updates to merge locally; omit it for conservative reconciliation on every
+   * realtime event.
+   */
+  cursorStability?: 'ordering'
+  find(params: TParams | undefined, page: PageRequest): Promise<PageResponse<unknown[], TMeta>>
+}
 
 /**
  * Event handlers for real-time updates
@@ -40,6 +84,9 @@ export interface Adapter<
   ): Promise<QueryResponse<unknown, TMeta | undefined>>
 
   find(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
+
+  /** Return the native pagination capability for a service, if configured. */
+  pageSource?(serviceName: string): PageSource<TParams, TMeta> | undefined
 
   findAll(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
 

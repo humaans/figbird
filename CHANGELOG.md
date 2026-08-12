@@ -27,6 +27,8 @@ return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
 
 Also included:
 
+- Native cursor pagination for `.paginate()` and `.all()`, configured per Feathers
+  service without adding cursor controls to logical queries.
 - Devtools for inspecting queries, fetches, realtime events, and writes, plus richer
   lifecycle and payload details through `figbird.events`.
 - `matcherKey` for explicitly sharing queries that use equivalent custom matchers.

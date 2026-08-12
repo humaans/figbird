@@ -1,4 +1,9 @@
-import { locallySupportedOperators, type Adapter, type QueryResponse } from '../adapters/adapter.js'
+import {
+  locallySupportedOperators,
+  type Adapter,
+  type PageResponse,
+  type QueryResponse,
+} from '../adapters/adapter.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
@@ -9,6 +14,7 @@ import { FetchEventJournal, planFetchRebase, rebaseResponseData } from './fetchR
 import {
   addQueryToItemIndex,
   applyEventsToService,
+  applyVisibleEventToQuery,
   createServiceState,
   diffCompleteSet,
   groupQueuedEvents,
@@ -66,6 +72,9 @@ const MAX_RETRY_DELAY = 30_000
 function defaultRetryDelay(attempt: number): number {
   return Math.min(1000 * 2 ** (attempt - 1), MAX_RETRY_DELAY)
 }
+
+type StoreResponse<TMeta> =
+  QueryResponse<unknown, TMeta | undefined> | PageResponse<unknown[], TMeta>
 
 type ItemId = string | number
 
@@ -136,6 +145,7 @@ export class QueryStore<
   #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
   #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
+  #reconnectQueryIds: Set<string> = new Set()
   #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
@@ -372,6 +382,35 @@ export class QueryStore<
         })
       })
     }
+  }
+
+  /** Route an event-driven refetch through cooldown and visibility handling. @internal */
+  reconcile(queryId: string): void {
+    this.#requestReconcile(queryId)
+  }
+
+  /** Replace/remove a row already visible in one query without changing membership. @internal */
+  applyVisibleEvent(queryId: string, event: ProcessedRealtimeEvent): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (!serviceName) return
+    const getId = this.#getIdReader(serviceName)
+    const touched = this.#transactOverServiceByName(serviceName, (service, touch) => {
+      applyVisibleEventToQuery({
+        service,
+        queryId,
+        event,
+        touch,
+        getId,
+        itemRemoved: meta => this.#adapter.itemRemoved(meta),
+      })
+    })
+    this.#notify(touched)
+  }
+
+  /** Keep a composite query's sentinel in the reconnect sweep while events are controller-owned. */
+  registerReconnectQuery(queryId: string): () => void {
+    this.#reconnectQueryIds.add(queryId)
+    return () => this.#reconnectQueryIds.delete(queryId)
   }
 
   /** Perform a service mutation and update the store from the result. */
@@ -670,7 +709,7 @@ export class QueryStore<
     }
   }
 
-  #fetch(queryId: string): Promise<QueryResponse<unknown, TMeta | undefined>> {
+  #fetch(queryId: string): Promise<StoreResponse<TMeta>> {
     const query = this.#getQuery(queryId)
     if (!query) {
       return Promise.reject(new Error('Query not found'))
@@ -683,6 +722,15 @@ export class QueryStore<
       if (local) return Promise.resolve(local)
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
+      if (desc.page) {
+        const pageSource = this.#adapter.pageSource?.(desc.serviceName)
+        if (!pageSource) {
+          return Promise.reject(
+            new Error(`Adapter does not support native pagination for "${desc.serviceName}"`),
+          )
+        }
+        return pageSource.find(desc.params as TParams, desc.page)
+      }
       const local = this.#tryLocalFind(query)
       if (local) return Promise.resolve(local)
       const findConfig = config as FindQueryConfig<unknown, unknown>
@@ -819,7 +867,7 @@ export class QueryStore<
     journalEvents,
   }: {
     queryId: string
-    result: QueryResponse<unknown, TMeta | undefined>
+    result: StoreResponse<TMeta>
     journalEvents: readonly ProcessedRealtimeEvent[]
   }): void {
     let shouldRefetch = false
@@ -861,6 +909,7 @@ export class QueryStore<
         isCompleteSet && !findConfig.server ? new Map(service.entities) : null
 
       const meta = (result as { meta?: TMeta }).meta
+      const pageInfo = 'pageInfo' in result ? result.pageInfo : undefined
       const rebasedResponse = rebaseResponseData({
         data,
         preserveSnapshot: query.config.realtime === 'disabled',
@@ -924,6 +973,7 @@ export class QueryStore<
           status: 'success' as const,
           data: rebasedResponse.data,
           meta: meta || this.#adapter.emptyMeta(),
+          ...(pageInfo ? { pageInfo } : {}),
           isFetching: false,
           error: null,
         },
@@ -1394,7 +1444,7 @@ export class QueryStore<
         if (query.queryId === service.materialized?.queryId) continue
         if (
           !query.config.skip &&
-          query.config.realtime !== 'disabled' &&
+          (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId)) &&
           this.#listenerCount(query.queryId) > 0
         ) {
           this.#requestReconcile(query.queryId)
