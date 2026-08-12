@@ -20,7 +20,8 @@ Also included:
 - Import-safe schema bindings through `createHooks(schema)`. The generated hooks resolve their
   runtime from `FigbirdProvider`, and `useMutations()` returns that instance's typed write proxy.
   Imperative code uses `figbird.m`, `figbird.prepare`, and other instance methods directly, so
-  importing hooks never constructs a client, opens a connection, or starts a timer.
+  importing hooks never constructs a client, opens a connection, or starts a timer. Provider-bound
+  APIs and schema-built queries reject a different schema object.
 - Native cursor pagination for `.paginate()` and `.all()`, configured per Feathers
   service without adding cursor controls to logical queries.
 - Browser Devtools for inspecting queries, fetches, realtime events, and writes, plus richer

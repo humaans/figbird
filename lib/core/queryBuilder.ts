@@ -13,6 +13,8 @@ import type {
   ResolveRelatedService,
 } from './schema.js'
 
+const queryBuilderSchema = Symbol('queryBuilderSchema')
+
 /**
  * Type-level: given a schema S and a service N, the set of relation names defined on
  * that service. Resolves to `never` when no relationships are declared for N.
@@ -145,7 +147,7 @@ export class QueryBuilder<
   TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find',
 > {
   readonly #state: QueryBuilderState
-  readonly #schema: S
+  readonly [queryBuilderSchema]: S
   #hash: string | null = null
 
   // Two call-site shapes only: fresh builders (no state — the defaults literal) and
@@ -153,7 +155,7 @@ export class QueryBuilder<
   // fields would silently reset them; requiring the full state makes that a compile
   // error instead.
   constructor(schema: S, service: string, state?: QueryBuilderState) {
-    this.#schema = schema
+    this[queryBuilderSchema] = schema
     this.#state = state ?? {
       service,
       kind: 'find',
@@ -221,7 +223,7 @@ export class QueryBuilder<
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>,
     query: WhereClause<TItem>,
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, K> {
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       query: deepMerge(this.#state.query, query),
     }) as QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>
@@ -240,7 +242,7 @@ export class QueryBuilder<
     direction: 'asc' | 'desc' = 'asc',
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
     const currentSort = (this.#state.query.$sort as Record<string, number>) ?? {}
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       query: {
         ...this.#state.query,
@@ -259,7 +261,7 @@ export class QueryBuilder<
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
     n: number,
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       query: {
         ...this.#state.query,
@@ -275,7 +277,7 @@ export class QueryBuilder<
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
     n: number,
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       query: {
         ...this.#state.query,
@@ -294,7 +296,7 @@ export class QueryBuilder<
   server(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       server: true,
     })
@@ -312,7 +314,7 @@ export class QueryBuilder<
   snapshot(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'> {
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       snapshot: true,
     })
@@ -337,7 +339,7 @@ export class QueryBuilder<
     // `keyof` is `string`, so a later `.related()` would `Omit` every field from
     // TItem (see the TRelated type-parameter comment on the class).
   ): QueryBuilder<S, TService, TItem, {}, 'one', 'get'> {
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       service: this.#state.service,
       kind: 'get',
       resourceId,
@@ -372,7 +374,7 @@ export class QueryBuilder<
     if (!Number.isInteger(options.pageSize) || options.pageSize <= 0) {
       throw new Error(`paginate(): pageSize must be a positive integer, got ${options.pageSize}`)
     }
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       kind: 'paginate',
       cardinality: 'many',
@@ -417,7 +419,7 @@ export class QueryBuilder<
           'Drop the window, or use .paginate() for incremental loading.',
       )
     }
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       kind: 'all',
       cardinality: 'many',
@@ -466,7 +468,7 @@ export class QueryBuilder<
     // construction and typed callers can't get this wrong, so an unknown name is
     // always a bug in an untyped caller — fail fast at the call site instead of
     // building a plausible-but-empty relation the runtime would warn about again.
-    const relationships = this.#schema.relationships ?? {}
+    const relationships = this[queryBuilderSchema].relationships ?? {}
     const serviceRelations = relationships[this.#state.service]
     const relDef = serviceRelations?.[name]
     if (!relDef) {
@@ -478,7 +480,10 @@ export class QueryBuilder<
 
     // Create a builder for the related service
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    const relatedBuilder = new QueryBuilder<S, string, any>(this.#schema, relDef.destService)
+    const relatedBuilder = new QueryBuilder<S, string, any>(
+      this[queryBuilderSchema],
+      relDef.destService,
+    )
 
     // Apply refinement if provided
     const refinedBuilder = refine ? refine(relatedBuilder) : relatedBuilder
@@ -489,7 +494,7 @@ export class QueryBuilder<
     const relatedAST = refinedBuilder.toAST()
     relatedAST.cardinality = relDef.cardinality === 'one' ? 'one' : 'many'
 
-    return new QueryBuilder(this.#schema, this.#state.service, {
+    return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       related: {
         ...this.#state.related,
@@ -535,6 +540,11 @@ export function createQueryBuilderProxy<S extends Schema>(schema: S): QueryBuild
       return create(serviceName)
     },
   })
+}
+
+/** Whether a builder was created from this exact schema object. @internal */
+export function queryBuilderUsesSchema(builder: object, schema: Schema): boolean {
+  return builder instanceof QueryBuilder && builder[queryBuilderSchema] === schema
 }
 
 /**

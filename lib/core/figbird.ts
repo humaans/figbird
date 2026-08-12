@@ -13,6 +13,7 @@ import { createMutationsProxy, type MutationsHost, type MutationsProxy } from '.
 import type { MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
+  queryBuilderUsesSchema,
   type AnyQueryBuilder,
   type QueryBuilderProxy,
   type QueryBuilderResult,
@@ -328,6 +329,9 @@ export class Figbird<
     const builder: B = definition
       ? definition.build(definition.validate(args))
       : (queryOrBuilder as B)
+    if (!queryBuilderUsesSchema(builder, this.schema)) {
+      throw new Error('The query builder uses a different schema from this Figbird instance')
+    }
     const hash = builder.hash()
     const cached = this.#relationalQueryCache.get(hash)
     let ref = cached as

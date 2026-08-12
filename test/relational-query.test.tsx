@@ -1,6 +1,7 @@
 import EventEmitter from 'events'
 import test from 'ava'
 import React from 'react'
+import { renderToString } from 'react-dom/server'
 import {
   createSchema,
   createHooks,
@@ -1417,6 +1418,27 @@ test('createHooks: schema bindings use the provider runtime', async t => {
     q,
   } = createHooks(schema)
   t.is(useTypedQuery, useQuery)
+  const otherSchema = { ...schema }
+  const { q: otherQ, useMutations: useOtherMutations } = createHooks(otherSchema)
+  t.throws(() => figbird.query(otherQ.issues), {
+    message: 'The query builder uses a different schema from this Figbird instance',
+  })
+
+  function WrongSchema() {
+    useOtherMutations()
+    return null
+  }
+  t.throws(
+    () =>
+      renderToString(
+        <App>
+          <WrongSchema />
+        </App>,
+      ),
+    {
+      message: 'The FigbirdProvider instance uses a different schema from createHooks(schema)',
+    },
+  )
 
   function IssueWithCreator() {
     const resolvedFigbird = useTypedFigbird()

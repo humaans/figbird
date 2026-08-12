@@ -1548,6 +1548,10 @@ Creating the kit and reading `q` have no runtime side effects. Every generated h
 the nearest `FigbirdProvider`. Imperative code uses the explicit instance directly:
 `figbird.m`, `figbird.prepare`, `figbird.prefetch`, and `figbird.refetch`.
 
+Construct the provider's Figbird instance with the same schema object passed to `createHooks`.
+Provider-bound APIs and schema-built queries throw if the schemas differ, preventing types from
+one schema from being applied to another runtime.
+
 ## FigbirdProvider
 
 Required for runtime-backed hooks from `createHooks`, such as `useQuery`, `useMutations`, and

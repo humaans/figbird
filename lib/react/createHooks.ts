@@ -30,7 +30,7 @@ import type {
 import { resolveServicePath } from '../core/schema.js'
 import { useFigbird as useContextFigbird } from './context.js'
 import { useAction, type UseActionHook } from './useAction.js'
-import { useMutating, type UseMutatingFilter } from './useMutating.js'
+import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
 import { useMutation, type UseMutationResult } from './useMutation.js'
 import { useFind, useGet, type QueryResult } from './useQueryByDesc.js'
 import { useQueries, type UseQueriesHook } from './useQueries.js'
@@ -146,11 +146,21 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
   const q = createQueryBuilderProxy(schema)
 
   function useBoundFigbird(): Figbird<S, A> {
-    return useContextFigbird<S, A>()
+    const figbird = useContextFigbird<S, A>()
+    if (figbird.schema !== schema) {
+      throw new Error(
+        'The FigbirdProvider instance uses a different schema from createHooks(schema)',
+      )
+    }
+    return figbird
   }
 
   function useTypedMutations(): MutationsProxy<S> {
     return useBoundFigbird().m
+  }
+
+  function useTypedMutating(filter?: UseMutatingFilter): boolean {
+    return useMutatingImpl(useBoundFigbird(), filter)
   }
 
   function useTypedFeathers() {
@@ -191,6 +201,6 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
     defineQuery: baseDefineQuery as DefineQueryForSchema<S>,
     useMutations: useTypedMutations,
     useAction,
-    useMutating: useMutating as UseMutatingForSchema<S>,
+    useMutating: useTypedMutating as UseMutatingForSchema<S>,
   }
 }
