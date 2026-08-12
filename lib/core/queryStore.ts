@@ -965,12 +965,15 @@ export class QueryStore<
         }
       }
 
-      if (effectiveJournalEvents.length > 0 && query.config.realtime !== 'disabled') {
+      if (
+        effectiveJournalEvents.length > 0 &&
+        query.config.realtime !== 'disabled' &&
+        !isProjection
+      ) {
         replayFetchedQueryFromEvents({
           service,
           queryId,
           events: effectiveJournalEvents,
-          preserveResponseItems: isProjection,
           touch,
           getId,
           itemAdded: meta => this.#adapter.itemAdded(meta),

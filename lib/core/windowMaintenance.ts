@@ -453,7 +453,6 @@ export function replayFetchedQueryFromEvents<TMeta>({
   service,
   queryId,
   events,
-  preserveResponseItems,
   touch,
   getId,
   itemAdded,
@@ -463,8 +462,6 @@ export function replayFetchedQueryFromEvents<TMeta>({
   service: ServiceState<TMeta>
   queryId: string
   events: readonly ProcessedRealtimeEvent[]
-  /** Keep server-shaped rows intact while the trailing reconciliation converges. */
-  preserveResponseItems: boolean
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
@@ -494,8 +491,6 @@ export function replayFetchedQueryFromEvents<TMeta>({
       const result = applyMergeEventToQuery(context, queryId, event)
       if (result === 'applied' || !needsVisibleFallback) continue
     }
-    if (preserveResponseItems) continue
-
     applyVisibleEventEffect(
       context,
       queryId,
