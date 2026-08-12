@@ -8,7 +8,14 @@
  */
 
 import { useMemo, useState } from 'react'
-import { m, useAction, useQuery, type Comment, type Reaction, type User } from '../../figbird'
+import {
+  useAction,
+  useMutations,
+  useQuery,
+  type Comment,
+  type Reaction,
+  type User,
+} from '../../figbird'
 import { Explain } from '../../components/Explain'
 import { StatusDot } from '../../components/ui'
 import { issueCommentsQuery } from './queries'
@@ -156,6 +163,7 @@ function CommentComposer({
   autoFocus?: boolean
   onDone?: () => void
 }) {
+  const m = useMutations()
   const [body, setBody] = useState('')
 
   const post = useAction('comment', (text: string) =>

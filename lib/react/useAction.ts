@@ -122,8 +122,7 @@ function emitterOf(figbird: ActionEventsHost | undefined | null): EmitFn | null 
  *   props/state — no deps array.
  * - The optional `name` labels `action:start/end/error` observability events so
  *   devtools speak the app's vocabulary ("reassign · 340ms"), not just the data
- *   layer's. Events are emitted via the bound instance (kit) or the context
- *   instance when one exists.
+ *   layer's. Events are emitted through the context instance when one exists.
  *
  * One identity, one call site: hoisting a single `useAction` over N list rows
  * re-creates the shared-slot problem ("which row is pending?"). Give each row

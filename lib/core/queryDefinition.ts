@@ -201,7 +201,7 @@ export interface DefineQuery<TBuilder = unknown> {
  * Create a named, args-keyed query factory. Definitions are inert, pure values — they
  * hold no cache state and are not tied to a Figbird instance; identity comes from the
  * built builder's AST hash. Prefer the schema-typed `defineQuery` returned by
- * `createHooks(figbird)` in app code; this standalone export serves core-only and
+ * `createHooks(schema)` in app code; this standalone export serves core-only and
  * non-React consumers.
  *
  * Args are typed from the build function. Pass a Standard Schema validator before the

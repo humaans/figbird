@@ -121,14 +121,14 @@ test('type narrowing works correctly with multiple services', t => {
   t.not(personItemType, taskItemType, 'Person and Task item types should be distinct')
 })
 
-test('meta type is automatically inferred from Figbird instance', t => {
+test('legacy hooks accept an explicit adapter type for params and metadata', t => {
   const fixturePath = join(__dirname, 'fixtures', 'inferred-meta-from-figbird.ts')
 
   // Check that data types are correct
   const tasksDataType = getTypeAtPosition(fixturePath, 'TasksData')
   const projectDataType = getTypeAtPosition(fixturePath, 'ProjectData')
 
-  // Check that meta types are automatically inferred as FeathersFindMeta
+  // Check that meta types are preserved as FeathersFindMeta
   const tasksMetaType = getTypeAtPosition(fixturePath, 'TasksMeta')
   // get no longer exposes meta by default
 
@@ -144,8 +144,7 @@ test('meta type is automatically inferred from Figbird instance', t => {
   t.is(tasksDataType, 'Task[] | null')
   t.is(projectDataType, 'Project | null')
 
-  // Verify that meta is automatically inferred as FeathersFindMeta for find
-  // without having to pass it explicitly to createHooks
+  // Verify that the adapter generic carries FeathersFindMeta into useFind.
   t.is(tasksMetaType, 'import("figbird").FeathersFindMeta')
 
   // Verify individual meta properties are typed correctly
@@ -153,7 +152,7 @@ test('meta type is automatically inferred from Figbird instance', t => {
   t.is(tasksMetaLimitType, 'number')
   t.is(tasksMetaSkipType, 'number')
 
-  // Verify that meta type is always inferred from the adapter (FeathersFindMeta in this case)
+  // The adapter's default metadata type is FeathersFindMeta too.
   t.is(backwardCompatMetaType, 'import("figbird").FeathersFindMeta')
 })
 

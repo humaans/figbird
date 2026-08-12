@@ -146,27 +146,23 @@ const adapter = new FeathersAdapter(feathersClient as never)
 
 export const figbird = new Figbird({ schema, adapter })
 
-// Typed hooks + builder proxies bound to this schema — these are what components
-// reach for; no provider required. `q` reads, `m` writes: writes are optimistic
-// by default (`m.issues.patch(...)`), with `m.<service>.confirmed` for surfaces
-// that must wait for the server ack. Per-action pending/error comes from
-// `useAction` (one hook call site per action); entity/service-level activity
-// from `useMutating`.
-export const { useQuery, q, m, defineQuery, prepare, prefetch, useAction, useMutating } =
-  createHooks(figbird)
+// Pure, schema-bound React API. FigbirdProvider supplies the runtime instance;
+// useMutations returns its typed write proxy inside components.
+export const { useQuery, q, useMutations, defineQuery, useAction, useMutating } =
+  createHooks(schema)
 
 // Reference data: preload the complete sets once — realtime maintains them, and every
 // later read against these services (filters, sorts, windows, relation fetches) is
 // answered locally from the materialized cache with no roundtrip.
-prepare(
+figbird.prepare(
   defineQuery('allUsers', () => q.users.all()),
   undefined,
 )
-prepare(
+figbird.prepare(
   defineQuery('allTeams', () => q.teams.all()),
   undefined,
 )
-prepare(
+figbird.prepare(
   defineQuery('allLabels', () => q.labels.all()),
   undefined,
 )

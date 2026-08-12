@@ -1,5 +1,4 @@
-import type { FeathersClient } from '../../lib'
-import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
+import { createHooks, createSchema, service } from '../../lib'
 
 // Test typed Feathers client with CRUD methods
 interface Note {
@@ -52,13 +51,8 @@ export const schema = createSchema({
   },
 })
 
-// Create Figbird instance
-const feathers = {} as FeathersClient
-const adapter = new FeathersAdapter(feathers)
-const figbird = new Figbird({ schema, adapter })
-
 // Create typed hooks including useFeathers
-const { useFeathers } = createHooks(figbird)
+const { useFeathers } = createHooks(schema)
 
 // Get typed feathers client
 const typedFeathers = useFeathers()

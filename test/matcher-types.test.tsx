@@ -179,7 +179,7 @@ test('React hooks provide typed query in matcher', async t => {
 
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter, schema })
-  const { useFind } = createHooks(figbird)
+  const { useFind } = createHooks<typeof schema, typeof adapter>(schema)
 
   // This test verifies that TypeScript properly types the query parameter
   // The matcher won't be called during initial fetch (only for realtime events)

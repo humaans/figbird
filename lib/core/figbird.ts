@@ -123,7 +123,7 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
 */
 /**
  * Figbird core instance holding the adapter and shared query state.
- * Prefer `createHooks(figbird)` in React apps to get strongly-typed hooks.
+ * Prefer `createHooks(schema)` in React apps to get strongly-typed hooks.
  */
 export class Figbird<
   S extends Schema = AnySchema,

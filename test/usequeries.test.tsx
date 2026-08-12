@@ -110,8 +110,8 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
 
 test('useQueries: kit-bound variant works and an empty array resolves immediately', async t => {
   const { render, unmount, flush, $ } = dom()
-  const { App, figbird } = createApp()
-  const hooks = createHooks(figbird)
+  const { App } = createApp()
+  const hooks = createHooks(schema)
 
   function Dashboard() {
     const [issues] = hooks.useQueries([hooks.q.issues])

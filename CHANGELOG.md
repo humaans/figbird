@@ -17,10 +17,10 @@ return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
 
 Also included:
 
-- Lazy schema bindings through `createHooks({ schema, getDefaultFigbird })`, so importing
-  typed `q`, hooks, and `m` does not need to construct a side-effectful production client.
-  Provider-backed hooks use the injected instance; imperative APIs resolve the default only
-  when called. The kit now also includes typed `useFigbird` and provider-aware `useM`.
+- Import-safe schema bindings through `createHooks(schema)`. The generated hooks resolve their
+  runtime from `FigbirdProvider`, and `useMutations()` returns that instance's typed write proxy.
+  Imperative code uses `figbird.m`, `figbird.prepare`, and other instance methods directly, so
+  importing hooks never constructs a client, opens a connection, or starts a timer.
 - Native cursor pagination for `.paginate()` and `.all()`, configured per Feathers
   service without adding cursor controls to logical queries.
 - Browser Devtools for inspecting queries, fetches, realtime events, and writes, plus richer

@@ -1,5 +1,5 @@
 import type { FeathersClient } from '../../lib'
-import { createHooks, createSchema, service, FeathersAdapter, Figbird } from '../../lib'
+import { createSchema, service, FeathersAdapter, Figbird } from '../../lib'
 
 interface EsignInstance {
   id: string
@@ -41,7 +41,7 @@ const schema = createSchema({
 const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)
 const figbird = new Figbird({ schema, adapter })
-const { m } = createHooks(figbird)
+const { m } = figbird
 
 // Custom methods declared in the schema appear directly on the handle, typed —
 // on the default (optimistic) handle and on the confirmed variant alike.

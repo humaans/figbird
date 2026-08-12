@@ -27,7 +27,7 @@ export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
 
 /**
  * Hook for fetching a single item by ID.
- * Returns untyped data. For type-safe queries, use createHooks(figbird).
+ * Returns untyped data. For type-safe queries, use createHooks(schema).
  *
  * @deprecated Legacy descriptor-based hook. Prefer `useQuery(q.service.get(id))` from
  * the builder API — this stays functional but new code should not use it.
@@ -47,7 +47,7 @@ export function useGet(
 
 /**
  * Hook for fetching multiple items with optional query parameters.
- * Returns untyped data. For type-safe queries, use createHooks(figbird).
+ * Returns untyped data. For type-safe queries, use createHooks(schema).
  *
  * @deprecated Legacy descriptor-based hook. Prefer `useQuery(q.service.where(...))` from
  * the builder API — this stays functional but new code should not use it.

@@ -9,9 +9,10 @@
  */
 
 import { useState } from 'react'
-import { m, useAction } from '../../figbird'
+import { useAction, useMutations } from '../../figbird'
 
 export function EditableTitle({ issueId, title }: { issueId: number; title: string }) {
+  const m = useMutations()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(title)
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -91,6 +92,7 @@ export function EditableDescription({
   issueId: number
   description: string
 }) {
+  const m = useMutations()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(description)
 

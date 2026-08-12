@@ -1023,14 +1023,13 @@ checklist" in the docs that maps each failure mode to its tool.
 
 ## Instance Binding And Introspection
 
-**One default instance, optional provider.** `createHooks(figbird)` returns the daily-use kit
-bound to that instance, so a singleton SPA needs no `FigbirdProvider`. The lazy
-`createHooks({ schema, getDefaultFigbird })` form binds types and `q` without constructing the
-default instance during module evaluation. In both forms, context overrides the default for
-hooks — the injection point for per-request SSR trees and per-test instances. Imperative APIs
-resolve the default only when called; provider-driven React code uses `useM()` when writes must
-follow context. The eager form emits a dev error when a provider holds a different instance,
-because that divergence used to be silent.
+**Schema-bound hooks, provider-bound runtime.** `createHooks(schema)` is pure: it creates typed
+hooks and the `q` builder without constructing a client. Every generated hook reads the nearest
+`FigbirdProvider`, making the runtime explicit and replaceable for application roots, SSR
+requests, stories, and tests. `useMutations()` returns that same instance's `m` proxy. Code outside
+React already has an explicit runtime boundary and uses `figbird.m`, `figbird.prepare`, and other
+instance methods directly. There is no hidden default-instance getter and no second initialization
+path to keep consistent.
 
 **Classification must be visible.** Whether a query node is local-exact, server-window, or
 server-authoritative decides its entire realtime behavior, and it flips implicitly — adding

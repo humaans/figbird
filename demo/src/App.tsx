@@ -10,7 +10,7 @@ import { ActivityPanel } from './components/ActivityPanel'
 import { DemoControls } from './components/DemoControls'
 import { IssueListPane } from './components/IssueList'
 import { NewIssueModal } from './components/NewIssueModal'
-import { prepare, prefetch } from './figbird'
+import { figbird } from './figbird'
 import { issueDetailRouteQueries } from './pages/IssueDetail/queries'
 import { TeamsPage } from './pages/Teams/screen'
 import { DetailSkeleton, SkeletonRows } from './components/ui'
@@ -145,7 +145,10 @@ const routes = [
   },
 ]
 
-const routerData = { prepare, prefetch }
+const routerData = {
+  prepare: figbird.prepare.bind(figbird),
+  prefetch: figbird.prefetch.bind(figbird),
+}
 
 export function App() {
   return (

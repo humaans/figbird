@@ -25,9 +25,8 @@ export function useFigbird<S extends Schema = AnySchema, A extends Adapter = Ada
 
 /**
  * Like `useFigbird`, but returns `undefined` instead of throwing when no provider is
- * present. Used by hooks created via `createHooks(figbird)`, which fall back to their
- * bound instance — making the provider optional for singleton apps while SSR and tests
- * can still inject per-tree instances through context.
+ * present. This lets hooks such as the standalone `useAction` integrate with Figbird
+ * observability when a provider exists without requiring one for their core behavior.
  */
 export function useFigbirdMaybe<S extends Schema = AnySchema, A extends Adapter = Adapter>():
   Figbird<S, A> | undefined {

@@ -256,7 +256,7 @@ test('React hooks work with locked-down query types', async t => {
 
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({ adapter, schema })
-  const { useFind } = createHooks(figbird)
+  const { useFind } = createHooks<typeof schema, typeof adapter>(schema)
 
   function Component() {
     // Note: The mock doesn't actually filter by query fields - it returns all items.
