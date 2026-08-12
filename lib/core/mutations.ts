@@ -33,26 +33,30 @@ import type {
   ServiceUpdate,
 } from './schema.js'
 
+type OptimisticProjection<TItem> =
+  | {
+      /** Explicit complete item to show optimistically. */
+      optimisticItem: TItem
+      optimisticPatch?: never
+    }
+  | {
+      optimisticItem?: never
+      /** Partial record to merge into the current optimistic projection. */
+      optimisticPatch: Partial<TItem>
+    }
+  | {
+      optimisticItem?: never
+      optimisticPatch?: never
+    }
+
 /**
  * Per-call mutation options — call-specific data only; the write *policy*
  * (optimistic vs confirmed) lives on the handle variant, not per call.
  */
-export interface MutationCallOptions<TItem = unknown> {
+export type MutationCallOptions<TItem = unknown> = {
   /** Adapter params passthrough (e.g. Feathers `{ query }`). */
   params?: unknown
-  /**
-   * Explicit synthesized item to show optimistically — for computed fields the
-   * request payload doesn't carry (`{ ...item, computedField }`). Ignored on
-   * `confirmed` handles, which never show unconfirmed state.
-   */
-  optimisticItem?: TItem
-  /**
-   * Partial record to merge into the optimistic projection when the server
-   * payload uses a different shape. For example, send `{ isCompleted: true }`
-   * while projecting `{ status: 'completed' }` locally.
-   */
-  optimisticPatch?: Partial<TItem>
-}
+} & OptimisticProjection<TItem>
 
 export type MethodArgs<TMethod> = TMethod extends (
   ...args: infer TArgs extends unknown[]

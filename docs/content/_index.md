@@ -677,6 +677,9 @@ variant, not per call:
   shape: `patch(id, { isCompleted: true }, { optimisticPatch: { status: 'completed' } })`.
   Ignored on `confirmed` handles.
 
+`optimisticItem` and `optimisticPatch` are mutually exclusive: one replaces the complete local
+item, while the other merges fields into it.
+
 ### Per-action state: useAction
 
 A screen with six buttons has six actions. Each gets its own `useAction`, with its own
