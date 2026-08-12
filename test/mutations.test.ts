@@ -1,6 +1,5 @@
 import test from 'ava'
 import type { QueryState } from '../lib'
-import { createHooks } from '../lib'
 import { createTestApp } from './helpers'
 import {
   collectEvents,
@@ -16,7 +15,7 @@ import {
 
 test('m: writes are optimistic by default; confirmed opts out per handle or inline', async t => {
   const { figbird } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
 
   const patched = await m.notes.patch(1, { content: 'updated' })
@@ -37,7 +36,7 @@ test('m: writes are optimistic by default; confirmed opts out per handle or inli
 
 test('m: handles are interned and the confirmed variant is stable', t => {
   const { figbird } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   t.is(m.notes, m.notes)
   t.is(m.notes.confirmed, m.notes.confirmed)
@@ -48,7 +47,7 @@ test('m: handles are interned and the confirmed variant is stable', t => {
 
 test('m: optimisticItem supplies the synthesized cache item without flipping policy', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   // Observe the cache through a subscribed query.
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
@@ -102,7 +101,7 @@ test('m: optimisticItem supplies the synthesized cache item without flipping pol
 
 test('m: failed optimistic mutation reveals authoritative data fetched while pending', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
   ref.subscribe(state => {
@@ -159,7 +158,7 @@ test('m: optimisticPatch separates the projected record from the wire payload', 
 
 test('m: custom schema methods dispatch through the adapter with events and tracking', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
 
   const archiveCalls: unknown[][] = []
@@ -189,7 +188,7 @@ test('m: custom schema methods dispatch through the adapter with events and trac
 
 test('m: call() is the untyped escape hatch and errors flow through mutate:error', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
 
   feathers.service('notes').explode = () => Promise.reject(new Error('boom'))
@@ -206,7 +205,7 @@ test('m: call() is the untyped escape hatch and errors flow through mutate:error
 
 test('m: handles are not thenable and ignore protocol probes instead of firing phantom calls', async t => {
   const { figbird } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
 
   const handle = m.notes as unknown as Record<string, unknown>
@@ -223,7 +222,7 @@ test('m: handles are not thenable and ignore protocol probes instead of firing p
 
 test('m: resolves service path aliases', async t => {
   const { figbird } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   // Schema key `people` routes to the transport path `api/people`.
   const patched = await m.people.patch(1, { name: 'Grace' })
@@ -232,7 +231,7 @@ test('m: resolves service path aliases', async t => {
 
 test('mutate events carry a correlating mutationId', async t => {
   const { figbird } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
 
   await m.notes.patch(1, { content: 'a' })
@@ -250,7 +249,7 @@ test('mutate events carry a correlating mutationId', async t => {
 
 test('id contract: optimistic creates without a client id throw synchronously', t => {
   const { figbird } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   const error = t.throws(() => m.notes.create({ content: 'no identity' }))
   t.regex(error!.message, /client-generated id/)
@@ -264,7 +263,7 @@ test('id contract: optimistic creates without a client id throw synchronously', 
 
 test('id contract: keyed optimistic mutations serialize and rebase over each acknowledgement', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
@@ -346,7 +345,7 @@ test('id contract: keyed optimistic mutations serialize and rebase over each ack
 
 test('id contract: confirmed creates need no id — await the create for the server-assigned identity', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
@@ -367,7 +366,7 @@ test('id contract: confirmed creates need no id — await the create for the ser
 
 test('id contract: a failed optimistic create rolls the item back out of the cache', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
@@ -399,7 +398,7 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
 
 test('create-id tracking: optimistic creates with client ids are visible to useMutating by id', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
-  const { m } = createHooks(figbird)
+  const { m } = figbird
 
   const gate = deferred<MockItem>()
   feathers.service('notes').create = (() => gate.promise) as never

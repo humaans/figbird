@@ -164,7 +164,8 @@ test('useAction: settling after unmount does not update state', async t => {
 
 test('useAction (kit): named actions report action:start/end/error through the bound instance', async t => {
   const { App, figbird } = createTestApp(schema, services())
-  const { useAction: useKitAction } = createHooks(figbird)
+  const { useAction: useKitAction } = createHooks(schema)
+  t.is(useKitAction, useAction)
   const events = collectEvents(figbird, 'action:')
 
   const d = dom()
@@ -250,8 +251,8 @@ test('useAction: run works as a React 19 <form action>', async t => {
 // ----- useMutationQueue -----
 
 test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', async t => {
-  const { App, figbird, feathers } = createTestApp(schema, services())
-  const { useMutationQueue: useQueue } = createHooks(figbird)
+  const { App, feathers } = createTestApp(schema, services())
+  const { useMutationQueue: useQueue } = createHooks(schema)
   const d = dom()
   let queue!: ReturnType<typeof useQueue>
   let rerender!: () => void
@@ -349,7 +350,7 @@ test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', a
 
 test('useMutationQueue: unmount flushes work and cannot strand a failed optimistic lane', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
-  const { useMutationQueue: useQueue } = createHooks(figbird)
+  const { useMutationQueue: useQueue } = createHooks(schema)
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
   ref.subscribe(state => {
@@ -405,7 +406,8 @@ function renderMutating(
 
 test('useMutating: reflects in-flight mutations by service and id, including custom methods', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
-  const { m, useMutating } = createHooks(figbird)
+  const { useMutating } = createHooks(schema)
+  const { m } = figbird
 
   const gate = deferred<MockItem>()
   feathers.service('notes').patch = () => gate.promise
@@ -439,7 +441,8 @@ test('useMutating: reflects in-flight mutations by service and id, including cus
 
 test('useMutating: a component that mounts while a mutation is already in flight reports true', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
-  const { m, useMutating } = createHooks(figbird)
+  const { useMutating } = createHooks(schema)
+  const { m } = figbird
 
   const gate = deferred<MockItem>()
   feathers.service('notes').patch = () => gate.promise
@@ -460,7 +463,8 @@ test('useMutating: a component that mounts while a mutation is already in flight
 
 test('useMutating: service filter resolves schema aliases to transport paths', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
-  const { m, useMutating } = createHooks(figbird)
+  const { useMutating } = createHooks(schema)
+  const { m } = figbird
 
   const gate = deferred<{ id: number; name: string }>()
   feathers.service('api/people').patch = () => gate.promise

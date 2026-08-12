@@ -161,15 +161,8 @@ export const figbird = new Figbird({ schema, adapter })
 
 // Pure, schema-bound React API. FigbirdProvider supplies the runtime instance;
 // useMutations returns its typed write proxy inside components.
-export const {
-  useQuery,
-  q,
-  useMutations,
-  defineQuery,
-  useAction,
-  useMutating,
-  useMutationQueue,
-} = createHooks(schema)
+export const { useQuery, q, useMutations, defineQuery, useAction, useMutating, useMutationQueue } =
+  createHooks(schema)
 
 // Reference data: preload the complete sets once — realtime maintains them, and every
 // later read against these services (filters, sorts, windows, relation fetches) is
