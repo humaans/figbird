@@ -589,7 +589,6 @@ const workflowSync = defineMutationQueue({
   schedule(operation) {
     return isTextPatch(operation) ? { wait: 800, maxWait: 3200 } : { wait: 300 }
   },
-  timeout: 25_000,
   retry: 3,
   retryDelay: 2500,
 })
@@ -603,10 +602,10 @@ function WorkflowEditor({ workflowId }) {
 }
 ```
 
-For a component-owned queue, pass the policy directly to `useMutationQueue(policy)`; unmounting
-flushes its work. For a reconnectable queue, `defineMutationQueue(policy)` owns an immutable
-policy and namespace, while the hook's key selects one instance. Hooks using the same definition,
-key, and Figbird instance reconnect to the same pending, saving, or failed state. Equal keys from
+Call `useMutationQueue(definition)` without a key for a component-owned queue; unmounting flushes
+its work. Pass a key when the component should reconnect to unfinished work after a remount. The
+definition owns immutable policy and supplies the namespace. Hooks using the same definition, key,
+and Figbird instance reconnect to the same pending, saving, or failed state. Equal keys from
 different definitions cannot collide. Figbird removes an unowned keyed queue as soon as it becomes
 idle. It retains unfinished queues for five minutes, then detaches them so abandoned failures
 cannot remain paused forever.

@@ -156,7 +156,7 @@ test('query reapply rebuilds membership directly and keeps meta totals exact', a
   await settle()
   const queryId = ref.details().queryId
   const serviceState = figbird.getState().get('notes')!
-  serviceState.entities.set(5, {
+  serviceState.entities.set('5', {
     id: 5,
     text: 'new',
     rank: 5,
@@ -176,7 +176,7 @@ test('query reapply rebuilds membership directly and keeps meta totals exact', a
   )
   t.is((state.meta as { total: number }).total, 5)
 
-  serviceState.entities.delete(1)
+  serviceState.entities.delete('1')
   figbird.queryStore.reapplyQuery(queryId, new Set())
   state = ref.getSnapshot()
   if (!state || state.status !== 'success') {
@@ -188,11 +188,11 @@ test('query reapply rebuilds membership directly and keeps meta totals exact', a
     [2, 3, 4, 5],
   )
   t.is((state.meta as { total: number }).total, 4)
-  t.false(serviceState.itemQueryIndex.get(1)?.has(queryId) ?? false)
+  t.false(serviceState.itemQueryIndex.get('1')?.has(queryId) ?? false)
   unsub()
 })
 
-test('query reapply preserves numeric item identity stored under a string key', async t => {
+test('query reapply uses canonical string keys for numeric item ids', async t => {
   const { figbird } = createApp()
   const ref = figbird.queryDesc(
     { serviceName: 'notes', method: 'find', params: { query: { tag: 'x' } } },
@@ -202,7 +202,7 @@ test('query reapply preserves numeric item identity stored under a string key', 
   await settle()
   const queryId = ref.details().queryId
   const serviceState = figbird.getState().get('notes')!
-  serviceState.entities.delete(1)
+  serviceState.entities.delete('1')
   serviceState.entities.set('1', {
     id: 1,
     text: 'string-keyed',
@@ -234,7 +234,6 @@ test('query reapply preserves numeric item identity stored under a string key', 
     (state.data as Note[]).map(note => note.id),
     [2, 3, 4],
   )
-  t.false(serviceState.itemQueryIndex.get(1)?.has(queryId) ?? false)
   t.false(serviceState.itemQueryIndex.get('1')?.has(queryId) ?? false)
   unsub()
 })

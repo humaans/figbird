@@ -221,7 +221,7 @@ test('a realtime race never widens a $select result with canonical entities', as
     { id: 1, title: 'Renamed', updatedAt: updatedAt + 1 },
     { id: 2, title: 'Second', updatedAt },
   ])
-  t.deepEqual(figbird.getState().get('notes')!.entities.get(1), patched)
+  t.deepEqual(figbird.getState().get('notes')!.entities.get('1'), patched)
 
   unsubSelect()
   unsubAll()
@@ -248,7 +248,7 @@ test('an optimistic patch survives a $select fetch without becoming its lane bas
     { id: 1, title: 'Optimistic', updatedAt },
     { id: 2, title: 'Second', updatedAt },
   ])
-  t.deepEqual(figbird.getState().get('notes')!.entities.get(1), {
+  t.deepEqual(figbird.getState().get('notes')!.entities.get('1'), {
     id: 1,
     title: 'Optimistic',
     body: 'First body',
@@ -260,7 +260,7 @@ test('an optimistic patch survives a $select fetch without becoming its lane bas
   await rejected
   await settle(20)
 
-  t.deepEqual(figbird.getState().get('notes')!.entities.get(1), {
+  t.deepEqual(figbird.getState().get('notes')!.entities.get('1'), {
     id: 1,
     title: 'First',
     body: 'First body',

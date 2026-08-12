@@ -158,7 +158,7 @@ export type {
 // React hook result types
 export type { UseActionHook, UseActionResult } from './react/useAction.js'
 export type { UseMutatingFilter } from './react/useMutating.js'
-export type { UseMutationQueueConfig, UseMutationQueueHook } from './react/useMutationQueue.js'
+export type { UseMutationQueueHook } from './react/useMutationQueue.js'
 export type { UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQueryByDesc.js'
 

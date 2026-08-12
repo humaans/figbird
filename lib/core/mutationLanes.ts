@@ -1,11 +1,11 @@
-import type {
-  EventType,
-  MutationDescriptor,
-  ProcessedProjectionEvent,
-  ProcessedRealtimeEvent,
+import {
+  entityKey,
+  type EventType,
+  type ItemId,
+  type MutationDescriptor,
+  type ProcessedProjectionEvent,
+  type ProcessedRealtimeEvent,
 } from './queryTypes.js'
-
-export type ItemId = string | number
 
 export const ABSENT = Symbol('figbird.absent')
 export type ProjectedEntity = unknown | typeof ABSENT
@@ -175,7 +175,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
           type,
           item: eventItem,
           previousItem,
-          itemId: state.id,
+          itemId: entityKey(state.id),
         }
       }
     }
@@ -220,7 +220,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
         type,
         item,
         previousItem,
-        itemId: state.id,
+        itemId: entityKey(state.id),
       },
     }
   }
@@ -276,7 +276,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
           type: 'removed',
           item: lane.lastPresent,
           previousItem,
-          itemId: lane.id,
+          itemId: entityKey(lane.id),
           mutationLaneKey: lane.key,
         })
       } else {
@@ -286,7 +286,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
           type: lane.base === ABSENT ? 'created' : 'patched',
           item: lane.visible,
           previousItem,
-          itemId: lane.id,
+          itemId: entityKey(lane.id),
           mutationLaneKey: lane.key,
         })
       }
@@ -335,7 +335,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
   }
 
   #key(serviceName: string, id: ItemId): string {
-    return JSON.stringify([serviceName, String(id)])
+    return JSON.stringify([serviceName, entityKey(id)])
   }
 }
 

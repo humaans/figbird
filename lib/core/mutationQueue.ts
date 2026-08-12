@@ -33,21 +33,19 @@ export interface MutationQueueConfig {
   retry?: MutationQueueRetry
   /** Delay before an automatic retry. Defaults to 0. */
   retryDelay?: MutationQueueRetryDelay
-  /** Reject an adapter attempt that has not settled within this many milliseconds. */
-  timeout?: number
 }
 
 const MUTATION_QUEUE_DEFINITION_CONFIG = Symbol('figbird.mutationQueueDefinitionConfig')
 
-/** Immutable policy identity for reconnectable mutation queues. */
+/** Immutable policy identity and namespace for mutation queues. */
 export interface MutationQueueDefinition {
   readonly [MUTATION_QUEUE_DEFINITION_CONFIG]: MutationQueueConfig
 }
 
 /**
- * Define the policy and namespace for a family of reconnectable mutation queues.
- * Keep the returned value at module scope, then select an instance with
- * `useMutationQueue(definition, key)`.
+ * Define queue policy once. Keep the result at module scope, then call
+ * `useMutationQueue(definition)` for component ownership or pass a key to
+ * reconnect to the same unfinished queue after a remount.
  */
 export function defineMutationQueue(config: MutationQueueConfig = {}): MutationQueueDefinition {
   return Object.freeze({
@@ -60,13 +58,6 @@ export function mutationQueueDefinitionConfig(
   definition: MutationQueueDefinition,
 ): MutationQueueConfig {
   return definition[MUTATION_QUEUE_DEFINITION_CONFIG]
-}
-
-/** @internal */
-export function isMutationQueueDefinition(value: unknown): value is MutationQueueDefinition {
-  return Boolean(
-    value && typeof value === 'object' && MUTATION_QUEUE_DEFINITION_CONFIG in (value as object),
-  )
 }
 
 export interface MutationQueueSnapshot {
@@ -102,7 +93,6 @@ export interface ScheduledMutationControl {
   expedite(): void
   onAttemptStart(): void
   onAttemptFailure(error: Error, attempt: number): Promise<'retry' | 'discard'>
-  readonly timeout: number | undefined
 }
 
 /** @internal */
@@ -123,23 +113,12 @@ export interface MutationQueueHost {
   ): RegisteredMutation
 }
 
-/** Internal capability used by React-owned queues whose policy follows renders. */
-export const CREATE_DYNAMIC_MUTATION_QUEUE = Symbol('figbird.createDynamicMutationQueue')
-
-/** Attempt policy captured while an item is still eligible for coalescing. */
-interface MutationQueuePolicy {
-  retry: MutationQueueRetry
-  retryDelay: MutationQueueRetryDelay
-  timeout: number | undefined
-}
-
 interface QueueItem extends ScheduledMutationControl {
   readonly sequence: number
   readonly enqueuedAt: number
   operation: MutationQueueOperation
   desc: MutationDescriptor | null
   registration: RegisteredMutation | null
-  policy: MutationQueuePolicy
   dueAt: number
   maxAt: number
   ready: boolean
@@ -157,7 +136,7 @@ export class MutationQueue<S extends Schema> {
   readonly m: MutationsProxy<S>
 
   readonly #host: MutationQueueHost
-  readonly #readConfig: () => MutationQueueConfig
+  readonly #config: MutationQueueConfig
   readonly #items: QueueItem[] = []
   readonly #listeners = new Set<() => void>()
   #nextSequence = 1
@@ -166,9 +145,9 @@ export class MutationQueue<S extends Schema> {
   #flushThrough = 0
   #detached = false
 
-  constructor(host: MutationQueueHost, readConfig: () => MutationQueueConfig) {
+  constructor(host: MutationQueueHost, config: MutationQueueConfig = {}) {
     this.#host = host
-    this.#readConfig = readConfig
+    this.#config = Object.freeze({ ...config })
     this.m = createMutationsProxy({
       mutate: desc => this.#enqueueMutation(desc),
       call: (serviceName, method, args) => this.#enqueueCall(serviceName, method, args),
@@ -243,13 +222,10 @@ export class MutationQueue<S extends Schema> {
         desc as Extract<MutationDescriptor, { method: 'patch' }>,
       )
       const operation = this.#operationFromDesc(merged)
-      const config = this.#readConfig()
-      const schedule = this.#schedule(operation, config)
-      const policy = this.#capturePolicy(config)
+      const schedule = this.#schedule(operation)
       if (tail.registration!.tryUpdate(merged)) {
         tail.desc = merged
         tail.operation = operation
-        tail.policy = policy
         tail.dueAt = Date.now() + schedule.wait
         tail.maxAt = Math.min(
           tail.maxAt,
@@ -301,16 +277,13 @@ export class MutationQueue<S extends Schema> {
   #createItem(operation: MutationQueueOperation, desc: MutationDescriptor | null): QueueItem {
     const sequence = this.#nextSequence++
     const enqueuedAt = Date.now()
-    const config = this.#readConfig()
-    const schedule = this.#schedule(operation, config)
-    const policy = this.#capturePolicy(config)
+    const schedule = this.#schedule(operation)
     const item: QueueItem = {
       sequence,
       enqueuedAt,
       operation,
       desc,
       registration: null,
-      policy,
       dueAt: enqueuedAt + schedule.wait,
       maxAt:
         schedule.maxWait === undefined ? Number.POSITIVE_INFINITY : enqueuedAt + schedule.maxWait,
@@ -318,9 +291,6 @@ export class MutationQueue<S extends Schema> {
       settled: false,
       timer: null,
       listeners: new Set(),
-      get timeout() {
-        return item.policy.timeout
-      },
       isReady: () => item.ready,
       subscribeReady: listener => {
         item.listeners.add(listener)
@@ -366,9 +336,9 @@ export class MutationQueue<S extends Schema> {
     error: Error,
     attempt: number,
   ): Promise<'retry' | 'discard'> {
-    if (this.#shouldRetry(item.policy.retry, error, attempt, item.operation)) {
+    if (this.#shouldRetry(this.#config.retry ?? false, error, attempt, item.operation)) {
       this.#setSnapshot({ status: 'retrying', error })
-      const delay = this.#retryDelay(item.policy.retryDelay, attempt, error, item.operation)
+      const delay = this.#retryDelay(this.#config.retryDelay ?? 0, attempt, error, item.operation)
       if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
       return 'retry'
     }
@@ -466,19 +436,11 @@ export class MutationQueue<S extends Schema> {
     }
   }
 
-  #schedule(operation: MutationQueueOperation, config: MutationQueueConfig): MutationSchedule {
-    const schedule = config.schedule?.(operation) ?? { wait: 0 }
+  #schedule(operation: MutationQueueOperation): MutationSchedule {
+    const schedule = this.#config.schedule?.(operation) ?? { wait: 0 }
     return {
       wait: Math.max(0, schedule.wait),
       ...(schedule.maxWait === undefined ? {} : { maxWait: Math.max(0, schedule.maxWait) }),
-    }
-  }
-
-  #capturePolicy(config: MutationQueueConfig): MutationQueuePolicy {
-    return {
-      retry: config.retry ?? false,
-      retryDelay: config.retryDelay ?? 0,
-      timeout: config.timeout,
     }
   }
 

@@ -26,7 +26,6 @@ import {
   ABSENT,
   MUTATION_EVENT_TYPE,
   MutationLanes,
-  type ItemId,
   type MutationLane,
   type ProjectionChange,
 } from './mutationLanes.js'
@@ -40,7 +39,6 @@ import {
   isUnfilteredFindQuery,
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
-  findStoredItemId,
   removeQueryFromItemIndex,
   splitWindow,
   updateQueriesFromEvents,
@@ -52,6 +50,7 @@ import {
   type StoredQueryClass,
 } from './queryClassification.js'
 import {
+  entityKey,
   queryOfParams,
   type ElementType,
   type CreateMutationDescriptor,
@@ -59,6 +58,7 @@ import {
   type FindQueryConfig,
   type GetQueryConfig,
   type InferMutationData,
+  type ItemId,
   type ItemMatcher,
   type MutationDescriptor,
   type ProcessedProjectionEvent,
@@ -727,14 +727,8 @@ export class QueryStore<
     while (true) {
       attempt += 1
       control?.onAttemptStart()
-      let request: Promise<unknown>
       try {
-        request = Promise.resolve(run())
-      } catch (error) {
-        request = Promise.reject(error)
-      }
-      try {
-        return await this.#withMutationTimeout(request, control?.timeout)
+        return await run()
       } catch (error) {
         const normalized = error instanceof Error ? error : new Error(String(error))
         if (!control || (await control.onAttemptFailure(normalized, attempt)) === 'discard') {
@@ -742,27 +736,6 @@ export class QueryStore<
         }
       }
     }
-  }
-
-  #withMutationTimeout(request: Promise<unknown>, timeout: number | undefined): Promise<unknown> {
-    if (timeout === undefined) return request
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const error = new Error(`figbird: mutation timed out after ${timeout}ms`)
-        error.name = 'MutationTimeoutError'
-        reject(error)
-      }, timeout)
-      request.then(
-        value => {
-          clearTimeout(timer)
-          resolve(value)
-        },
-        error => {
-          clearTimeout(timer)
-          reject(error)
-        },
-      )
-    })
   }
 
   #cancelQueuedMutation(lane: MutationLane, entry: QueuedMutation, error: Error): void {
@@ -1166,7 +1139,7 @@ export class QueryStore<
     if (config.server) return null
     if (config.fetchPolicy === 'network-only') return null
 
-    const entity = service.entities.get(desc.resourceId)
+    const entity = service.entities.get(entityKey(desc.resourceId))
     if (entity === undefined) return null
 
     const q = queryOfParams(desc.params)
@@ -1292,7 +1265,7 @@ export class QueryStore<
       if (responseMode === 'entity') {
         for (const item of responseItems) {
           const itemId = getId(item)
-          if (itemId === undefined || rebasePlan.itemIds.has(itemId)) continue
+          if (itemId === undefined || rebasePlan.itemIds.has(entityKey(itemId))) continue
           const accepted = this.#acceptLaneAuthoritative(query.desc.serviceName, 'updated', item)
           if (!accepted.handled || !accepted.projection) continue
           const projectionEvent = this.#queuedProjectionEvent(accepted.projection)
@@ -1367,10 +1340,11 @@ export class QueryStore<
       for (const item of rebasedResponse.items) {
         const itemId = getId(item)
         if (itemId !== undefined) {
-          if (!isProjection && !journaledItemIds.has(itemId)) {
-            const currentItem = service.entities.get(itemId)
+          const key = entityKey(itemId)
+          if (!isProjection && !journaledItemIds.has(key)) {
+            const currentItem = service.entities.get(key)
             if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
-              service.entities.set(itemId, item)
+              service.entities.set(key, item)
             }
           }
           addQueryToItemIndex(service, itemId, queryId)
@@ -2077,8 +2051,7 @@ export class QueryStore<
   #getEntity(serviceName: string, id: string | number): unknown {
     const service = this.#state.get(serviceName)
     if (!service) return null
-    const storedId = findStoredItemId(service, id)
-    return storedId === undefined ? null : (service.entities.get(storedId) ?? null)
+    return service.entities.get(entityKey(id)) ?? null
   }
 
   /**

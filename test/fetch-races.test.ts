@@ -164,7 +164,7 @@ function processedEvent(itemId: number): ProcessedRealtimeEvent {
     type: 'patched',
     item: { id: itemId },
     previousItem: null,
-    itemId,
+    itemId: String(itemId),
   }
 }
 
@@ -224,7 +224,7 @@ test('journal overflow invalidates only cursors that exceed the event limit', t 
   t.false(newerSnapshot.overflowed)
   t.deepEqual(
     newerSnapshot.events.map(event => event.itemId),
-    [3, 4],
+    ['3', '4'],
   )
 })
 
@@ -291,9 +291,9 @@ test('a complete-set refetch does not delete a row created during the fetch', as
     () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
     'the complete-set trailing reconciliation',
   )
-  t.true(figbird.getState().get('notes')!.entities.has(2))
+  t.true(figbird.getState().get('notes')!.entities.has('2'))
   t.true(ids(ref.getSnapshot()!.data).includes(2))
-  t.false(processed.some(event => event.type === 'removed' && event.itemId === 2))
+  t.false(processed.some(event => event.type === 'removed' && event.itemId === '2'))
   unsub()
   unsubProcessed()
 })
@@ -349,7 +349,7 @@ test('a mutation acknowledgement survives an in-flight complete-set fetch', asyn
     () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
     'the mutation trailing reconciliation',
   )
-  t.true(figbird.getState().get('notes')!.entities.has(2))
+  t.true(figbird.getState().get('notes')!.entities.has('2'))
   t.true(ids(ref.getSnapshot()!.data).includes(2))
   unsub()
 })
@@ -370,7 +370,7 @@ test('realtime-disabled queries retain the response snapshot from an in-flight f
 
   await waitFor(() => !ref.getSnapshot()?.isFetching, 'the snapshot fetch to settle')
   t.is((ref.getSnapshot()!.data as Note[])[0]!.content, 'original')
-  t.is((figbird.getState().get('notes')!.entities.get(1) as Note).content, 'patched')
+  t.is((figbird.getState().get('notes')!.entities.get('1') as Note).content, 'patched')
   t.is(notes.counts.find, 2)
   unsub()
 })

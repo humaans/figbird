@@ -1,10 +1,7 @@
 import test from 'ava'
 import type { FigbirdEvent, QueryState } from '../lib'
 import { isMutationSupersededError } from '../lib'
-import {
-  CREATE_DYNAMIC_MUTATION_QUEUE,
-  type MutationQueueConfig,
-} from '../lib/core/mutationQueue.js'
+import type { MutationQueueConfig } from '../lib/core/mutationQueue.js'
 import { createTestApp } from './helpers'
 import { deferred, schema, services, type MockItem, type Note } from './mutation-test-helpers'
 
@@ -32,10 +29,10 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   const mutationEvents: FigbirdEvent[] = []
   const unsubscribeMutationEvents = figbird.events.subscribe(event => mutationEvents.push(event))
   const unsubscribeEvents = figbird.queryStore.subscribeToProcessedEvents(event => {
-    if (event.origin === 'projection' && event.itemId === 1) projectionEvents += 1
+    if (event.origin === 'projection' && event.itemId === '1') projectionEvents += 1
   })
   const unsubscribeSettlements = figbird.queryStore.subscribeToProjectionSettlements(event => {
-    if (event.itemId === 1) projectionSettlements += 1
+    if (event.itemId === '1') projectionSettlements += 1
   })
   const first = queue.m.notes.patch(1, { content: 'e' })
   const second = queue.m.notes.patch(1, { content: 'edited' })
@@ -312,7 +309,7 @@ test('mutation queue: a throwing retry predicate preserves the terminal failure'
   await t.throwsAsync(() => pending, { message: 'offline' })
 })
 
-test('mutation queue: each item keeps the retry policy captured at registration', async t => {
+test('mutation queue: policy is fixed when the queue is created', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const firstAttempt = deferred<MockItem>()
   let calls = 0
@@ -324,7 +321,7 @@ test('mutation queue: each item keeps the retry policy captured at registration'
   }) as never
 
   let config: MutationQueueConfig = { retry: false }
-  const queue = figbird[CREATE_DYNAMIC_MUTATION_QUEUE](() => config)
+  const queue = figbird.createMutationQueue(config)
   const first = queue.m.notes.patch(1, { content: 'do not retry' })
   const firstRejected = t.throwsAsync(() => first, { message: 'offline' })
   config = { retry: 1 }
@@ -336,9 +333,13 @@ test('mutation queue: each item keeps the retry policy captured at registration'
   queue.discard()
   await firstRejected
 
-  const second = await queue.m.notes.patch(1, { content: 'retry this one' })
-  t.is(second.content, 'retry this one')
-  t.is(calls, 3)
+  const second = queue.m.notes.patch(1, { content: 'still do not retry' })
+  const secondRejected = t.throwsAsync(() => second, { message: 'offline again' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(queue.status, 'failed')
+  t.is(calls, 2)
+  queue.discard()
+  await secondRejected
 })
 
 test('mutation queue: a successful remove cancels a later patch in the old lifetime', async t => {

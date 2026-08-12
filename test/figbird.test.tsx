@@ -506,13 +506,13 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   t.is($('.note2')!.innerHTML, 'hello')
   const state1 = figbird.getState().get('notes')
-  t.is((state1?.entities.get(1) as Note)?.content, 'hello')
+  t.is((state1?.entities.get('1') as Note)?.content, 'hello')
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
   const state2 = figbird.getState().get('notes')
-  t.is((state2?.entities.get(1) as Note)?.content, 'real')
+  t.is((state2?.entities.get('1') as Note)?.content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -527,7 +527,7 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   // should have updated
   const state3 = figbird.getState().get('notes')
-  t.is((state3?.entities.get(1) as Note)?.content, 'still updating')
+  t.is((state3?.entities.get('1') as Note)?.content, 'still updating')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
