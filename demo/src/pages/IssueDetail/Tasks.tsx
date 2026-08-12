@@ -40,12 +40,6 @@ function nextClientTaskId(): number {
   return lastClientTaskId
 }
 
-function ignoreQueueResult(promise: Promise<unknown>): void {
-  // The queue owns failure UI and retry/discard. Every event handler still
-  // observes its promise so a deliberately armed demo failure is not unhandled.
-  void promise.catch(() => {})
-}
-
 export function TasksPanel({ issueId, users }: { issueId: number; users: User[] }) {
   const { data: tasks } = useQuery(issueTasksQuery, { id: issueId })
   const queue = useMutationQueue(issueTaskQueue, `issue:${issueId}:tasks`)
@@ -54,16 +48,14 @@ export function TasksPanel({ issueId, users }: { issueId: number; users: User[] 
   const createTask = (after?: Task) => {
     const id = nextClientTaskId()
     const position = after ? after.position + 0.001 : (tasks.at(-1)?.position ?? 0) + 1
-    ignoreQueueResult(
-      queue.m.tasks.create({
-        id,
-        issueId,
-        title: '',
-        completed: false,
-        assigneeId: null,
-        position,
-      }),
-    )
+    void queue.m.tasks.create({
+      id,
+      issueId,
+      title: '',
+      completed: false,
+      assigneeId: null,
+      position,
+    })
     setFocusTaskId(id)
   }
 
@@ -122,14 +114,10 @@ sync.m.tasks.remove(id)`}
               task={task}
               users={users}
               autoFocus={task.id === focusTaskId}
-              onTitle={title => ignoreQueueResult(queue.m.tasks.patch(task.id, { title }))}
-              onToggle={() =>
-                ignoreQueueResult(queue.m.tasks.patch(task.id, { completed: !task.completed }))
-              }
-              onAssign={assigneeId =>
-                ignoreQueueResult(queue.m.tasks.patch(task.id, { assigneeId }))
-              }
-              onRemove={() => ignoreQueueResult(queue.m.tasks.remove(task.id))}
+              onTitle={title => void queue.m.tasks.patch(task.id, { title })}
+              onToggle={() => void queue.m.tasks.patch(task.id, { completed: !task.completed })}
+              onAssign={assigneeId => void queue.m.tasks.patch(task.id, { assigneeId })}
+              onRemove={() => void queue.m.tasks.remove(task.id)}
               onCreateBelow={() => createTask(task)}
             />
           ))}

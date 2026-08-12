@@ -7,7 +7,7 @@
   `disable()`; the extension starts debug collection when its panel connects.
 - Add explicitly owned serial mutation queues through `figbird.createMutationQueue()` and
   `useMutationQueue()`. Queue calls project immediately, preserve cross-record call order,
-  coalesce compatible unsent patches, and support scheduling, retry, timeout, flush, and
+  coalesce compatible unsent patches, and support scheduling, retry, flush, and
   discard policies. `defineMutationQueue(policy)` gives reconnectable React queues an immutable
   policy namespace, so hooks reconnect by definition and key without cross-feature policy races.
   Scoped and ordinary writes still share the same per-record lanes.

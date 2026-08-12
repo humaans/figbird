@@ -589,8 +589,6 @@ const workflowSync = defineMutationQueue({
   schedule(operation) {
     return isTextPatch(operation) ? { wait: 800, maxWait: 3200 } : { wait: 300 }
   },
-  retry: 3,
-  retryDelay: 2500,
 })
 
 function WorkflowEditor({ workflowId }) {
@@ -602,13 +600,13 @@ function WorkflowEditor({ workflowId }) {
 }
 ```
 
-Call `useMutationQueue(definition)` without a key for a component-owned queue; unmounting flushes
-its work. Pass a key when the component should reconnect to unfinished work after a remount. The
-definition owns immutable policy and supplies the namespace. Hooks using the same definition, key,
-and Figbird instance reconnect to the same pending, saving, or failed state. Equal keys from
-different definitions cannot collide. Figbird removes an unowned keyed queue as soon as it becomes
-idle. It retains unfinished queues for five minutes, then detaches them so abandoned failures
-cannot remain paused forever.
+Call `useMutationQueue()` or `useMutationQueue(definition)` for a component-owned queue; unmounting
+flushes its work. Pass a definition and key when the component should reconnect to unfinished work
+after a remount. A key without a definition is rejected because the definition supplies the queue's
+policy and identity namespace. Hooks using the same definition, key, and Figbird instance reconnect
+to the same pending, saving, or failed state. Equal keys from different definitions cannot collide.
+Figbird removes an unowned keyed queue as soon as it becomes idle. It retains unfinished queues for
+five minutes, then detaches them so abandoned failures cannot remain paused forever.
 
 Every call projects immediately. Adapter calls remain serial in registration order. Consecutive,
 unsent patches with the same queue, service, id, params, and optimism mode merge shallowly; later
@@ -630,10 +628,9 @@ and its dependent writes are cancelled.
 Outside React, create the same object with `figbird.createMutationQueue(config)`. A mutation queue
 is ordered, not atomic or durable: keyed queues survive component navigation, but no queue survives
 a page reload. The application must register a parent create before a child create that references
-it. An unkeyed queue applies the latest committed configuration to new work and flushes on unmount;
-if it later exhausts its retries, it rolls back the failed and remaining work
-instead of pausing without an owner. Timeouts cannot cancel an adapter request already on the wire,
-so retry creates only when the server accepts client IDs idempotently.
+it. A component-owned queue flushes on unmount; if it later exhausts its retries, it rolls back the
+failed and remaining work instead of pausing without an owner. Enable retries for creates only when
+the server treats their client-generated ids idempotently.
 
 ### Creates and ids: the id contract
 
@@ -670,15 +667,15 @@ Per-call options carry call-specific _data_ only. Write policy lives on the hand
 variant, not per call:
 
 - `params` — adapter params passthrough: `create(data, { params: { query: { ... } } })`.
-- `optimisticItem` — an explicit synthesized cache item when the payload doesn't carry
-  computed fields: `patch(id, data, { optimisticItem: { ...item, computedField } })`.
-  Ignored on `confirmed` handles, which never show unconfirmed state.
+- `optimisticItem` — an explicit synthesized cache item for optimistic creates, updates, and
+  patches when the payload doesn't carry computed fields:
+  `patch(id, data, { optimisticItem: { ...item, computedField } })`.
 - `optimisticPatch` — a partial local projection when the wire payload uses a different
   shape: `patch(id, { isCompleted: true }, { optimisticPatch: { status: 'completed' } })`.
-  Ignored on `confirmed` handles.
 
 `optimisticItem` and `optimisticPatch` are mutually exclusive: one replaces the complete local
-item, while the other merges fields into it.
+item, while the other merges fields into it. Creates accept only `optimisticItem`; removes and
+`confirmed` handles accept only `params`, because neither applies an optimistic projection.
 
 ### Per-action state: useAction
 
@@ -1412,8 +1409,10 @@ instance-bound plain values. Inside React, get it from `useMutations()` so it fo
 nearest `FigbirdProvider`. Outside React, use `figbird.m` directly. Writes are optimistic by
 default; `confirmed` variants update the cache only
 after the server acks. Handles hold no pending/error state by design; that's
-[useAction](#useaction) and [useMutating](#usemutating). Per-call `options` carry data
-only: `{ params?: AdapterParams, optimisticItem?: Item }`. Also available as `figbird.m`.
+[useAction](#useaction) and [useMutating](#usemutating). Per-call `options` carry data only:
+creates accept `params` and `optimisticItem`; updates and patches also accept the mutually exclusive
+`optimisticPatch`; removes and `confirmed` handles accept only `params`. Also available as
+`figbird.m`.
 Like `q`, the proxy is callable for dynamic service names: `m(name)` is `m.<name>` with a
 string-typed door.
 

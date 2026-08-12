@@ -1,5 +1,12 @@
 import type { FeathersClient } from '../../lib'
-import { createSchema, service, FeathersAdapter, Figbird } from '../../lib'
+import {
+  createSchema,
+  defineMutationQueue,
+  service,
+  FeathersAdapter,
+  Figbird,
+  useMutationQueue,
+} from '../../lib'
 
 interface EsignInstance {
   id: string
@@ -57,6 +64,40 @@ export type ConfirmedResult = Awaited<typeof confirmedPromise>
 // CRUD stays typed from the service definition.
 const patchPromise = m['api/esign-instances'].patch('esign_1', { status: 'sent' })
 export type PatchResult = Awaited<typeof patchPromise>
+
+// Projection options are available only where the runtime applies them.
+m['api/esign-instances'].create(
+  { id: 'esign_2', status: 'draft' },
+  { optimisticItem: { id: 'esign_2', status: 'draft' } },
+)
+m['api/esign-instances'].patch(
+  'esign_1',
+  { status: 'sent' },
+  { optimisticPatch: { status: 'sent' } },
+)
+// @ts-expect-error - create accepts a complete optimistic item, not a patch
+m['api/esign-instances'].create({ id: 'esign_3', status: 'draft' }, { optimisticPatch: {} })
+// @ts-expect-error - remove has no optimistic projection options
+m['api/esign-instances'].remove('esign_1', { optimisticItem: { id: 'esign_1', status: 'draft' } })
+// @ts-expect-error - confirmed writes never accept optimistic projection options
+m['api/esign-instances'].confirmed.patch('esign_1', {}, { optimisticPatch: {} })
+
+// The descriptor layer also prevents conflicting complete-item and patch projections.
+const conflictingProjection = {
+  serviceName: 'api/esign-instances',
+  method: 'patch',
+  id: 'esign_1',
+  data: { status: 'sent' },
+  optimistic: { id: 'esign_1', status: 'sent' },
+  optimisticPatch: { status: 'sent' },
+} as const
+// @ts-expect-error - an explicit optimistic item and optimisticPatch are mutually exclusive
+figbird.mutateDesc(conflictingProjection)
+
+const autosaveQueue = defineMutationQueue()
+useMutationQueue(autosaveQueue, 'esign:1')
+// @ts-expect-error - keyed queues require a definition to namespace their identity
+useMutationQueue(undefined, 'esign:1')
 
 // Only declared method names exist on the handle — undeclared ones are rejected.
 // `call()` is the untyped escape hatch.

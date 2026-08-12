@@ -14,6 +14,7 @@ export {
 
 export type {
   ArgsAndOptions,
+  CreateMutationOptions,
   DefineQuery,
   EventType,
   FigbirdEvent,
@@ -21,6 +22,7 @@ export type {
   InFlightMutation,
   MutationActivity,
   MutationCallOptions,
+  MutationParamsOptions,
   MutationEventMethod,
   MutationMethod,
   MutationQueueConfig,
@@ -39,6 +41,7 @@ export type {
   RetryDelay,
   StandardSchemaV1,
   VisibilitySource,
+  WriteMutationOptions,
 } from './core/figbird.js'
 export {
   MutationQueueDiscardedError,

@@ -669,8 +669,9 @@ mutation-specific path: its ordinary root and relation query inputs already rebu
 events.
 
 **Explicit serial mutation queues.** A feature can create one long-lived queue through
-`figbird.createMutationQueue(config)` or a component-owned queue through `useMutationQueue(config)`
-and issue writes through its typed `queue.m` proxy. Reconnectable hooks use a module-level
+`figbird.createMutationQueue(config)` or a component-owned queue through `useMutationQueue()` or
+`useMutationQueue(definition)` and issue writes through its typed `queue.m` proxy. Reconnectable
+hooks require a module-level
 `defineMutationQueue(config)` plus an instance key. The definition owns immutable policy and its
 registry namespace; the key only selects one queue within that definition. This prevents two
 owners from racing to configure one queue and prevents unrelated features with equal string keys
@@ -728,7 +729,8 @@ both modes (the promise settles on the ack; optimism only controls when the cach
 change). `confirmed` is deliberately greppable — it names the critical surfaces. The low-level
 descriptor (`figbird.mutateDesc`) and the deprecated `useMutation` keep the old non-optimistic
 default: the inversion is a property of the `m` DSL, so legacy code changes behavior only when it
-migrates. Per-call options carry data only (`params`, `optimisticItem`) — the
+migrates. Per-call options carry data only (`params`, `optimisticItem`, or `optimisticPatch`, as
+allowed by the verb and policy variant) — the
 `optimistic: boolean | item` flag/payload union is gone from the new DSL.
 
 **The id contract.** Optimistic creates must carry a client-generated id the server will accept

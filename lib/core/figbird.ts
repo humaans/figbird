@@ -66,6 +66,16 @@ import type {
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
 
+type DescriptorWriteProjection<TItem> =
+  | {
+      optimistic?: true
+      optimisticPatch?: Partial<TItem>
+    }
+  | {
+      optimistic: false | TItem
+      optimisticPatch?: never
+    }
+
 export { isFetching, isIdle, isLoading, isPending, splitConfig } from './queryTypes.js'
 export type {
   EventType,
@@ -78,11 +88,14 @@ export type {
 } from './queryTypes.js'
 export type { FigbirdEvent, FigbirdEvents, MutationEventMethod, MutationMethod } from './events.js'
 export type {
+  CreateMutationOptions,
   MethodArgs,
   MethodData,
   MutationCallOptions,
+  MutationParamsOptions,
   MutationsHandle,
   MutationsProxy,
+  WriteMutationOptions,
 } from './mutations.js'
 export {
   defineMutationQueue,
@@ -608,26 +621,26 @@ export class Figbird<
   }): Promise<ServiceItem<S, N>[]>
 
   /** Update an existing item by ID (full replacement). */
-  mutateDesc<N extends ServiceNames<S>>(desc: {
-    serviceName: N
-    method: 'update'
-    id: string | number
-    data: ServiceUpdate<S, N>
-    params?: AdapterParams<A>
-    optimistic?: boolean | ServiceItem<S, N>
-    optimisticPatch?: Partial<ServiceItem<S, N>>
-  }): Promise<ServiceItem<S, N>>
+  mutateDesc<N extends ServiceNames<S>>(
+    desc: {
+      serviceName: N
+      method: 'update'
+      id: string | number
+      data: ServiceUpdate<S, N>
+      params?: AdapterParams<A>
+    } & DescriptorWriteProjection<ServiceItem<S, N>>,
+  ): Promise<ServiceItem<S, N>>
 
   /** Patch an existing item by ID (partial update). */
-  mutateDesc<N extends ServiceNames<S>>(desc: {
-    serviceName: N
-    method: 'patch'
-    id: string | number
-    data: ServicePatch<S, N>
-    params?: AdapterParams<A>
-    optimistic?: boolean | ServiceItem<S, N>
-    optimisticPatch?: Partial<ServiceItem<S, N>>
-  }): Promise<ServiceItem<S, N>>
+  mutateDesc<N extends ServiceNames<S>>(
+    desc: {
+      serviceName: N
+      method: 'patch'
+      id: string | number
+      data: ServicePatch<S, N>
+      params?: AdapterParams<A>
+    } & DescriptorWriteProjection<ServiceItem<S, N>>,
+  ): Promise<ServiceItem<S, N>>
 
   /** Remove an item by ID. */
   mutateDesc<N extends ServiceNames<S>>(desc: {
