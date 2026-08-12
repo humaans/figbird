@@ -65,9 +65,8 @@ export function useFind(
 
 /**
  * The single spot the legacy get call shape (`serviceName, id, params+config`) is
- * assembled into a descriptor — shared by the root `useGet` and the `createHooks`
- * kit (which layers types via return casts). Service path aliases are resolved
- * centrally by figbird.queryDesc(). @internal
+ * assembled into a descriptor. Service path aliases are resolved centrally by
+ * figbird.queryDesc(). @internal
  */
 export function useGetImpl<T, TMeta extends Record<string, unknown>, TQuery>(
   figbird: DescFigbirdLike,

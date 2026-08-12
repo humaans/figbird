@@ -66,8 +66,7 @@ interface MutatingFigbird {
 }
 
 /**
- * Instance-taking implementation shared by the context-bound `useMutation` and the
- * bound-instance hooks that `createHooks` produces. @internal
+ * Instance-taking implementation behind the context-bound `useMutation`. @internal
  */
 export function useMutationImpl(
   figbird: MutatingFigbird,

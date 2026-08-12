@@ -468,6 +468,7 @@ test('useAction: settling after unmount does not update state', async t => {
 test('useAction (kit): named actions report action:start/end/error through the bound instance', async t => {
   const { App, figbird } = createTestApp(schema, services())
   const { useAction: useKitAction } = createHooks(schema)
+  t.is(useKitAction, useAction)
   const events = collectEvents(figbird, 'action:')
 
   const d = dom()

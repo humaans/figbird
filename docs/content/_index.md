@@ -1550,8 +1550,10 @@ the nearest `FigbirdProvider`. Imperative code uses the explicit instance direct
 
 ## FigbirdProvider
 
-Required for hooks from `createHooks`. It supplies the runtime instance to a tree and is the
-injection point for application roots, per-request SSR instances, stories, and tests:
+Required for runtime-backed hooks from `createHooks`, such as `useQuery`, `useMutations`, and
+`useMutating`. It supplies the instance to a tree and is the injection point for application
+roots, per-request SSR instances, stories, and tests. `useAction` can also run without a provider;
+when one exists, it uses that instance for observability events.
 
 ```tsx
 <FigbirdProvider figbird={testFigbird}>{ui}</FigbirdProvider>

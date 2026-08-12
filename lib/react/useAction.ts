@@ -137,8 +137,7 @@ export const useAction: UseActionHook = <TArgs extends unknown[], TResult>(
 }
 
 /**
- * Instance-taking implementation shared by the context-bound root export and
- * the bound-instance hook that `createHooks` produces. @internal
+ * Instance-taking implementation behind the context-aware root export. @internal
  */
 export function useActionImpl<TArgs extends unknown[], TResult>(
   figbird: ActionEventsHost | undefined | null,

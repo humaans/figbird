@@ -43,8 +43,7 @@ export function useMutating(filter?: UseMutatingFilter): boolean {
 }
 
 /**
- * Instance-taking implementation shared by the context-bound `useMutating` and
- * the bound-instance hook that `createHooks` produces. @internal
+ * Instance-taking implementation behind the context-bound `useMutating`. @internal
  */
 export function useMutatingImpl(figbird: MutatingHost, filter: UseMutatingFilter = {}): boolean {
   // Tracker entries carry resolved service paths — resolve the filter the same way

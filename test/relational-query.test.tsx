@@ -1416,6 +1416,7 @@ test('createHooks: schema bindings use the provider runtime', async t => {
     useMutations,
     q,
   } = createHooks(schema)
+  t.is(useTypedQuery, useQuery)
 
   function IssueWithCreator() {
     const resolvedFigbird = useTypedFigbird()

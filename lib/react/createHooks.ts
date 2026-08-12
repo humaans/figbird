@@ -29,12 +29,12 @@ import type {
 } from '../core/schema.js'
 import { resolveServicePath } from '../core/schema.js'
 import { useFigbird as useContextFigbird } from './context.js'
-import { useActionImpl, type UseActionHook, type UseActionResult } from './useAction.js'
-import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
-import { useMutationImpl, type UseMutationResult } from './useMutation.js'
-import { useFindImpl, useGetImpl, type QueryResult } from './useQueryByDesc.js'
-import { useQueriesImpl, type UseQueriesHook, type UseQueriesOptions } from './useQueries.js'
-import { useQueryImpl, type UseQueryHook, type UseQueryOptions } from './useQuery.js'
+import { useAction, type UseActionHook } from './useAction.js'
+import { useMutating, type UseMutatingFilter } from './useMutating.js'
+import { useMutation, type UseMutationResult } from './useMutation.js'
+import { useFind, useGet, type QueryResult } from './useQueryByDesc.js'
+import { useQueries, type UseQueriesHook } from './useQueries.js'
+import { useQuery, type UseQueryHook } from './useQuery.js'
 
 /**
  * Strongly-typed call signatures per service name.
@@ -153,52 +153,6 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
     return useBoundFigbird().m
   }
 
-  function useTypedGet<N extends ServiceNames<S>>(
-    serviceName: N,
-    resourceId: string | number,
-    params?: WithServiceQuery<S, N, TParams> &
-      Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
-  ) {
-    return useGetImpl<ServiceItem<S, N>, TMeta, ServiceQuery<S, N>>(
-      useBoundFigbird(),
-      serviceName as string,
-      resourceId,
-      params || {},
-    ) as unknown as QueryResult<ServiceItem<S, N>>
-  }
-
-  function useTypedFind<N extends ServiceNames<S>>(
-    serviceName: N,
-    params?: WithServiceQuery<S, N, TParams> &
-      Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
-  ) {
-    return useFindImpl<ServiceItem<S, N>[], TMeta, ServiceQuery<S, N>>(
-      useBoundFigbird(),
-      serviceName as string,
-      params || {},
-    )
-  }
-
-  function useTypedMutation<N extends ServiceNames<S>>(serviceName: N) {
-    return useMutationImpl(useBoundFigbird(), serviceName) as UseMutationResult<
-      ServiceItem<S, N>,
-      ServiceCreate<S, N>,
-      ServiceUpdate<S, N>,
-      ServicePatch<S, N>
-    >
-  }
-
-  function useTypedMutating(filter?: UseMutatingFilter) {
-    return useMutatingImpl(useBoundFigbird(), filter)
-  }
-
-  function useTypedAction<TArgs extends unknown[], TResult>(
-    fnOrName: string | ((...args: TArgs) => Promise<TResult> | TResult),
-    maybeFn?: (...args: TArgs) => Promise<TResult> | TResult,
-  ): UseActionResult<TArgs, TResult> {
-    return useActionImpl(useBoundFigbird(), fnOrName, maybeFn)
-  }
-
   function useTypedFeathers() {
     const adapter = useBoundFigbird().adapter as { feathers?: FeathersClient }
     if (!adapter.feathers) {
@@ -225,30 +179,18 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
     )
   }
 
-  function useTypedQuery(
-    queryOrDefinition: unknown,
-    argsOrOptions?: unknown,
-    maybeOptions?: UseQueryOptions,
-  ) {
-    return useQueryImpl(useBoundFigbird(), queryOrDefinition, argsOrOptions, maybeOptions)
-  }
-
-  function useTypedQueries(queries: readonly AnyQueryBuilder[], options?: UseQueriesOptions) {
-    return useQueriesImpl(useBoundFigbird(), queries, options)
-  }
-
   return {
-    useGet: useTypedGet as UseGetForSchema<S, TParams>,
-    useFind: useTypedFind as UseFindForSchema<S, TParams, TMeta>,
-    useMutation: useTypedMutation as UseMutationForSchema<S>,
+    useGet: useGet as unknown as UseGetForSchema<S, TParams>,
+    useFind: useFind as unknown as UseFindForSchema<S, TParams, TMeta>,
+    useMutation: useMutation as unknown as UseMutationForSchema<S>,
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
     useFigbird: useBoundFigbird,
-    useQuery: useTypedQuery as unknown as UseQueryHook<S>,
-    useQueries: useTypedQueries as unknown as UseQueriesHook<S>,
+    useQuery: useQuery as UseQueryHook<S>,
+    useQueries: useQueries as UseQueriesHook<S>,
     q,
     defineQuery: baseDefineQuery as DefineQueryForSchema<S>,
     useMutations: useTypedMutations,
-    useAction: useTypedAction as UseActionHook,
-    useMutating: useTypedMutating as UseMutatingForSchema<S>,
+    useAction,
+    useMutating: useMutating as UseMutatingForSchema<S>,
   }
 }
