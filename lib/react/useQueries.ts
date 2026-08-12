@@ -78,8 +78,7 @@ export const useQueries: UseQueriesHook = ((
 ): unknown => useQueriesImpl(useFigbird(), queries, options)) as UseQueriesHook
 
 /**
- * Instance-taking implementation shared by the context-bound `useQueries` and the
- * bound-instance hook that `createHooks` produces. @internal
+ * Instance-taking implementation behind the context-bound `useQueries`. @internal
  */
 export function useQueriesImpl(
   figbird: FigbirdLike,

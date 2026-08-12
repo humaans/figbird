@@ -7,7 +7,7 @@
  */
 
 import type { FeathersClient } from '../../lib'
-import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
+import { createHooks, createSchema, FeathersAdapter, service } from '../../lib'
 
 // Define a model
 interface Product {
@@ -33,10 +33,8 @@ const schema = createSchema({
 // Setup Figbird with FeathersAdapter
 const feathersClient = {} as FeathersClient
 const adapter = new FeathersAdapter(feathersClient)
-const figbird = new Figbird({ adapter, schema })
-
 // Create typed hooks
-const { useFind } = createHooks(figbird)
+const { useFind } = createHooks<typeof schema, typeof adapter>(schema)
 
 // ✅ EXAMPLE 1: Combining Figbird params with Feathers query
 // ✅ EXAMPLE: Complex combination of all param types (kept for test)

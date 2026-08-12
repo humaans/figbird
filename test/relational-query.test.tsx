@@ -1,6 +1,7 @@
 import EventEmitter from 'events'
 import test from 'ava'
-import React, { StrictMode } from 'react'
+import React from 'react'
+import { renderToString } from 'react-dom/server'
 import {
   createSchema,
   createHooks,
@@ -1406,14 +1407,42 @@ test('useRelationalQuery: two components share cached data', async t => {
 // createHooks Tests
 // ============================================================================
 
-test('createHooks: useQuery with suspense:false is exported and works', async t => {
+test('createHooks: schema bindings use the provider runtime', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
-  // Create typed hooks from figbird instance
-  const { useQuery: useTypedQuery, q } = createHooks(figbird)
+  const {
+    useQuery: useTypedQuery,
+    useFigbird: useTypedFigbird,
+    useMutations,
+    q,
+  } = createHooks(schema)
+  t.is(useTypedQuery, useQuery)
+  const otherSchema = { ...schema }
+  const { q: otherQ, useMutations: useOtherMutations } = createHooks(otherSchema)
+  t.throws(() => figbird.query(otherQ.issues), {
+    message: 'The query builder uses a different schema from this Figbird instance',
+  })
+
+  function WrongSchema() {
+    useOtherMutations()
+    return null
+  }
+  t.throws(
+    () =>
+      renderToString(
+        <App>
+          <WrongSchema />
+        </App>,
+      ),
+    {
+      message: 'The FigbirdProvider instance uses a different schema from createHooks(schema)',
+    },
+  )
 
   function IssueWithCreator() {
+    const resolvedFigbird = useTypedFigbird()
+    const mutations = useMutations()
     // Use the typed hook - the query builder should be properly typed
     const issue = useTypedQuery(q.issues.get(1).related('creator'), {
       suspense: false,
@@ -1430,7 +1459,10 @@ test('createHooks: useQuery with suspense:false is exported and works', async t 
     const data = issue.data as Issue & { creator: User | null }
 
     return (
-      <div className='issue-detail'>
+      <div
+        className='issue-detail'
+        data-provider={resolvedFigbird === figbird && mutations === figbird.m}
+      >
         <div className='title'>{data.title}</div>
         <div className='creator'>{data.creator?.name ?? 'Unknown'}</div>
       </div>
@@ -1448,6 +1480,7 @@ test('createHooks: useQuery with suspense:false is exported and works', async t 
   await flush()
 
   t.truthy($('.issue-detail'))
+  t.is($('.issue-detail')!.getAttribute('data-provider'), 'true')
   t.is($('.title')!.innerHTML, 'First issue')
   t.is($('.creator')!.innerHTML, 'Alice')
 
@@ -2741,31 +2774,6 @@ test('inspect: stable read-only projection of live queries', async t => {
   unsub()
 })
 
-test('createHooks: bound hooks and q work without a FigbirdProvider', async t => {
-  const { render, unmount, flush, $ } = dom()
-  const { figbird } = createApp()
-  const { useQuery: useBoundQuery, q } = createHooks(figbird)
-
-  function IssueList() {
-    const { data } = useBoundQuery(q.issues.related('creator'))
-    return <div className='count'>{data.length}</div>
-  }
-
-  // No FigbirdProvider anywhere in the tree — hooks resolve the bound instance.
-  render(
-    <StrictMode>
-      <React.Suspense fallback={<div className='fallback'>Loading…</div>}>
-        <IssueList />
-      </React.Suspense>
-    </StrictMode>,
-  )
-  await flush()
-
-  t.is($('.count')!.innerHTML, '3')
-
-  unmount()
-})
-
 test('.all(): materialized reads stay local only when their ordering is knowable', async t => {
   const { figbird, feathers } = createApp()
 
@@ -2968,8 +2976,9 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
 
 test('prepare and prefetch install staleTime before materializing a warm query', async t => {
   const { figbird, feathers } = createApp()
+  const { q } = createHooks(schema)
   const issueDetail = defineQuery('preparedIssueStaleTime', ({ id }: { id: number }) =>
-    figbird.q.issues.get(id).related('creator'),
+    q.issues.get(id).related('creator'),
   )
 
   const first = figbird.prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })

@@ -119,7 +119,7 @@ test('schema-based type inference', t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Create typed hooks for this schema
-  const { useFind, useGet, useMutation } = createHooks(figbird)
+  const { useFind, useGet, useMutation } = createHooks(schema)
 
   function PersonList() {
     // Type is inferred as QueryResult<Person[]>
@@ -335,7 +335,7 @@ test('schema with array of services', t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Create typed hooks
-  const { useFind } = createHooks(figbird)
+  const { useFind } = createHooks(schema)
 
   function App() {
     // Use the actual service names
@@ -463,7 +463,7 @@ test('query type inference is strict - no extra properties allowed', t => {
   const figbird = new Figbird({ adapter, schema })
 
   // Create typed hooks
-  const { useFind } = createHooks(figbird)
+  const { useFind } = createHooks(schema)
 
   function TestComponent() {
     // This should work - valid TaskQuery properties

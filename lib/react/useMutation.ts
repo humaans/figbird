@@ -42,7 +42,7 @@ export interface UseMutationResult<
  * Writes are non-optimistic: the cache reflects the change once the server acks.
  * Optimistic writes are a feature of the current write API (`m`).
  *
- * Returns untyped data. For type-safe mutations, use createHooks(figbird).
+ * Returns untyped data. For type-safe mutations, use createHooks(schema).
  *
  * const { create, patch, remove, status, data, error } = useMutation('notes')
  *
@@ -66,8 +66,7 @@ interface MutatingFigbird {
 }
 
 /**
- * Instance-taking implementation shared by the context-bound `useMutation` and the
- * bound-instance hooks that `createHooks` produces. @internal
+ * Instance-taking implementation behind the context-bound `useMutation`. @internal
  */
 export function useMutationImpl(
   figbird: MutatingFigbird,

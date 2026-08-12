@@ -98,13 +98,14 @@ export type {
 
 // react hooks
 export { createHooks } from './react/createHooks.js'
+export type { FigbirdHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
-// The write-side story: m is the stateless write proxy (figbird.m / createHooks);
-// useAction carries per-action pending/error; useMutating answers entity/service-level
-// "is anything in flight".
+// The write-side story: useMutations returns the provider instance's stateless write
+// proxy; useAction carries per-action pending/error; useMutating answers entity/service-
+// level "is anything in flight". Imperative code uses figbird.m directly.
 export { useAction } from './react/useAction.js'
 export { useMutating } from './react/useMutating.js'
-// Deprecated: superseded by m + useAction + useMutating.
+// Deprecated: superseded by useMutations + useAction + useMutating.
 export { useMutation } from './react/useMutation.js'
 // useFeathers is the raw-client escape hatch, typed via createHooks.
 export { useFeathers } from './react/useFeathers.js'

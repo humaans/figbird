@@ -73,8 +73,8 @@ function app({ feathers, figbird, config }: AppOptions = {}) {
   const figbirdInstance: Figbird<AppSchema, typeof adapter> =
     figbird || new Figbird({ schema, adapter, eventBatchInterval: 0, retry: false })
 
-  // Create typed hooks from the figbird instance
-  const { useGet, useFind, useMutation } = createHooks(figbirdInstance)
+  // Create typed hooks from the schema. The provider selects the runtime instance.
+  const { useGet, useFind, useMutation } = createHooks<typeof schema, typeof adapter>(schema)
 
   function App({ children }: { children?: React.ReactNode }) {
     return (

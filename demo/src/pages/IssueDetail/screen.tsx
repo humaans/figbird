@@ -14,7 +14,7 @@
  */
 
 import { useNavigate, useRoute } from 'react-space-router'
-import { m, q, useAction, useMutating, useQuery } from '../../figbird'
+import { q, useAction, useMutating, useMutations, useQuery } from '../../figbird'
 import { Explain } from '../../components/Explain'
 import { StatusDot } from '../../components/ui'
 import { CommentsPanel } from './Comments'
@@ -49,6 +49,7 @@ export default function IssueDetailScreen() {
 }
 
 function IssueDetailLoaded({ issueId }: { issueId: number }) {
+  const m = useMutations()
   const navigate = useNavigate()
   // The route's queries declaration warmed this exact query before the chunk arrived. The Suspense
   // boundary above (keyed by issueId) renders its skeleton if we're still cold.

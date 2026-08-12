@@ -1,10 +1,9 @@
 /**
- * Test fixture demonstrating automatic meta type inference from Figbird instance
- * This shows the improved DX where we don't need to manually pass FeathersFindMeta
+ * Test fixture demonstrating adapter-specific meta typing for schema-bound hooks.
  */
 
 import type { FeathersClient } from '../../lib'
-import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
+import { createHooks, createSchema, FeathersAdapter, service } from '../../lib'
 
 // Define domain types
 interface Task {
@@ -45,17 +44,9 @@ const adapter = new FeathersAdapter(feathersClient, {
   defaultPageSize: 25,
 })
 
-// Create Figbird instance with the adapter
-// The Figbird instance now carries both Schema and TMeta types
-const figbird = new Figbird({
-  adapter,
-  schema,
-})
-
-// Create hooks by passing the figbird instance
-// This automatically infers BOTH the schema AND the meta type!
-// No need to manually pass FeathersFindMeta anymore! 🎉
-const { useFind, useGet } = createHooks(figbird)
+// The schema is inferred from the value. Supplying the adapter type preserves
+// adapter-specific params and metadata on the deprecated descriptor hooks.
+const { useFind, useGet } = createHooks<typeof schema, typeof adapter>(schema)
 
 // Use the hooks to test type inference
 export const tasksResult = useFind('tasks')
@@ -74,7 +65,6 @@ export type ProjectData = typeof projectResult.data
 // Since we're using FeathersAdapter, it will always be FeathersFindMeta
 const feathersNoMeta = {} as FeathersClient
 const adapterNoExplicitMeta = new FeathersAdapter(feathersNoMeta)
-const figbirdNoExplicitMeta = new Figbird({ adapter: adapterNoExplicitMeta, schema })
-const backwardCompatHooks = createHooks(figbirdNoExplicitMeta)
+const backwardCompatHooks = createHooks<typeof schema, typeof adapterNoExplicitMeta>(schema)
 export const backwardCompatResult = backwardCompatHooks.useFind('tasks')
 export type BackwardCompatMeta = typeof backwardCompatResult.meta

@@ -4,7 +4,7 @@
  */
 
 import type { FeathersClient } from '../../lib'
-import { createHooks, createSchema, FeathersAdapter, Figbird, service } from '../../lib'
+import { createHooks, createSchema, FeathersAdapter, service } from '../../lib'
 
 // Define domain models
 interface Article {
@@ -43,10 +43,8 @@ const schema = createSchema({
 // Create Figbird instance with FeathersAdapter
 const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)
-const figbird = new Figbird({ schema, adapter })
-
-// Create typed hooks with figbird instance
-const { useFind } = createHooks(figbird)
+// Bind the schema and opt the deprecated descriptor hook into Feathers metadata.
+const { useFind } = createHooks<typeof schema, typeof adapter>(schema)
 
 // Example 1: Paginated article list with type-safe metadata
 export function ArticleList() {

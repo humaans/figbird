@@ -88,16 +88,17 @@ export const figbird = new Figbird({
   schema,
 })
 
-// The daily-use kit, bound to this instance.
-export const { useQuery, q, m, defineQuery, prepare, prefetch, refetch, useAction, useMutating } =
-  createHooks(figbird)
+// Pure, schema-bound React bindings.
+export const { useQuery, q, useMutations, defineQuery, useAction, useMutating } =
+  createHooks(schema)
 ```
 
 ```tsx
-// components — one import, no provider required
-import { m, q, useQuery } from './figbird'
+import { FigbirdProvider } from 'figbird'
+import { figbird, q, useMutations, useQuery } from './figbird'
 
 function OpenIssues() {
+  const m = useMutations()
   const { data: issues } = useQuery(
     q.issues.where({ status: 'open' }).orderBy('id', 'desc').related('creator'),
   )
@@ -112,7 +113,15 @@ function OpenIssues() {
 }
 ```
 
-No `FigbirdProvider` is needed: the hooks are bound to the instance they were created with. (A provider, when present, overrides the bound instance; see [FigbirdProvider](#figbirdprovider).)
+Render the application beneath a provider:
+
+```tsx
+<FigbirdProvider figbird={figbird}>
+  <App />
+</FigbirdProvider>
+```
+
+The schema binding is import-safe; the provider selects the runtime used by the React tree.
 
 # Concepts
 
@@ -1116,13 +1125,13 @@ const feathers = mockFeathers(
 const figbird = new Figbird({ adapter: new FeathersAdapter(feathers), schema })
 ```
 
-Render with hooks bound to this instance (or inject it via `FigbirdProvider`), then:
+Render the component beneath `<FigbirdProvider figbird={figbird}>`, then:
 
 - simulate server-side changes: `feathers.service('issues').emit('patched', {...})` —
   they flow through the realtime pipeline like socket events
 - assert fetch behavior: `feathers.service('issues').counts.find`
-- mutations through `m` hit the mock's CRUD, which emits the realtime echo like a
-  real server would
+- mutations through `useMutations()` or `figbird.m` hit the mock's CRUD, which emits the
+  realtime echo like a real server would
 
 Figbird's own test suite runs on this client.
 
@@ -1287,7 +1296,7 @@ Each element has the `useQuery` suspense result shape for its builder (`data`,
 `error`, `isFetching`, `refetch`, plus the `loadMore`/`hasMore`/… family on a
 `.paginate()` element). Suspense-only. Options: `staleTime?: number`.
 
-## m
+## m and useMutations
 
 ```ts
 m.notes.create(data, options?)   // Promise<Item>; arrays create in batch
@@ -1301,8 +1310,9 @@ m.notes.confirmed                // variant that waits for the server ack
 ```
 
 The write proxy: services as properties, mirroring `q`. Handles are stateless,
-instance-bound plain values (not hooks): access them at module scope and call from
-anywhere. Writes are optimistic by default; `confirmed` variants update the cache only
+instance-bound plain values. Inside React, get it from `useMutations()` so it follows the
+nearest `FigbirdProvider`. Outside React, use `figbird.m` directly. Writes are optimistic by
+default; `confirmed` variants update the cache only
 after the server acks. Handles hold no pending/error state by design; that's
 [useAction](#useaction) and [useMutating](#usemutating). Per-call `options` carry data
 only: `{ params?: AdapterParams, optimisticItem?: Item }`. Also available as `figbird.m`.
@@ -1322,12 +1332,14 @@ action.data // T | null — last successful result, cleared when a new run start
 action.reset() // clear error/data
 ```
 
-Per-action UI lifecycle around any async function, one hook call site per action. The
+Per-action UI lifecycle around any async function, one hook call site per action. It is
+separate from `useMutations()`: the latter selects stable service commands, while each
+`useAction()` call owns the pending, error, and result state for one UI action. The
 body runs as a React Action (async transition), so suspense-triggering consequences
 (navigation after a write, a query change) keep the previous UI on screen; `run` also
 works directly as a React 19 `<form action>`. Named actions emit `action:start/end/error`
-on the observability channel (via the kit's bound instance, or the context instance for
-the root export). See [Per-action state](#per-action-state-useaction) for the semantics
+on the observability channel through the provider instance. See
+[Per-action state](#per-action-state-useaction) for the semantics
 and the one-identity-one-call-site rule.
 
 ## useMutating
@@ -1482,10 +1494,10 @@ const figbird = new Figbird({
 | Member                                            | Description                                                                                                                                                 |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `q`                                               | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                                                               |
-| `prepare(definition, args)`                       | Awaitable query lease for routers — also returned bound from `createHooks`. See [figbird.prepare](#figbirdprepare).                                         |
-| `prefetch(definition, args, opts?)`               | Idempotent speculative warming — also returned bound from `createHooks`. See [figbird.prefetch](#figbirdprefetch).                                          |
-| `refetch(service?)`                               | Manual refetch escape hatch for changes figbird can’t observe (custom methods without events, out-of-band writes) — also returned bound from `createHooks`. |
-| `m`                                               | The write proxy — `m.issues.patch(...)`, callable as `m(service)` for dynamic names — also returned bound from `createHooks`. See [m](#m).                  |
+| `prepare(definition, args)`                       | Awaitable query lease for routers. Call it on the explicit instance: `figbird.prepare(...)`. See [figbird.prepare](#figbirdprepare).                                     |
+| `prefetch(definition, args, opts?)`               | Idempotent speculative warming. Call it on the explicit instance: `figbird.prefetch(...)`. See [figbird.prefetch](#figbirdprefetch).                                      |
+| `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
+| `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
 | `mutating`                                        | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                    |
 | `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
@@ -1518,35 +1530,42 @@ Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, ski
 
 ## createHooks
 
-Binds a Figbird instance to typed React hooks:
+Binds a schema to import-safe, typed React hooks:
 
 ```ts
-export const { useQuery, q, m, defineQuery, prepare, prefetch, refetch, useAction, useMutating } =
-  createHooks(figbird)
+export const { useQuery, useFigbird, useMutations, q, defineQuery, useAction, useMutating } =
+  createHooks(schema)
 ```
 
 Returns the daily-use kit: `useQuery`, `q` (the read proxy), schema-typed
-`defineQuery`, instance-bound `prepare`/`prefetch`, and the write side — `m` (the write
-proxy), `useAction` (per-action state), and `useMutating` (in-flight activity). Also
-includes `useFeathers` (the raw-client escape hatch) and the deprecated legacy hooks
-(`useMutation`, `useFind`, `useGet`) for older codebases.
+`defineQuery`, and the write side — `useMutations` (the provider instance's write proxy),
+`useAction` (per-action state), and `useMutating` (in-flight activity). It also includes
+typed `useFigbird`, `useFeathers` (the raw-client
+escape hatch), and the deprecated legacy hooks (`useMutation`, `useFind`, `useGet`) for
+older codebases.
 
-Instance resolution: hooks use the bound instance directly, so no provider is required. If a
-`FigbirdProvider` is present in the tree, **it wins**; that's the injection point for
-per-request SSR instances and tests. A dev-mode error fires if a provider holds a _different_
-instance than the bound one.
+Creating the kit and reading `q` have no runtime side effects. Every generated hook resolves
+the nearest `FigbirdProvider`. Imperative code uses the explicit instance directly:
+`figbird.m`, `figbird.prepare`, `figbird.prefetch`, and `figbird.refetch`.
+
+Construct the provider's Figbird instance with the same schema object passed to `createHooks`.
+Provider-bound APIs and schema-built queries throw if the schemas differ, preventing types from
+one schema from being applied to another runtime.
 
 ## FigbirdProvider
 
-Optional. Hooks from `createHooks` work without any provider; use one to inject a different
-instance into a subtree, like per-request instances in SSR or a fresh instance per test:
+Required for runtime-backed hooks from `createHooks`, such as `useQuery`, `useMutations`, and
+`useMutating`. It supplies the instance to a tree and is the injection point for application
+roots, per-request SSR instances, stories, and tests. `useAction` can also run without a provider;
+when one exists, it uses that instance for observability events.
 
 ```tsx
 <FigbirdProvider figbird={testFigbird}>{ui}</FigbirdProvider>
 ```
 
-`useFigbird()` reads the context instance (throws without a provider); `useFigbirdMaybe()`
-returns `undefined` instead.
+The standalone `useFigbird()` export reads only the context instance and throws without a
+provider; `useFigbirdMaybe()` returns `undefined` instead. The typed `useFigbird` returned by a
+`createHooks` kit reads the same provider.
 
 # API: Observability
 

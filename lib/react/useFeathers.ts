@@ -7,7 +7,7 @@ import { useFigbird } from './context.js'
 /**
  * Returns the underlying Feathers client — the supported escape hatch for one-off
  * operations outside Figbird's caching layer. Typed (including custom methods
- * declared in the schema) when obtained from `createHooks(figbird)`.
+ * declared in the schema) when obtained from `createHooks(schema)`.
  */
 export function useFeathers(): FeathersClient {
   const figbird = useFigbird()

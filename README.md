@@ -13,7 +13,14 @@ pnpm add figbird
 ## Usage
 
 ```tsx
-import { Figbird, FeathersAdapter, createSchema, service, createHooks } from 'figbird'
+import {
+  Figbird,
+  FigbirdProvider,
+  FeathersAdapter,
+  createSchema,
+  service,
+  createHooks,
+} from 'figbird'
 
 const schema = createSchema({
   services: {
@@ -32,7 +39,7 @@ const figbird = new Figbird({
   schema,
 })
 
-export const { useQuery, useAction, q, m } = createHooks(figbird)
+export const { useQuery, useMutations, useAction, q } = createHooks(schema)
 
 function Notes() {
   const { data: notes } = useQuery(q.notes.where({ read: false }).related('author'))
@@ -41,6 +48,7 @@ function Notes() {
 }
 
 function NoteRow({ note }: { note: Note & { author?: User } }) {
+  const m = useMutations()
   const markRead = useAction('mark read', () => m.notes.patch(note.id, { read: true }))
 
   return (
@@ -49,9 +57,23 @@ function NoteRow({ note }: { note: Note & { author?: User } }) {
     </button>
   )
 }
+
+function Root() {
+  return (
+    <FigbirdProvider figbird={figbird}>
+      <Notes />
+    </FigbirdProvider>
+  )
+}
 ```
 
-No provider needed — the hooks are bound to the instance. Cold reads suspend into your `<Suspense>` boundary; warm reads render synchronously.
+`createHooks(schema)` is pure and safe to evaluate at import time. The provider selects the
+runtime instance, so tests, stories, and SSR requests can inject their own client. Imperative
+code outside React uses the instance directly: `figbird.m`, `figbird.prepare`, and
+`figbird.prefetch`. Construct each injected instance with the same schema object passed to
+`createHooks`; provider-bound APIs and schema-built queries throw when the schemas differ.
+
+Cold reads suspend into your `<Suspense>` boundary; warm reads render synchronously.
 Transient fetch failures retry up to three times with exponential backoff before Figbird exposes the error. Client errors fail immediately, except for `408` and `429` responses.
 
 ## Features

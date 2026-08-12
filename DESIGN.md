@@ -1023,14 +1023,13 @@ checklist" in the docs that maps each failure mode to its tool.
 
 ## Instance Binding And Introspection
 
-**One instance, optional provider.** `createHooks(figbird)` returns the daily-use kit _bound_ to
-that instance — the hooks, `q` (the builder proxy), schema-typed `defineQuery`, and bound
-`prepare`/`prefetch` — so a singleton SPA needs no `FigbirdProvider` at all and imports everything
-from one module. Context, when
-present, overrides the bound instance — that is the injection point for per-request SSR trees and
-per-test instances — and a dev-mode error fires when a provider holds a _different_ instance than
-the bound one, because that divergence used to be silent (types from one instance, runtime from
-another).
+**Schema-bound hooks, provider-bound runtime.** `createHooks(schema)` is pure: it creates typed
+hooks and the `q` builder without constructing a client. Every generated hook reads the nearest
+`FigbirdProvider`, making the runtime explicit and replaceable for application roots, SSR
+requests, stories, and tests. `useMutations()` returns that same instance's `m` proxy. Code outside
+React already has an explicit runtime boundary and uses `figbird.m`, `figbird.prepare`, and other
+instance methods directly. There is no hidden default-instance getter and no second initialization
+path to keep consistent.
 
 **Classification must be visible.** Whether a query node is local-exact, server-window, or
 server-authoritative decides its entire realtime behavior, and it flips implicitly — adding

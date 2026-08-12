@@ -246,10 +246,9 @@ export const useQuery: UseQueryHook = ((
   useQueryImpl(useFigbird(), queryOrDefinition, argsOrOptions, maybeOptions)) as UseQueryHook
 
 /**
- * Instance-taking dispatch shared by the context-bound `useQuery` and the
- * bound-instance hooks that `createHooks` produces. Resolves the interned
- * RelationalQueryRef (or null for skips) and hands it to the shared hook body.
- * @internal
+ * Instance-taking dispatch behind the context-bound `useQuery`. Resolves the
+ * interned RelationalQueryRef (or null for skips) and hands it to the shared hook
+ * body. @internal
  */
 export function useQueryImpl(
   figbird: FigbirdLike,

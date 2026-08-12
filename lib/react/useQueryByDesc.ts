@@ -27,7 +27,7 @@ export type QueryResult<T, TMeta = undefined> = BaseQueryResult &
 
 /**
  * Hook for fetching a single item by ID.
- * Returns untyped data. For type-safe queries, use createHooks(figbird).
+ * Returns untyped data. For type-safe queries, use createHooks(schema).
  *
  * @deprecated Legacy descriptor-based hook. Prefer `useQuery(q.service.get(id))` from
  * the builder API — this stays functional but new code should not use it.
@@ -47,7 +47,7 @@ export function useGet(
 
 /**
  * Hook for fetching multiple items with optional query parameters.
- * Returns untyped data. For type-safe queries, use createHooks(figbird).
+ * Returns untyped data. For type-safe queries, use createHooks(schema).
  *
  * @deprecated Legacy descriptor-based hook. Prefer `useQuery(q.service.where(...))` from
  * the builder API — this stays functional but new code should not use it.
@@ -65,9 +65,8 @@ export function useFind(
 
 /**
  * The single spot the legacy get call shape (`serviceName, id, params+config`) is
- * assembled into a descriptor — shared by the root `useGet` and the `createHooks`
- * kit (which layers types via return casts). Service path aliases are resolved
- * centrally by figbird.queryDesc(). @internal
+ * assembled into a descriptor. Service path aliases are resolved centrally by
+ * figbird.queryDesc(). @internal
  */
 export function useGetImpl<T, TMeta extends Record<string, unknown>, TQuery>(
   figbird: DescFigbirdLike,
