@@ -526,7 +526,6 @@ export function replayFetchedQueryFromEvents<TMeta>({
       const result = applyMergeEventToQuery(context, queryId, event)
       if (result === 'applied' || !needsVisibleFallback) continue
     }
-
     applyVisibleEventEffect(
       context,
       queryId,

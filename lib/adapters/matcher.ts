@@ -1,7 +1,7 @@
 import sift from 'sift'
 import {
   LOCAL_QUERY_OPERATORS,
-  SERVER_ONLY_QUERY_FILTERS,
+  PROJECTION_QUERY_FILTERS,
   SERVER_WINDOW_QUERY_FILTERS,
 } from '../core/queryClassification.js'
 
@@ -45,7 +45,7 @@ function cleanQuery(query: QueryValue, operators: string[], filters: string[]): 
 // Feathers control fields that are stripped from queries before matching, and the
 // operators preserved for matching — derived from classification's canonical sets
 // so "what the matcher evaluates" and "what classifies as local" cannot drift.
-export const FILTERS = [...SERVER_WINDOW_QUERY_FILTERS, ...SERVER_ONLY_QUERY_FILTERS]
+export const FILTERS = [...SERVER_WINDOW_QUERY_FILTERS, ...PROJECTION_QUERY_FILTERS]
 export const OPERATORS = [...LOCAL_QUERY_OPERATORS]
 
 // Removes special filters from the `query` parameters

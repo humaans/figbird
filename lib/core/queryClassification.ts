@@ -34,7 +34,8 @@ export const LOCAL_QUERY_OPERATORS = new Set([
   '$or',
 ])
 export const SERVER_WINDOW_QUERY_FILTERS = new Set(['$limit', '$skip', '$sort'])
-export const SERVER_ONLY_QUERY_FILTERS = new Set(['$select'])
+/** Filters that change returned row shape, so their results are not canonical entities. */
+export const PROJECTION_QUERY_FILTERS = new Set(['$select'])
 
 /**
  * A single structured reason contributing to a query node's classification.
@@ -113,7 +114,7 @@ export function explainQueryNode(
   const window: ClassificationReason[] = []
   walkQueryKeys(query, (key, top) => {
     if (!key.startsWith('$')) return
-    if (SERVER_ONLY_QUERY_FILTERS.has(key)) {
+    if (PROJECTION_QUERY_FILTERS.has(key)) {
       authoritative.push({ code: 'select-projection', detail: key })
     } else if (SERVER_WINDOW_QUERY_FILTERS.has(key)) {
       // allPages neutralizes windows: the full result set is fetched, so
@@ -172,6 +173,15 @@ function walkQueryKeysAtDepth(
     visit(key, top)
     walkQueryKeysAtDepth(child, visit, false)
   }
+}
+
+/** True when the query projects rows (`$select` anywhere) — its results are partial rows, not full entities. */
+export function isProjectionQuery(query: unknown): boolean {
+  let found = false
+  walkQueryKeys(query, key => {
+    if (PROJECTION_QUERY_FILTERS.has(key)) found = true
+  })
+  return found
 }
 
 /** True when the query uses `$limit`/`$skip`/`$sort` anywhere. */
