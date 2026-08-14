@@ -628,9 +628,9 @@ and its dependent writes are cancelled.
 Outside React, create the same object with `figbird.createMutationQueue(config)`. A mutation queue
 is ordered, not atomic or durable: keyed queues survive component navigation, but no queue survives
 a page reload. The application must register a parent create before a child create that references
-it. A component-owned queue flushes on unmount; if it later exhausts its retries, it rolls back the
-failed and remaining work instead of pausing without an owner. Enable retries for creates only when
-the server treats their client-generated ids idempotently.
+it. A component-owned queue flushes on unmount. Once detached, it interrupts any pending retry delay
+and rolls back from the first failed operation instead of retrying or pausing without an owner.
+Enable retries for creates only when the server treats their client-generated ids idempotently.
 
 ### Creates and ids: the id contract
 

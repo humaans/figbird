@@ -348,7 +348,7 @@ test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', a
   thirdOwner.unmount()
 })
 
-test('useMutationQueue: unmount flushes work and cannot strand a failed optimistic lane', async t => {
+test('useMutationQueue: unmount stops automatic retries and cannot strand an optimistic lane', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useMutationQueue: useQueue } = createHooks(schema)
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
@@ -361,9 +361,12 @@ test('useMutationQueue: unmount flushes work and cannot strand a failed optimist
 
   const d = dom()
   let queue!: ReturnType<typeof useQueue>
-  const delayedQueue = defineMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const retryingQueue = defineMutationQueue({
+    retry: () => true,
+    retryDelay: 10_000,
+  })
   function Probe() {
-    queue = useQueue(delayedQueue)
+    queue = useQueue(retryingQueue)
     return null
   }
   d.render(
@@ -373,10 +376,11 @@ test('useMutationQueue: unmount flushes work and cannot strand a failed optimist
   )
 
   let pending!: Promise<Note>
-  await d.act(() => {
+  await d.flush(() => {
     pending = queue.m.notes.patch(1, { content: 'unsaved' })
   })
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'unsaved')
+  t.is(queue.status, 'retrying')
   d.unmount()
   await t.throwsAsync(() => pending, { message: 'offline' })
   await Promise.resolve()

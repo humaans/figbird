@@ -142,6 +142,7 @@ export class MutationQueue<S extends Schema> {
   #nextSequence = 1
   #snapshot: MutationQueueSnapshot = { status: 'idle', pending: 0, error: null }
   #failedDecision: ((decision: 'retry' | 'discard') => void) | null = null
+  #cancelRetryWait: (() => void) | null = null
   #flushThrough = 0
   #detached = false
 
@@ -182,6 +183,7 @@ export class MutationQueue<S extends Schema> {
   detach(): void {
     if (this.#detached) return
     this.#detached = true
+    this.#cancelRetryWait?.()
     if (this.#failedDecision) this.discard()
     else this.flush()
   }
@@ -336,16 +338,19 @@ export class MutationQueue<S extends Schema> {
     error: Error,
     attempt: number,
   ): Promise<'retry' | 'discard'> {
-    if (this.#shouldRetry(this.#config.retry ?? false, error, attempt, item.operation)) {
-      this.#setSnapshot({ status: 'retrying', error })
-      const delay = this.#retryDelay(this.#config.retryDelay ?? 0, attempt, error, item.operation)
-      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
-      return 'retry'
-    }
-
     if (this.#detached) {
       this.#discardAfter(item)
       return 'discard'
+    }
+
+    if (this.#shouldRetry(this.#config.retry ?? false, error, attempt, item.operation)) {
+      this.#setSnapshot({ status: 'retrying', error })
+      const delay = this.#retryDelay(this.#config.retryDelay ?? 0, attempt, error, item.operation)
+      if (!(await this.#waitForRetry(delay)) || this.#detached) {
+        this.#discardAfter(item)
+        return 'discard'
+      }
+      return 'retry'
     }
 
     this.#setSnapshot({ status: 'failed', error })
@@ -381,6 +386,23 @@ export class MutationQueue<S extends Schema> {
       () => (typeof delay === 'number' ? delay : delay(attempt, error, operation)),
       defaultRetryDelay(attempt),
     )
+  }
+
+  #waitForRetry(delay: number): Promise<boolean> {
+    if (this.#detached) return Promise.resolve(false)
+    if (delay === 0) return Promise.resolve(true)
+
+    return new Promise(resolve => {
+      const finish = (elapsed: boolean) => {
+        if (this.#cancelRetryWait === cancel) this.#cancelRetryWait = null
+        clearTimeout(timer)
+        resolve(elapsed)
+      }
+      const cancel = () => finish(false)
+      const timer = setTimeout(() => finish(true), delay)
+      this.#cancelRetryWait = cancel
+      if (this.#detached) cancel()
+    })
   }
 
   #armCurrent(): void {
