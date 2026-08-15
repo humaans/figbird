@@ -51,8 +51,8 @@
     "demo:client": "npm --prefix demo run dev:client",
     "release": "np --no-publish && npm publish",
     "release:next": "np --tag=next --any-branch --no-publish && npm publish --tag=next",
+    "docs": "hugo server -s docs",
     "docs:build": "hugo -s docs",
-    "docs:watch": "hugo server -s docs",
     "docs:release": "hugo -s docs && gh-pages -d docs/public"
   },
   "engines": {
