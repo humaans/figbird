@@ -16,6 +16,9 @@ export function WritesTab({ writes, inFlight }: { writes: WriteRecord[]; inFligh
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const actions = writes.filter(write => write.type === 'action')
   const mutations = writes.filter(write => write.type === 'mutation')
+  const optimisticInFlight = mutations.filter(
+    write => write.optimistic && write.status === 'in-flight',
+  ).length
   const selectedWrite = writes.find(write => write.id === selectedWriteId)
 
   return (
@@ -38,6 +41,14 @@ export function WritesTab({ writes, inFlight }: { writes: WriteRecord[]; inFligh
             Operation
             {inFlight > 0 ? (
               <span style={{ color: colors.blue, marginLeft: 8 }}>{inFlight} in flight</span>
+            ) : null}
+            {optimisticInFlight > 0 ? (
+              <span
+                style={{ color: colors.amber, marginLeft: 8 }}
+                title='Already projected into the cache; may still be scheduled or saving'
+              >
+                {optimisticInFlight} projected
+              </span>
             ) : null}
           </span>
           <span>Duration</span>
@@ -148,7 +159,9 @@ function WriteRow({
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
         <span style={{ color: selected ? colors.blue : colors.faint, marginRight: 6 }}>›</span>
         <strong style={{ fontWeight: 600 }}>{label}</strong>
-        {write.optimistic ? <span style={{ color: colors.muted }}> optimistic</span> : null}
+        {write.optimistic ? (
+          <span style={{ color: colors.amber }}> · optimistic projection</span>
+        ) : null}
         {write.error ? <div style={{ color: colors.red }}>{write.error}</div> : null}
       </span>
       <span>{write.durationMs === undefined ? '-' : formatMs(write.durationMs)}</span>
@@ -201,7 +214,10 @@ function WriteDetails({
           value={write.durationMs === undefined ? '-' : formatMs(write.durationMs)}
         />
         {write.type === 'mutation' ? (
-          <DetailStat label='Mode' value={write.optimistic ? 'optimistic' : 'confirmed'} />
+          <DetailStat
+            label='Cache mode'
+            value={write.optimistic ? 'projected immediately' : 'after confirmation'}
+          />
         ) : null}
       </div>
       {write.error ? (

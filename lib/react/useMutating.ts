@@ -26,7 +26,8 @@ export interface MutatingHost {
 }
 
 /**
- * True while any in-flight mutation matches the filter — the cross-cutting
+ * True while any active mutation matches the filter, including scheduled queue
+ * work — the cross-cutting
  * counterpart to `useAction`'s per-call-site state. Backed by the core's
  * synchronous mutation tracker, so it is correct even when the component mounts
  * while a mutation is already in flight, and it sees mutations fired from

@@ -37,12 +37,18 @@ export const issueCommentsQuery = defineQuery(({ id }: { id: number }) =>
   q.comments.where({ issueId: id }).related('author').related('reactions'),
 )
 
+/** A local-exact task set; assignees resolve from the preloaded users cache. */
+export const issueTasksQuery = defineQuery(({ id }: { id: number }) =>
+  q.tasks.where({ issueId: id }).orderBy('position', 'asc').related('assignee'),
+)
+
 export function issueDetailRouteQueries({ params }: RoutePrepareContext): QueryDescriptor[] {
   const id = Number(params.id)
   if (!Number.isFinite(id)) return []
 
   return [
     [issueDetailQuery, { id }],
+    [issueTasksQuery, { id }],
     [issueCommentsQuery, { id }],
   ]
 }

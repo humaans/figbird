@@ -82,6 +82,7 @@ Transient fetch failures retry up to three times with exponential backoff before
 - **Live queries** — results update as records are created, modified, or removed
 - **Suspense-native** — loading states live in boundaries, not branches
 - **Optimistic mutations** — declared once per surface, rolled back on failure everywhere
+- **Ordered autosave queues** — buffer and merge edits across related records without losing optimism
 - **Prepare & prefetch** — routers and hover handlers warm the exact queries screens will read
 - **Full TypeScript** — define a schema once, get inference through builders, relations, and mutations
 

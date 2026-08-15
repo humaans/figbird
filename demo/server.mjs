@@ -1,8 +1,8 @@
 /**
  * Tiny Feathers server for the figbird demo.
  *
- * Exposes services over Socket.IO: issues, comments, users, teams, labels,
- * issue-label joins, reactions.
+ * Exposes services over Socket.IO: issues, tasks, comments, users, teams,
+ * labels, issue-label joins, reactions.
  *
  * Simulated conditions are a *dial*, not a tax:
  *   - Network latency has three profiles — fast (default, LAN-ish), realistic
@@ -118,6 +118,10 @@ const comments = new SlowMemoryService(
   { multi: false, paginate: { default: 50, max: 500 } },
   { speed: 1.2 },
 )
+const tasks = new SlowMemoryService(
+  { multi: false, paginate: { default: 100, max: 500 } },
+  { speed: 0.9 },
+)
 const issueLabels = new SlowMemoryService(
   { multi: false, paginate: { default: 100, max: 1000 } },
   { speed: 0.8 },
@@ -132,10 +136,11 @@ app.use('teams', teams)
 app.use('labels', labels)
 app.use('issues', issues)
 app.use('comments', comments)
+app.use('tasks', tasks)
 app.use('issueLabels', issueLabels)
 app.use('reactions', reactions)
 
-const allServices = [users, teams, labels, issues, comments, issueLabels, reactions]
+const allServices = [users, teams, labels, issues, comments, tasks, issueLabels, reactions]
 
 const clearStores = () => {
   for (const svc of allServices) {
@@ -263,6 +268,7 @@ const seed = async () => {
 
   const issueCount = 90
   let commentId = 1
+  let taskId = 1
   let issueLabelId = 1
   let reactionId = 1
 
@@ -284,6 +290,23 @@ const seed = async () => {
       commentIds: [],
     }
     issues.store[issue.id] = issue
+
+    // A few concrete tasks make the issue-local mutation queue immediately
+    // playable. Positions are sparse so optimistic inserts can land between rows.
+    const taskCount = i <= 20 ? 1 + Math.floor(rng() * 3) : Math.floor(rng() * 2)
+    for (let n = 0; n < taskCount; n++) {
+      const assigneeId = rng() < 0.7 ? pick(userIds) : null
+      tasks.store[taskId] = {
+        id: taskId,
+        issueId: issue.id,
+        title:
+          ['Reproduce the issue', 'Confirm expected behavior', 'Ship and verify'][n] ?? 'Follow up',
+        completed: n === 0 && rng() < 0.35,
+        assigneeId,
+        position: n + 1,
+      }
+      taskId++
+    }
 
     // Labels: 0–3 distinct labels per issue.
     const labelCount = Math.floor(rng() * 4)
@@ -335,6 +358,7 @@ const seed = async () => {
 
   nextIssueId = issueCount + 1
   nextCommentId = commentId
+  nextTaskId = taskId
   nextIssueLabelId = issueLabelId
   nextReactionId = reactionId
 }
@@ -382,6 +406,7 @@ app.service('issues').hooks({
 
 let nextIssueId = 1
 let nextCommentId = 1
+let nextTaskId = 1
 let nextIssueLabelId = 1
 let nextReactionId = 1
 
@@ -586,6 +611,40 @@ app.service('comments').hooks({
               { commentIds: [...(issue.commentIds ?? []), context.result.id] },
               { internal: true },
             )
+        }
+        return context
+      },
+    ],
+  },
+})
+
+// ----- Tasks hooks: ordered, issue-owned rows with optional user assignment -----
+
+app.service('tasks').hooks({
+  before: {
+    create: [
+      async context => {
+        if (!issues.store[context.data.issueId]) {
+          throw new NotFound(`Issue ${String(context.data.issueId)} does not exist`)
+        }
+        if (context.data.assigneeId != null && !users.store[context.data.assigneeId]) {
+          throw new NotFound(`User ${String(context.data.assigneeId)} does not exist`)
+        }
+        context.data = {
+          ...context.data,
+          id: context.data.id ?? nextTaskId++,
+          title: context.data.title ?? '',
+          completed: context.data.completed ?? false,
+          assigneeId: context.data.assigneeId ?? null,
+          position: context.data.position ?? Date.now(),
+        }
+        return context
+      },
+    ],
+    patch: [
+      async context => {
+        if (context.data.assigneeId != null && !users.store[context.data.assigneeId]) {
+          throw new NotFound(`User ${String(context.data.assigneeId)} does not exist`)
         }
         return context
       },

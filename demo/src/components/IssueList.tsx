@@ -133,12 +133,12 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
     loadMore,
     hasMore,
     isLoadingMore,
-    totalCount,
+    total,
   } = useQuery(
     q.issues
       .where(where)
       .orderBy('updatedAt', 'desc')
-      .paginate({ pageSize: 25, returnTotal: true })
+      .paginate({ pageSize: 25, includeTotal: true })
       .related('assignee')
       .related('team')
       .related('labels'),
@@ -150,7 +150,7 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
         <span className='eyebrow'>Issues</span>
         <span className='count'>
           {issues.length}
-          {totalCount != null ? ` of ${totalCount}` : ''}
+          {total != null ? ` of ${total}` : ''}
         </span>
         <StatusDot active={isFetching} />
         <Explain
@@ -158,7 +158,7 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
           query={`q.issues
   .where(filters)
   .orderBy('updatedAt', 'desc')
-  .paginate({ pageSize: 25, returnTotal: true })
+  .paginate({ pageSize: 25, includeTotal: true })
   .related('assignee')
   .related('team')
   .related('labels') // two-hop via issueLabels`}

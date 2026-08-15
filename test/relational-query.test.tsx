@@ -1781,6 +1781,156 @@ test('realtime: relation-path filters match root events through cached relations
   unmount()
 })
 
+test('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
+  interface FilterDocument {
+    id: number
+    title: string
+    personId: number
+  }
+  interface FilterPerson {
+    id: number
+    name: string
+    orgUnitId: number
+  }
+  interface FilterOrgUnit {
+    id: number
+    label: string
+  }
+
+  const filterSchema = createSchema({
+    services: {
+      documents: service<{ item: FilterDocument }>(),
+      people: service<{ item: FilterPerson }>(),
+      orgUnits: service<{ item: FilterOrgUnit }>(),
+    },
+    relationships: {
+      documents: ({ one }) => ({
+        person: one({ sourceField: 'personId', destService: 'people', destField: 'id' }),
+      }),
+      people: ({ one }) => ({
+        orgUnit: one({ sourceField: 'orgUnitId', destService: 'orgUnits', destField: 'id' }),
+      }),
+    },
+  })
+
+  const { App, figbird, feathers } = createTestApp(filterSchema, {
+    documents: { data: {} },
+    people: { data: { 1: { id: 1, name: 'Ari', orgUnitId: 1 } } },
+    orgUnits: {
+      data: {
+        1: { id: 1, label: 'Engineering' },
+        2: { id: 2, label: 'People' },
+      },
+    },
+  })
+  const { render, unmount, flush, act, $all } = dom()
+
+  function Documents() {
+    useStatusQuery(figbird.q.people.related('orgUnit'))
+    const documents = useStatusQuery(
+      figbird.q.documents
+        .where({ 'person.orgUnit.label': 'Engineering' })
+        .related('person', person => person.related('orgUnit')),
+    )
+    if (documents.status !== 'success') return <div>Loading</div>
+    return (
+      <ul>
+        {documents.data.map(document => (
+          <li className='document' key={document.id}>
+            {document.title}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  render(
+    <App>
+      <Documents />
+    </App>,
+  )
+  await flush()
+  await feathers.service('documents').create({ id: 1, title: 'Plan', personId: 1 })
+  await flush()
+  t.deepEqual(
+    $all('.document').map(node => node.innerHTML),
+    ['Plan'],
+  )
+
+  const findCount = feathers.service('documents').counts.find
+  let resolvePatch!: (item: FilterPerson) => void
+  feathers.service('people').patch = (() =>
+    new Promise(resolve => {
+      resolvePatch = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<FilterPerson>
+  act(() => {
+    pending = queue.m.people.patch(1, { orgUnitId: 2 })
+  })
+
+  t.deepEqual(
+    $all('.document').map(node => node.innerHTML),
+    [],
+  )
+  t.is(
+    feathers.service('documents').counts.find,
+    findCount,
+    'projected dependency changes are resolved from local entities',
+  )
+
+  await act(async () => {
+    queue.flush()
+    resolvePatch({ id: 1, name: 'Ari', orgUnitId: 2 })
+    await pending
+  })
+  t.is(
+    feathers.service('documents').counts.find,
+    findCount + 1,
+    'the relation-filtered root reconciles once after the mutation lane drains',
+  )
+  unmount()
+})
+
+test('optimistic queue: child patches update an assembled relation before transport', async t => {
+  const { App, figbird, feathers } = createApp()
+  const { render, unmount, flush, act, $ } = dom()
+
+  function IssueComments() {
+    const issue = useStatusQuery(figbird.q.issues.get(1).related('comments'))
+    if (issue.status !== 'success') return <div>Loading</div>
+    return <div className='body'>{issue.data!.comments[0]?.body}</div>
+  }
+
+  render(
+    <App>
+      <IssueComments />
+    </App>,
+  )
+  await flush()
+
+  let resolvePatch!: (item: Comment) => void
+  feathers.service('comments').patch = (() =>
+    new Promise(resolve => {
+      resolvePatch = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<Comment>
+  act(() => {
+    pending = queue.m.comments.patch(1, { body: 'Optimistic body' })
+  })
+
+  t.is($('.body')?.innerHTML, 'Optimistic body')
+  t.is(feathers.service('comments').counts.patch, 0)
+
+  await act(async () => {
+    queue.flush()
+    resolvePatch({ id: 1, issueId: 1, authorId: 2, body: 'Optimistic body' })
+    await pending
+  })
+  unmount()
+})
+
 test('realtime: child entity arrival on nested relation updates the assembled view', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
@@ -2385,7 +2535,7 @@ test('useQuery: server refetches a server-authoritative query from its service e
 })
 
 test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
-  const { render, unmount, flush, $ } = dom()
+  const { render, unmount, flush, act, $ } = dom()
   const { App, figbird, feathers } = createProfileQueryApp()
 
   function ProfileView() {
@@ -2396,6 +2546,7 @@ test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
     return (
       <div
         className='profile'
+        data-manager-fk={String(data.managerId ?? 'none')}
         data-manager={data.manager?.name ?? 'none'}
         data-manager-id={String(data.manager?.id ?? 'none')}
       />
@@ -2414,12 +2565,41 @@ test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
 
   t.is($('.profile')!.getAttribute('data-manager'), 'Mira')
   t.is($('.profile')!.getAttribute('data-manager-id'), '10')
+  t.is($('.profile')!.getAttribute('data-manager-fk'), '10')
 
-  await feathers.service('people').patch(1, { managerId: 11 })
+  let resolvePatch!: (item: ProfilePerson) => void
+  feathers.service('people').patch = (() =>
+    new Promise(resolve => {
+      resolvePatch = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<ProfilePerson>
+  act(() => {
+    pending = queue.m.people.patch(1, { managerId: 11 })
+  })
+
+  t.is(
+    $('.profile')!.getAttribute('data-manager-fk'),
+    '11',
+    'the optimistic foreign key stays visible while its new relation leaf loads',
+  )
+
   await flush()
 
   t.is($('.profile')!.getAttribute('data-manager'), 'Nia')
   t.is($('.profile')!.getAttribute('data-manager-id'), '11')
+
+  await act(async () => {
+    queue.flush()
+    resolvePatch({
+      id: 1,
+      name: 'Alice',
+      status: 'active',
+      managerId: 11,
+      startDate: '2024-01-01',
+    })
+    await pending
+  })
 
   unmount()
 })
@@ -2502,6 +2682,7 @@ test('useQuery: many-to-many through a join service expands nested relation leav
 test('useQuery: limited sorted relation refetches its server window after a visible item leaves', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createWindowQueryApp()
+  const people = feathers.service('people')
 
   function CompanyView() {
     const { data, isFetching } = useQuery(
@@ -2541,8 +2722,19 @@ test('useQuery: limited sorted relation refetches its server window after a visi
   t.is($('.company')!.getAttribute('data-people'), 'Alice,Bob')
   t.is($('.company')!.getAttribute('data-employment'), 'Alice role,Bob role')
 
-  await feathers.service('people').patch(2, { status: 'inactive' })
-  await flush()
+  people.setDelay(40)
+  await flush(async () => {
+    await people.patch(2, { status: 'inactive' })
+  })
+
+  t.is(
+    $('.company')!.getAttribute('data-fetching'),
+    'true',
+    'a relation-only revalidation contributes to graph isFetching',
+  )
+  t.is($('.company')!.getAttribute('data-people'), 'Alice,Bob')
+
+  await flush(() => new Promise(resolve => setTimeout(resolve, 50)))
 
   t.is($('.company')!.getAttribute('data-fetching'), 'false')
   t.is($('.company')!.getAttribute('data-people'), 'Alice,Cara')
@@ -2908,7 +3100,11 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
     const { data, refetch } = useQuery(figbird.q.issues.related('comments').snapshot())
     refetchFn = refetch
     return (
-      <div className='frozen' data-count={data.length}>
+      <div
+        className='frozen'
+        data-count={data.length}
+        data-comments={data.reduce((total, issue) => total + issue.comments.length, 0)}
+      >
         {data.map(issue => (
           <span key={issue.id} className='row' data-comments={issue.comments.length} />
         ))}
@@ -2925,6 +3121,7 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
   )
   await flush()
   t.is($('.frozen')!.getAttribute('data-count'), '3')
+  t.is($('.frozen')!.getAttribute('data-comments'), '3')
 
   // Realtime events on both services — a frozen tree must not move.
   await feathers.service('issues').create({ id: 99, title: 'New', status: 'open', creatorId: 1 })
@@ -2935,6 +3132,18 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
   // refetch() is the only way it moves.
   await flush(() => refetchFn!())
   t.is($('.frozen')!.getAttribute('data-count'), '4')
+  t.is($('.frozen')!.getAttribute('data-comments'), '4')
+
+  // The root set is now unchanged: only a relation query can discover this row.
+  await feathers.service('comments').create({ id: 100, issueId: 1, authorId: 2, body: 'later' })
+  await flush()
+  t.is($('.frozen')!.getAttribute('data-comments'), '4')
+  await flush(() => refetchFn!())
+  t.is(
+    $('.frozen')!.getAttribute('data-comments'),
+    '5',
+    'graph refetch refreshes relation leaves even when the root rows are unchanged',
+  )
 
   // Identity: frozen and live reads of the same filters do not share a cache entry.
   t.not(figbird.query(figbird.q.issues.snapshot()).hash(), figbird.query(figbird.q.issues).hash())
@@ -3463,9 +3672,11 @@ test('junction: useQuery returns dest items via the junction transparently', asy
 
 test('junction: realtime — adding a roleMember row appears under the right role', async t => {
   const { App, figbird, feathers } = createJunctionApp()
-  const { render, unmount, flush, $ } = dom()
+  const { render, unmount, flush, act, $ } = dom()
 
   function AdminRole() {
+    // Materialize the reference service, matching lookup-table-heavy applications.
+    useQuery(figbird.q.users2.all())
     const { data } = useQuery(figbird.q.roles2.get(1).related('members'))
     return (
       <div className='members'>
@@ -3487,12 +3698,29 @@ test('junction: realtime — adding a roleMember row appears under the right rol
   await flush()
   t.is($('.members')!.innerHTML, 'Alice,Bob')
 
-  // Add a junction row binding Cara to Admin. Realtime on the junction service should
-  // flow through both subs and re-assemble.
-  await flush(async () => {
-    await feathers.service('roleMembers').create({ id: 5, roleId: 1, userId: 3 })
+  let resolveCreate!: (item: RoleMember) => void
+  feathers.service('roleMembers').create = (() =>
+    new Promise(resolve => {
+      resolveCreate = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<RoleMember>
+  act(() => {
+    pending = queue.m.roleMembers.create({ id: 5, roleId: 1, userId: 3 })
   })
-  t.is($('.members')!.innerHTML, 'Alice,Bob,Cara')
+
+  await flush()
+  t.is(
+    $('.members')!.innerHTML,
+    'Alice,Bob,Cara',
+    'an optimistic junction edge resolves immediately from a materialized destination',
+  )
+
+  await act(async () => {
+    queue.flush()
+    resolveCreate({ id: 5, roleId: 1, userId: 3 })
+    await pending
+  })
 
   unmount()
 })

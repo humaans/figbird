@@ -1,6 +1,9 @@
-import type { ProcessedRealtimeEvent } from './queryTypes.js'
-
-type ItemId = string | number
+import {
+  entityKey,
+  type EntityKey,
+  type ItemId,
+  type ProcessedRealtimeEvent,
+} from './queryTypes.js'
 
 /** Maximum retained events per service while one or more fetches are in flight. */
 export const MAX_FETCH_JOURNAL_EVENTS = 1024
@@ -124,8 +127,8 @@ export class FetchEventJournal {
 
 export interface FetchRebasePlan {
   readonly events: readonly ProcessedRealtimeEvent[]
-  readonly latestEventById: ReadonlyMap<ItemId, ProcessedRealtimeEvent>
-  readonly itemIds: ReadonlySet<ItemId>
+  readonly latestEventById: ReadonlyMap<EntityKey, ProcessedRealtimeEvent>
+  readonly itemIds: ReadonlySet<EntityKey>
 }
 
 /** Drop journal events that the response is provably newer than. */
@@ -140,13 +143,13 @@ export function planFetchRebase({
   getId: (item: unknown) => ItemId | undefined
   isItemStale: (current: unknown, next: unknown) => boolean
 }): FetchRebasePlan {
-  const responseItemsById = new Map<ItemId, unknown>()
+  const responseItemsById = new Map<EntityKey, unknown>()
   for (const item of responseItems) {
     const itemId = getId(item)
-    if (itemId !== undefined) responseItemsById.set(itemId, item)
+    if (itemId !== undefined) responseItemsById.set(entityKey(itemId), item)
   }
 
-  const latestJournalEventById = new Map<ItemId, ProcessedRealtimeEvent>()
+  const latestJournalEventById = new Map<EntityKey, ProcessedRealtimeEvent>()
   for (const event of journalEvents) {
     latestJournalEventById.set(event.itemId, event)
   }
@@ -154,7 +157,7 @@ export function planFetchRebase({
   // isItemStale(current, next) means `next` is older. If the event is older
   // than the response row, the server computed that row after the event and no
   // replay is needed. Missing or equal timestamps remain conservative.
-  const supersededItemIds = new Set<ItemId>()
+  const supersededItemIds = new Set<EntityKey>()
   for (const [itemId, event] of latestJournalEventById) {
     const responseItem = responseItemsById.get(itemId)
     if (responseItem !== undefined && isItemStale(responseItem, event.item)) {
@@ -163,7 +166,7 @@ export function planFetchRebase({
   }
 
   const events = journalEvents.filter(event => !supersededItemIds.has(event.itemId))
-  const latestEventById = new Map<ItemId, ProcessedRealtimeEvent>()
+  const latestEventById = new Map<EntityKey, ProcessedRealtimeEvent>()
   for (const event of events) {
     latestEventById.set(event.itemId, event)
   }
@@ -174,18 +177,47 @@ export function planFetchRebase({
 export interface RebasedResponse {
   readonly data: unknown
   readonly items: readonly unknown[]
-  readonly itemIds: ReadonlySet<ItemId>
+  readonly itemIds: ReadonlySet<EntityKey>
+}
+
+export type FetchResponseMode = 'entity' | 'projection' | 'snapshot'
+
+function overlayProjectionItem(
+  responseItem: unknown,
+  event: ProcessedRealtimeEvent,
+): unknown | undefined {
+  if (event.type === 'removed') return undefined
+  if (
+    !responseItem ||
+    typeof responseItem !== 'object' ||
+    Array.isArray(responseItem) ||
+    !event.item ||
+    typeof event.item !== 'object' ||
+    Array.isArray(event.item)
+  ) {
+    return responseItem
+  }
+
+  const response = responseItem as Record<string, unknown>
+  const projected = { ...response }
+  const authoritative = event.item as Record<string, unknown>
+  for (const key of Object.keys(response)) {
+    if (Object.prototype.hasOwnProperty.call(authoritative, key)) {
+      projected[key] = authoritative[key]
+    }
+  }
+  return projected
 }
 
 /**
  * Rebase response values over newer cached entities for realtime-aware queries.
- * Some queries must keep their server response items unchanged: snapshots preserve
- * exact values, while projections preserve a partial row shape. Cache protection
- * remains a separate store concern.
+ * Snapshots preserve exact server values. Entity responses may reuse newer cached
+ * rows. Projections apply known newer values only within the server-returned shape;
+ * a partial row must never be promoted to canonical entity authority.
  */
 export function rebaseResponseData({
   data,
-  preserveResponseItems,
+  mode,
   latestEventById,
   entities,
   getId,
@@ -193,21 +225,26 @@ export function rebaseResponseData({
   canKeepCurrentItem,
 }: {
   data: unknown
-  preserveResponseItems: boolean
-  latestEventById: ReadonlyMap<ItemId, ProcessedRealtimeEvent>
-  entities: ReadonlyMap<ItemId, unknown>
+  mode: FetchResponseMode
+  latestEventById: ReadonlyMap<EntityKey, ProcessedRealtimeEvent>
+  entities: ReadonlyMap<EntityKey, unknown>
   getId: (item: unknown) => ItemId | undefined
   isItemStale: (current: unknown, next: unknown) => boolean
   canKeepCurrentItem: (item: unknown) => boolean
 }): RebasedResponse {
   const rebaseItem = (item: unknown): unknown | undefined => {
-    if (preserveResponseItems) return item
+    if (mode === 'snapshot') return item
 
     const itemId = getId(item)
     if (itemId === undefined) return item
+    const key = entityKey(itemId)
 
-    const currentItem = entities.get(itemId)
-    const journalEvent = latestEventById.get(itemId)
+    const journalEvent = latestEventById.get(key)
+    if (mode === 'projection') {
+      return journalEvent ? overlayProjectionItem(item, journalEvent) : item
+    }
+
+    const currentItem = entities.get(key)
     if (journalEvent) {
       // Preserve response membership until ordered replay updates meta and get
       // errors. The stale response value itself never replaces the cache value.
@@ -227,10 +264,10 @@ export function rebaseResponseData({
       ? data
       : rebaseItem(data)
   const items = Array.isArray(rebasedData) ? rebasedData : rebasedData == null ? [] : [rebasedData]
-  const itemIds = new Set<ItemId>()
+  const itemIds = new Set<EntityKey>()
   for (const item of items) {
     const itemId = getId(item)
-    if (itemId !== undefined) itemIds.add(itemId)
+    if (itemId !== undefined) itemIds.add(entityKey(itemId))
   }
 
   return { data: rebasedData, items, itemIds }

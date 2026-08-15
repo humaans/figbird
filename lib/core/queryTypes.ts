@@ -2,6 +2,14 @@ import type { AnySchema, Schema, ServiceItem, ServiceNames } from './schema.js'
 import type { StoredQueryClass } from './queryClassification.js'
 import type { PageInfo, PageRequest } from '../adapters/adapter.js'
 
+export type ItemId = string | number
+export type EntityKey = string
+
+/** Canonical cache identity: numeric and string forms address the same item. */
+export function entityKey(id: ItemId): EntityKey {
+  return String(id)
+}
+
 /**
  * Event types supported by Figbird
  */
@@ -18,25 +26,40 @@ export interface Event {
 /**
  * Queued event for batch processing
  */
-export interface QueuedEvent {
+interface QueuedEventBase {
   serviceName: string
   type: EventType
   items: unknown[]
 }
+
+/** Internal entity changes waiting at the store's atomic event boundary. */
+export type QueuedEvent =
+  | (QueuedEventBase & { origin: 'authoritative' })
+  | (QueuedEventBase & { origin: 'projection'; mutationLaneKey: string })
 
 /**
  * A realtime event after it has been applied to the entity cache. Carries the
  * previous entity so downstream invalidation logic (e.g. relational filters) can
  * detect which fields changed.
  */
-export interface ProcessedRealtimeEvent {
+interface ProcessedEventBase {
   serviceName: string
   type: EventType
   item: unknown
   previousItem: unknown | null
   /** Always defined — events whose item has no resolvable id are never applied. */
-  itemId: string | number
+  itemId: EntityKey
 }
+
+/** An optimistic entity change after cache application. */
+export type ProcessedProjectionEvent = ProcessedEventBase & {
+  origin: 'projection'
+  mutationLaneKey: string
+}
+
+/** An authoritative or optimistic entity change after cache application. */
+export type ProcessedRealtimeEvent =
+  (ProcessedEventBase & { origin: 'authoritative' }) | ProcessedProjectionEvent
 
 export type QueryStatus = 'loading' | 'success' | 'error'
 
@@ -115,9 +138,9 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
  * Service state in the store
  */
 export interface ServiceState<TMeta = Record<string, unknown>> {
-  entities: Map<string | number, unknown>
+  entities: Map<EntityKey, unknown>
   queries: Map<string, Query<unknown, TMeta, unknown>>
-  itemQueryIndex: Map<string | number, Set<string>>
+  itemQueryIndex: Map<EntityKey, Set<string>>
   /**
    * Set when an unfiltered allPages fetch (a filterless `.all()`) succeeded: the
    * complete row set is in the entity cache, realtime maintains it, and matcher-
@@ -317,6 +340,12 @@ interface BaseMutationDescriptor {
    * (typed per service by the `mutateDesc` overloads — this is the untyped base).
    */
   optimistic?: boolean | unknown
+  /**
+   * Partial record used for the optimistic projection when the wire payload and
+   * the local shape differ. Unlike `optimistic`, this is merged over the current
+   * projected record. It is meaningful for update/patch mutations only.
+   */
+  optimisticPatch?: unknown
 }
 
 /**

@@ -13,6 +13,9 @@ import { isServerMaintained } from './queryClassification.js'
 import { ItemRemovedError } from './errors.js'
 import { buildComparator } from './sort.js'
 import {
+  entityKey,
+  type EntityKey,
+  type ItemId,
   queryOfParams,
   type EventType,
   type ProcessedRealtimeEvent,
@@ -21,8 +24,6 @@ import {
   type QueuedEvent,
   type ServiceState,
 } from './queryTypes.js'
-
-type ItemId = string | number
 
 export function createServiceState<TMeta = Record<string, unknown>>(): ServiceState<TMeta> {
   return {
@@ -42,15 +43,25 @@ function getQueryItems<TMeta = Record<string, unknown>>(
       : []
 }
 
+function itemHasKey(
+  item: unknown,
+  key: EntityKey,
+  getId: (item: unknown) => ItemId | undefined,
+): boolean {
+  const id = getId(item)
+  return id !== undefined && entityKey(id) === key
+}
+
 export function addQueryToItemIndex<TMeta>(
   service: ServiceState<TMeta>,
   itemId: ItemId,
   queryId: string,
 ): void {
-  if (!service.itemQueryIndex.has(itemId)) {
-    service.itemQueryIndex.set(itemId, new Set())
+  const key = entityKey(itemId)
+  if (!service.itemQueryIndex.has(key)) {
+    service.itemQueryIndex.set(key, new Set())
   }
-  service.itemQueryIndex.get(itemId)!.add(queryId)
+  service.itemQueryIndex.get(key)!.add(queryId)
 }
 
 export function removeQueryFromItemIndex<TMeta>({
@@ -77,19 +88,13 @@ export function removeQueryFromItemIndexById<TMeta>(
   itemId: ItemId,
   queryId: string,
 ): void {
-  const queryIds = service.itemQueryIndex.get(itemId)
+  const key = entityKey(itemId)
+  const queryIds = service.itemQueryIndex.get(key)
   if (!queryIds) return
   queryIds.delete(queryId)
   if (queryIds.size === 0) {
-    service.itemQueryIndex.delete(itemId)
+    service.itemQueryIndex.delete(key)
   }
-}
-
-// Deliberately loose, unlike the strictly-keyed entity cache: get descriptors often
-// carry numeric ids as strings (route params) while entities use numbers. The server
-// performs the same coercion when resolving a get.
-function isSameId(a: ItemId, b: ItemId): boolean {
-  return String(a) === String(b)
 }
 
 // `$sort` doesn't affect which rows are fetched, so a sorted-but-unfiltered
@@ -165,17 +170,28 @@ export function applyEventsToService<TMeta>({
     const { type, items } = event
     for (const item of items) {
       if (type === 'created') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
+        const incomingId = getId(item)
+        if (incomingId !== undefined) {
+          const itemId = entityKey(incomingId)
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.set(itemId, item)
-          processedEvents.push({ serviceName, type, item, previousItem, itemId })
+          processedEvents.push({
+            serviceName,
+            type,
+            item,
+            previousItem,
+            itemId,
+            ...(event.origin === 'projection'
+              ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
+              : { origin: event.origin }),
+          })
         }
       } else if (type === 'updated' || type === 'patched') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
+        const incomingId = getId(item)
+        if (incomingId !== undefined) {
+          const itemId = entityKey(incomingId)
           const currItem = service.entities.get(itemId)
-          if (!currItem || !isItemStale(currItem, item)) {
+          if (event.origin === 'projection' || !currItem || !isItemStale(currItem, item)) {
             service.entities.set(itemId, item)
             processedEvents.push({
               serviceName,
@@ -183,15 +199,28 @@ export function applyEventsToService<TMeta>({
               item,
               previousItem: currItem ?? null,
               itemId,
+              ...(event.origin === 'projection'
+                ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
+                : { origin: event.origin }),
             })
           }
         }
       } else if (type === 'removed') {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
+        const incomingId = getId(item)
+        if (incomingId !== undefined) {
+          const itemId = entityKey(incomingId)
           const previousItem = service.entities.get(itemId) ?? null
           service.entities.delete(itemId)
-          processedEvents.push({ serviceName, type, item, previousItem, itemId })
+          processedEvents.push({
+            serviceName,
+            type,
+            item,
+            previousItem,
+            itemId,
+            ...(event.origin === 'projection'
+              ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
+              : { origin: event.origin }),
+          })
         }
       }
     }
@@ -214,17 +243,24 @@ export function diffCompleteSet<TMeta>({
 }: {
   service: ServiceState<TMeta>
   serviceName: string
-  previousEntities: Map<ItemId, unknown>
-  nextItemIds: Set<ItemId>
+  previousEntities: Map<EntityKey, unknown>
+  nextItemIds: Set<EntityKey>
   /** Items changed by events during the fetch; those events already own their diff. */
-  ignoredItemIds?: ReadonlySet<ItemId>
+  ignoredItemIds?: ReadonlySet<EntityKey>
 }): ProcessedRealtimeEvent[] {
   const events: ProcessedRealtimeEvent[] = []
   for (const [itemId, previousItem] of previousEntities) {
     if (ignoredItemIds?.has(itemId)) continue
     if (!nextItemIds.has(itemId)) {
       service.entities.delete(itemId)
-      events.push({ serviceName, type: 'removed', item: previousItem, previousItem, itemId })
+      events.push({
+        origin: 'authoritative',
+        serviceName,
+        type: 'removed',
+        item: previousItem,
+        previousItem,
+        itemId,
+      })
     }
   }
   for (const itemId of nextItemIds) {
@@ -232,9 +268,23 @@ export function diffCompleteSet<TMeta>({
     const item = service.entities.get(itemId)!
     const previousItem = previousEntities.get(itemId)
     if (!previousItem) {
-      events.push({ serviceName, type: 'created', item, previousItem: null, itemId })
+      events.push({
+        origin: 'authoritative',
+        serviceName,
+        type: 'created',
+        item,
+        previousItem: null,
+        itemId,
+      })
     } else if (previousItem !== item) {
-      events.push({ serviceName, type: 'updated', item, previousItem, itemId })
+      events.push({
+        origin: 'authoritative',
+        serviceName,
+        type: 'updated',
+        item,
+        previousItem,
+        itemId,
+      })
     }
   }
   return events
@@ -262,7 +312,7 @@ function applyVisibleEventEffect<TMeta>(
   if (!query) return false
 
   const { itemId } = event
-  if (query.desc.method === 'get' && !isSameId(query.desc.resourceId, itemId)) {
+  if (query.desc.method === 'get' && entityKey(query.desc.resourceId) !== itemId) {
     return false
   }
 
@@ -276,12 +326,12 @@ function applyVisibleEventEffect<TMeta>(
             data: null,
             meta: itemRemoved(query.state.meta),
             isFetching: false,
-            error: new ItemRemovedError(itemId),
+            error: new ItemRemovedError(query.desc.resourceId),
           }
         : {
             ...query.state,
             meta: itemRemoved(query.state.meta),
-            data: (query.state.data as unknown[]).filter(item => getId(item) !== itemId),
+            data: (query.state.data as unknown[]).filter(item => !itemHasKey(item, itemId, getId)),
           }
     service.queries.set(queryId, { ...query, state: nextState })
     removeQueryFromItemIndexById(service, itemId, queryId)
@@ -312,7 +362,7 @@ function applyVisibleEventEffect<TMeta>(
     state: {
       ...query.state,
       data: (query.state.data as unknown[]).map(current =>
-        getId(current) === itemId ? item : current,
+        itemHasKey(current, itemId, getId) ? item : current,
       ),
     },
   })
@@ -432,7 +482,7 @@ function applyMergeEventToQuery<TMeta>(
     matches &&
     type === 'created' &&
     query.desc.method === 'get' &&
-    isSameId(query.desc.resourceId, itemId)
+    entityKey(query.desc.resourceId) === itemId
   ) {
     // Restore a get query when its resource reappears after a removal or rollback.
     return applyVisibleEventEffect(context, queryId, event, 'replace') ? 'applied' : 'ignored'
@@ -481,6 +531,94 @@ export function updateQueriesFromEvents<TMeta>({
       }
     }
   }
+}
+
+export type QueryReapplyResult = 'applied' | 'reconcile' | 'ignored'
+
+/** Rebuild one locally decidable find from the entity cache. */
+export function reapplyQueryFromEntities<TMeta>({
+  service,
+  queryId,
+  touch,
+  getId,
+  itemAdded,
+  itemRemoved,
+  defaultSort,
+}: {
+  service: ServiceState<TMeta>
+  queryId: string
+  touch: (queryId: string) => void
+  getId: (item: unknown) => ItemId | undefined
+  itemAdded: (meta: TMeta) => TMeta
+  itemRemoved: (meta: TMeta) => TMeta
+  defaultSort?: Record<string, number> | undefined
+}): QueryReapplyResult {
+  const query = service.queries.get(queryId)
+  if (!query || query.config.realtime !== 'merge') return 'ignored'
+  if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') return 'ignored'
+  if (isServerMaintained(query.classification)) return 'reconcile'
+  if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
+  if (!Array.isArray(query.state.data)) return 'ignored'
+
+  const candidates = new Map<EntityKey, { id: EntityKey; item: unknown }>()
+  for (const [storedId, item] of service.entities) {
+    const incomingId = getId(item)
+    if (incomingId === undefined || !query.filterItem(item)) continue
+    candidates.set(storedId, { id: storedId, item })
+  }
+
+  const previousRows = query.state.data as unknown[]
+  const previousKeys = new Set<EntityKey>()
+  for (const item of previousRows) {
+    const itemId = getId(item)
+    if (itemId === undefined) continue
+    previousKeys.add(entityKey(itemId))
+  }
+
+  const retainedKeys = new Set<EntityKey>()
+  const nextRows: unknown[] = []
+  for (const item of previousRows) {
+    const itemId = getId(item)
+    if (itemId === undefined) continue
+    const key = entityKey(itemId)
+    const candidate = candidates.get(key)
+    if (!candidate) continue
+    retainedKeys.add(key)
+    nextRows.push(candidate.item)
+  }
+  for (const [key, candidate] of candidates) {
+    if (!retainedKeys.has(key)) nextRows.push(candidate.item)
+  }
+
+  const { sort } = splitWindow(queryOfParams(query.desc.params))
+  const effectiveSort = sort ?? defaultSort
+  if (effectiveSort) nextRows.sort(buildComparator(effectiveSort))
+
+  const nextKeys = new Set(candidates.keys())
+  const added = [...nextKeys].filter(key => !previousKeys.has(key))
+  const removed = [...previousKeys].filter(key => !nextKeys.has(key))
+  const dataChanged =
+    previousRows.length !== nextRows.length ||
+    previousRows.some((item, index) => item !== nextRows[index])
+  if (!dataChanged && added.length === 0 && removed.length === 0) return 'ignored'
+
+  for (const key of removed) {
+    removeQueryFromItemIndexById(service, key, queryId)
+  }
+  for (const key of added) {
+    const candidate = candidates.get(key)
+    if (candidate) addQueryToItemIndex(service, candidate.id, queryId)
+  }
+
+  let meta = query.state.meta
+  for (let index = 0; index < added.length; index += 1) meta = itemAdded(meta)
+  for (let index = 0; index < removed.length; index += 1) meta = itemRemoved(meta)
+  service.queries.set(queryId, {
+    ...query,
+    state: { ...query.state, data: nextRows, meta },
+  })
+  touch(queryId)
+  return 'applied'
 }
 
 /** Replay in-flight events over one fetched query without changing disabled snapshots. */
@@ -588,7 +726,7 @@ function mergeEventIntoWindow<TMeta>({
   type: EventType
   item: unknown
   previousItem: unknown | null
-  itemId: ItemId
+  itemId: EntityKey
   hasItem: boolean
   getId: (item: unknown) => ItemId | undefined
   defaultSort?: Record<string, number> | undefined
@@ -708,7 +846,7 @@ function mergeEventIntoWindow<TMeta>({
     if (full) return { action: 'refetch' }
     return {
       action: 'merge',
-      data: rows.filter(row => getId(row) !== itemId),
+      data: rows.filter(row => !itemHasKey(row, itemId, getId)),
       metaOp: 'removed',
       enteredWindow: false,
       leftWindow: true,
@@ -716,20 +854,20 @@ function mergeEventIntoWindow<TMeta>({
   }
 
   // Visible and still matching: update in place unless its sort position moved.
-  const index = rows.findIndex(row => getId(row) === itemId)
+  const index = rows.findIndex(row => itemHasKey(row, itemId, getId))
   if (index === -1) return { action: 'refetch' } // index/data disagree — reconcile
   if (!cmp || cmp(rows[index]!, item) === 0) {
     // Sort keys unchanged (or order unknown — keep the position rather than guess).
     return {
       action: 'merge',
-      data: rows.map(row => (getId(row) === itemId ? item : row)),
+      data: rows.map(row => (itemHasKey(row, itemId, getId) ? item : row)),
       metaOp: null,
       enteredWindow: false,
       leftWindow: false,
     }
   }
   // The row moved: re-place it within the contiguous run.
-  const without = rows.filter(row => getId(row) !== itemId)
+  const without = rows.filter(row => !itemHasKey(row, itemId, getId))
   if (without.length === 0) {
     return { action: 'merge', data: [item], metaOp: null, enteredWindow: false, leftWindow: false }
   }

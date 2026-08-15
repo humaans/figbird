@@ -10,6 +10,13 @@ import {
 import { registerDevtoolsInstance } from './devtoolsBridge.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
+import {
+  MutationQueue,
+  mutationQueueDefinitionConfig,
+  type MutationQueueConfig,
+  type MutationQueueDefinition,
+  type MutationQueueHost,
+} from './mutationQueue.js'
 import type { MutationActivity } from './mutationTracker.js'
 import {
   createQueryBuilderProxy,
@@ -59,6 +66,16 @@ import type {
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
 
+type DescriptorWriteProjection<TItem> =
+  | {
+      optimistic?: true
+      optimisticPatch?: Partial<TItem>
+    }
+  | {
+      optimistic: false | TItem
+      optimisticPatch?: never
+    }
+
 export { isFetching, isIdle, isLoading, isPending, splitConfig } from './queryTypes.js'
 export type {
   EventType,
@@ -71,12 +88,31 @@ export type {
 } from './queryTypes.js'
 export type { FigbirdEvent, FigbirdEvents, MutationEventMethod, MutationMethod } from './events.js'
 export type {
+  CreateMutationOptions,
   MethodArgs,
   MethodData,
   MutationCallOptions,
+  MutationParamsOptions,
   MutationsHandle,
   MutationsProxy,
+  WriteMutationOptions,
 } from './mutations.js'
+export {
+  defineMutationQueue,
+  MutationQueueDiscardedError,
+  MutationSupersededError,
+  isMutationSupersededError,
+} from './mutationQueue.js'
+export type {
+  MutationQueueConfig,
+  MutationQueueDefinition,
+  MutationQueueOperation,
+  MutationQueueRetry,
+  MutationQueueRetryDelay,
+  MutationQueueSnapshot,
+  MutationQueueStatus,
+  MutationSchedule,
+} from './mutationQueue.js'
 export type { InFlightMutation, MutationActivity } from './mutationTracker.js'
 export {
   defineQuery,
@@ -102,6 +138,15 @@ type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A exten
   AdapterParams<A>,
   'query'
 > & { query?: ServiceQuery<S, N> }
+
+const KEYED_MUTATION_QUEUE_RETENTION_MS = 5 * 60_000
+
+interface KeyedMutationQueueEntry<S extends Schema> {
+  queue: MutationQueue<S>
+  owners: number
+  evictionTimer: ReturnType<typeof setTimeout> | null
+  unsubscribe: () => void
+}
 
 /**
     Usage:
@@ -144,6 +189,10 @@ export class Figbird<
   // (see RelationalQueryRef#cleanup).
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   #relationalQueryCache: Map<string, RelationalQueryRef<any, S, any, any, any>> = new Map()
+
+  // Keyed mutation queues outlive individual React owners while work remains,
+  // allowing a remounted feature to reconnect to its pending/error state.
+  #keyedMutationQueues = new Map<MutationQueueDefinition, Map<string, KeyedMutationQueueEntry<S>>>()
 
   /**
    * Create a Figbird instance.
@@ -572,24 +621,26 @@ export class Figbird<
   }): Promise<ServiceItem<S, N>[]>
 
   /** Update an existing item by ID (full replacement). */
-  mutateDesc<N extends ServiceNames<S>>(desc: {
-    serviceName: N
-    method: 'update'
-    id: string | number
-    data: ServiceUpdate<S, N>
-    params?: AdapterParams<A>
-    optimistic?: boolean | ServiceItem<S, N>
-  }): Promise<ServiceItem<S, N>>
+  mutateDesc<N extends ServiceNames<S>>(
+    desc: {
+      serviceName: N
+      method: 'update'
+      id: string | number
+      data: ServiceUpdate<S, N>
+      params?: AdapterParams<A>
+    } & DescriptorWriteProjection<ServiceItem<S, N>>,
+  ): Promise<ServiceItem<S, N>>
 
   /** Patch an existing item by ID (partial update). */
-  mutateDesc<N extends ServiceNames<S>>(desc: {
-    serviceName: N
-    method: 'patch'
-    id: string | number
-    data: ServicePatch<S, N>
-    params?: AdapterParams<A>
-    optimistic?: boolean | ServiceItem<S, N>
-  }): Promise<ServiceItem<S, N>>
+  mutateDesc<N extends ServiceNames<S>>(
+    desc: {
+      serviceName: N
+      method: 'patch'
+      id: string | number
+      data: ServicePatch<S, N>
+      params?: AdapterParams<A>
+    } & DescriptorWriteProjection<ServiceItem<S, N>>,
+  ): Promise<ServiceItem<S, N>>
 
   /** Remove an item by ID. */
   mutateDesc<N extends ServiceNames<S>>(desc: {
@@ -657,8 +708,127 @@ export class Figbird<
   }
 
   /**
-   * Live view of in-flight mutations (CRUD and custom methods). Synchronously
-   * maintained — correct even for subscribers that attach mid-mutation — and
+   * Create an explicitly owned serial mutation queue. Calls made through the
+   * queue's `m` proxy project immediately, preserve queue order across records,
+   * and still share Figbird's global per-record mutation lanes with ordinary
+   * `figbird.m` calls.
+   */
+  createMutationQueue(config: MutationQueueConfig = {}): MutationQueue<S> {
+    return this.#createMutationQueue(config)
+  }
+
+  #createMutationQueue(config: MutationQueueConfig): MutationQueue<S> {
+    const host: MutationQueueHost = {
+      registerMutation: (desc, control) => {
+        const resolve = (value: MutationDescriptor): MutationDescriptor => ({
+          ...value,
+          serviceName: resolveServicePath(this.schema, value.serviceName),
+        })
+        const registration = this.queryStore.registerMutation(resolve(desc), control)
+        return {
+          promise: registration.promise,
+          tryUpdate: next => registration.tryUpdate(resolve(next)),
+          cancel: error => registration.cancel(error),
+        }
+      },
+      registerCall: (serviceName, method, args, control) =>
+        this.queryStore.registerCall(
+          resolveServicePath(this.schema, serviceName),
+          method,
+          args,
+          control,
+        ),
+    }
+    return new MutationQueue<S>(host, config)
+  }
+
+  /** Return one reconnectable instance of an immutable queue definition. @internal */
+  getMutationQueue(definition: MutationQueueDefinition, key: string): MutationQueue<S> {
+    if (key.length === 0) throw new Error('figbird: mutation queue key must not be empty')
+    let queues = this.#keyedMutationQueues.get(definition)
+    const existing = queues?.get(key)
+    if (existing) return existing.queue
+
+    const queue = this.createMutationQueue(mutationQueueDefinitionConfig(definition))
+    const entry = {
+      queue,
+      owners: 0,
+      evictionTimer: null as ReturnType<typeof setTimeout> | null,
+      unsubscribe: () => {},
+    }
+    entry.unsubscribe = queue.subscribe(() => {
+      if (entry.owners === 0 && queue.status === 'idle') {
+        this.#evictMutationQueue(definition, key, entry)
+      }
+    })
+    if (!queues) {
+      queues = new Map()
+      this.#keyedMutationQueues.set(definition, queues)
+    }
+    queues.set(key, entry)
+    this.#scheduleMutationQueueEviction(definition, key, entry)
+    return queue
+  }
+
+  /** Retain a keyed queue for one committed React owner. @internal */
+  retainMutationQueue(
+    definition: MutationQueueDefinition,
+    key: string,
+    queue: MutationQueue<S>,
+  ): () => void {
+    const entry = this.#keyedMutationQueues.get(definition)?.get(key)
+    if (!entry || entry.queue !== queue) {
+      throw new Error(`figbird: mutation queue "${key}" is no longer registered`)
+    }
+    entry.owners += 1
+    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    entry.evictionTimer = null
+
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      entry.owners = Math.max(0, entry.owners - 1)
+      queueMicrotask(() => {
+        if (entry.owners > 0 || this.#keyedMutationQueues.get(definition)?.get(key) !== entry)
+          return
+        if (entry.queue.status === 'idle') this.#evictMutationQueue(definition, key, entry)
+        else this.#scheduleMutationQueueEviction(definition, key, entry)
+      })
+    }
+  }
+
+  #scheduleMutationQueueEviction(
+    definition: MutationQueueDefinition,
+    key: string,
+    entry: KeyedMutationQueueEntry<S>,
+  ): void {
+    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    entry.evictionTimer = setTimeout(
+      () => this.#evictMutationQueue(definition, key, entry),
+      KEYED_MUTATION_QUEUE_RETENTION_MS,
+    )
+    const timer = entry.evictionTimer as ReturnType<typeof setTimeout> & { unref?: () => void }
+    timer.unref?.()
+  }
+
+  #evictMutationQueue(
+    definition: MutationQueueDefinition,
+    key: string,
+    entry: KeyedMutationQueueEntry<S>,
+  ): void {
+    const queues = this.#keyedMutationQueues.get(definition)
+    if (entry.owners > 0 || queues?.get(key) !== entry) return
+    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    entry.unsubscribe()
+    queues.delete(key)
+    if (queues.size === 0) this.#keyedMutationQueues.delete(definition)
+    if (entry.queue.status !== 'idle') entry.queue.detach()
+  }
+
+  /**
+   * Live view of active mutations, including scheduled queue work (CRUD and
+   * custom methods). Synchronously maintained — correct even for subscribers — and
    * shaped for `useSyncExternalStore`. `useMutating` is the React binding.
    */
   get mutating(): MutationActivity {

@@ -1,5 +1,6 @@
 // core
 export {
+  defineMutationQueue,
   Figbird,
   defineQuery,
   QUERY_DEFINITION_BRAND,
@@ -13,6 +14,7 @@ export {
 
 export type {
   ArgsAndOptions,
+  CreateMutationOptions,
   DefineQuery,
   EventType,
   FigbirdEvent,
@@ -20,8 +22,17 @@ export type {
   InFlightMutation,
   MutationActivity,
   MutationCallOptions,
+  MutationParamsOptions,
   MutationEventMethod,
   MutationMethod,
+  MutationQueueConfig,
+  MutationQueueDefinition,
+  MutationQueueOperation,
+  MutationQueueRetry,
+  MutationQueueRetryDelay,
+  MutationQueueSnapshot,
+  MutationQueueStatus,
+  MutationSchedule,
   MutationsHandle,
   MutationsProxy,
   PreparedQuery,
@@ -30,7 +41,14 @@ export type {
   RetryDelay,
   StandardSchemaV1,
   VisibilitySource,
+  WriteMutationOptions,
 } from './core/figbird.js'
+export {
+  MutationQueueDiscardedError,
+  MutationSupersededError,
+  isMutationSupersededError,
+} from './core/figbird.js'
+export type { MutationQueue } from './core/mutationQueue.js'
 export { ItemRemovedError, isItemRemovedError } from './core/errors.js'
 
 // schema
@@ -105,6 +123,7 @@ export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js
 // level "is anything in flight". Imperative code uses figbird.m directly.
 export { useAction } from './react/useAction.js'
 export { useMutating } from './react/useMutating.js'
+export { useMutationQueue } from './react/useMutationQueue.js'
 // Deprecated: superseded by useMutations + useAction + useMutating.
 export { useMutation } from './react/useMutation.js'
 // useFeathers is the raw-client escape hatch, typed via createHooks.
@@ -142,6 +161,7 @@ export type {
 // React hook result types
 export type { UseActionHook, UseActionResult } from './react/useAction.js'
 export type { UseMutatingFilter } from './react/useMutating.js'
+export type { UseMutationQueueHook } from './react/useMutationQueue.js'
 export type { UseMutationResult } from './react/useMutation.js'
 export type { QueryResult } from './react/useQueryByDesc.js'
 

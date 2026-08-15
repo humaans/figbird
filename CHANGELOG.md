@@ -10,6 +10,22 @@ This release makes joins a first-class part of Figbird. Each screen can now ask 
 
 This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `useQueries` for suspending on several independent queries in parallel, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
 
+Figbird serializes keyed writes to the same record. Optimistic changes appear immediately,
+while adapter calls run in order and rebase over each server response or failure. Active
+optimistic state survives fetches. Queries that need the server to decide membership or
+ordering reconcile after the record's writes settle.
+
+Explicit mutation queues provide ordered writes across records and services through
+`figbird.createMutationQueue()` and `useMutationQueue()`. Queues project every call
+immediately, preserve call order, coalesce compatible unsent patches, and support
+scheduling, retries, flush, and discard. `defineMutationQueue()` gives reconnectable React
+queues a stable policy and key namespace. Queue writes and ordinary writes share the same
+per-record ordering.
+
+Writes can use `optimisticPatch` when the local projection differs from the server payload.
+Relational filters apply projected changes locally, then reconcile once after the record's
+writes settle.
+
 Realtime handling is safer across all APIs. Fetches and overlapping refetches no
 longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries
 remain fixed snapshots. When an item being viewed is removed, `useGet` and `useQuery`
@@ -24,8 +40,9 @@ Also included:
   APIs and schema-built queries reject a different schema object.
 - Native cursor pagination for `.paginate()` and `.all()`, configured per Feathers
   service without adding cursor controls to logical queries.
-- Browser Devtools for inspecting queries, fetches, realtime events, and writes, plus richer
-  lifecycle and payload details through `figbird.events`.
+- Chrome and Firefox DevTools extensions for inspecting queries, fetches, realtime events,
+  and writes. Debug collection runs while the panel is connected. `figbird.events` exposes
+  the same lifecycle and payload details to application code.
 - `matcherKey` for explicitly sharing queries that use equivalent custom matchers.
 - `reconnectJitter` for staggering reconnect refetches, defaulting to `[0, 3000]` ms.
 - Reliable ordering for materialized finds: queries use the network unless `$sort` or

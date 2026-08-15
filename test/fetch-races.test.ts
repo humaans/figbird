@@ -159,13 +159,57 @@ function ids(data: unknown): number[] {
 
 function processedEvent(itemId: number): ProcessedRealtimeEvent {
   return {
+    origin: 'authoritative',
     serviceName: 'notes',
     type: 'patched',
     item: { id: itemId },
     previousItem: null,
-    itemId,
+    itemId: String(itemId),
   }
 }
+
+test('lane projections keep the realtime batch atomic', async t => {
+  const { figbird, notes } = createApp(
+    {
+      1: { id: 1, content: 'one', rank: 1, updatedAt: 1 },
+      2: { id: 2, content: 'two', rank: 2, updatedAt: 1 },
+    },
+    { eventBatchInterval: 30 },
+  )
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const snapshots: string[][] = []
+  const unsub = ref.subscribe(state => {
+    if (state.status === 'success') {
+      snapshots.push((state.data as Note[]).map(note => note.content))
+    }
+  })
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial find')
+
+  let resolvePatch!: (item: TestItem) => void
+  const patchGate = new Promise<TestItem>(resolve => {
+    resolvePatch = resolve
+  })
+  notes.patch = () => patchGate
+  const pending = figbird.mutateDesc({
+    serviceName: 'notes',
+    method: 'patch',
+    id: 1,
+    data: { content: 'optimistic' },
+    optimistic: true,
+  })
+  snapshots.length = 0
+
+  notes.emit('patched', { id: 1, content: 'server lane', rank: 1, updatedAt: 2 })
+  notes.emit('patched', { id: 2, content: 'server peer', rank: 2, updatedAt: 2 })
+  t.is(snapshots.length, 0, 'neither half of the batch is observable early')
+
+  await waitFor(() => snapshots.length > 0, 'the realtime batch')
+  t.deepEqual(snapshots, [['optimistic', 'server peer']])
+
+  resolvePatch({ id: 1, content: 'server ack', rank: 1, updatedAt: 3 })
+  await pending
+  unsub()
+})
 
 test('journal overflow invalidates only cursors that exceed the event limit', t => {
   const journal = new FetchEventJournal(3)
@@ -180,7 +224,7 @@ test('journal overflow invalidates only cursors that exceed the event limit', t 
   t.false(newerSnapshot.overflowed)
   t.deepEqual(
     newerSnapshot.events.map(event => event.itemId),
-    [3, 4],
+    ['3', '4'],
   )
 })
 
@@ -247,9 +291,9 @@ test('a complete-set refetch does not delete a row created during the fetch', as
     () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
     'the complete-set trailing reconciliation',
   )
-  t.true(figbird.getState().get('notes')!.entities.has(2))
+  t.true(figbird.getState().get('notes')!.entities.has('2'))
   t.true(ids(ref.getSnapshot()!.data).includes(2))
-  t.false(processed.some(event => event.type === 'removed' && event.itemId === 2))
+  t.false(processed.some(event => event.type === 'removed' && event.itemId === '2'))
   unsub()
   unsubProcessed()
 })
@@ -305,7 +349,7 @@ test('a mutation acknowledgement survives an in-flight complete-set fetch', asyn
     () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
     'the mutation trailing reconciliation',
   )
-  t.true(figbird.getState().get('notes')!.entities.has(2))
+  t.true(figbird.getState().get('notes')!.entities.has('2'))
   t.true(ids(ref.getSnapshot()!.data).includes(2))
   unsub()
 })
@@ -326,7 +370,7 @@ test('realtime-disabled queries retain the response snapshot from an in-flight f
 
   await waitFor(() => !ref.getSnapshot()?.isFetching, 'the snapshot fetch to settle')
   t.is((ref.getSnapshot()!.data as Note[])[0]!.content, 'original')
-  t.is((figbird.getState().get('notes')!.entities.get(1) as Note).content, 'patched')
+  t.is((figbird.getState().get('notes')!.entities.get('1') as Note).content, 'patched')
   t.is(notes.counts.find, 2)
   unsub()
 })

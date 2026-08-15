@@ -33,20 +33,39 @@ import type {
   ServiceUpdate,
 } from './schema.js'
 
-/**
- * Per-call mutation options — call-specific data only; the write *policy*
- * (optimistic vs confirmed) lives on the handle variant, not per call.
- */
-export interface MutationCallOptions<TItem = unknown> {
+type OptimisticWriteProjection<TItem> =
+  | {
+      /** Explicit complete item to show optimistically. */
+      optimisticItem: TItem
+      optimisticPatch?: never
+    }
+  | {
+      optimisticItem?: never
+      /** Partial record to merge into the current optimistic projection. */
+      optimisticPatch: Partial<TItem>
+    }
+  | {
+      optimisticItem?: never
+      optimisticPatch?: never
+    }
+
+/** Adapter params shared by every mutation method and policy variant. */
+export interface MutationParamsOptions {
   /** Adapter params passthrough (e.g. Feathers `{ query }`). */
   params?: unknown
-  /**
-   * Explicit synthesized item to show optimistically — for computed fields the
-   * request payload doesn't carry (`{ ...item, computedField }`). Ignored on
-   * `confirmed` handles, which never show unconfirmed state.
-   */
+}
+
+/** Projection options for an optimistic create. */
+export type CreateMutationOptions<TItem> = MutationParamsOptions & {
+  /** Explicit complete item to show optimistically. */
   optimisticItem?: TItem
 }
+
+/** Projection options for an optimistic update or patch. */
+export type WriteMutationOptions<TItem> = MutationParamsOptions & OptimisticWriteProjection<TItem>
+
+/** @deprecated Use the mutation-specific option type instead. */
+export type MutationCallOptions<TItem = unknown> = WriteMutationOptions<TItem>
 
 export type MethodArgs<TMethod> = TMethod extends (
   ...args: infer TArgs extends unknown[]
@@ -77,29 +96,34 @@ type CustomMethods<S extends Schema, N extends ServiceNames<S>> = {
   ) => Promise<MethodData<ServiceMethods<S, N>[M]>>
 }
 
-interface HandleVerbs<S extends Schema, N extends ServiceNames<S>> {
+type CreateOptionsFor<TItem, TOptimistic extends boolean> = TOptimistic extends true
+  ? CreateMutationOptions<TItem>
+  : MutationParamsOptions
+
+type WriteOptionsFor<TItem, TOptimistic extends boolean> = TOptimistic extends true
+  ? WriteMutationOptions<TItem>
+  : MutationParamsOptions
+
+interface HandleVerbs<S extends Schema, N extends ServiceNames<S>, TOptimistic extends boolean> {
   create(
     data: ServiceCreate<S, N>,
-    options?: MutationCallOptions<ServiceItem<S, N>>,
+    options?: CreateOptionsFor<ServiceItem<S, N>, TOptimistic>,
   ): Promise<ServiceItem<S, N>>
   create(
     data: ServiceCreate<S, N>[],
-    options?: MutationCallOptions<ServiceItem<S, N>[]>,
+    options?: CreateOptionsFor<ServiceItem<S, N>[], TOptimistic>,
   ): Promise<ServiceItem<S, N>[]>
   update(
     id: string | number,
     data: ServiceUpdate<S, N>,
-    options?: MutationCallOptions<ServiceItem<S, N>>,
+    options?: WriteOptionsFor<ServiceItem<S, N>, TOptimistic>,
   ): Promise<ServiceItem<S, N>>
   patch(
     id: string | number,
     data: ServicePatch<S, N>,
-    options?: MutationCallOptions<ServiceItem<S, N>>,
+    options?: WriteOptionsFor<ServiceItem<S, N>, TOptimistic>,
   ): Promise<ServiceItem<S, N>>
-  remove(
-    id: string | number,
-    options?: MutationCallOptions<ServiceItem<S, N>>,
-  ): Promise<ServiceItem<S, N>>
+  remove(id: string | number, options?: MutationParamsOptions): Promise<ServiceItem<S, N>>
   /**
    * Call a custom service method by name — the escape hatch for methods not
    * declared in the schema (declared ones appear directly on the handle, typed).
@@ -112,10 +136,10 @@ interface HandleVerbs<S extends Schema, N extends ServiceNames<S>> {
  * default; `confirmed` is the same handle with "show it only once it's real"
  * semantics (the cache updates after the server acks).
  */
-export type MutationsHandle<S extends Schema, N extends ServiceNames<S>> = HandleVerbs<S, N> &
+export type MutationsHandle<S extends Schema, N extends ServiceNames<S>> = HandleVerbs<S, N, true> &
   CustomMethods<S, N> & {
     /** Variant that waits for the server ack before the cache shows the change. */
-    readonly confirmed: HandleVerbs<S, N> & CustomMethods<S, N>
+    readonly confirmed: HandleVerbs<S, N, false> & CustomMethods<S, N>
   }
 
 /**
@@ -145,14 +169,19 @@ interface HandleConfig {
   optimistic: boolean
 }
 
+type RuntimeMutationOptions = MutationParamsOptions & {
+  optimisticItem?: unknown
+  optimisticPatch?: unknown
+}
+
 function createHandle(host: MutationsHost, serviceName: string, config: HandleConfig): object {
   const { optimistic } = config
 
-  const resolveOptimistic = (options?: MutationCallOptions) =>
+  const resolveOptimistic = (options?: RuntimeMutationOptions) =>
     optimistic ? (options?.optimisticItem ?? true) : false
 
   const base: Record<string, unknown> = {
-    create: (data: unknown, options?: MutationCallOptions) =>
+    create: (data: unknown, options?: RuntimeMutationOptions) =>
       host.mutate({
         serviceName,
         method: 'create',
@@ -160,7 +189,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
       }),
-    update: (id: string | number, data: unknown, options?: MutationCallOptions) =>
+    update: (id: string | number, data: unknown, options?: RuntimeMutationOptions) =>
       host.mutate({
         serviceName,
         method: 'update',
@@ -168,8 +197,11 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         data,
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
+        ...(options?.optimisticPatch !== undefined
+          ? { optimisticPatch: options.optimisticPatch }
+          : {}),
       }),
-    patch: (id: string | number, data: unknown, options?: MutationCallOptions) =>
+    patch: (id: string | number, data: unknown, options?: RuntimeMutationOptions) =>
       host.mutate({
         serviceName,
         method: 'patch',
@@ -177,8 +209,11 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         data,
         ...(options?.params !== undefined ? { params: options.params } : {}),
         optimistic: resolveOptimistic(options),
+        ...(options?.optimisticPatch !== undefined
+          ? { optimisticPatch: options.optimisticPatch }
+          : {}),
       }),
-    remove: (id: string | number, options?: MutationCallOptions) =>
+    remove: (id: string | number, options?: RuntimeMutationOptions) =>
       host.mutate({
         serviceName,
         method: 'remove',

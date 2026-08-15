@@ -466,6 +466,7 @@ class FigbirdCollector implements Collector {
         }
         break
       case 'mutate:start':
+      case 'mutate:update':
       case 'mutate:end':
       case 'mutate:error':
       case 'mutate:rollback':
@@ -642,7 +643,9 @@ class FigbirdCollector implements Collector {
   #recordMutation(
     event: Extract<
       FigbirdEvent,
-      { kind: 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback' }
+      {
+        kind: 'mutate:start' | 'mutate:update' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+      }
     >,
     at: number,
   ): void {
@@ -663,6 +666,14 @@ class FigbirdCollector implements Collector {
         ...('args' in event ? { args: this.#captureArgs(event.args) } : {}),
       } satisfies WriteRecord)
 
+    if (event.kind === 'mutate:update') {
+      this.#writes.set(id, {
+        ...base,
+        optimistic: event.optimistic,
+        args: this.#captureArgs(event.args),
+      })
+      return
+    }
     if (event.kind === 'mutate:end') {
       this.#writes.set(id, {
         ...base,
@@ -748,6 +759,11 @@ class FigbirdCollector implements Collector {
           method: event.method,
           optimistic: event.optimistic,
           ...(event.id === undefined ? {} : { id: event.id }),
+        }
+      case 'mutate:update':
+        return {
+          ...event,
+          args: this.#captureArgs(event.args),
         }
       case 'action:start':
         return {

@@ -169,10 +169,12 @@ export function createTestApp<S extends Schema>(
     queryAwareFind = false,
     skipTotal = false,
     operators,
+    eventBatchInterval = 0,
   }: {
     queryAwareFind?: boolean
     skipTotal?: boolean
     operators?: Record<string, CustomOperatorRegistration>
+    eventBatchInterval?: number
   } = {},
 ) {
   const feathers = mockFeathers(services, { queryAwareFind, skipTotal })
@@ -181,7 +183,7 @@ export function createTestApp<S extends Schema>(
   const figbird = new Figbird({
     schema,
     adapter,
-    eventBatchInterval: 0,
+    eventBatchInterval,
     // Keep existing tests deterministic: no reconcile cooldown unless a test
     // opts in with its own instance.
     reconcileCooldown: 0,

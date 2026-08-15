@@ -1,7 +1,7 @@
 import type { QueryAST } from './queryBuilder.js'
 import type { RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
-import type { ProcessedRealtimeEvent, ServiceState } from './queryTypes.js'
+import { entityKey, type ProcessedRealtimeEvent, type ServiceState } from './queryTypes.js'
 
 /**
  * Relational filters — dotted-path predicates over related entities, e.g.
@@ -236,7 +236,10 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   // below would make merge decisions O(items × entities). The candidate is verified
   // against destField before returning, since the map key and destField are not
   // guaranteed to be the same field.
-  const direct = destState.entities.get(sourceValue)
+  const direct =
+    typeof sourceValue === 'string' || typeof sourceValue === 'number'
+      ? destState.entities.get(entityKey(sourceValue))
+      : undefined
   if (direct !== undefined && getFieldValue(direct, relDef.destField) === sourceValue) {
     return direct
   }

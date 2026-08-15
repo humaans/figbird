@@ -639,18 +639,64 @@ The replacement factors each granularity to the layer that owns it:
   flashing fallbacks; the `pending` flip stays urgent so labels swap immediately. The reads-side
   rule "params changes are transitions" gets its write-side mirror made literal: reads suspend,
   writes are transitions.
-- **`useMutating(filter?)`** — entity/service/instance-level in-flight state. Deliberately NOT
+- **`useMutating(filter?)`** — entity/service/instance-level active mutation state. Deliberately NOT
   built on the events channel: event delivery is deferred to a microtask and events never replay,
   so a subscriber mounting mid-mutation would report a false negative. A synchronous
   `MutationTracker` in the core (updated at the mutate call sites, exposed as `figbird.mutating`)
-  gives `useSyncExternalStore` a correct snapshot at any moment. The canonical use is serializing
-  writes per record — overlapping optimistic patches make rollback ambiguous, so the app disables
-  the surface while `useMutating({ service, id })` is true.
+  gives `useSyncExternalStore` a correct snapshot at any moment. Keyed CRUD writes serialize in a
+  store-level per-record lane; the canonical UI use is preventing duplicate or stale user intent by
+  disabling the surface while `useMutating({ service, id })` is true.
 
 Non-goals, decided: no keyed status on `useMutation` (stringly identity split across two call
-sites); no drop/serial/once modes on `useAction` (the entity-level disable is the real concurrency
-policy; button-level modes would paper over it); no event-stream-based `useMutating` (see above).
+sites); no drop/serial/once modes on `useAction` (record ordering belongs to the store and duplicate
+intent belongs to the UI); no event-stream-based `useMutating` (see above).
 `useMutation` remains as a deprecated, fully-functional legacy hook.
+
+**Per-record mutation lanes.** Keyed CRUD calls for one `(service, id)` apply their optimistic
+intents immediately but reach the adapter one at a time. A lane keeps the last authoritative item
+as its base and folds the remaining create/update/patch/remove intents over that base after every
+acknowledgement or failure. This prevents an older response from replacing newer optimistic state
+and makes rollback compositional: remove only the failed intent, then replay what remains. A failed
+create cancels the queued writes that depended on the identity. Different records stay parallel;
+id-less confirmed creates, batch creates, and opaque custom methods have no record key and keep the
+direct path.
+
+The active intent overlay participates in fetch rebasing even when it predates the fetch cursor.
+Locally exact query nodes consume projected entity events immediately. Reconciliation that needs
+server truth — server windows, authoritative queries, and relational-filter invalidation — is
+collected by the lane and released once when the lane drains. Relational assembly itself needs no
+mutation-specific path: its ordinary root and relation query inputs already rebuild from projected
+events.
+
+**Explicit serial mutation queues.** A feature can create one long-lived queue through
+`figbird.createMutationQueue(config)` or a component-owned queue through `useMutationQueue()` or
+`useMutationQueue(definition)` and issue writes through its typed `queue.m` proxy. Reconnectable
+hooks require a module-level
+`defineMutationQueue(config)` plus an instance key. The definition owns immutable policy and its
+registry namespace; the key only selects one queue within that definition. This prevents two
+owners from racing to configure one queue and prevents unrelated features with equal string keys
+from colliding. The queue adds a serial predecessor and a scheduling deadline to each write; the
+store still registers every write immediately in its global `(service, id)` lane. Transport starts
+only after both constraints clear. This preserves scoped/unscoped interleaving on one record
+without serializing unrelated records across the application.
+
+The queue coalesces only compatible, consecutive, unsent patches. Coalescing never crosses another
+operation and never changes an in-flight request. Plain-object params compare structurally so fresh
+but equal request options do not defeat coalescing. Queue failures pause transport while optimistic
+intents remain projected; retry resumes the failed attempt and discard removes the failed and later
+intents. A component-owned queue flushes on unmount and automatically discards after a later
+terminal failure, because no UI remains to choose retry or discard. A remove is a record-lifetime
+boundary: success supersedes later old-lifetime patches, while failure restores and replays them.
+Queues provide ordering, not atomic commit or durable offline delivery.
+
+Projected relational-filter dependencies now trigger a local membership pass immediately. The
+record lane retains one cumulative transition and emits it through a separate settlement channel
+when the lane drains, allowing one server reconciliation without a refetch for each intermediate
+keystroke.
+
+`optimisticPatch` separates the record fragment used for local projection from the adapter payload.
+This covers domain translations such as projecting `{ status: 'completed' }` while sending
+`{ isCompleted: true }`, without forcing callers to synthesize a complete `optimisticItem`.
 
 `mutate:*` events gained a `mutationId` correlating one mutation's lifecycle, and their `method`
 widened to admit custom method names.
@@ -683,7 +729,8 @@ both modes (the promise settles on the ack; optimism only controls when the cach
 change). `confirmed` is deliberately greppable — it names the critical surfaces. The low-level
 descriptor (`figbird.mutateDesc`) and the deprecated `useMutation` keep the old non-optimistic
 default: the inversion is a property of the `m` DSL, so legacy code changes behavior only when it
-migrates. Per-call options carry data only (`params`, `optimisticItem`) — the
+migrates. Per-call options carry data only (`params`, `optimisticItem`, or `optimisticPatch`, as
+allowed by the verb and policy variant) — the
 `optimistic: boolean | item` flag/payload union is gone from the new DSL.
 
 **The id contract.** Optimistic creates must carry a client-generated id the server will accept

@@ -5,6 +5,7 @@ import type { QueryAST } from './queryBuilder.js'
 import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
 import type {
+  ProcessedProjectionEvent,
   ProcessedRealtimeEvent,
   QueryConfig,
   QueryDescriptor,
@@ -64,7 +65,9 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   }
   queryStore: {
     subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
+    subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
     ensureRealtimeSubscription(serviceName: string): void
+    reapplyQuery(queryId: string, mutationLaneKeys: ReadonlySet<string>): void
   }
   getState(): Map<string, ServiceState<TMeta>>
   /** Returns a QueryRef; typed loosely here and re-typed once at the engine's seam. */
@@ -143,16 +146,15 @@ type RelationSub<S extends Schema, TParams, TMeta extends Record<string, unknown
     }
 
 /** Result of gathering every relation's current data ahead of assembly. */
-type GatherResult =
-  | { kind: 'loading' }
-  | { kind: 'error'; error: Error }
-  | {
-      kind: 'ready'
-      /** Data refs keyed for change detection (includes junction/per-parent sub-keys). */
-      dataRefs: Map<string, unknown[] | null>
-      /** Data shaped for the pure assembly pass. */
-      assembly: Map<string, AssembledRelationData>
-    }
+type GatherResult = {
+  kind: 'ready' | 'loading' | 'error'
+  error: Error | null
+  isFetching: boolean
+  /** Data refs keyed for change detection (includes junction/per-parent sub-keys). */
+  dataRefs: Map<string, unknown[] | null>
+  /** Ready node data shaped for the pure assembly pass. */
+  assembly: Map<string, AssembledRelationData>
+}
 
 export interface InspectedRelationalQuery {
   key: string
@@ -221,6 +223,10 @@ export class RelationalQueryRef<
   // Last-seen data ref per relation key — triggers reassembly when a relation's query
   // data changes (e.g. realtime event landed a new matching entity).
   #lastRelationData: Map<string, unknown[] | null> = new Map()
+  // The previous relation input is merged node-by-node with a partial gather. This
+  // keeps an unresolved leaf stale without rolling back unrelated optimistic edges.
+  #lastRelationAssembly: Map<string, AssembledRelationData> | null = null
+  #lastGatherWasPartial = false
 
   // Suspense-support state. The promise is created lazily when suspensePromise() is
   // first called and resolves/rejects on the first transition to success/error. Once
@@ -425,8 +431,22 @@ export class RelationalQueryRef<
     if (root.phase === 'loading') return this.#fetchingSnapshot()
 
     const gathered = this.#gatherRelationData()
-    if (gathered.kind === 'loading') return this.#fetchingSnapshot()
-    if (gathered.kind === 'error') return this.#errorSnapshot(gathered.error)
+    if (gathered.kind === 'loading' && this.#lastSnapshot?.status !== 'success') {
+      return this.#fetchingSnapshot()
+    }
+    if (gathered.kind === 'error' && this.#lastSnapshot?.status !== 'success') {
+      return this.#errorSnapshot(gathered.error!)
+    }
+
+    const assembly = this.#mergeRelationAssembly(gathered.assembly)
+    const becameComplete = this.#lastGatherWasPartial && gathered.kind === 'ready'
+    const isFetching = root.isFetching || gathered.isFetching
+    const error =
+      gathered.kind === 'error'
+        ? gathered.error
+        : gathered.kind === 'loading' && this.#lastSnapshot?.status === 'success'
+          ? this.#lastSnapshot.error
+          : null
 
     // Decide whether the assembled output could have changed. Reassemble if root data
     // or any relation data ref has changed. This is what lets realtime events on
@@ -434,7 +454,9 @@ export class RelationalQueryRef<
     // mutates the comments query's data ref → we reassemble → the new comment appears
     // under the right issue.
     let inputsChanged =
-      this.#lastRootData !== root.rows || this.#lastRelationData.size !== gathered.dataRefs.size
+      becameComplete ||
+      this.#lastRootData !== root.rows ||
+      this.#lastRelationData.size !== gathered.dataRefs.size
     if (!inputsChanged) {
       for (const [key, data] of gathered.dataRefs) {
         if (this.#lastRelationData.get(key) !== data) {
@@ -450,37 +472,34 @@ export class RelationalQueryRef<
     if (
       !inputsChanged &&
       this.#lastSnapshot?.status === 'success' &&
-      this.#lastSnapshot.error === null &&
-      this.#lastSnapshot.isFetching === root.isFetching
+      this.#lastSnapshot.error === error &&
+      this.#lastSnapshot.isFetching === isFetching
     ) {
       return this.#wrap(this.#lastSnapshot)
     }
 
-    const assembled = assembleRelations(root.rows, this.#ast, this.#schema, gathered.assembly)
     const data =
-      this.#ast.kind !== 'paginate' && this.#ast.cardinality === 'one'
-        ? ((assembled[0] ?? null) as T)
-        : (assembled as unknown as T)
+      !inputsChanged && this.#lastSnapshot?.status === 'success'
+        ? this.#lastSnapshot.data
+        : this.#assemble(root.rows, assembly)
 
     this.#lastRootData = root.rows
     this.#lastRelationData = gathered.dataRefs
+    this.#lastRelationAssembly = assembly
+    this.#lastGatherWasPartial = gathered.kind !== 'ready'
     this.#lastSnapshot = {
       status: 'success',
       data,
-      error: null,
-      isFetching: root.isFetching,
+      error,
+      isFetching,
     }
 
     return this.#wrap(this.#lastSnapshot)
   }
 
   /**
-   * While a sub-query (root or relation) is fetching but we already have a previous
-   * successful snapshot, keep showing it with isFetching: true. This is the SWR
-   * pattern at the relational level — without it, a parent-data change that triggers
-   * a relation `$in` to grow would force a brand-new (cold) relation queryRef,
-   * flipping the assembled view back to 'loading' and flashing a Suspense fallback
-   * under `useQuery`.
+   * While the root is fetching but we already have a successful snapshot, keep it on
+   * screen. Relation loading is handled node-by-node in #gatherRelationData instead.
    */
   #fetchingSnapshot(): RelationalQueryState<T> {
     if (this.#lastSnapshot?.status === 'success') {
@@ -498,6 +517,22 @@ export class RelationalQueryRef<
       }
     }
     return this.#wrap(this.#lastSnapshot)
+  }
+
+  #mergeRelationAssembly(
+    current: Map<string, AssembledRelationData>,
+  ): Map<string, AssembledRelationData> {
+    if (!this.#lastRelationAssembly) return current
+    const merged = new Map(this.#lastRelationAssembly)
+    for (const [key, value] of current) merged.set(key, value)
+    return merged
+  }
+
+  #assemble(rootRows: unknown[], assembly: Map<string, AssembledRelationData>): T {
+    const assembled = assembleRelations(rootRows, this.#ast, this.#schema, assembly)
+    return this.#ast.kind !== 'paginate' && this.#ast.cardinality === 'one'
+      ? ((assembled[0] ?? null) as T)
+      : (assembled as unknown as T)
   }
 
   /**
@@ -550,22 +585,37 @@ export class RelationalQueryRef<
   }
 
   /**
-   * Walk the query AST collecting every relation's current data — the one definition
-   * of readiness. A declared relation whose sub is missing, or any sub still loading,
-   * short-circuits to loading; errors short-circuit to error. Nested relations are
-   * visited only once their parent's data is resolved, mirroring how sync creates
-   * them. The result feeds both change detection (dataRefs) and the pure assembly
-   * pass; for two-hop `many` relations both the junction and dest halves are walked
-   * so realtime events on either service trigger reassembly.
+   * Walk the query AST collecting every relation's current data. Loading and errors
+   * are aggregate state, not short-circuits: ready siblings and parent edges remain
+   * available for assembly while one leaf settles. The caller overlays this partial
+   * assembly onto the previous one, giving relational queries node-level SWR rather
+   * than rolling the entire graph back.
    */
   #gatherRelationData(
     ast: QueryAST = this.#ast,
     parentKey: string | null = null,
     acc: {
+      kind: GatherResult['kind']
+      error: Error | null
+      isFetching: boolean
       dataRefs: Map<string, unknown[] | null>
       assembly: Map<string, AssembledRelationData>
-    } = { dataRefs: new Map(), assembly: new Map() },
+    } = {
+      kind: 'ready',
+      error: null,
+      isFetching: false,
+      dataRefs: new Map(),
+      assembly: new Map(),
+    },
   ): GatherResult {
+    const loading = () => {
+      if (acc.kind === 'ready') acc.kind = 'loading'
+      acc.isFetching = true
+    }
+    const failed = (error: Error) => {
+      acc.kind = 'error'
+      acc.error ??= error
+    }
     const relationships = this.#schema.relationships?.[ast.service] ?? {}
     for (const [relName, relAST] of Object.entries(ast.related)) {
       const key = relationKey(parentKey, relName)
@@ -583,7 +633,11 @@ export class RelationalQueryRef<
 
       // Relations are synced lazily from parent success; a declared relation whose
       // sub doesn't exist yet simply hasn't been reached — the snapshot is loading.
-      if (!sub) return { kind: 'loading' }
+      if (!sub) {
+        acc.dataRefs.set(key, null)
+        loading()
+        continue
+      }
 
       switch (sub.kind) {
         case 'empty': {
@@ -594,25 +648,42 @@ export class RelationalQueryRef<
         }
         case 'fanIn': {
           const s = sub.queryRef.getSnapshot()
-          if (!s || s.status === 'loading') return { kind: 'loading' }
-          if (s.status === 'error') return { kind: 'error', error: s.error }
+          if (!s || s.status === 'loading') {
+            acc.dataRefs.set(key, null)
+            loading()
+            continue
+          }
+          if (s.status === 'error') {
+            acc.dataRefs.set(key, null)
+            failed(s.error)
+            continue
+          }
+          acc.isFetching ||= s.isFetching
           acc.dataRefs.set(key, s.data as unknown[])
           acc.assembly.set(key, { kind: 'fanIn', items: s.data as unknown[] })
-          const nested = this.#gatherRelationData(relAST, key, acc)
-          if (nested.kind !== 'ready') return nested
+          this.#gatherRelationData(relAST, key, acc)
           break
         }
         case 'junction': {
           const js = sub.queryRef.getSnapshot()
-          if (!js || js.status === 'loading') return { kind: 'loading' }
-          if (js.status === 'error') return { kind: 'error', error: js.error }
+          if (!js || js.status === 'loading') {
+            acc.dataRefs.set(`${key}#junction`, null)
+            acc.dataRefs.set(key, null)
+            loading()
+            continue
+          }
+          if (js.status === 'error') {
+            acc.dataRefs.set(`${key}#junction`, null)
+            acc.dataRefs.set(key, null)
+            failed(js.error)
+            continue
+          }
+          acc.isFetching ||= js.isFetching
           acc.dataRefs.set(`${key}#junction`, js.data as unknown[])
 
           // The destination is a fan-in over the junction rows, living at its own key.
           const destSub = this.#relationSubs.get(`${key}#dest`)
-          if (!destSub || destSub.kind === 'empty') {
-            // Dest pending (junction still settling) or resolved to zero edges —
-            // no dest data yet, so no nested subs to recurse into.
+          if (destSub?.kind === 'empty') {
             acc.dataRefs.set(key, null)
             acc.assembly.set(key, {
               kind: 'junction',
@@ -621,47 +692,107 @@ export class RelationalQueryRef<
             })
             break
           }
+          if (!destSub) {
+            acc.dataRefs.set(key, null)
+            acc.assembly.set(key, this.#pendingJunctionAssembly(key, js.data as unknown[]))
+            loading()
+            continue
+          }
           if (destSub.kind !== 'fanIn') break
           const ds = destSub.queryRef.getSnapshot()
-          if (!ds || ds.status === 'loading') return { kind: 'loading' }
-          if (ds.status === 'error') return { kind: 'error', error: ds.error }
+          if (!ds || ds.status === 'loading') {
+            acc.dataRefs.set(key, null)
+            acc.assembly.set(key, this.#pendingJunctionAssembly(key, js.data as unknown[]))
+            loading()
+            continue
+          }
+          if (ds.status === 'error') {
+            acc.dataRefs.set(key, null)
+            acc.assembly.set(key, this.#pendingJunctionAssembly(key, js.data as unknown[]))
+            failed(ds.error)
+            continue
+          }
+          acc.isFetching ||= ds.isFetching
           acc.dataRefs.set(key, ds.data as unknown[])
           acc.assembly.set(key, {
             kind: 'junction',
             items: ds.data as unknown[],
             junctionItems: js.data as unknown[],
           })
-          const nested = this.#gatherRelationData(relAST, key, acc)
-          if (nested.kind !== 'ready') return nested
+          this.#gatherRelationData(relAST, key, acc)
           break
         }
         case 'perParent': {
           acc.dataRefs.set(key, null)
+          const previous = this.#lastRelationAssembly?.get(key)
           const byParent = new Map<string, unknown[]>()
           for (const [childKey, child] of sub.children) {
             const s = child.queryRef.getSnapshot()
-            if (!s || s.status === 'loading') return { kind: 'loading' }
-            if (s.status === 'error') return { kind: 'error', error: s.error }
+            if (!s || s.status === 'loading') {
+              acc.dataRefs.set(`${key}#parent:${childKey}`, null)
+              const stale = previous?.kind === 'perParent' ? previous.byParent.get(childKey) : null
+              if (stale) byParent.set(childKey, stale)
+              loading()
+              continue
+            }
+            if (s.status === 'error') {
+              acc.dataRefs.set(`${key}#parent:${childKey}`, null)
+              const stale = previous?.kind === 'perParent' ? previous.byParent.get(childKey) : null
+              if (stale) byParent.set(childKey, stale)
+              failed(s.error)
+              continue
+            }
+            acc.isFetching ||= s.isFetching
             acc.dataRefs.set(`${key}#parent:${childKey}`, s.data as unknown[])
             byParent.set(childKey, s.data as unknown[])
           }
           acc.assembly.set(key, { kind: 'perParent', byParent })
-          const nested = this.#gatherRelationData(relAST, key, acc)
-          if (nested.kind !== 'ready') return nested
+          this.#gatherRelationData(relAST, key, acc)
           break
         }
       }
     }
 
-    return { kind: 'ready', dataRefs: acc.dataRefs, assembly: acc.assembly }
+    return acc
+  }
+
+  #pendingJunctionAssembly(key: string, junctionItems: unknown[]): AssembledRelationData {
+    const previous = this.#lastRelationAssembly?.get(key)
+    return {
+      kind: 'junction',
+      items: previous?.kind === 'junction' ? previous.items : [],
+      junctionItems,
+    }
   }
 
   /**
-   * Triggers a refetch for the root (for paginated queries this drops follow-up pages
-   * and re-fetches from page 0).
+   * Refetch the whole graph. The root and every currently materialized relation leaf
+   * are independent store queries, so refreshing only the root can leave relation-only
+   * server changes invisible (especially for snapshot queries).
    */
   refetch(): void {
     this.#root?.refetch()
+    const seen = new Set<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>>()
+    for (const sub of this.#relationSubs.values()) {
+      switch (sub.kind) {
+        case 'empty':
+          break
+        case 'fanIn':
+        case 'junction':
+          if (!seen.has(sub.queryRef)) {
+            seen.add(sub.queryRef)
+            sub.queryRef.refetch()
+          }
+          break
+        case 'perParent':
+          for (const child of sub.children.values()) {
+            if (seen.has(child.queryRef)) continue
+            seen.add(child.queryRef)
+            child.queryRef.refetch()
+          }
+          break
+      }
+    }
   }
 
   /** Append the next page (paginated queries only; no-op otherwise). */
@@ -1100,12 +1231,24 @@ export class RelationalQueryRef<
    */
   #buildRelationQueryRef(
     destService: string,
-    relDef: { destField: string; query?: Record<string, unknown>; via?: unknown },
+    relDef: RelationshipDef,
     relAST: QueryAST,
     uniqueValues: (string | number)[],
   ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
+    const hasExplicitSort = '$sort' in relAST.query || '$sort' in (relDef.query ?? {})
+    // A fully materialized service can answer filtered finds locally only when their
+    // order is deterministic. These relation shapes do not expose destination-query
+    // order (assembly follows the parent id list / junction rows, or selects one), so
+    // an internal key sort is semantics-preserving and unlocks an immediate cache hit.
+    // Direct `many` keeps backend order unless the consumer supplied one.
+    const deterministicSort =
+      !hasExplicitSort &&
+      (relDef.cardinality === 'one' || relDef.cardinality === 'embedded' || Boolean(relDef.via))
+        ? { $sort: { [relDef.destField]: 1 } }
+        : {}
     const query = {
       ...relAST.query,
+      ...deterministicSort,
       [relDef.destField]: { $in: uniqueValues },
       ...(relDef.query || {}),
     }
@@ -1212,21 +1355,34 @@ export class RelationalQueryRef<
       this.#host.queryStore.ensureRealtimeSubscription(dependency.serviceName)
     }
 
-    this.#processedEventUnsub = this.#host.queryStore.subscribeToProcessedEvents(event => {
-      if (
-        !shouldRefetchRelationalFilterQuery(
-          this.#schema,
-          this.#host.getState(),
-          this.#ast,
-          paths,
-          dependencies,
-          event,
-        )
-      ) {
+    const affectsFilter = (event: ProcessedRealtimeEvent) =>
+      shouldRefetchRelationalFilterQuery(
+        this.#schema,
+        this.#host.getState(),
+        this.#ast,
+        paths,
+        dependencies,
+        event,
+      )
+
+    const unsubscribeEvents = this.#host.queryStore.subscribeToProcessedEvents(event => {
+      if (!affectsFilter(event)) return
+      if (event.origin === 'projection') {
+        const laneKeys = new Set([event.mutationLaneKey])
+        for (const queryId of this.#root?.queryIds() ?? []) {
+          this.#host.queryStore.reapplyQuery(queryId, laneKeys)
+        }
         return
       }
       this.#queueRelationalFilterRefetch()
     })
+    const unsubscribeSettlements = this.#host.queryStore.subscribeToProjectionSettlements(event => {
+      if (affectsFilter(event)) this.#queueRelationalFilterRefetch()
+    })
+    this.#processedEventUnsub = () => {
+      unsubscribeEvents()
+      unsubscribeSettlements()
+    }
   }
 
   #queueRelationalFilterRefetch(): void {
@@ -1340,6 +1496,8 @@ export class RelationalQueryRef<
     this.#lastWrappedInner = null
     this.#lastRootData = null
     this.#lastRelationData.clear()
+    this.#lastRelationAssembly = null
+    this.#lastGatherWasPartial = false
     this.#listenerStaleTimes.clear()
     this.#staleTime = 0
     // Evict from the figbird-level cache so a subsequent query rebuilds a fresh ref.

@@ -163,6 +163,7 @@ function eventDetails(item: DevtoolsEvent): string {
         event.itemId === undefined ? '' : `#${event.itemId}`,
       ])
     case 'mutate:start':
+    case 'mutate:update':
     case 'mutate:end':
     case 'mutate:error':
     case 'mutate:rollback':
@@ -219,6 +220,7 @@ function EventKind({ kind }: { kind: string }) {
 function eventTone(kind: string): 'green' | 'amber' | 'red' | 'blue' | 'neutral' {
   if (kind.endsWith(':error') || kind.endsWith(':rollback')) return 'red'
   if (kind === 'realtime') return 'blue'
+  if (kind.endsWith(':update')) return 'blue'
   if (kind.endsWith(':start')) return 'amber'
   if (kind.endsWith(':end')) return 'green'
   return 'neutral'

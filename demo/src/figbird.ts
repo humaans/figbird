@@ -61,6 +61,14 @@ export interface IssueLabel {
   issueId: number
   labelId: number
 }
+export interface Task {
+  id: number
+  issueId: number
+  title: string
+  completed: boolean
+  assigneeId: number | null
+  position: number
+}
 export interface Reaction {
   id: number
   commentId: number
@@ -78,6 +86,7 @@ export const schema = createSchema({
     comments: service<{ item: Comment }>(),
     labels: service<{ item: Label }>(),
     issueLabels: service<{ item: IssueLabel }>(),
+    tasks: service<{ item: Task }>(),
     reactions: service<{ item: Reaction }>(),
   },
   // destField defaults to 'id'; string fields cover the common single-key case.
@@ -87,6 +96,7 @@ export const schema = createSchema({
       assignee: one({ sourceField: 'assigneeId', destService: 'users' }),
       team: one({ sourceField: 'teamId', destService: 'teams' }),
       comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' }),
+      tasks: many({ sourceField: 'id', destService: 'tasks', destField: 'issueId' }),
       issueLabels: many({ sourceField: 'id', destService: 'issueLabels', destField: 'issueId' }),
       // Transparent two-hop junction: consumers say `.related('labels')` and get
       // Label[] directly — figbird fetches the issueLabels junction, then the
@@ -120,6 +130,9 @@ export const schema = createSchema({
       author: one({ sourceField: 'authorId', destService: 'users' }),
       reactions: many({ sourceField: 'id', destService: 'reactions', destField: 'commentId' }),
     }),
+    tasks: ({ one }) => ({
+      assignee: one({ sourceField: 'assigneeId', destService: 'users' }),
+    }),
     reactions: ({ one }) => ({
       user: one({ sourceField: 'userId', destService: 'users' }),
     }),
@@ -148,7 +161,7 @@ export const figbird = new Figbird({ schema, adapter })
 
 // Pure, schema-bound React API. FigbirdProvider supplies the runtime instance;
 // useMutations returns its typed write proxy inside components.
-export const { useQuery, q, useMutations, defineQuery, useAction, useMutating } =
+export const { useQuery, q, useMutations, defineQuery, useAction, useMutating, useMutationQueue } =
   createHooks(schema)
 
 // Reference data: preload the complete sets once — realtime maintains them, and every

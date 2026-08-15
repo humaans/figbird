@@ -506,13 +506,13 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   t.is($('.note2')!.innerHTML, 'hello')
   const state1 = figbird.getState().get('notes')
-  t.is((state1?.entities.get(1) as Note)?.content, 'hello')
+  t.is((state1?.entities.get('1') as Note)?.content, 'hello')
 
   await flush(async () => {
     await feathers.service('notes').patch(1, { content: 'real' })
   })
   const state2 = figbird.getState().get('notes')
-  t.is((state2?.entities.get(1) as Note)?.content, 'real')
+  t.is((state2?.entities.get('1') as Note)?.content, 'real')
 
   t.deepEqual(
     $all('.note2').map(n => n.innerHTML),
@@ -527,7 +527,7 @@ test('realtime listeners continue updating the store even if queries are unmount
 
   // should have updated
   const state3 = figbird.getState().get('notes')
-  t.is((state3?.entities.get(1) as Note)?.content, 'still updating')
+  t.is((state3?.entities.get('1') as Note)?.content, 'still updating')
 })
 
 test('useMutation - multicreate updates cache correctly', async t => {
@@ -2279,7 +2279,7 @@ test('useFind recovers gracefully from errors on refetch', async t => {
   unmount()
 })
 
-test('concurrent mutations maintain data consistency', async t => {
+test('legacy useMutation preserves concurrent transport behavior', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, useMutation, feathers } = app()
   let hasFiredMutations = false
@@ -2327,7 +2327,8 @@ test('concurrent mutations maintain data consistency', async t => {
     await new Promise(resolve => setTimeout(resolve, 50))
   })
 
-  // The last update to complete should win (update1 because it has longer delay)
+  // Deprecated useMutation does not enter record lanes. The later transport
+  // response wins, preserving its timeout-and-retry compatibility behavior.
   t.is($all('.note').length, 1)
   t.is($all('.note')[0]?.innerHTML, 'update1')
 

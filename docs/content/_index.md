@@ -510,7 +510,8 @@ store. The reads-side rule "params changes are transitions" gets a write-side mi
 **reads suspend, writes are actions.**
 
 ```ts
-await m.issues.create({ title: 'Ship it' })
+const id = crypto.randomUUID()
+await m.issues.create({ id, title: 'Ship it' })
 await m.issues.patch(id, { status: 'closed' })
 await m.issues.update(id, fullItem)
 await m.issues.remove(id)
@@ -543,6 +544,103 @@ identically. Optimism only controls when the _cache_ shows the change. Second,
 failures are never silent: rollback is global, `useAction` gives every action an `error`
 slot, and the events channel sees everything. `confirmed` is greppable on purpose. It
 names your critical surfaces.
+
+### Writes to the same record are serialized
+
+Figbird sends CRUD calls for the same service and id in call order. Calls for different
+records can run in parallel. Every optimistic change still appears immediately:
+
+```ts
+const id = crypto.randomUUID()
+
+const created = m.issues.create({ id, title: 'Draft' })
+const titled = m.issues.patch(id, { title: 'Ready' })
+const closed = m.issues.patch(id, { status: 'closed' })
+const removed = m.issues.remove(id)
+
+await Promise.all([created, titled, closed, removed])
+```
+
+The optimistic remove hides the item immediately. The adapter receives `create`, `patch`,
+`patch`, and `remove` one at a time. Each server response becomes the new confirmed base,
+then Figbird reapplies the remaining changes. An old response cannot resurrect an earlier
+version. If a patch fails, Figbird removes that change and reapplies the later ones. If a
+create fails, Figbird cancels the writes that depend on its id.
+
+Confirmed writes with the same service and id follow the same ordering, so they cannot
+overtake optimistic writes. Id-less confirmed creates, batch creates, and custom methods
+have no single record id and do not join this ordering. Use a mutation queue when one
+feature needs ordered writes across records or services. Use a server transaction when
+the writes must commit atomically.
+
+Active optimistic projections are replayed over fetch responses. Locally decidable
+queries update immediately. Relations assemble from cached data and fetch missing leaves.
+When the server must decide query membership or ordering, Figbird waits for the record's
+writes to settle before reconciling the query.
+
+### Ordered autosave with mutation queues
+
+`m` sends independent records in parallel. A feature such as a workflow editor may instead
+need one open-ended stream: create an action, create a task that references it, then accept
+more edits in whatever order the user makes them. Define its policy once, then select one
+reconnectable instance per workflow:
+
+```ts
+const workflowSync = defineMutationQueue({
+  schedule(operation) {
+    return isTextPatch(operation) ? { wait: 800, maxWait: 3200 } : { wait: 300 }
+  },
+})
+
+function useWorkflowSync(workflowId: string) {
+  const sync = useMutationQueue(workflowSync, `workflow:${workflowId}`)
+
+  return {
+    sync,
+    addTask(actionId: string, taskId: string) {
+      return Promise.all([
+        sync.m.actions.create({ id: actionId, title: 'Draft' }),
+        sync.m.tasks.create({ id: taskId, actionId, title: '' }),
+        sync.m.tasks.patch(taskId, { title: 'Write launch plan' }),
+      ])
+    },
+  }
+}
+```
+
+Call `useMutationQueue()` or `useMutationQueue(definition)` for a component-owned queue.
+On unmount, it sends scheduled work. If it is paused on an error, it discards the failed
+operation and everything after it.
+
+Pass a definition and key to reconnect after a remount. Hooks with the same definition,
+key, and Figbird instance share the same pending, saving, or failed queue. Definitions
+give keys a namespace, so equal keys from different features cannot collide. Figbird
+removes an unowned queue when it becomes idle. It retains unfinished queues for five
+minutes, then detaches them so an abandoned error cannot remain paused forever.
+
+Every call projects immediately. The queue sends adapter calls in registration order.
+Consecutive unsent patches coalesce when their service, id, params, and
+optimistic-or-confirmed mode match. Their payloads merge shallowly, later values win, and
+all callers share the request promise. Structurally equal plain-object params match even
+when callers create new objects. Patches with `optimisticItem` do not coalesce. An
+ordinary write or any other queued operation ends the group.
+
+Queue writes still use Figbird's per-record ordering. An ordinary `m.tasks.patch()` cannot
+overtake an earlier `sync.m.tasks.patch()` on the same task. An ordinary write to another
+record can still run in parallel.
+
+Use `sync.flush()` to skip current debounce delays. A terminal error pauses the queue with its
+optimistic state intact; inspect `sync.status`, `sync.pending`, and `sync.error`, then call
+`sync.retry()` or `sync.discard()`. Discard rolls back the failed operation and all later queued
+work. A successful remove cancels later patches from the deleted record lifetime; if the remove
+fails, old-lifetime patches become visible again and may proceed, while a queued same-ID recreate
+and its dependent writes are cancelled.
+
+Outside React, use `figbird.createMutationQueue(config)`. A mutation queue is ordered, not
+atomic or durable. An unfinished keyed queue can survive component navigation, but no
+queue survives a page reload. Register a parent create before a child create that
+references it. Enable retries for creates only when the server treats their
+client-generated ids idempotently.
 
 ### Creates and ids: the id contract
 
@@ -579,9 +677,15 @@ Per-call options carry call-specific _data_ only. Write policy lives on the hand
 variant, not per call:
 
 - `params` — adapter params passthrough: `create(data, { params: { query: { ... } } })`.
-- `optimisticItem` — an explicit synthesized cache item when the payload doesn't carry
-  computed fields: `patch(id, data, { optimisticItem: { ...item, computedField } })`.
-  Ignored on `confirmed` handles, which never show unconfirmed state.
+- `optimisticItem` — an explicit synthesized cache item for optimistic creates, updates, and
+  patches when the payload doesn't carry computed fields:
+  `patch(id, data, { optimisticItem: { ...item, computedField } })`.
+- `optimisticPatch` — a partial local projection when the wire payload uses a different
+  shape: `patch(id, { isCompleted: true }, { optimisticPatch: { status: 'completed' } })`.
+
+`optimisticItem` and `optimisticPatch` are mutually exclusive: one replaces the complete local
+item, while the other merges fields into it. Creates accept only `optimisticItem`; removes and
+`confirmed` handles accept only `params`, because neither applies an optimistic projection.
 
 ### Per-action state: useAction
 
@@ -642,7 +746,7 @@ writes per record. Or express the change as data the server can apply idempotent
 
 ### Entity-level activity: useMutating
 
-`useMutating` answers "is any mutation in flight" for one entity, one service, or the
+`useMutating` answers "is any mutation active" for one entity, one service, or the
 whole instance, no matter where the mutation was fired from:
 
 ```ts
@@ -653,12 +757,13 @@ const anything = useMutating() // anywhere
 
 It's backed by a synchronous mutation tracker in the core (not the batched events
 channel), so it is correct even for components that mount _while_ a mutation is already
-in flight, and it sees writes from other components, route actions, and non-React code.
+already active, and it sees scheduled queue work plus writes from other components, route actions,
+and non-React code.
 
-The canonical use is serializing writes to one record: overlapping optimistic patches to
-the same row make rollback ambiguous, so disable the whole toolbar with
-`useMutating({ service, id })` while any action on that record is in flight. Each
-button's `useAction.pending` still labels _which_ one is running.
+Figbird serializes keyed server writes and rebases their optimistic projections. The
+canonical UI use for this hook is preventing duplicate or stale user intent: disable the
+whole toolbar with `useMutating({ service, id })` while any action on that record is in
+flight. Each button's `useAction.pending` still labels _which_ one is running.
 
 Caveats: optimistic creates are tracked by their client-generated id (the id contract
 guarantees one); `confirmed` creates without a client id and custom-method calls carry no
@@ -1314,10 +1419,50 @@ instance-bound plain values. Inside React, get it from `useMutations()` so it fo
 nearest `FigbirdProvider`. Outside React, use `figbird.m` directly. Writes are optimistic by
 default; `confirmed` variants update the cache only
 after the server acks. Handles hold no pending/error state by design; that's
-[useAction](#useaction) and [useMutating](#usemutating). Per-call `options` carry data
-only: `{ params?: AdapterParams, optimisticItem?: Item }`. Also available as `figbird.m`.
+[useAction](#useaction) and [useMutating](#usemutating). Per-call `options` carry data only:
+creates accept `params` and `optimisticItem`; updates and patches also accept the mutually exclusive
+`optimisticPatch`; removes and `confirmed` handles accept only `params`. Also available as
+`figbird.m`.
 Like `q`, the proxy is callable for dynamic service names: `m(name)` is `m.<name>` with a
 string-typed door.
+
+## defineMutationQueue and useMutationQueue
+
+```ts
+const autosave = defineMutationQueue({
+  schedule: operation => ({ wait: operation.method === 'patch' ? 500 : 0 }),
+  retry: 2,
+  retryDelay: 1000,
+})
+
+const local = useMutationQueue() // owned by this component
+const configured = useMutationQueue(autosave) // configured, still component-owned
+const reconnectable = useMutationQueue(autosave, `issue:${issueId}`)
+```
+
+`defineMutationQueue(config?)` creates an immutable policy value. Keep it at module scope.
+The optional `schedule` function controls debounce timing; `retry` and `retryDelay`
+control automatic retries.
+
+`useMutationQueue()` returns a serial queue with an `m` write proxy. Pass a definition to
+use its policy. Pass a definition and key to reconnect to unfinished work after a remount.
+The returned queue exposes `status`, `pending`, `error`, `flush()`, `retry()`, and
+`discard()`. See [Ordered autosave with mutation queues](#ordered-autosave-with-mutation-queues).
+
+## figbird.createMutationQueue
+
+```ts
+const sync = figbird.createMutationQueue({
+  schedule: operation => ({ wait: operation.method === 'patch' ? 500 : 0 }),
+})
+
+sync.m.tasks.patch(id, { title })
+```
+
+Creates the same serial queue outside React. The caller owns its lifetime. This form does
+not have a reconnect key; keep the queue object for as long as the feature needs it. Call
+`sync.detach()` when its owner goes away. Detaching sends scheduled work, or discards work
+from a terminal failure, and prevents new calls.
 
 ## useAction
 
@@ -1345,7 +1490,7 @@ and the one-identity-one-call-site rule.
 ## useMutating
 
 ```ts
-useMutating() // any mutation in flight, anywhere
+useMutating() // any active mutation, anywhere
 useMutating({ service, id?, method? }) // narrowed; service accepts schema keys
 ```
 
@@ -1498,7 +1643,8 @@ const figbird = new Figbird({
 | `prefetch(definition, args, opts?)`               | Idempotent speculative warming. Call it on the explicit instance: `figbird.prefetch(...)`. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
-| `mutating`                                        | Synchronous in-flight mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                    |
+| `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
+| `mutating`                                        | Synchronous active-mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                       |
 | `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
 | `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |
