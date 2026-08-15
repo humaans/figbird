@@ -2535,7 +2535,7 @@ test('useQuery: server refetches a server-authoritative query from its service e
 })
 
 test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
-  const { render, unmount, flush, $ } = dom()
+  const { render, unmount, flush, act, $ } = dom()
   const { App, figbird, feathers } = createProfileQueryApp()
 
   function ProfileView() {
@@ -2546,6 +2546,7 @@ test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
     return (
       <div
         className='profile'
+        data-manager-fk={String(data.managerId ?? 'none')}
         data-manager={data.manager?.name ?? 'none'}
         data-manager-id={String(data.manager?.id ?? 'none')}
       />
@@ -2564,12 +2565,41 @@ test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
 
   t.is($('.profile')!.getAttribute('data-manager'), 'Mira')
   t.is($('.profile')!.getAttribute('data-manager-id'), '10')
+  t.is($('.profile')!.getAttribute('data-manager-fk'), '10')
 
-  await feathers.service('people').patch(1, { managerId: 11 })
+  let resolvePatch!: (item: ProfilePerson) => void
+  feathers.service('people').patch = (() =>
+    new Promise(resolve => {
+      resolvePatch = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<ProfilePerson>
+  act(() => {
+    pending = queue.m.people.patch(1, { managerId: 11 })
+  })
+
+  t.is(
+    $('.profile')!.getAttribute('data-manager-fk'),
+    '11',
+    'the optimistic foreign key stays visible while its new relation leaf loads',
+  )
+
   await flush()
 
   t.is($('.profile')!.getAttribute('data-manager'), 'Nia')
   t.is($('.profile')!.getAttribute('data-manager-id'), '11')
+
+  await act(async () => {
+    queue.flush()
+    resolvePatch({
+      id: 1,
+      name: 'Alice',
+      status: 'active',
+      managerId: 11,
+      startDate: '2024-01-01',
+    })
+    await pending
+  })
 
   unmount()
 })

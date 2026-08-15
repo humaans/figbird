@@ -47,7 +47,25 @@ export function TasksPanel({ issueId, users }: { issueId: number; users: User[] 
 
   const createTask = (after?: Task) => {
     const id = nextClientTaskId()
-    const position = after ? after.position + 0.001 : (tasks.at(-1)?.position ?? 0) + 1
+    let position = (tasks.at(-1)?.position ?? 0) + 1
+    if (after) {
+      const afterIndex = tasks.findIndex(task => task.id === after.id)
+      const next = afterIndex === -1 ? undefined : tasks[afterIndex + 1]
+      if (next) {
+        position = after.position + (next.position - after.position) / 2
+
+        // Repeated insertion can eventually exhaust the floating-point gap (and
+        // older demo data may contain duplicate ranks). Re-space only then.
+        if (!(position > after.position && position < next.position)) {
+          tasks.forEach((task, index) => {
+            void queue.m.tasks.patch(task.id, { position: (index + 1) * 2 })
+          })
+          position = (afterIndex + 1) * 2 + 1
+        }
+      } else if (afterIndex !== -1) {
+        position = after.position + 1
+      }
+    }
     void queue.m.tasks.create({
       id,
       issueId,
@@ -171,6 +189,8 @@ function TaskRow({
   onRemove: () => void
   onCreateBelow: () => void
 }) {
+  const selectedAssignee = users.find(user => user.id === task.assigneeId)
+
   const changeAssignee = (event: ChangeEvent<HTMLSelectElement>) => {
     onAssign(event.target.value === '' ? null : Number(event.target.value))
   }
@@ -201,7 +221,7 @@ function TaskRow({
         className='task-title-input'
       />
       <label className='task-assignee'>
-        <span aria-hidden>{task.assignee?.avatar ?? '○'}</span>
+        <span aria-hidden>{task.assignee?.avatar ?? selectedAssignee?.avatar ?? '○'}</span>
         <select value={task.assigneeId ?? ''} onChange={changeAssignee} aria-label='Assignee'>
           <option value=''>Unassigned</option>
           {users.map(user => (

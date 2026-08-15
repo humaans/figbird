@@ -224,6 +224,11 @@ export class RelationalQueryRef<
   // Last-seen data ref per relation key — triggers reassembly when a relation's query
   // data changes (e.g. realtime event landed a new matching entity).
   #lastRelationData: Map<string, unknown[] | null> = new Map()
+  // The last complete relation input lets a changing root remain optimistic while a
+  // newly referenced relation leaf is fetched. Without it, the relational SWR path
+  // would return the entire previous snapshot and temporarily hide root-field edits.
+  #lastRelationAssembly: Map<string, AssembledRelationData> | null = null
+  #usingStaleRelations = false
 
   // Suspense-support state. The promise is created lazily when suspensePromise() is
   // first called and resolves/rejects on the first transition to success/error. Once
@@ -428,7 +433,7 @@ export class RelationalQueryRef<
     if (root.phase === 'loading') return this.#fetchingSnapshot()
 
     const gathered = this.#gatherRelationData()
-    if (gathered.kind === 'loading') return this.#fetchingSnapshot()
+    if (gathered.kind === 'loading') return this.#fetchingSnapshot(root.rows)
     if (gathered.kind === 'error') return this.#errorSnapshot(gathered.error)
 
     // Decide whether the assembled output could have changed. Reassemble if root data
@@ -437,7 +442,9 @@ export class RelationalQueryRef<
     // mutates the comments query's data ref → we reassemble → the new comment appears
     // under the right issue.
     let inputsChanged =
-      this.#lastRootData !== root.rows || this.#lastRelationData.size !== gathered.dataRefs.size
+      this.#usingStaleRelations ||
+      this.#lastRootData !== root.rows ||
+      this.#lastRelationData.size !== gathered.dataRefs.size
     if (!inputsChanged) {
       for (const [key, data] of gathered.dataRefs) {
         if (this.#lastRelationData.get(key) !== data) {
@@ -459,14 +466,12 @@ export class RelationalQueryRef<
       return this.#wrap(this.#lastSnapshot)
     }
 
-    const assembled = assembleRelations(root.rows, this.#ast, this.#schema, gathered.assembly)
-    const data =
-      this.#ast.kind !== 'paginate' && this.#ast.cardinality === 'one'
-        ? ((assembled[0] ?? null) as T)
-        : (assembled as unknown as T)
+    const data = this.#assemble(root.rows, gathered.assembly)
 
     this.#lastRootData = root.rows
     this.#lastRelationData = gathered.dataRefs
+    this.#lastRelationAssembly = gathered.assembly
+    this.#usingStaleRelations = false
     this.#lastSnapshot = {
       status: 'success',
       data,
@@ -479,15 +484,27 @@ export class RelationalQueryRef<
 
   /**
    * While a sub-query (root or relation) is fetching but we already have a previous
-   * successful snapshot, keep showing it with isFetching: true. This is the SWR
-   * pattern at the relational level — without it, a parent-data change that triggers
-   * a relation `$in` to grow would force a brand-new (cold) relation queryRef,
-   * flipping the assembled view back to 'loading' and flashing a Suspense fallback
-   * under `useQuery`.
+   * successful snapshot, keep showing it with isFetching: true. When the root itself
+   * is ready, reassemble its current rows with the last complete relation inputs.
+   * This preserves optimistic root fields while a changed foreign key fetches its new
+   * leaf. The relation may temporarily be null if that leaf was not in the prior
+   * input, but the root never snaps back to its pre-mutation value.
+   *
+   * This is the SWR pattern at the relational level — without it, a parent-data
+   * change that triggers a relation `$in` to grow would either flash a Suspense
+   * fallback or mask the optimistic root change with the previous assembled graph.
    */
-  #fetchingSnapshot(): RelationalQueryState<T> {
+  #fetchingSnapshot(rootRows?: unknown[]): RelationalQueryState<T> {
     if (this.#lastSnapshot?.status === 'success') {
-      if (!this.#lastSnapshot.isFetching) {
+      if (rootRows && this.#lastRelationAssembly && this.#lastRootData !== rootRows) {
+        this.#lastRootData = rootRows
+        this.#usingStaleRelations = true
+        this.#lastSnapshot = {
+          ...this.#lastSnapshot,
+          data: this.#assemble(rootRows, this.#lastRelationAssembly),
+          isFetching: true,
+        }
+      } else if (!this.#lastSnapshot.isFetching) {
         this.#lastSnapshot = { ...this.#lastSnapshot, isFetching: true }
       }
       return this.#wrap(this.#lastSnapshot)
@@ -501,6 +518,13 @@ export class RelationalQueryRef<
       }
     }
     return this.#wrap(this.#lastSnapshot)
+  }
+
+  #assemble(rootRows: unknown[], assembly: Map<string, AssembledRelationData>): T {
+    const assembled = assembleRelations(rootRows, this.#ast, this.#schema, assembly)
+    return this.#ast.kind !== 'paginate' && this.#ast.cardinality === 'one'
+      ? ((assembled[0] ?? null) as T)
+      : (assembled as unknown as T)
   }
 
   /**
@@ -1356,6 +1380,8 @@ export class RelationalQueryRef<
     this.#lastWrappedInner = null
     this.#lastRootData = null
     this.#lastRelationData.clear()
+    this.#lastRelationAssembly = null
+    this.#usingStaleRelations = false
     this.#listenerStaleTimes.clear()
     this.#staleTime = 0
     // Evict from the figbird-level cache so a subsequent query rebuilds a fresh ref.
