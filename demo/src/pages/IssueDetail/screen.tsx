@@ -122,6 +122,12 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
     )
   }
 
+  // The foreign key is part of the optimistic root projection. Resolve it against
+  // the already-materialized reference lists as a final UI fallback while a cold
+  // relational leaf is fetched.
+  const assignee = issue.assignee ?? users.find(user => user.id === issue.assigneeId)
+  const team = issue.team ?? teams.find(candidate => candidate.id === issue.teamId)
+
   return (
     <main className='detail'>
       <header className='detail-head'>
@@ -161,9 +167,9 @@ queries: ({ params }) => [
         <EditableTitle issueId={issue.id} title={issue.title} />
         <div className='detail-meta'>
           {issue.creator?.name ?? 'unknown'} <span className='dim'>→</span>{' '}
-          {issue.assignee?.name ?? 'unassigned'}
+          {assignee?.name ?? 'unassigned'}
           {' · '}
-          {issue.team?.name ?? 'no team'}
+          {team?.name ?? 'no team'}
         </div>
         {issue.labels.length > 0 ? (
           <div className='label-row'>

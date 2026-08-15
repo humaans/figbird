@@ -78,6 +78,7 @@ export function TasksPanel({ issueId, users }: { issueId: number; users: User[] 
   }
 
   const completed = tasks.filter(task => task.completed).length
+  const removedRemotely = isNotFound(queue.error)
 
   return (
     <section className='tasks'>
@@ -144,10 +145,16 @@ sync.m.tasks.remove(id)`}
 
       {queue.status === 'failed' ? (
         <div className='task-queue-error' role='alert'>
-          <span>{queue.error?.message ?? 'Task save failed.'}</span>
-          <button className='link' onClick={() => queue.retry()}>
-            Retry
-          </button>
+          <span>
+            {removedRemotely
+              ? 'This task was removed elsewhere. Discard its obsolete edit to keep saving.'
+              : (queue.error?.message ?? 'Task save failed.')}
+          </span>
+          {!removedRemotely ? (
+            <button className='link' onClick={() => queue.retry()}>
+              Retry
+            </button>
+          ) : null}
           <button className='link danger' onClick={() => queue.discard()}>
             Discard queued changes
           </button>
@@ -155,6 +162,12 @@ sync.m.tasks.remove(id)`}
       ) : null}
     </section>
   )
+}
+
+function isNotFound(error: Error | null): boolean {
+  if (!error) return false
+  const code = (error as Error & { code?: unknown }).code
+  return error.name === 'NotFound' || code === 404
 }
 
 function QueueState({ status, pending }: { status: string; pending: number }) {

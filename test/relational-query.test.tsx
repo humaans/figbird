@@ -2682,6 +2682,7 @@ test('useQuery: many-to-many through a join service expands nested relation leav
 test('useQuery: limited sorted relation refetches its server window after a visible item leaves', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createWindowQueryApp()
+  const people = feathers.service('people')
 
   function CompanyView() {
     const { data, isFetching } = useQuery(
@@ -2721,8 +2722,19 @@ test('useQuery: limited sorted relation refetches its server window after a visi
   t.is($('.company')!.getAttribute('data-people'), 'Alice,Bob')
   t.is($('.company')!.getAttribute('data-employment'), 'Alice role,Bob role')
 
-  await feathers.service('people').patch(2, { status: 'inactive' })
-  await flush()
+  people.setDelay(40)
+  await flush(async () => {
+    await people.patch(2, { status: 'inactive' })
+  })
+
+  t.is(
+    $('.company')!.getAttribute('data-fetching'),
+    'true',
+    'a relation-only revalidation contributes to graph isFetching',
+  )
+  t.is($('.company')!.getAttribute('data-people'), 'Alice,Bob')
+
+  await flush(() => new Promise(resolve => setTimeout(resolve, 50)))
 
   t.is($('.company')!.getAttribute('data-fetching'), 'false')
   t.is($('.company')!.getAttribute('data-people'), 'Alice,Cara')
@@ -3088,7 +3100,11 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
     const { data, refetch } = useQuery(figbird.q.issues.related('comments').snapshot())
     refetchFn = refetch
     return (
-      <div className='frozen' data-count={data.length}>
+      <div
+        className='frozen'
+        data-count={data.length}
+        data-comments={data.reduce((total, issue) => total + issue.comments.length, 0)}
+      >
         {data.map(issue => (
           <span key={issue.id} className='row' data-comments={issue.comments.length} />
         ))}
@@ -3105,6 +3121,7 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
   )
   await flush()
   t.is($('.frozen')!.getAttribute('data-count'), '3')
+  t.is($('.frozen')!.getAttribute('data-comments'), '3')
 
   // Realtime events on both services — a frozen tree must not move.
   await feathers.service('issues').create({ id: 99, title: 'New', status: 'open', creatorId: 1 })
@@ -3115,6 +3132,18 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
   // refetch() is the only way it moves.
   await flush(() => refetchFn!())
   t.is($('.frozen')!.getAttribute('data-count'), '4')
+  t.is($('.frozen')!.getAttribute('data-comments'), '4')
+
+  // The root set is now unchanged: only a relation query can discover this row.
+  await feathers.service('comments').create({ id: 100, issueId: 1, authorId: 2, body: 'later' })
+  await flush()
+  t.is($('.frozen')!.getAttribute('data-comments'), '4')
+  await flush(() => refetchFn!())
+  t.is(
+    $('.frozen')!.getAttribute('data-comments'),
+    '5',
+    'graph refetch refreshes relation leaves even when the root rows are unchanged',
+  )
 
   // Identity: frozen and live reads of the same filters do not share a cache entry.
   t.not(figbird.query(figbird.q.issues.snapshot()).hash(), figbird.query(figbird.q.issues).hash())
@@ -3643,9 +3672,11 @@ test('junction: useQuery returns dest items via the junction transparently', asy
 
 test('junction: realtime — adding a roleMember row appears under the right role', async t => {
   const { App, figbird, feathers } = createJunctionApp()
-  const { render, unmount, flush, $ } = dom()
+  const { render, unmount, flush, act, $ } = dom()
 
   function AdminRole() {
+    // Materialize the reference service, matching lookup-table-heavy applications.
+    useQuery(figbird.q.users2.all())
     const { data } = useQuery(figbird.q.roles2.get(1).related('members'))
     return (
       <div className='members'>
@@ -3667,12 +3698,29 @@ test('junction: realtime — adding a roleMember row appears under the right rol
   await flush()
   t.is($('.members')!.innerHTML, 'Alice,Bob')
 
-  // Add a junction row binding Cara to Admin. Realtime on the junction service should
-  // flow through both subs and re-assemble.
-  await flush(async () => {
-    await feathers.service('roleMembers').create({ id: 5, roleId: 1, userId: 3 })
+  let resolveCreate!: (item: RoleMember) => void
+  feathers.service('roleMembers').create = (() =>
+    new Promise(resolve => {
+      resolveCreate = resolve
+    })) as never
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  let pending!: Promise<RoleMember>
+  act(() => {
+    pending = queue.m.roleMembers.create({ id: 5, roleId: 1, userId: 3 })
   })
-  t.is($('.members')!.innerHTML, 'Alice,Bob,Cara')
+
+  await flush()
+  t.is(
+    $('.members')!.innerHTML,
+    'Alice,Bob,Cara',
+    'an optimistic junction edge resolves immediately from a materialized destination',
+  )
+
+  await act(async () => {
+    queue.flush()
+    resolveCreate({ id: 5, roleId: 1, userId: 3 })
+    await pending
+  })
 
   unmount()
 })
