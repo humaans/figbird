@@ -56,14 +56,16 @@ interface WindowPage<T, S extends Schema, TParams, TMeta extends Record<string, 
   start: number
   ref: RelationalQueryRef<T[], S, TParams, TMeta, TQuery>
   unsubscribe: () => void
+  staleTime: number
   lastUsed: number
 }
 
-interface SuspenseWaiter {
+interface ColdRead {
   range: WindowRange
   promise: Promise<void>
   resolve: () => void
   reject: (error: Error) => void
+  releaseTimer: ReturnType<typeof setTimeout> | null
 }
 
 const EMPTY_DATA: ReadonlyMap<number, never> = new Map<number, never>()
@@ -90,7 +92,7 @@ function rangeKey(range: WindowRange): string {
 /**
  * Shared lifecycle for a viewport-indexed relational query. Pagination-specific
  * addressing and readiness live behind WindowPager; this class owns readers,
- * relational page refs, Suspense waiters, and bounded retention.
+ * relational page refs, render-phase cold reads, and bounded retention.
  */
 export class WindowQueryRef<
   T,
@@ -110,8 +112,7 @@ export class WindowQueryRef<
 
   #pages = new Map<number, WindowPage<T, S, TParams, TMeta, TQuery>>()
   #subscribers = new Map<(state: WindowQueryState<T>) => void, WindowSubscriber<T>>()
-  #coldRanges = new Map<string, WindowRange>()
-  #waiters = new Map<string, SuspenseWaiter>()
+  #coldReads = new Map<string, ColdRead>()
   #cleanupScheduled = false
   #syncScheduled = false
   #notifyScheduled = false
@@ -190,13 +191,16 @@ export class WindowQueryRef<
       range,
       staleTime: options.staleTime ?? 0,
     })
-    this.#coldRanges.delete(rangeKey(range))
+    const coldRead = this.#coldReads.get(rangeKey(range))
+    if (coldRead && coldRead.releaseTimer !== null) {
+      this.#releaseColdRead(rangeKey(range), coldRead)
+    }
     this.#syncPages()
 
     return () => {
       this.#subscribers.delete(listener)
       this.#scheduleSync()
-      if (this.#subscribers.size === 0 && this.#coldRanges.size === 0) this.#scheduleCleanup()
+      if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#scheduleCleanup()
     }
   }
 
@@ -264,7 +268,7 @@ export class WindowQueryRef<
     if (state.status === 'error') return Promise.reject(state.error)
 
     const key = rangeKey(range)
-    const existing = this.#waiters.get(key)
+    const existing = this.#coldReads.get(key)
     if (existing) return existing.promise
 
     let resolve = () => {}
@@ -273,19 +277,22 @@ export class WindowQueryRef<
       resolve = resolvePromise
       reject = rejectPromise
     })
-    this.#waiters.set(key, { range, promise, resolve, reject })
-    this.#coldRanges.set(key, range)
+    this.#coldReads.set(key, {
+      range,
+      promise,
+      resolve,
+      reject,
+      releaseTimer: null,
+    })
     this.#syncPages()
-    this.#settleWaiters()
+    this.#settleColdReads()
     return promise
   }
 
   releaseColdStart(rangeInput: WindowRange): void {
     const range = normalizeRange(rangeInput)
     const key = rangeKey(range)
-    this.#coldRanges.delete(key)
-    this.#waiters.delete(key)
-    if (this.#subscribers.size === 0 && this.#coldRanges.size === 0) this.#scheduleCleanup()
+    this.#releaseColdRead(key)
   }
 
   #desiredStarts(): Set<number> {
@@ -295,8 +302,8 @@ export class WindowQueryRef<
         starts.add(start)
       }
     }
-    for (const range of this.#coldRanges.values()) {
-      for (const start of this.#pager.targetStarts(range, this.#config.preloadPages)) {
+    for (const read of this.#coldReads.values()) {
+      for (const start of this.#pager.targetStarts(read.range, this.#config.preloadPages)) {
         starts.add(start)
       }
     }
@@ -306,6 +313,7 @@ export class WindowQueryRef<
   #syncPages(): void {
     const desired = this.#desiredStarts()
     this.#pager.sync(desired)
+    this.#syncPageFreshness()
     if (this.#evictPages(this.#pager.protectedStarts(desired))) {
       this.#rebuildData()
       this.#version += 1
@@ -329,15 +337,17 @@ export class WindowQueryRef<
       { root: this.#pager.rootOverride(start) },
     )
     ref.setDisplayName(this.#name ? `${this.#name} [${start}]` : undefined)
+    const staleTime = this.#currentStaleTime()
     const page: WindowPage<T, S, TParams, TMeta, TQuery> = {
       start,
       ref,
       unsubscribe: () => {},
+      staleTime,
       lastUsed: ++this.#clock,
     }
     this.#pages.set(start, page)
     page.unsubscribe = ref.subscribe(() => this.#pageChanged(start), {
-      staleTime: this.#currentStaleTime(),
+      staleTime,
     })
     this.#pageChanged(start)
   }
@@ -359,7 +369,7 @@ export class WindowQueryRef<
     this.#rebuildData()
     this.#version += 1
     this.#snapshotCache.clear()
-    this.#settleWaiters()
+    this.#settleColdReads()
     this.#scheduleSync()
     this.#scheduleNotify()
   }
@@ -375,9 +385,10 @@ export class WindowQueryRef<
     this.#data = data
   }
 
-  #settleWaiters(): void {
-    for (const [key, waiter] of this.#waiters) {
-      const required = this.#pager.requiredStarts(waiter.range).flatMap(start => {
+  #settleColdReads(): void {
+    for (const [key, read] of this.#coldReads) {
+      if (read.releaseTimer !== null) continue
+      const required = this.#pager.requiredStarts(read.range).flatMap(start => {
         const page = this.#pages.get(start)
         return page ? [page] : []
       })
@@ -387,22 +398,36 @@ export class WindowQueryRef<
         if (state.status === 'error') error ??= state.error
       }
       if (error) {
-        this.#waiters.delete(key)
-        this.#coldRanges.delete(key)
-        waiter.reject(error)
-      } else if (this.#pager.rangeReady(waiter.range)) {
-        this.#waiters.delete(key)
-        waiter.resolve()
+        read.reject(error)
+      } else if (this.#pager.rangeReady(read.range)) {
+        read.resolve()
+      } else {
+        continue
       }
+      // React retries a suspended render asynchronously. Keep this range pinned
+      // through that retry, but expire it on the next task if no subscription commits.
+      read.releaseTimer = setTimeout(() => this.#releaseColdRead(key, read), 0)
+    }
+  }
+
+  #syncPageFreshness(): void {
+    const staleTime = this.#currentStaleTime()
+    for (const page of this.#pages.values()) {
+      if (page.staleTime === staleTime) continue
+      const unsubscribe = page.ref.subscribe(() => this.#pageChanged(page.start), { staleTime })
+      page.unsubscribe()
+      page.unsubscribe = unsubscribe
+      page.staleTime = staleTime
     }
   }
 
   #currentStaleTime(): number {
+    if (this.#subscribers.size === 0) return 0
     let staleTime = Infinity
     for (const subscriber of this.#subscribers.values()) {
       staleTime = Math.min(staleTime, subscriber.staleTime)
     }
-    return staleTime === Infinity ? 0 : staleTime
+    return staleTime
   }
 
   #pagerPage(start: number): PagerPage | undefined {
@@ -467,8 +492,16 @@ export class WindowQueryRef<
     this.#cleanupScheduled = true
     queueMicrotask(() => {
       this.#cleanupScheduled = false
-      if (this.#subscribers.size === 0 && this.#coldRanges.size === 0) this.#cleanup()
+      if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#cleanup()
     })
+  }
+
+  #releaseColdRead(key: string, expected?: ColdRead): void {
+    const read = this.#coldReads.get(key)
+    if (!read || (expected && read !== expected)) return
+    if (read.releaseTimer !== null) clearTimeout(read.releaseTimer)
+    this.#coldReads.delete(key)
+    if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#scheduleCleanup()
   }
 
   #cleanup(): void {
@@ -478,7 +511,10 @@ export class WindowQueryRef<
     this.#data = EMPTY_DATA
     this.#total = undefined
     this.#snapshotCache.clear()
-    this.#waiters.clear()
+    for (const read of this.#coldReads.values()) {
+      if (read.releaseTimer !== null) clearTimeout(read.releaseTimer)
+    }
+    this.#coldReads.clear()
     this.#onEvict?.()
   }
 }

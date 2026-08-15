@@ -64,13 +64,13 @@ function keyed<T extends { id: number }>(rows: T[]): Record<string, T> {
 interface TestWindowRef<T> {
   subscribe(
     listener: (state: WindowQueryState<T>) => void,
-    options: { range: WindowRange },
+    options: { range: WindowRange; staleTime?: number },
   ): () => void
   getSnapshot(range: WindowRange): WindowQueryState<T>
   refetch(): void
 }
 
-function readSettledWindow<T>(ref: TestWindowRef<T>, range: WindowRange) {
+function readSettledWindow<T>(ref: TestWindowRef<T>, range: WindowRange, staleTime?: number) {
   let unsubscribe = () => {}
   const promise = new Promise<WindowQueryState<T>>(resolve => {
     const check = () => {
@@ -79,7 +79,7 @@ function readSettledWindow<T>(ref: TestWindowRef<T>, range: WindowRange) {
         resolve(state)
       }
     }
-    unsubscribe = ref.subscribe(check, { range })
+    unsubscribe = ref.subscribe(check, { range, ...(staleTime !== undefined ? { staleTime } : {}) })
     check()
   })
   return { promise, unsubscribe: () => unsubscribe() }
@@ -150,6 +150,70 @@ test('window query: retention never evicts pages required by active readers', as
   t.is(data.size, 20)
   top.unsubscribe()
   deep.unsubscribe()
+})
+
+test('window query: a settled cold read expires when no React reader commits', async t => {
+  const { figbird } = createTestApp(schema, {
+    items: { data: keyed(makeRows(20)) },
+    owners: { data: {} },
+  })
+  const query = figbird.q.items.orderBy('rank', 'asc')
+  const config = { pageSize: 10, preloadPages: 0, maxPages: 2 }
+  const abandoned = figbird.window(query, config)
+
+  await abandoned.suspensePromise({ start: 0, end: 5 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.not(figbird.window(query, config), abandoned)
+})
+
+test('window query: retained pages follow the strictest active reader', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    items: { data: keyed(makeRows(20)) },
+    owners: { data: {} },
+  })
+  const range = { start: 0, end: 5 }
+  const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 10,
+    preloadPages: 0,
+    maxPages: 2,
+  })
+  const lenient = readSettledWindow(ref, range, Infinity)
+  await lenient.promise
+  const service = feathers.service('items')
+  const initialFetches = service.counts.find
+
+  const addStrictReader = (expectedFetches: number) => {
+    let unsubscribe = () => {}
+    const settled = new Promise<void>(resolve => {
+      const check = () => {
+        const state = ref.getSnapshot(range)
+        if (
+          service.counts.find >= expectedFetches &&
+          state.status === 'success' &&
+          !state.isFetching
+        ) {
+          resolve()
+        }
+      }
+      unsubscribe = ref.subscribe(check, { range, staleTime: 0 })
+      check()
+    })
+    return { settled, unsubscribe: () => unsubscribe() }
+  }
+
+  const firstStrict = addStrictReader(initialFetches + 1)
+  await firstStrict.settled
+  t.is(service.counts.find, initialFetches + 1)
+  firstStrict.unsubscribe()
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+
+  const secondStrict = addStrictReader(initialFetches + 2)
+  await secondStrict.settled
+  t.is(service.counts.find, initialFetches + 2)
+
+  secondStrict.unsubscribe()
+  lenient.unsubscribe()
 })
 
 test('useWindowQuery: each hook gets an independent first-window Suspense lifecycle', async t => {

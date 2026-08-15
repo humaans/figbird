@@ -117,7 +117,8 @@ export class OffsetWindowPager implements WindowPager {
       },
       config: {
         realtime: ast.snapshot ? 'disabled' : 'merge',
-        fetchPolicy: 'network-only',
+        fetchPolicy: 'swr',
+        gcOnUnsubscribe: true,
         ...(ast.server ? { server: true } : {}),
       },
     }
@@ -220,7 +221,8 @@ export class CursorWindowPager implements WindowPager {
       },
       config: {
         realtime: start === 0 && !ast.snapshot ? 'refetch' : 'disabled',
-        fetchPolicy: 'network-only',
+        fetchPolicy: 'swr',
+        gcOnUnsubscribe: true,
         server: true,
       },
     }

@@ -4,6 +4,7 @@ import { cursorQueryCanKeepPrefix, cursorQueryInputsUnchanged } from './cursorMa
 import type { QueryAST } from './queryBuilder.js'
 import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
+import type { QueryLifecycleConfig } from './queryIdentity.js'
 import type {
   ProcessedProjectionEvent,
   ProcessedRealtimeEvent,
@@ -72,7 +73,10 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   }
   getState(): Map<string, ServiceState<TMeta>>
   /** Returns a QueryRef; typed loosely here and re-typed once at the engine's seam. */
-  queryDesc(desc: QueryDescriptor, config?: QueryConfig<unknown, unknown>): unknown
+  queryDesc(
+    desc: QueryDescriptor,
+    config?: QueryConfig<unknown, unknown> & QueryLifecycleConfig,
+  ): unknown
 }
 
 /**
@@ -173,7 +177,7 @@ export interface InspectedRelationalQuery {
 /** Internal escape hatch for consumers that need a custom root query boundary. */
 export interface RelationalRootOverride {
   descriptor: QueryDescriptor
-  config?: QueryConfig<unknown, unknown>
+  config?: QueryConfig<unknown, unknown> & QueryLifecycleConfig
 }
 
 interface RelationalQueryOptions {
@@ -347,7 +351,7 @@ export class RelationalQueryRef<
    */
   #query(
     desc: QueryDescriptor,
-    config: QueryConfig<unknown, unknown>,
+    config: QueryConfig<unknown, unknown> & QueryLifecycleConfig,
   ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
     return this.#host.queryDesc(desc, config) as QueryRef<
       unknown[],
@@ -401,11 +405,12 @@ export class RelationalQueryRef<
   }
 
   #currentStaleTime(): number {
+    if (this.#listenerStaleTimes.size === 0) return 0
     let staleTime = Infinity
     for (const value of this.#listenerStaleTimes.values()) {
       staleTime = Math.min(staleTime, value)
     }
-    return staleTime === Infinity ? 0 : staleTime
+    return staleTime
   }
 
   #ensureFresh(staleTime: number): void {
