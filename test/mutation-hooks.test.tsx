@@ -490,7 +490,7 @@ test('useMutating: service filter resolves schema aliases to transport paths', a
   t.is(probe.read(), 'false')
 })
 
-test('useSyncStatus: replays pending writes, retains failures, and clears them on retry', async t => {
+test('useSyncStatus: replays pending writes and settles one-shot failures', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useSyncStatus } = createHooks(schema)
   const d = dom()
@@ -501,6 +501,13 @@ test('useSyncStatus: replays pending writes, retains failures, and clears them o
   }
 
   const read = () => JSON.parse(d.$('output')!.textContent!) as ReturnType<typeof useSyncStatus>
+  const observedWriteCounts: Array<readonly [number, number]> = []
+  const unsubscribeMutating = figbird.mutating.subscribe(() => {
+    observedWriteCounts.push([
+      figbird.mutating.getSnapshot().length,
+      figbird.sync.getSnapshot().pendingWrites,
+    ])
+  })
 
   t.is(figbird.sync.getSnapshot().phase, 'synced')
   t.is(figbird.sync.getSnapshot().lastSyncedAt, null)
@@ -539,9 +546,9 @@ test('useSyncStatus: replays pending writes, retains failures, and clears them o
     first.reject(new Error('offline'))
     await t.throwsAsync(failedWrite, { message: 'offline' })
   })
-  t.is(read().phase, 'error')
+  t.is(read().phase, 'synced')
   t.is(read().pendingWrites, 0)
-  t.is(read().failedWrites, 1)
+  t.is(read().failedWrites, 0, 'settled one-shot errors are owned by the calling action')
 
   const retry = deferred<MockItem>()
   feathers.service('notes').patch = () => retry.promise
@@ -561,4 +568,9 @@ test('useSyncStatus: replays pending writes, retains failures, and clears them o
   t.is(read().pendingWrites, 0)
   t.is(read().failedWrites, 0)
   t.is(typeof read().lastSyncedAt, 'number')
+  t.true(
+    observedWriteCounts.every(([mutating, pendingWrites]) => mutating === pendingWrites),
+    'mutating and sync snapshots share one authoritative registry',
+  )
+  unsubscribeMutating()
 })

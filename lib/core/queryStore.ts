@@ -11,7 +11,6 @@ import { FigbirdEventEmitter } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
 import { GatedMutationAttempt } from './gatedMutationAttempt.js'
 import {
-  MutationQueueDiscardedError,
   MutationSupersededError,
   type RegisteredMutation,
   type ScheduledMutationControl,
@@ -121,12 +120,18 @@ interface TrackedMutation<T> {
   promise: Promise<T>
 }
 
+interface StartedMutation {
+  mutationId: number
+  startedAt: number
+  tracking: MutationTrackingEntry
+}
+
 interface QueuedMutation {
   desc: MutationDescriptor
   args: unknown[]
   optimistic: boolean
   attempt: GatedMutationAttempt
-  mutationId?: number
+  mutationId: number
 }
 
 interface AppliedEventEffect {
@@ -258,7 +263,10 @@ export class QueryStore<
     this.#eventBatchInterval = eventBatchInterval
     this.#events = new FigbirdEventEmitter()
     this.#mutations = new MutationTracker()
-    this.#sync = new SyncTracker(this.#adapter.getConnectionState?.() ?? 'connected')
+    this.#sync = new SyncTracker(
+      this.#mutations,
+      this.#adapter.getConnectionState?.() ?? 'connected',
+    )
     this.#reconcileCooldown = reconcileCooldown
     this.#retry = this.#normalizeRetry(retry)
     this.#retryDelay = retryDelay
@@ -675,40 +683,37 @@ export class QueryStore<
       this.#getEntity(desc.serviceName, id),
     )
 
+    const tracking = {
+      serviceName: desc.serviceName,
+      method: desc.method,
+      id,
+      optimistic,
+      args,
+    }
+    const started = this.#beginMutation(tracking)
     const entry: QueuedMutation = {
       desc,
       args,
       optimistic,
       attempt: new GatedMutationAttempt(control),
+      mutationId: started.mutationId,
     }
 
-    const tracked = this.#trackMutation(
-      {
-        serviceName: desc.serviceName,
-        method: desc.method,
-        id,
-        optimistic,
-        args,
+    const tracked = this.#observeMutation(started, () => entry.attempt.promise, {
+      onSuccess: item => this.#settleQueuedMutation(lane, entry, { ok: true, item }),
+      onError: (error, mutationId) => {
+        this.#settleQueuedMutation(lane, entry, { ok: false, error })
+        if (optimistic) {
+          this.#events.emit({
+            kind: 'mutate:rollback',
+            mutationId,
+            serviceName: desc.serviceName,
+            method: desc.method,
+            id,
+          })
+        }
       },
-      () => entry.attempt.promise,
-      {
-        onSuccess: item => this.#settleQueuedMutation(lane, entry, { ok: true, item }),
-        onError: (error, mutationId) => {
-          this.#settleQueuedMutation(lane, entry, { ok: false, error })
-          if (optimistic) {
-            this.#events.emit({
-              kind: 'mutate:rollback',
-              mutationId,
-              serviceName: desc.serviceName,
-              method: desc.method,
-              id,
-            })
-          }
-        },
-      },
-    )
-    entry.mutationId = tracked.mutationId
-
+    })
     this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true)
     entry.attempt.whenReady(() => {
       this.#expediteMutationPredecessors(lane, entry)
@@ -751,7 +756,7 @@ export class QueryStore<
       this.#runControlledAttempt(
         entry.attempt.control,
         () => this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args]),
-        entry.mutationId!,
+        entry.mutationId,
       ),
     )
   }
@@ -777,12 +782,11 @@ export class QueryStore<
       } catch (error) {
         const normalized = error instanceof Error ? error : new Error(String(error))
         if (!control) throw normalized
-        this.#sync.writeAttemptFailed(mutationId)
+        this.#mutations.attemptFailed(mutationId)
         if ((await control.onAttemptFailure(normalized, attempt)) === 'discard') {
-          this.#sync.writeDiscarded(mutationId)
           throw normalized
         }
-        this.#sync.writeAttemptRetrying(mutationId)
+        this.#mutations.attemptRetrying(mutationId)
       }
     }
   }
@@ -940,11 +944,14 @@ export class QueryStore<
     run: () => Promise<T>,
     hooks?: MutationTrackingHooks<T>,
   ): TrackedMutation<T> {
-    const { serviceName, method, id, optimistic, args } = entry
+    return this.#observeMutation(this.#beginMutation(entry), run, hooks)
+  }
+
+  #beginMutation(tracking: MutationTrackingEntry): StartedMutation {
+    const { serviceName, method, id, optimistic, args } = tracking
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
     const mutationId = this.#mutations.start({ serviceName, method, ...idField })
-    this.#sync.writeStarted(mutationId, { serviceName, method, ...idField })
     this.#events.emit({
       kind: 'mutate:start',
       mutationId,
@@ -954,11 +961,20 @@ export class QueryStore<
       optimistic,
       args,
     })
+    return { mutationId, startedAt, tracking }
+  }
+
+  #observeMutation<T>(
+    { mutationId, startedAt, tracking }: StartedMutation,
+    run: () => Promise<T>,
+    hooks?: MutationTrackingHooks<T>,
+  ): TrackedMutation<T> {
+    const { serviceName, method, id, optimistic } = tracking
+    const idField = id !== undefined ? { id } : {}
     const promise = run().then(
       result => {
         hooks?.onSuccess?.(result)
-        this.#mutations.end(mutationId)
-        this.#sync.writeSucceeded(mutationId)
+        this.#mutations.settle(mutationId, 'success')
         this.#events.emit({
           kind: 'mutate:end',
           mutationId,
@@ -973,14 +989,10 @@ export class QueryStore<
       (err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err))
         hooks?.onError?.(error, mutationId)
-        this.#mutations.end(mutationId)
-        if (
-          error instanceof MutationSupersededError ||
-          error instanceof MutationQueueDiscardedError
-        ) {
-          this.#sync.writeDiscarded(mutationId)
-        }
-        this.#sync.writeFailed(mutationId)
+        this.#mutations.settle(
+          mutationId,
+          error instanceof MutationSupersededError ? 'discarded' : 'failure',
+        )
         this.#events.emit({
           kind: 'mutate:error',
           mutationId,
@@ -2038,7 +2050,7 @@ export class QueryStore<
     this.#reconcileWindows.delete(queryId)
     this.#deferredWhileHidden.delete(queryId)
     this.#scheduledReconnectQueryIds.delete(queryId)
-    this.#sync.reconciliationFinished(queryId)
+    this.#sync.forgetQuery(queryId)
   }
 
   #maybeFinishReconciliation(queryId: string): void {

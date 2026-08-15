@@ -1,13 +1,14 @@
 import type { AdapterConnectionState } from '../adapters/adapter.js'
+import type { MutationTracker } from './mutationTracker.js'
 
 export type SyncPhase = 'restoring' | 'offline' | 'syncing' | 'synced' | 'error'
 
 /** Canonical, instance-wide view of Figbird's progress toward server truth. */
 export interface SyncStatus {
   readonly phase: SyncPhase
-  /** Writes that have not reached a successful terminal state, including queued work. */
+  /** Writes that have not settled, including scheduled and paused queue work. */
   readonly pendingWrites: number
-  /** Pending or terminal writes whose latest attempt failed. */
+  /** Pending queue writes whose latest attempt failed and can be retried or discarded. */
   readonly failedWrites: number
   /** Distinct queries currently fetching or waiting to retry. */
   readonly fetchingQueries: number
@@ -23,32 +24,21 @@ export interface SyncActivity {
   getSnapshot(): SyncStatus
 }
 
-interface WriteIdentity {
-  serviceName: string
-  method: string
-  id?: string | number
-}
-
-function writeKey({ serviceName, method, id }: WriteIdentity): string {
-  return `${serviceName}\u0000${method}\u0000${id === undefined ? '' : String(id)}`
-}
-
 /** Synchronously maintained by QueryStore; events are deliberately not involved. */
 export class SyncTracker implements SyncActivity {
+  #mutations: MutationTracker
   #connection: AdapterConnectionState
-  #pendingWrites = new Set<number>()
-  #failedWrites = new Set<number>()
-  #writeKeys = new Map<number, string>()
-  #ignoredTerminalFailures = new Set<number>()
   #fetchCounts = new Map<string, number>()
   #failedReconciliations = new Set<string>()
   #reconciliations = new Set<string>()
   #listeners = new Set<() => void>()
   #snapshot: SyncStatus
 
-  constructor(connection: AdapterConnectionState) {
+  constructor(mutations: MutationTracker, connection: AdapterConnectionState) {
+    this.#mutations = mutations
     this.#connection = connection
     this.#snapshot = this.#createSnapshot(null)
+    this.#mutations.subscribeToSync(change => this.#changed(change))
   }
 
   getSnapshot = (): SyncStatus => this.#snapshot
@@ -64,62 +54,11 @@ export class SyncTracker implements SyncActivity {
     this.#changed()
   }
 
-  writeStarted(mutationId: number, identity: WriteIdentity): void {
-    const key = writeKey(identity)
-    // A new call with the same logical target is the retry boundary for a
-    // terminal failure. Queue retries retain their mutation id and use the
-    // attempt methods below instead.
-    for (const [failedId, failedKey] of this.#writeKeys) {
-      if (failedKey !== key || !this.#failedWrites.has(failedId)) continue
-      this.#failedWrites.delete(failedId)
-      if (!this.#pendingWrites.has(failedId)) this.#writeKeys.delete(failedId)
-    }
-    this.#writeKeys.set(mutationId, key)
-    this.#pendingWrites.add(mutationId)
-    this.#failedWrites.delete(mutationId)
-    this.#changed()
-  }
-
-  writeAttemptFailed(mutationId: number): void {
-    if (!this.#pendingWrites.has(mutationId)) return
-    this.#failedWrites.add(mutationId)
-    this.#changed()
-  }
-
-  writeAttemptRetrying(mutationId: number): void {
-    if (this.#failedWrites.delete(mutationId)) this.#changed()
-  }
-
-  writeSucceeded(mutationId: number): void {
-    const wasPending = this.#pendingWrites.delete(mutationId)
-    const wasFailed = this.#failedWrites.delete(mutationId)
-    this.#writeKeys.delete(mutationId)
-    this.#ignoredTerminalFailures.delete(mutationId)
-    if (wasPending || wasFailed) this.#changed({ successful: true })
-  }
-
-  writeFailed(mutationId: number): void {
-    this.#pendingWrites.delete(mutationId)
-    if (this.#ignoredTerminalFailures.delete(mutationId)) {
-      this.#failedWrites.delete(mutationId)
-      this.#writeKeys.delete(mutationId)
-      this.#changed()
-      return
-    }
-    this.#failedWrites.add(mutationId)
-    this.#changed()
-  }
-
-  writeDiscarded(mutationId: number): void {
-    this.#ignoredTerminalFailures.add(mutationId)
-    this.#pendingWrites.delete(mutationId)
-    this.#failedWrites.delete(mutationId)
-    this.#changed()
-  }
-
   queryStarted(queryId: string): void {
     this.#fetchCounts.set(queryId, (this.#fetchCounts.get(queryId) ?? 0) + 1)
-    this.#failedReconciliations.delete(queryId)
+    if (this.#failedReconciliations.delete(queryId)) {
+      this.#reconciliations.add(queryId)
+    }
     this.#changed()
   }
 
@@ -136,7 +75,11 @@ export class SyncTracker implements SyncActivity {
   }
 
   reconciliationStarted(queryId: string): void {
-    if (this.#reconciliations.has(queryId)) return
+    const wasFailed = this.#failedReconciliations.delete(queryId)
+    if (this.#reconciliations.has(queryId)) {
+      if (wasFailed) this.#changed()
+      return
+    }
     this.#reconciliations.add(queryId)
     this.#changed()
   }
@@ -144,6 +87,14 @@ export class SyncTracker implements SyncActivity {
   reconciliationFinished(queryId: string): void {
     if (!this.#reconciliations.delete(queryId)) return
     this.#changed({ successful: !this.#failedReconciliations.has(queryId) })
+  }
+
+  /** Remove every trace of a query that QueryStore is deleting. */
+  forgetQuery(queryId: string): void {
+    const fetched = this.#fetchCounts.delete(queryId)
+    const failed = this.#failedReconciliations.delete(queryId)
+    const reconciling = this.#reconciliations.delete(queryId)
+    if (fetched || failed || reconciling) this.#changed()
   }
 
   #changed({ successful = false }: { successful?: boolean } = {}): void {
@@ -172,30 +123,32 @@ export class SyncTracker implements SyncActivity {
   }
 
   #isFullySynced(): boolean {
+    const writes = this.#mutations.getSyncSnapshot()
     return (
       this.#connection === 'connected' &&
-      this.#pendingWrites.size === 0 &&
-      this.#failedWrites.size === 0 &&
+      writes.pendingWrites === 0 &&
+      writes.failedWrites === 0 &&
       this.#failedReconciliations.size === 0 &&
       this.#reconciliations.size === 0
     )
   }
 
   #createSnapshot(lastSyncedAt: number | null): SyncStatus {
+    const writes = this.#mutations.getSyncSnapshot()
     const phase: SyncPhase =
       this.#connection === 'disconnected'
         ? 'offline'
-        : this.#failedWrites.size > 0 || this.#failedReconciliations.size > 0
+        : writes.failedWrites > 0 || this.#failedReconciliations.size > 0
           ? 'error'
           : this.#connection === 'connecting' || this.#reconciliations.size > 0
             ? 'restoring'
-            : this.#pendingWrites.size > 0
+            : writes.pendingWrites > 0
               ? 'syncing'
               : 'synced'
     return Object.freeze({
       phase,
-      pendingWrites: this.#pendingWrites.size,
-      failedWrites: this.#failedWrites.size,
+      pendingWrites: writes.pendingWrites,
+      failedWrites: writes.failedWrites,
       fetchingQueries: this.#fetchCounts.size,
       pendingReconciliations: this.#reconciliations.size,
       lastSyncedAt,

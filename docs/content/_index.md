@@ -1534,9 +1534,10 @@ Ordinary query fetches update `fetchingQueries` without changing `phase`, so a g
 indicator does not flash during normal screen-level data loading.
 
 `pendingWrites` includes scheduled queue work and a failed queue item that still needs retry or
-discard. A terminal write failure remains in `failedWrites` until the same logical operation is
-attempted again. `lastSyncedAt` advances only when successful work leaves the whole instance
-clean after a write or reconciliation. The hook is backed by `figbird.sync` and
+discard. `failedWrites` counts that retryable queue work; an ordinary rejected action settles out
+of the global snapshot because its caller owns the error and Figbird no longer has work to retry.
+`lastSyncedAt` advances only when successful work leaves the whole instance clean after a write or
+reconciliation. The hook is backed by `figbird.sync` and
 `useSyncExternalStore`, so it is also available from a schema-bound `createHooks` kit.
 
 ## defineQuery

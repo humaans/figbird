@@ -180,6 +180,23 @@ test('cooldown: a trailing refetch is skipped when the last subscriber left', as
   const state = figbird.getState().get('notes')
   const pending = Array.from(state!.queries.values()).some(q => q.pending)
   t.true(pending)
+
+  // A failed ephemeral reconciliation must be forgotten with the query. Otherwise
+  // a query that no longer exists leaves the instance permanently in `error`.
+  const ephemeral = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find' },
+    { realtime: 'refetch', fetchPolicy: 'network-only' },
+  )
+  const unsubscribeEphemeral = ephemeral.subscribe(() => {})
+  await sleep(20)
+  const failure = Object.assign(new Error('bad request'), { code: 400 })
+  notes.find = () => Promise.reject(failure)
+  notes.emit('created', { id: 12, content: 'fails to reconcile' })
+  await sleep(20)
+  t.is(figbird.sync.getSnapshot().phase, 'error')
+
+  unsubscribeEphemeral()
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
 })
 
 test('hidden tabs: event-driven reconciliation defers; local-exact merges keep flowing', async t => {
