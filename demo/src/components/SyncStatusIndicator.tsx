@@ -16,9 +16,7 @@ export function SyncStatusIndicator() {
         : sync.phase === 'restoring'
           ? 'Refreshing stale data…'
           : sync.phase === 'syncing'
-            ? sync.pendingWrites > 0
-              ? `Saving ${plural(sync.pendingWrites, 'change')}…`
-              : 'Refreshing data…'
+            ? `Saving ${plural(sync.pendingWrites, 'change')}…`
             : 'Everything saved'
 
   const detail = [

@@ -1528,14 +1528,16 @@ Returns Figbird's canonical, instance-wide sync snapshot. Unlike the observabili
 stream, this state replays: a component mounting halfway through a fetch, scheduled mutation,
 paused queue failure, disconnect, or hidden-tab reconciliation sees the correct answer
 immediately. `offline` takes priority while the adapter transport is disconnected; `error`
-covers failed writes or query refreshes; `restoring` covers connection setup and event/reconnect
-reconciliation; ordinary reads and writes are `syncing`; a clean idle instance is `synced`.
+covers failed writes or reconciliation refreshes; `restoring` covers connection setup and
+event/reconnect reconciliation; pending writes are `syncing`; otherwise the instance is `synced`.
+Ordinary query fetches update `fetchingQueries` without changing `phase`, so a global saved/saving
+indicator does not flash during normal screen-level data loading.
 
 `pendingWrites` includes scheduled queue work and a failed queue item that still needs retry or
 discard. A terminal write failure remains in `failedWrites` until the same logical operation is
 attempted again. `lastSyncedAt` advances only when successful work leaves the whole instance
-clean. The hook is backed by `figbird.sync` and `useSyncExternalStore`, so it is also available
-from a schema-bound `createHooks` kit.
+clean after a write or reconciliation. The hook is backed by `figbird.sync` and
+`useSyncExternalStore`, so it is also available from a schema-bound `createHooks` kit.
 
 ## defineQuery
 

@@ -41,7 +41,7 @@ export class SyncTracker implements SyncActivity {
   #writeKeys = new Map<number, string>()
   #ignoredTerminalFailures = new Set<number>()
   #fetchCounts = new Map<string, number>()
-  #failedQueries = new Set<string>()
+  #failedReconciliations = new Set<string>()
   #reconciliations = new Set<string>()
   #listeners = new Set<() => void>()
   #snapshot: SyncStatus
@@ -119,7 +119,7 @@ export class SyncTracker implements SyncActivity {
 
   queryStarted(queryId: string): void {
     this.#fetchCounts.set(queryId, (this.#fetchCounts.get(queryId) ?? 0) + 1)
-    this.#failedQueries.delete(queryId)
+    this.#failedReconciliations.delete(queryId)
     this.#changed()
   }
 
@@ -127,8 +127,12 @@ export class SyncTracker implements SyncActivity {
     const count = this.#fetchCounts.get(queryId) ?? 0
     if (count <= 1) this.#fetchCounts.delete(queryId)
     else this.#fetchCounts.set(queryId, count - 1)
-    if (outcome === 'error' && count <= 1) this.#failedQueries.add(queryId)
-    this.#changed({ successful: outcome === 'success' })
+    if (outcome === 'error' && count <= 1 && this.#reconciliations.has(queryId)) {
+      this.#failedReconciliations.add(queryId)
+    }
+    // Ordinary query fetches remain observable through fetchingQueries, but do
+    // not change the interpreted, write-focused phase or lastSyncedAt.
+    this.#changed()
   }
 
   reconciliationStarted(queryId: string): void {
@@ -139,7 +143,7 @@ export class SyncTracker implements SyncActivity {
 
   reconciliationFinished(queryId: string): void {
     if (!this.#reconciliations.delete(queryId)) return
-    this.#changed({ successful: !this.#failedQueries.has(queryId) })
+    this.#changed({ successful: !this.#failedReconciliations.has(queryId) })
   }
 
   #changed({ successful = false }: { successful?: boolean } = {}): void {
@@ -172,8 +176,7 @@ export class SyncTracker implements SyncActivity {
       this.#connection === 'connected' &&
       this.#pendingWrites.size === 0 &&
       this.#failedWrites.size === 0 &&
-      this.#fetchCounts.size === 0 &&
-      this.#failedQueries.size === 0 &&
+      this.#failedReconciliations.size === 0 &&
       this.#reconciliations.size === 0
     )
   }
@@ -182,11 +185,11 @@ export class SyncTracker implements SyncActivity {
     const phase: SyncPhase =
       this.#connection === 'disconnected'
         ? 'offline'
-        : this.#failedWrites.size > 0 || this.#failedQueries.size > 0
+        : this.#failedWrites.size > 0 || this.#failedReconciliations.size > 0
           ? 'error'
           : this.#connection === 'connecting' || this.#reconciliations.size > 0
             ? 'restoring'
-            : this.#pendingWrites.size > 0 || this.#fetchCounts.size > 0
+            : this.#pendingWrites.size > 0
               ? 'syncing'
               : 'synced'
     return Object.freeze({

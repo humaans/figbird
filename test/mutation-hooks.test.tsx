@@ -505,6 +505,23 @@ test('useSyncStatus: replays pending writes, retains failures, and clears them o
   t.is(figbird.sync.getSnapshot().phase, 'synced')
   t.is(figbird.sync.getSnapshot().lastSyncedAt, null)
 
+  const queryGate = deferred<{ total: number; limit: number; skip: number; data: MockItem[] }>()
+  feathers.service('notes').find = () => queryGate.promise
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsubscribeQuery = query.subscribe(() => {})
+  t.is(figbird.sync.getSnapshot().fetchingQueries, 1)
+  t.is(figbird.sync.getSnapshot().phase, 'synced', 'ordinary reads do not flash global sync UI')
+  queryGate.resolve({
+    total: 1,
+    limit: 10,
+    skip: 0,
+    data: [{ id: 1, content: 'hello' }],
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(figbird.sync.getSnapshot().fetchingQueries, 0)
+  t.is(figbird.sync.getSnapshot().lastSyncedAt, null)
+  unsubscribeQuery()
+
   const first = deferred<MockItem>()
   feathers.service('notes').patch = () => first.promise
   const failedWrite = figbird.m.notes.patch(1, { content: 'offline' })
