@@ -14,7 +14,7 @@
  */
 
 import { useNavigate, useRoute } from 'react-space-router'
-import { q, useAction, useMutating, useMutations, useQuery } from '../../figbird'
+import { q, useAction, useMutating, useMutations, useQueries, useQuery } from '../../figbird'
 import { Explain } from '../../components/Explain'
 import { StatusDot } from '../../components/ui'
 import { CommentsPanel } from './Comments'
@@ -54,13 +54,15 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
   const navigate = useNavigate()
   // The route's queries declaration warmed this exact query before the chunk arrived. The Suspense
   // boundary above (keyed by issueId) renders its skeleton if we're still cold.
-  const { data: issue, error, isFetching, refetch } = useQuery(issueDetailQuery, { id: issueId })
+  const { data: issue, error, isFetching, refetch } = useQuery(issueDetailQuery({ id: issueId }))
 
   // Cycled through by the toolbar actions — queried rather than mirrored from the
   // server seed, so they can't silently drift when the seed changes.
-  const { data: users } = useQuery(q.users)
-  const { data: teams } = useQuery(q.teams)
-  const { data: labels } = useQuery(q.labels)
+  const [{ data: users }, { data: teams }, { data: labels }] = useQueries([
+    q.users,
+    q.teams,
+    q.labels,
+  ])
 
   // One action per button: each owns its pending label; the bodies close over
   // the current issue, so no arguments need threading. Writes go through `m` —
@@ -153,8 +155,9 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
 // and row-hover prefetch, in parallel with
 // this screen's lazy chunk:
 queries: ({ params }) => [
-  [issueDetailQuery, { id: +params.id }],
-  [issueCommentsQuery, { id: +params.id }],
+  issueDetailQuery({ id: +params.id }),
+  issueTasksQuery({ id: +params.id }),
+  issueCommentsQuery({ id: +params.id }),
 ]`}
           >
             One <code>.get(id)</code> query assembles the whole graph — issue, people, team, labels

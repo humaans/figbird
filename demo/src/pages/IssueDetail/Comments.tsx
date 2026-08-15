@@ -34,7 +34,7 @@ interface CommentThread {
 }
 
 export function CommentsPanel({ issueId }: { issueId: number }) {
-  const { data: comments, isFetching } = useQuery(issueCommentsQuery, { id: issueId })
+  const { data: comments, isFetching } = useQuery(issueCommentsQuery({ id: issueId }))
   const [replyTo, setReplyTo] = useState<number | null>(null)
 
   const threads = useMemo<CommentThread[]>(() => {
@@ -70,7 +70,7 @@ export function CommentsPanel({ issueId }: { issueId: number }) {
 
 // fired by the route, in parallel with
 // this screen's lazy chunk:
-prepare(issueCommentsQuery, { id })`}
+prepare(issueCommentsQuery({ id }))`}
         >
           The route warmed this exact query before the screen's code even downloaded, so the thread
           usually renders without a fallback. It's deliberately unwindowed — figbird classifies it{' '}

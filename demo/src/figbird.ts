@@ -161,21 +161,20 @@ export const figbird = new Figbird({ schema, adapter })
 
 // Pure, schema-bound React API. FigbirdProvider supplies the runtime instance;
 // useMutations returns its typed write proxy inside components.
-export const { useQuery, q, useMutations, defineQuery, useAction, useMutating, useMutationQueue } =
-  createHooks(schema)
+export const {
+  useQuery,
+  useQueries,
+  q,
+  useMutations,
+  defineQuery,
+  useAction,
+  useMutating,
+  useMutationQueue,
+} = createHooks(schema)
 
 // Reference data: preload the complete sets once — realtime maintains them, and every
 // later read against these services (filters, sorts, windows, relation fetches) is
 // answered locally from the materialized cache with no roundtrip.
-figbird.prepare(
-  defineQuery('allUsers', () => q.users.all()),
-  undefined,
-)
-figbird.prepare(
-  defineQuery('allTeams', () => q.teams.all()),
-  undefined,
-)
-figbird.prepare(
-  defineQuery('allLabels', () => q.labels.all()),
-  undefined,
-)
+figbird.prepare(defineQuery('allUsers', () => q.users.all()))
+figbird.prepare(defineQuery('allTeams', () => q.teams.all()))
+figbird.prepare(defineQuery('allLabels', () => q.labels.all()))

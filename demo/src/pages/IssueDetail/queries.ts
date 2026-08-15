@@ -7,7 +7,7 @@
  */
 
 import { defineQuery, q } from '../../figbird'
-import type { QueryDescriptor, RoutePrepareContext } from 'react-space-router'
+import type { RoutePrepareContext } from 'react-space-router'
 
 // Args here come from typed code (the route coerces the URL param first),
 // so the plain typed-args form is enough. Pass a zod/valibot/arktype schema as the
@@ -42,13 +42,9 @@ export const issueTasksQuery = defineQuery(({ id }: { id: number }) =>
   q.tasks.where({ issueId: id }).orderBy('position', 'asc').related('assignee'),
 )
 
-export function issueDetailRouteQueries({ params }: RoutePrepareContext): QueryDescriptor[] {
+export function issueDetailRouteQueries({ params }: RoutePrepareContext) {
   const id = Number(params.id)
   if (!Number.isFinite(id)) return []
 
-  return [
-    [issueDetailQuery, { id }],
-    [issueTasksQuery, { id }],
-    [issueCommentsQuery, { id }],
-  ]
+  return [issueDetailQuery({ id }), issueTasksQuery({ id }), issueCommentsQuery({ id })]
 }

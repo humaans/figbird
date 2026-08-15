@@ -5,7 +5,7 @@
 
 import { useMemo, type ReactNode } from 'react'
 import { Link } from 'react-space-router'
-import { q, useQuery } from '../figbird'
+import { q, useQueries } from '../figbird'
 import { Explain } from './Explain'
 import { StatusDot } from './ui'
 
@@ -16,9 +16,11 @@ interface ActivityEntry {
 }
 
 export function ActivityPanel() {
-  const { data: comments } = useQuery(q.comments.orderBy('id', 'desc').limit(10).related('author'))
-  const { data: reactions } = useQuery(q.reactions.orderBy('id', 'desc').limit(6).related('user'))
-  const { data: issues, isFetching } = useQuery(q.issues.orderBy('updatedAt', 'desc').limit(6))
+  const [{ data: comments }, { data: reactions }, { data: issues, isFetching }] = useQueries([
+    q.comments.orderBy('id', 'desc').limit(10).related('author'),
+    q.reactions.orderBy('id', 'desc').limit(6).related('user'),
+    q.issues.orderBy('updatedAt', 'desc').limit(6),
+  ])
 
   const entries = useMemo<ActivityEntry[]>(() => {
     const out: ActivityEntry[] = []
@@ -77,16 +79,21 @@ export function ActivityPanel() {
         <span className='eyebrow'>Activity</span>
         <StatusDot active={isFetching} />
         <Explain
-          label='Cross-service feed'
-          query={`q.comments.orderBy('id', 'desc').limit(10)
-  .related('author')
-q.reactions.orderBy('id', 'desc').limit(6)
-  .related('user')
-q.issues.orderBy('updatedAt', 'desc').limit(6)`}
+          label='Parallel cross-service feed'
+          query={`const [comments, reactions, issues] =
+  useQueries([
+    q.comments.orderBy('id', 'desc').limit(10)
+      .related('author'),
+    q.reactions.orderBy('id', 'desc').limit(6)
+      .related('user'),
+    q.issues.orderBy('updatedAt', 'desc').limit(6),
+  ])`}
         >
-          Three independent queries — comments, reactions, issues — merged by timestamp in the
-          component. Each stays realtime on its own service; a teammate's comment lands here, in the
-          list's comment count, and in the open issue simultaneously, from one socket event.
+          <code>useQueries</code> starts all three independent roots before suspending, so this
+          boundary waits once instead of fetching comments, reactions, and issues serially. The
+          results are merged by timestamp in the component. Each stays realtime on its own service;
+          a teammate's comment lands here, in the list's comment count, and in the open issue
+          simultaneously, from one socket event.
         </Explain>
       </header>
       <ul className='activity-list'>
