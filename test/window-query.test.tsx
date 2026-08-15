@@ -152,6 +152,32 @@ test('window query: retention never evicts pages required by active readers', as
   deep.unsubscribe()
 })
 
+test('window query: concurrent cold reads stay warm beyond the page retention budget', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    items: { data: keyed(makeRows(80)) },
+    owners: { data: {} },
+  })
+  const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 10,
+    preloadPages: 0,
+    maxPages: 1,
+  })
+  const top = { start: 0, end: 5 }
+  const deep = { start: 50, end: 55 }
+
+  await Promise.all([ref.suspensePromise(top), ref.suspensePromise(deep)])
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+
+  t.is(ref.getSnapshot(top).status, 'success')
+  t.is(ref.getSnapshot(deep).status, 'success')
+  t.is(feathers.service('items').counts.find, 2)
+
+  await ref.suspensePromise(top)
+  t.is(feathers.service('items').counts.find, 2)
+  ref.releaseColdStart(top)
+  ref.releaseColdStart(deep)
+})
+
 test('window query: settled cold reads survive delayed retries and remain bounded', async t => {
   const { figbird, feathers } = createTestApp(schema, {
     items: { data: keyed(makeRows(20)) },
@@ -182,9 +208,9 @@ test('window query: settled cold reads survive delayed retries and remain bounde
   t.not(figbird.window(query, config), abandoned)
 })
 
-test('window query: abandoned ranges cannot bypass page retention on an active ref', async t => {
+test('window query: abandoned ranges have a separate bounded retry cache', async t => {
   const { figbird } = createTestApp(schema, {
-    items: { data: keyed(makeRows(100)) },
+    items: { data: keyed(makeRows(240)) },
     owners: { data: {} },
   })
   const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
@@ -195,19 +221,20 @@ test('window query: abandoned ranges cannot bypass page retention on an active r
   const visible = readSettledWindow(ref, { start: 0, end: 5 })
   await visible.promise
 
-  await ref.suspensePromise({ start: 20, end: 25 })
-  await ref.suspensePromise({ start: 40, end: 45 })
-  await ref.suspensePromise({ start: 60, end: 65 })
+  const abandonedRanges = Array.from({ length: 21 }, (_, index) => ({
+    start: (index + 1) * 10,
+    end: (index + 1) * 10 + 5,
+  }))
+  for (const range of abandonedRanges) await ref.suspensePromise(range)
   await new Promise<void>(resolve => queueMicrotask(resolve))
 
   const data = ref.getSnapshot({ start: 0, end: 5 }).data
-  t.is(data.size, 20)
+  t.is(data.size, 210)
   t.is(data.get(0)?.id, 1)
-  t.is(data.get(60)?.id, 61)
-  t.false(data.has(20))
-  t.false(data.has(40))
+  t.false(data.has(10))
+  t.is(data.get(210)?.id, 211)
 
-  ref.releaseColdStart({ start: 60, end: 65 })
+  for (const range of abandonedRanges) ref.releaseColdStart(range)
   visible.unsubscribe()
 })
 

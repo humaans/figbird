@@ -83,6 +83,7 @@ interface WindowQueryLifecycle {
 }
 
 const EMPTY_DATA: ReadonlyMap<number, never> = new Map<number, never>()
+const MAX_SETTLED_COLD_READS = 20
 
 function normalizeRange(range: WindowRange): WindowRange {
   if (!Number.isInteger(range.start) || range.start < 0) {
@@ -449,9 +450,9 @@ export class WindowQueryRef<
       settled = true
     }
     if (settled) {
-      // The newest settled read stays warm for React's retry. Older abandoned
-      // ranges share the ordinary retained-page budget instead of pinning pages
-      // forever while another range has a committed subscriber.
+      // Settled render-phase reads stay warm independently of maxPages so
+      // concurrent Suspense retries cannot evict one another. The separate cap
+      // bounds abandoned renders until React commits and subscribes a reader.
       this.#pruneSettledColdReads()
       this.#onIdle?.()
     }
@@ -461,19 +462,8 @@ export class WindowQueryRef<
     const reads = Array.from(this.#coldReads.entries())
       .filter((entry): entry is [string, SettledColdRead] => entry[1].status === 'settled')
       .sort((a, b) => b[1].lastUsed - a[1].lastUsed)
-    const retainedStarts = new Set<number>()
 
-    for (const [index, [key, read]] of reads.entries()) {
-      const targets = new Set(this.#pager.targetStarts(read.range, this.#config.preloadPages))
-      const starts = this.#pager.protectedStarts(targets)
-      const nextSize = new Set([...retainedStarts, ...starts]).size
-      const budget = Math.max(this.#config.maxPages, retainedStarts.size)
-      if (index > 0 && nextSize > budget) {
-        this.#coldReads.delete(key)
-        continue
-      }
-      for (const start of starts) retainedStarts.add(start)
-    }
+    for (const [key] of reads.slice(MAX_SETTLED_COLD_READS)) this.#coldReads.delete(key)
   }
 
   #syncPageFreshness(): void {
