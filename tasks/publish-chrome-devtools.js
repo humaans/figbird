@@ -15,9 +15,9 @@ const upload = await request(`${apiRoot}/upload/v2/${item}:upload`, {
 
 console.log(`Uploaded Chrome extension ${upload.crxVersion ?? '(processing)'}`)
 
-if (upload.uploadState === 'UPLOAD_IN_PROGRESS') {
+if (isInProgressUploadState(upload.uploadState)) {
   await waitForUpload(item)
-} else if (upload.uploadState !== 'UPLOAD_SUCCESS') {
+} else if (!isSuccessfulUploadState(upload.uploadState)) {
   throw new Error(`Chrome upload failed with state ${String(upload.uploadState)}`)
 }
 
@@ -36,12 +36,20 @@ async function waitForUpload(itemName) {
   for (let attempt = 0; attempt < 24; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 5_000))
     const status = await request(`${apiRoot}/v2/${itemName}:fetchStatus`)
-    if (status.lastAsyncUploadState === 'UPLOAD_SUCCESS') return
-    if (status.lastAsyncUploadState && status.lastAsyncUploadState !== 'UPLOAD_IN_PROGRESS') {
+    if (isSuccessfulUploadState(status.lastAsyncUploadState)) return
+    if (status.lastAsyncUploadState && !isInProgressUploadState(status.lastAsyncUploadState)) {
       throw new Error(`Chrome upload failed with state ${status.lastAsyncUploadState}`)
     }
   }
   throw new Error('Chrome upload was still processing after two minutes')
+}
+
+function isSuccessfulUploadState(state) {
+  return state === 'UPLOAD_SUCCESS' || state === 'SUCCEEDED'
+}
+
+function isInProgressUploadState(state) {
+  return state === 'UPLOAD_IN_PROGRESS' || state === 'IN_PROGRESS'
 }
 
 async function request(url, init = {}) {

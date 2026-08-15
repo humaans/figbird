@@ -48,9 +48,16 @@ XPI produced by Mozilla, not the unsigned ZIP. A local build cannot create that 
 and `npm run devtools:build` recreates `extensions/build`, so do not keep signed artifacts
 there permanently.
 
-The release workflow uploads the Mozilla-signed file to the matching
-`devtools-v<version>` GitHub prerelease as `figbird-devtools-firefox-signed.xpi`. That release
-asset is the stable team download; the workflow artifact is retained as a build record.
+The release workflow uploads both installable builds to the matching
+`devtools-v<version>` GitHub prerelease:
+
+- `figbird-devtools-chrome.zip`, which team members unzip and load using Chrome's
+  **Load unpacked** action.
+- `figbird-devtools-firefox-signed.xpi`, which Firefox installs directly after an
+  installation prompt.
+
+These release assets are the stable team downloads; the workflow artifacts are retained as
+build records.
 
 The shared browser extension version lives in `extensions/version.json`. See
 `extensions/RELEASING.md` for publisher setup and release instructions.
