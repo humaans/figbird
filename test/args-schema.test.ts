@@ -88,18 +88,18 @@ test('defineQuery creates validated, inert requests with normalized args', t => 
   t.is(issueDetail.name, 'issueDetail')
   t.is(typeof issueDetail.build, 'function')
   t.is(typeof issueDetail.validate, 'function')
-  const request = issueDetail.withArgs({ id: '7' } as never)
+  const request = issueDetail({ id: '7' } as never)
   t.true(isQueryRequest(request))
   t.is(request.definition, issueDetail)
   t.deepEqual(request.args, { id: 7 })
 })
 
-test('withArgs throws QueryArgsError on invalid args', t => {
+test('calling a definition throws QueryArgsError on invalid args', t => {
   const figbird = makeFigbird()
   const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
     figbird.q.issues.get(id),
   )
-  const err = t.throws(() => issueDetail.withArgs({ id: 'abc' } as never), {
+  const err = t.throws(() => issueDetail({ id: 'abc' } as never), {
     instanceOf: QueryArgsError,
   })
   t.is(err.queryName, 'issueDetail')
@@ -108,14 +108,14 @@ test('withArgs throws QueryArgsError on invalid args', t => {
   t.is(err.issues.length, 1)
 })
 
-test('withArgs normalizes args before build', t => {
+test('calling a definition normalizes args before build', t => {
   const figbird = makeFigbird()
   const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
     figbird.q.issues.get(id),
   )
   // Normalized: '7' string coerces to 7. Both produce the same builder hash.
-  const fromString = figbird.query(issueDetail.withArgs({ id: '7' } as never))
-  const fromNumber = figbird.query(issueDetail.withArgs({ id: 7 }))
+  const fromString = figbird.query(issueDetail({ id: '7' } as never))
+  const fromNumber = figbird.query(issueDetail({ id: 7 }))
   t.is(fromString.hash(), fromNumber.hash())
 })
 
@@ -135,9 +135,9 @@ test('figbird.prepare uses normalized args so prepared and direct calls share th
   const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
     figbird.q.issues.get(id),
   )
-  const prepared = figbird.prepare(issueDetail.withArgs({ id: '1' } as never))
+  const prepared = figbird.prepare(issueDetail({ id: '1' } as never))
   // The same cache entry is hit when args normalize to the same value.
-  const directRef = figbird.query(issueDetail.withArgs({ id: 1 }))
+  const directRef = figbird.query(issueDetail({ id: 1 }))
   t.is(prepared.key, directRef.hash())
   prepared.release()
 })

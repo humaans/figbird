@@ -792,32 +792,32 @@ names always mean the built-in: a schema method named `create`/`update`/`patch`/
 
 ## Preparation
 
-Four pieces make preparation work: `defineQuery` declares an args-keyed query; `withArgs`
-binds route inputs into an inert request; `prepare` starts it early with an explicit lease;
+Three pieces make preparation work: `defineQuery` creates a callable factory that binds
+route inputs into an inert request; `prepare` starts it early with an explicit lease;
 `prefetch` warms it speculatively. These APIs come
 from your `createHooks` kit (a standalone `defineQuery` is also exported from `'figbird'` for
 non-React code, and `prepare`/`prefetch` exist as instance methods).
 
 ### defineQuery
 
-A query definition is an args-keyed query factory. Bind concrete inputs with `withArgs()`
-when the query needs to cross an integration boundary, such as a router. The result is an
-inert, instance-independent request: it contains no cache state and can be forwarded as an
-opaque value. A component can consume the request directly, or use the legacy
-definition-plus-args form; both resolve to the **same cache entry**:
+A query definition is an args-keyed query factory. Call it with concrete inputs when the
+query needs to cross an integration boundary, such as a router. The result is an inert,
+instance-independent request: it contains no cache state and can be forwarded as an opaque
+value. A component can consume the request directly, or use the legacy definition-plus-args
+form; both resolve to the **same cache entry**:
 
 ```ts
 export const issueDetail = defineQuery(({ id }: { id: number }) =>
   q.issues.get(id).related('creator').related('comments'),
 )
 
-const request = issueDetail.withArgs({ id: 42 })
+const request = issueDetail({ id: 42 })
 
 // component
 const { data } = useQuery(request)
 ```
 
-Args are typed from the build function. When args arrive from an untrusted source like URL params or storage, pass a [Standard Schema](https://github.com/standard-schema/standard-schema) validator (zod, valibot, arktype…) as the middle argument. `withArgs()` validates and normalizes immediately, turning silent cache-splits (`{ id: "42" }` vs `{ id: 42 }`) into loud failures:
+Args are typed from the build function. When args arrive from an untrusted source like URL params or storage, pass a [Standard Schema](https://github.com/standard-schema/standard-schema) validator (zod, valibot, arktype…) as the middle argument. Calling the definition validates and normalizes immediately, turning silent cache-splits (`{ id: "42" }` vs `{ id: 42 }`) into loud failures:
 
 ```ts
 export const issueDetail = defineQuery(
@@ -825,7 +825,7 @@ export const issueDetail = defineQuery(
   ({ id }) => q.issues.get(id).related('comments'),
 )
 
-const request = issueDetail.withArgs({ id: '42' }) // coerces "42" → 42 now
+const request = issueDetail({ id: '42' }) // coerces "42" → 42 now
 prepare(request)
 ```
 
@@ -835,7 +835,10 @@ prepare(request)
 
 ```ts
 // The router only carries opaque requests. Its data adapter decides how to prepare them.
-queries: ({ params }) => [issueDetail.withArgs({ id: Number(params.id) })]
+queries: ({ params }) => [issueDetail({ id: Number(params.id) })]
+
+// Argumentless definitions need no route resolver and are forwarded as-is.
+queries: [customFieldsQuery, rolesQuery]
 
 const data = {
   prepare: request => figbird.prepare(request),
@@ -851,13 +854,13 @@ Preparation is an _earlier read_, not a different one. The component may call
 `prefetch()` is the idempotent, fire-and-forget sibling of `prepare()`, built for "the user will probably need this" moments like hover or viewport entry:
 
 ```tsx
-<Row onMouseEnter={() => prefetch(issueDetail.withArgs({ id: issue.id }))} />
+<Row onMouseEnter={() => prefetch(issueDetail({ id: issue.id }))} />
 ```
 
 Safe to call at any frequency: if the query was prefetched within `staleTime` (default 30s) it's a no-op. Otherwise it fetches and holds an internal pin that auto-releases after `staleTime`. The data stays cached either way, so a later `useQuery` gets a warm, synchronous read with no Suspense fallback. If the user clicks through, the component's own subscription takes over seamlessly.
 
 ```ts
-prefetch(issueDetail.withArgs({ id }), { staleTime: 60_000 })
+prefetch(issueDetail({ id }), { staleTime: 60_000 })
 ```
 
 Rule of thumb: `prepare()` when you need to _await_ readiness or control the lease; `prefetch()` when you just want things warm.
@@ -1172,11 +1175,11 @@ export const issueDetail = defineQuery(({ id }: { id: number }) =>
 {
   path: '/issues/:id',
   resolver: () => import('./pages/IssueDetail/screen'),
-  queries: ({ params }) => [issueDetail.withArgs({ id: Number(params.id) })],
+  queries: ({ params }) => [issueDetail({ id: Number(params.id) })],
 }
 
 // 3. Hover starts the same queries even earlier — clicking is then a warm read
-<Row onMouseEnter={() => prefetch(issueDetail.withArgs({ id }))} />
+<Row onMouseEnter={() => prefetch(issueDetail({ id }))} />
 
 // 4. The screen just reads — warm visits render synchronously, no fallback
 const { data } = useQuery(issueDetail, { id })
@@ -1518,11 +1521,11 @@ defineQuery(argsSchema, build) // Standard Schema-validated args
 defineQuery(name, build) // optional name — labels errors and devtools, never identity
 defineQuery(name, argsSchema, build)
 
-const request = definition.withArgs(args)
+const request = definition(args)
 ```
 
-Args-keyed query factory. A pure value, not tied to an instance. `withArgs()` validates
-and normalizes concrete args into an inert `QueryRequest`, also independent of an instance.
+Args-keyed query factory. A pure value, not tied to an instance. Calling it validates and
+normalizes concrete args into an inert `QueryRequest`, also independent of an instance.
 `query`, `prepare`, `prefetch`, `explain`, `useQuery`, and `useQueries` accept that request.
 Legacy definition-plus-args calls remain supported and share the same cache entry.
 The `createHooks` kit returns a schema-typed version; the standalone export from
@@ -1532,7 +1535,7 @@ The `createHooks` kit returns a schema-typed version; the standalone export from
 
 ```ts
 const { key, promise, release } = figbird.prepare(definition, args, { staleTime? })
-const { key, promise, release } = figbird.prepare(definition.withArgs(args), { staleTime? })
+const { key, promise, release } = figbird.prepare(definition(args), { staleTime? })
 ```
 
 Starts a query and returns an awaitable lease, the router-grade primitive. `args` may be
@@ -1542,7 +1545,7 @@ omitted when the definition's build function takes none. See [prepare](#prepare)
 
 ```ts
 figbird.prefetch(definition, args, { staleTime? }) // staleTime defaults to 30s
-figbird.prefetch(definition.withArgs(args), { staleTime? })
+figbird.prefetch(definition(args), { staleTime? })
 ```
 
 Idempotent, fire-and-forget speculative warming with a self-releasing pin. See

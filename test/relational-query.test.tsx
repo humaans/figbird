@@ -2860,7 +2860,7 @@ test('defineQuery + prepare: prepare and useQuery share the same cache entry', a
   )
 
   // Bind route params before handing the inert request to a router data adapter.
-  const request = issueDetail.withArgs({ id: 1 })
+  const request = issueDetail({ id: 1 })
   const prepared = figbird.prepare(request)
   t.truthy(prepared.key)
 
@@ -2930,7 +2930,7 @@ test('explain: classifies nodes with structured reasons', t => {
       .related('creator'),
   )
 
-  const report = figbird.explain(issuesByTitle.withArgs({ title: 'foo' }))
+  const report = figbird.explain(issuesByTitle({ title: 'foo' }))
 
   const root = report.nodes.find(n => n.path === '(root)')!
   t.is(root.class, 'server-authoritative')

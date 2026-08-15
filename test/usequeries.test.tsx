@@ -76,7 +76,7 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
   }
 
   function Dashboard() {
-    const [issues, users] = useQueries([openIssues.withArgs({ status: 'open' }), figbird.q.users])
+    const [issues, users] = useQueries([openIssues({ status: 'open' }), figbird.q.users])
     // Type-inference assertions — the tuple element types flow from each builder.
     const issueRows: Issue[] = issues.data
     const userRows: User[] = users.data

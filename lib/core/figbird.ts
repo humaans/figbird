@@ -476,7 +476,7 @@ export class Figbird<
     )
     // query() owns definition resolution (validate → build → intern), so the
     // "definition + args collapses to one cache entry" contract lives in one place.
-    return this.#prepareRequest(query.withArgs(args), options)
+    return this.#prepareRequest(query(args), options)
   }
 
   #prepareRequest(
@@ -542,7 +542,7 @@ export class Figbird<
       argsOrOptions,
       maybeOptions,
     )
-    this.#prefetchRequest(query.withArgs(args), options)
+    this.#prefetchRequest(query(args), options)
   }
 
   #prefetchRequest(

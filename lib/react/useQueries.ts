@@ -42,10 +42,15 @@ export interface UseQueriesOptions {
   staleTime?: number
 }
 
-type QueryInput<S extends Schema> = AnyQueryBuilder<S> | QueryRequest<unknown, AnyQueryBuilder<S>>
+type QueryInput<S extends Schema> =
+  | AnyQueryBuilder<S>
+  // A heterogeneous tuple needs to erase each request's args while retaining its builder.
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  | QueryRequest<any, AnyQueryBuilder<S>>
 
 type QueryInputBuilder<T> =
-  T extends QueryRequest<unknown, infer B> ? B : T extends AnyQueryBuilder ? T : never
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  T extends QueryRequest<any, infer B> ? B : T extends AnyQueryBuilder ? T : never
 
 /**
  * The `useQueries` call surface — declared once and shared by the root export

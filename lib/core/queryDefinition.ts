@@ -25,22 +25,22 @@ export interface QueryRequest<Args, B> {
 /**
  * An args-keyed query factory produced by `defineQuery`. Definitions are inert — they
  * hold no cache state and no instance dependency. The cache key is derived from the
- * underlying builder's AST hash, which means `prepare(def.withArgs(args))` and
+ * underlying builder's AST hash, which means `prepare(def(args))` and
  * `useQuery(def, args)` collapse to the same `RelationalQueryRef`.
  *
- * `withArgs` validates at the binding site. Legacy definition-plus-args calls validate
- * when consumed. Validation throws `QueryArgsError` on failure; on success the
- * (possibly normalized) value feeds into `build`, so the cache key reflects normalized
- * args rather than raw input.
+ * Calling the definition validates at the binding site and returns an inert request.
+ * Legacy definition-plus-args calls validate when consumed. Validation throws
+ * `QueryArgsError` on failure; on success the (possibly normalized) value feeds into
+ * `build`, so the cache key reflects normalized args rather than raw input.
  */
 export interface QueryDefinition<Args, B> {
+  /** Validate and bind args into an inert request accepted by query consumers. */
+  (args: Args): QueryRequest<Args, B>
   readonly [QUERY_DEFINITION_BRAND]: true
   /** Optional label for errors/devtools — empty string when unnamed. Never identity. */
   readonly name: string
   build(args: Args): B
   validate(args: unknown): Args
-  /** Validate and bind args into an inert request accepted anywhere the definition is. */
-  withArgs(args: Args): QueryRequest<Args, B>
 }
 
 /**
@@ -85,13 +85,13 @@ export function splitDefinitionRest<Options>(
  */
 export function isQueryDefinition(value: unknown): value is QueryDefinition<unknown, unknown> {
   return (
-    typeof value === 'object' &&
+    (typeof value === 'object' || typeof value === 'function') &&
     value !== null &&
     (value as { [QUERY_DEFINITION_BRAND]?: unknown })[QUERY_DEFINITION_BRAND] === true
   )
 }
 
-/** Type guard for a concrete query produced by `definition.withArgs(args)`. */
+/** Type guard for a concrete query produced by calling a query definition. */
 export function isQueryRequest(value: unknown): value is QueryRequest<unknown, unknown> {
   return (
     typeof value === 'object' &&
@@ -228,8 +228,8 @@ export interface DefineQuery<TBuilder = unknown> {
  *
  * Args are typed from the build function. Pass a Standard Schema validator before the
  * build function when args arrive from untrusted sources (URL params, storage) — it
- * runs when `withArgs()` binds a request, or at legacy definition-plus-args call sites,
- * and throws `QueryArgsError`.
+ * runs when the definition binds a request, or at legacy definition-plus-args call
+ * sites, and throws `QueryArgsError`.
  *
  * The name is optional metadata, never identity (identity is the AST hash): it labels
  * `QueryArgsError` messages and devtools. Skip it unless you want those labels.
@@ -246,21 +246,21 @@ export const defineQuery: DefineQuery = ((
   const [x, y] = typeof a === 'string' ? [b, c] : [a, b]
   const argsSchema = y ? (x as StandardSchemaV1) : null
   const build = (y ?? x) as (args: unknown) => unknown
-  const definition: QueryDefinition<unknown, unknown> = {
-    [QUERY_DEFINITION_BRAND]: true,
-    name,
-    build,
-    validate: argsSchema
-      ? (args: unknown) => validateQueryArgs(name || '(anonymous)', argsSchema, args)
-      : (args: unknown) => args,
-    withArgs(args: unknown) {
-      return {
-        [QUERY_REQUEST_BRAND]: true,
-        definition,
-        args: definition.validate(args),
-      }
-    },
-  }
+  const validate = argsSchema
+    ? (args: unknown) => validateQueryArgs(name || '(anonymous)', argsSchema, args)
+    : (args: unknown) => args
+  let definition: QueryDefinition<unknown, unknown>
+  definition = ((args: unknown) => ({
+    [QUERY_REQUEST_BRAND]: true,
+    definition,
+    args: validate(args),
+  })) as QueryDefinition<unknown, unknown>
+  Object.defineProperties(definition, {
+    [QUERY_DEFINITION_BRAND]: { value: true },
+    name: { value: name, configurable: true },
+    build: { value: build },
+    validate: { value: validate },
+  })
   return definition
 }) as DefineQuery
 
