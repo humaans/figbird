@@ -72,6 +72,7 @@ interface SettledColdRead {
   status: 'settled'
   range: WindowRange
   promise: Promise<void>
+  lastUsed: number
 }
 
 type ColdRead = PendingColdRead | SettledColdRead
@@ -284,7 +285,10 @@ export class WindowQueryRef<
 
     const key = rangeKey(range)
     const existing = this.#coldReads.get(key)
-    if (existing) return existing.promise
+    if (existing) {
+      if (existing.status === 'settled') existing.lastUsed = ++this.#clock
+      return existing.promise
+    }
 
     let resolve = () => {}
     let reject = (_error: Error) => {}
@@ -411,6 +415,7 @@ export class WindowQueryRef<
   }
 
   #settleColdReads(): void {
+    let settled = false
     for (const [key, read] of this.#coldReads) {
       if (read.status === 'settled') continue
       const required = this.#pager.requiredStarts(read.range).flatMap(start => {
@@ -427,6 +432,7 @@ export class WindowQueryRef<
           status: 'settled',
           range: read.range,
           promise: read.promise,
+          lastUsed: ++this.#clock,
         })
         read.reject(error)
       } else if (this.#pager.rangeReady(read.range)) {
@@ -434,14 +440,39 @@ export class WindowQueryRef<
           status: 'settled',
           range: read.range,
           promise: read.promise,
+          lastUsed: ++this.#clock,
         })
         read.resolve()
       } else {
         continue
       }
-      // A settled render-phase read stays warm until React commits its subscriber.
-      // Genuinely abandoned reads are bounded by Figbird's idle window-ref LRU.
+      settled = true
+    }
+    if (settled) {
+      // The newest settled read stays warm for React's retry. Older abandoned
+      // ranges share the ordinary retained-page budget instead of pinning pages
+      // forever while another range has a committed subscriber.
+      this.#pruneSettledColdReads()
       this.#onIdle?.()
+    }
+  }
+
+  #pruneSettledColdReads(): void {
+    const reads = Array.from(this.#coldReads.entries())
+      .filter((entry): entry is [string, SettledColdRead] => entry[1].status === 'settled')
+      .sort((a, b) => b[1].lastUsed - a[1].lastUsed)
+    const retainedStarts = new Set<number>()
+
+    for (const [index, [key, read]] of reads.entries()) {
+      const targets = new Set(this.#pager.targetStarts(read.range, this.#config.preloadPages))
+      const starts = this.#pager.protectedStarts(targets)
+      const nextSize = new Set([...retainedStarts, ...starts]).size
+      const budget = Math.max(this.#config.maxPages, retainedStarts.size)
+      if (index > 0 && nextSize > budget) {
+        this.#coldReads.delete(key)
+        continue
+      }
+      for (const start of starts) retainedStarts.add(start)
     }
   }
 

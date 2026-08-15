@@ -182,6 +182,35 @@ test('window query: settled cold reads survive delayed retries and remain bounde
   t.not(figbird.window(query, config), abandoned)
 })
 
+test('window query: abandoned ranges cannot bypass page retention on an active ref', async t => {
+  const { figbird } = createTestApp(schema, {
+    items: { data: keyed(makeRows(100)) },
+    owners: { data: {} },
+  })
+  const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 10,
+    preloadPages: 0,
+    maxPages: 1,
+  })
+  const visible = readSettledWindow(ref, { start: 0, end: 5 })
+  await visible.promise
+
+  await ref.suspensePromise({ start: 20, end: 25 })
+  await ref.suspensePromise({ start: 40, end: 45 })
+  await ref.suspensePromise({ start: 60, end: 65 })
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+
+  const data = ref.getSnapshot({ start: 0, end: 5 }).data
+  t.is(data.size, 20)
+  t.is(data.get(0)?.id, 1)
+  t.is(data.get(60)?.id, 61)
+  t.false(data.has(20))
+  t.false(data.has(40))
+
+  ref.releaseColdStart({ start: 60, end: 65 })
+  visible.unsubscribe()
+})
+
 test('window query: retained pages follow the strictest active reader', async t => {
   const { figbird, feathers } = createTestApp(schema, {
     items: { data: keyed(makeRows(20)) },
