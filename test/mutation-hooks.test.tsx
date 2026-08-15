@@ -489,3 +489,59 @@ test('useMutating: service filter resolves schema aliases to transport paths', a
   })
   t.is(probe.read(), 'false')
 })
+
+test('useSyncStatus: replays pending writes, retains failures, and clears them on retry', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, services())
+  const { useSyncStatus } = createHooks(schema)
+  const d = dom()
+
+  function Probe() {
+    const sync = useSyncStatus()
+    return <output>{JSON.stringify(sync)}</output>
+  }
+
+  const read = () => JSON.parse(d.$('output')!.textContent!) as ReturnType<typeof useSyncStatus>
+
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
+  t.is(figbird.sync.getSnapshot().lastSyncedAt, null)
+
+  const first = deferred<MockItem>()
+  feathers.service('notes').patch = () => first.promise
+  const failedWrite = figbird.m.notes.patch(1, { content: 'offline' })
+
+  // The hook subscribes after the call and still receives the canonical active snapshot.
+  d.render(
+    <App>
+      <Probe />
+    </App>,
+  )
+  t.is(read().phase, 'syncing')
+  t.is(read().pendingWrites, 1)
+
+  await d.flush(async () => {
+    first.reject(new Error('offline'))
+    await t.throwsAsync(failedWrite, { message: 'offline' })
+  })
+  t.is(read().phase, 'error')
+  t.is(read().pendingWrites, 0)
+  t.is(read().failedWrites, 1)
+
+  const retry = deferred<MockItem>()
+  feathers.service('notes').patch = () => retry.promise
+  let retriedWrite!: Promise<Note>
+  await d.flush(() => {
+    retriedWrite = figbird.m.notes.patch(1, { content: 'online' })
+  })
+  t.is(read().phase, 'syncing')
+  t.is(read().pendingWrites, 1)
+  t.is(read().failedWrites, 0)
+
+  await d.flush(async () => {
+    retry.resolve({ id: 1, content: 'online' })
+    await retriedWrite
+  })
+  t.is(read().phase, 'synced')
+  t.is(read().pendingWrites, 0)
+  t.is(read().failedWrites, 0)
+  t.is(typeof read().lastSyncedAt, 'number')
+})

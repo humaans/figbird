@@ -61,6 +61,9 @@ export interface EventHandlers {
   removed: (item: unknown) => void
 }
 
+/** Adapter transport state consumed by Figbird's canonical sync snapshot. */
+export type AdapterConnectionState = 'connecting' | 'connected' | 'disconnected'
+
 /** Service context supplied when the adapter evaluates a query locally. */
 export interface MatcherContext {
   serviceName: string
@@ -101,6 +104,12 @@ export interface Adapter<
   // Optional reconnect support. Adapters should call the handler when the transport
   // reconnects after a period where realtime events may have been missed.
   subscribeToReconnect?(handler: () => void): () => void
+
+  /** Current transport state. Omit when the adapter has no meaningful connection lifecycle. */
+  getConnectionState?(): AdapterConnectionState
+
+  /** Notify whenever `getConnectionState()` may have changed. */
+  subscribeToConnectionState?(handler: () => void): () => void
 
   /**
    * Read an item's id, or `undefined` when absent. Pure extraction — whether a

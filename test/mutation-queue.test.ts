@@ -409,9 +409,10 @@ test('mutation queue: a terminal failure pauses with optimism intact until retry
   await new Promise(resolve => setTimeout(resolve, 10))
 
   let calls = 0
-  feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
+  const retryGate = deferred<MockItem>()
+  feathers.service('notes').patch = ((_id: number, _data: Partial<Note>) => {
     calls += 1
-    return calls === 1 ? Promise.reject(new Error('offline')) : Promise.resolve({ id: 1, ...data })
+    return calls === 1 ? Promise.reject(new Error('offline')) : retryGate.promise
   }) as never
 
   const queue = figbird.createMutationQueue()
@@ -421,11 +422,24 @@ test('mutation queue: a terminal failure pauses with optimism intact until retry
   t.is(queue.getSnapshot().status, 'failed')
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'survives retry')
   t.is(calls, 1)
+  t.deepEqual(
+    {
+      phase: figbird.sync.getSnapshot().phase,
+      pendingWrites: figbird.sync.getSnapshot().pendingWrites,
+      failedWrites: figbird.sync.getSnapshot().failedWrites,
+    },
+    { phase: 'error', pendingWrites: 1, failedWrites: 1 },
+  )
 
   queue.retry()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(figbird.sync.getSnapshot().phase, 'syncing')
+  t.is(figbird.sync.getSnapshot().failedWrites, 0)
+  retryGate.resolve({ id: 1, content: 'survives retry' })
   await pending
   t.is(calls, 2)
   t.is(queue.getSnapshot().status, 'idle')
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
 })
 
 test('mutation queue: related creates are transported serially in call order', async t => {
@@ -472,6 +486,8 @@ test('mutation queue: discard rolls back the failed and pending optimistic work'
   await new Promise(resolve => setTimeout(resolve, 0))
 
   t.is(queue.getSnapshot().status, 'failed')
+  t.is(figbird.sync.getSnapshot().pendingWrites, 2)
+  t.is(figbird.sync.getSnapshot().failedWrites, 1)
   t.deepEqual(
     latest?.data?.map(note => note.content),
     ['pending one', 'pending two'],
@@ -485,4 +501,7 @@ test('mutation queue: discard rolls back the failed and pending optimistic work'
     ['hello', 'world'],
   )
   t.is(queue.getSnapshot().status, 'idle')
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
+  t.is(figbird.sync.getSnapshot().pendingWrites, 0)
+  t.is(figbird.sync.getSnapshot().failedWrites, 0)
 })

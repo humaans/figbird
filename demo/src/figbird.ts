@@ -170,6 +170,7 @@ export const {
   useAction,
   useMutating,
   useMutationQueue,
+  useSyncStatus,
 } = createHooks(schema)
 
 // Reference data: preload the complete sets once — realtime maintains them, and every

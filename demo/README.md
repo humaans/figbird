@@ -56,6 +56,8 @@ If you're here to learn figbird, read in this order — each file teaches one id
 8. **`src/components/DemoControls.tsx`** — demo-server switches for latency, background
    traffic, forced failures, socket reconnects, and resets. The Figbird browser
    extension provides the query, timeline, event, and write views.
+9. **`src/components/SyncStatusIndicator.tsx`** — one `useSyncStatus()` snapshot rendered
+   as the nav's offline/saving/restoring/saved indicator.
 
 Structure rule: `src/` root is wiring (`main`, `figbird`, `demoControl`, `App`);
 `src/components/` is the shell UI the workspace composes; `src/pages/` is routed screens.
@@ -76,6 +78,7 @@ The bottom-right **Demo controls** menu changes server behavior:
   queue pauses instead, keeping its projection visible until you choose Retry or Discard.
 - **Drop socket** — kills the transport; socket.io auto-reconnects and figbird refetches
   every active query (and the materialized reference sets) to reconcile anything missed.
+  The nav indicator moves through offline → restoring → saved from `useSyncStatus()`.
 
 Install the extension from `extensions/build/chrome` or `extensions/build/firefox`, open
 the browser's developer tools, and select the **Figbird** panel. It exposes live queries,

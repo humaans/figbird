@@ -11,6 +11,7 @@ import { FigbirdEventEmitter } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
 import { GatedMutationAttempt } from './gatedMutationAttempt.js'
 import {
+  MutationQueueDiscardedError,
   MutationSupersededError,
   type RegisteredMutation,
   type ScheduledMutationControl,
@@ -71,6 +72,7 @@ import {
   type ServiceState,
 } from './queryTypes.js'
 import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
+import { SyncTracker } from './syncTracker.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -124,6 +126,7 @@ interface QueuedMutation {
   args: unknown[]
   optimistic: boolean
   attempt: GatedMutationAttempt
+  mutationId?: number
 }
 
 interface AppliedEventEffect {
@@ -169,6 +172,7 @@ export class QueryStore<
   #adapter: Adapter<TParams, TMeta, TQuery>
   #events: FigbirdEventEmitter
   #mutations: MutationTracker
+  #sync: SyncTracker
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
@@ -200,6 +204,7 @@ export class QueryStore<
   #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
   #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
+  #scheduledReconnectQueryIds: Set<string> = new Set()
   #reconnectQueryIds: Set<string> = new Set()
   #warnedMissingIdServices: Set<string> = new Set()
 
@@ -253,12 +258,16 @@ export class QueryStore<
     this.#eventBatchInterval = eventBatchInterval
     this.#events = new FigbirdEventEmitter()
     this.#mutations = new MutationTracker()
+    this.#sync = new SyncTracker(this.#adapter.getConnectionState?.() ?? 'connected')
     this.#reconcileCooldown = reconcileCooldown
     this.#retry = this.#normalizeRetry(retry)
     this.#retryDelay = retryDelay
     this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
+    this.#adapter.subscribeToConnectionState?.(() => {
+      this.#sync.connectionChanged(this.#adapter.getConnectionState?.() ?? 'connected')
+    })
     this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep())
   }
 
@@ -271,6 +280,11 @@ export class QueryStore<
   /** The instance's active mutation tracker — the store is its single owner. */
   get mutations(): MutationTracker {
     return this.#mutations
+  }
+
+  /** The instance's canonical aggregate sync state. */
+  get sync(): SyncTracker {
+    return this.#sync
   }
 
   /** Returns the entire store state map keyed by service name. */
@@ -693,6 +707,7 @@ export class QueryStore<
         },
       },
     )
+    entry.mutationId = tracked.mutationId
 
     this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true)
     entry.attempt.whenReady(() => {
@@ -733,8 +748,10 @@ export class QueryStore<
       return
     }
     entry.attempt.start(() =>
-      this.#runControlledAttempt(entry.attempt.control, () =>
-        this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args]),
+      this.#runControlledAttempt(
+        entry.attempt.control,
+        () => this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args]),
+        entry.mutationId!,
       ),
     )
   }
@@ -749,6 +766,7 @@ export class QueryStore<
   async #runControlledAttempt(
     control: ScheduledMutationControl | undefined,
     run: () => Promise<unknown>,
+    mutationId: number,
   ): Promise<unknown> {
     let attempt = 0
     while (true) {
@@ -758,9 +776,13 @@ export class QueryStore<
         return await run()
       } catch (error) {
         const normalized = error instanceof Error ? error : new Error(String(error))
-        if (!control || (await control.onAttemptFailure(normalized, attempt)) === 'discard') {
+        if (!control) throw normalized
+        this.#sync.writeAttemptFailed(mutationId)
+        if ((await control.onAttemptFailure(normalized, attempt)) === 'discard') {
+          this.#sync.writeDiscarded(mutationId)
           throw normalized
         }
+        this.#sync.writeAttemptRetrying(mutationId)
       }
     }
   }
@@ -891,7 +913,7 @@ export class QueryStore<
     )
 
     const start = () => {
-      attempt.start(() => this.#runControlledAttempt(control, run))
+      attempt.start(() => this.#runControlledAttempt(control, run, tracked.mutationId))
     }
     attempt.whenReady(start)
 
@@ -922,6 +944,7 @@ export class QueryStore<
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
     const mutationId = this.#mutations.start({ serviceName, method, ...idField })
+    this.#sync.writeStarted(mutationId, { serviceName, method, ...idField })
     this.#events.emit({
       kind: 'mutate:start',
       mutationId,
@@ -935,6 +958,7 @@ export class QueryStore<
       result => {
         hooks?.onSuccess?.(result)
         this.#mutations.end(mutationId)
+        this.#sync.writeSucceeded(mutationId)
         this.#events.emit({
           kind: 'mutate:end',
           mutationId,
@@ -950,6 +974,13 @@ export class QueryStore<
         const error = err instanceof Error ? err : new Error(String(err))
         hooks?.onError?.(error, mutationId)
         this.#mutations.end(mutationId)
+        if (
+          error instanceof MutationSupersededError ||
+          error instanceof MutationQueueDiscardedError
+        ) {
+          this.#sync.writeDiscarded(mutationId)
+        }
+        this.#sync.writeFailed(mutationId)
         this.#events.emit({
           kind: 'mutate:error',
           mutationId,
@@ -968,38 +999,51 @@ export class QueryStore<
 
   // Query lifecycle
   async #queue(queryId: string): Promise<void> {
-    this.#fetching({ queryId })
-    const generation = this.#queryGenerations.get(queryId)
-    if (generation === undefined) return
+    this.#sync.queryStarted(queryId)
+    let syncOutcome: 'success' | 'error' | 'cancelled' = 'cancelled'
+    try {
+      this.#fetching({ queryId })
+      const generation = this.#queryGenerations.get(queryId)
+      if (generation === undefined) return
 
-    let retryAttempt = 0
-    while (true) {
-      const outcome = await this.#runFetchAttempt(queryId, generation)
-      if (outcome.kind !== 'failed') return
-
-      const query = this.#getQuery(queryId)
-      if (
-        !query ||
-        this.#queryGenerations.get(queryId) !== generation ||
-        !this.#hasRetryOwner(queryId) ||
-        !this.#shouldRetry(query, retryAttempt, outcome.error)
-      ) {
-        if (query && this.#queryGenerations.get(queryId) === generation) {
-          this.#fetchFailed({ queryId, error: outcome.error })
+      let retryAttempt = 0
+      while (true) {
+        const outcome = await this.#runFetchAttempt(queryId, generation)
+        if (outcome.kind === 'completed') {
+          syncOutcome = 'success'
+          return
         }
-        return
-      }
+        if (outcome.kind === 'stale') return
 
-      retryAttempt++
-      const configuredDelay = query.config.retryDelay ?? this.#retryDelay
-      const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
-      await new Promise<void>(resolve => setTimeout(resolve, delay))
+        const query = this.#getQuery(queryId)
+        if (
+          !query ||
+          this.#queryGenerations.get(queryId) !== generation ||
+          !this.#hasRetryOwner(queryId) ||
+          !this.#shouldRetry(query, retryAttempt, outcome.error)
+        ) {
+          if (query && this.#queryGenerations.get(queryId) === generation) {
+            this.#fetchFailed({ queryId, error: outcome.error })
+            syncOutcome = 'error'
+          }
+          return
+        }
 
-      if (this.#queryGenerations.get(queryId) !== generation) return
-      if (!this.#hasRetryOwner(queryId)) {
-        this.#fetchFailed({ queryId, error: outcome.error })
-        return
+        retryAttempt++
+        const configuredDelay = query.config.retryDelay ?? this.#retryDelay
+        const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
+        await new Promise<void>(resolve => setTimeout(resolve, delay))
+
+        if (this.#queryGenerations.get(queryId) !== generation) return
+        if (!this.#hasRetryOwner(queryId)) {
+          this.#fetchFailed({ queryId, error: outcome.error })
+          syncOutcome = 'error'
+          return
+        }
       }
+    } finally {
+      this.#sync.queryFinished(queryId, syncOutcome)
+      this.#maybeFinishReconciliation(queryId)
     }
   }
 
@@ -1915,10 +1959,17 @@ export class QueryStore<
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
   #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
-    if (!force && this.#listenerCount(queryId) === 0) {
-      this.#markQueryPending(queryId)
+    if (!this.#getQuery(queryId)) {
+      this.#sync.reconciliationFinished(queryId)
       return
     }
+    if (!force && this.#listenerCount(queryId) === 0) {
+      this.#markQueryPending(queryId)
+      this.#sync.reconciliationFinished(queryId)
+      return
+    }
+
+    this.#sync.reconciliationStarted(queryId)
 
     if (this.#visibility.isHidden()) {
       this.#deferredWhileHidden.add(queryId)
@@ -1986,6 +2037,22 @@ export class QueryStore<
     if (window?.trailing) clearTimeout(window.trailing)
     this.#reconcileWindows.delete(queryId)
     this.#deferredWhileHidden.delete(queryId)
+    this.#scheduledReconnectQueryIds.delete(queryId)
+    this.#sync.reconciliationFinished(queryId)
+  }
+
+  #maybeFinishReconciliation(queryId: string): void {
+    const query = this.#getQuery(queryId)
+    const window = this.#reconcileWindows.get(queryId)
+    if (
+      this.#deferredWhileHidden.has(queryId) ||
+      window?.trailing ||
+      query?.state.isFetching ||
+      query?.dirty
+    ) {
+      return
+    }
+    this.#sync.reconciliationFinished(queryId)
   }
 
   /**
@@ -2017,12 +2084,13 @@ export class QueryStore<
     }
   }
 
-  #refetchActiveQueries(): void {
+  #activeReconnectQueries(): Map<string, boolean> {
+    const targets = new Map<string, boolean>()
     for (const service of this.getState().values()) {
       // Materialization roots reconcile even with no subscribers — every local read
       // depends on their completeness, and events may have been missed while offline.
       if (service.materialized) {
-        this.#requestReconcile(service.materialized.queryId, { force: true })
+        targets.set(service.materialized.queryId, true)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
@@ -2031,13 +2099,29 @@ export class QueryStore<
           (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId)) &&
           this.#listenerCount(query.queryId) > 0
         ) {
-          this.#requestReconcile(query.queryId)
+          targets.set(query.queryId, targets.get(query.queryId) ?? false)
         }
       }
+    }
+    return targets
+  }
+
+  #refetchActiveQueries(): void {
+    const targets = this.#activeReconnectQueries()
+    for (const queryId of this.#scheduledReconnectQueryIds) {
+      if (!targets.has(queryId)) this.#sync.reconciliationFinished(queryId)
+    }
+    this.#scheduledReconnectQueryIds.clear()
+    for (const [queryId, force] of targets) {
+      this.#requestReconcile(queryId, { force })
     }
   }
 
   #scheduleReconnectSweep(): void {
+    for (const queryId of this.#activeReconnectQueries().keys()) {
+      this.#scheduledReconnectQueryIds.add(queryId)
+      this.#sync.reconciliationStarted(queryId)
+    }
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))

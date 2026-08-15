@@ -1511,6 +1511,32 @@ Returns a boolean, live via `useSyncExternalStore` over `figbird.mutating`, the 
 synchronous tracker. It's correct for components that mount mid-mutation and it sees
 writes from any surface. See [Entity-level activity](#entity-level-activity-usemutating).
 
+## useSyncStatus
+
+```ts
+const sync = useSyncStatus()
+
+sync.phase // 'restoring' | 'offline' | 'syncing' | 'synced' | 'error'
+sync.pendingWrites
+sync.failedWrites
+sync.fetchingQueries
+sync.pendingReconciliations
+sync.lastSyncedAt // epoch milliseconds, or null before the first successful settle
+```
+
+Returns Figbird's canonical, instance-wide sync snapshot. Unlike the observability event
+stream, this state replays: a component mounting halfway through a fetch, scheduled mutation,
+paused queue failure, disconnect, or hidden-tab reconciliation sees the correct answer
+immediately. `offline` takes priority while the adapter transport is disconnected; `error`
+covers failed writes or query refreshes; `restoring` covers connection setup and event/reconnect
+reconciliation; ordinary reads and writes are `syncing`; a clean idle instance is `synced`.
+
+`pendingWrites` includes scheduled queue work and a failed queue item that still needs retry or
+discard. A terminal write failure remains in `failedWrites` until the same logical operation is
+attempted again. `lastSyncedAt` advances only when successful work leaves the whole instance
+clean. The hook is backed by `figbird.sync` and `useSyncExternalStore`, so it is also available
+from a schema-bound `createHooks` kit.
+
 ## defineQuery
 
 ```ts
@@ -1665,6 +1691,7 @@ const figbird = new Figbird({
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
 | `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
 | `mutating`                                        | Synchronous active-mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                       |
+| `sync`                                            | Canonical aggregate sync tracker (`subscribe`/`getSnapshot`) — `useSyncStatus` is its React binding.                                                      |
 | `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
 | `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |
@@ -1699,13 +1726,22 @@ Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, ski
 Binds a schema to import-safe, typed React hooks:
 
 ```ts
-export const { useQuery, useFigbird, useMutations, q, defineQuery, useAction, useMutating } =
-  createHooks(schema)
+export const {
+  useQuery,
+  useFigbird,
+  useMutations,
+  q,
+  defineQuery,
+  useAction,
+  useMutating,
+  useSyncStatus,
+} = createHooks(schema)
 ```
 
 Returns the daily-use kit: `useQuery`, `q` (the read proxy), schema-typed
 `defineQuery`, and the write side — `useMutations` (the provider instance's write proxy),
-`useAction` (per-action state), and `useMutating` (in-flight activity). It also includes
+`useAction` (per-action state), `useMutating` (in-flight activity), and `useSyncStatus`
+(instance-wide connectivity and sync state). It also includes
 typed `useFigbird`, `useFeathers` (the raw-client
 escape hatch), and the deprecated legacy hooks (`useMutation`, `useFind`, `useGet`) for
 older codebases.

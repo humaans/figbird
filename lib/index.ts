@@ -46,6 +46,9 @@ export type {
   StandardSchemaV1,
   VisibilitySource,
   WriteMutationOptions,
+  SyncActivity,
+  SyncPhase,
+  SyncStatus,
 } from './core/figbird.js'
 export {
   MutationQueueDiscardedError,
@@ -106,6 +109,7 @@ export { matcher } from './adapters/matcher.js'
 // Adapter interface and types
 export type {
   Adapter,
+  AdapterConnectionState,
   AdapterFindMeta,
   AdapterParams,
   AdapterQuery,
@@ -128,6 +132,7 @@ export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js
 export { useAction } from './react/useAction.js'
 export { useMutating } from './react/useMutating.js'
 export { useMutationQueue } from './react/useMutationQueue.js'
+export { useSyncStatus } from './react/useSyncStatus.js'
 // Deprecated: superseded by useMutations + useAction + useMutating.
 export { useMutation } from './react/useMutation.js'
 // useFeathers is the raw-client escape hatch, typed via createHooks.

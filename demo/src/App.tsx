@@ -14,6 +14,7 @@ import { figbird } from './figbird'
 import { issueDetailRouteQueries } from './pages/IssueDetail/queries'
 import { TeamsPage } from './pages/Teams/screen'
 import { DetailSkeleton, SkeletonRows } from './components/ui'
+import { SyncStatusIndicator } from './components/SyncStatusIndicator'
 
 function EmptyDetail() {
   return (
@@ -106,6 +107,7 @@ function Workspace({ children }: { children?: ReactNode }) {
           + New issue
         </button>
         <span className='spacer' />
+        <SyncStatusIndicator />
         <span className='nav-hint'>tip: open two windows side by side</span>
       </nav>
       {isFull ? (
