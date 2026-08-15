@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { DevtoolsEvent } from './collector.js'
+import type { EventVisibility } from './Devtools.js'
 import { compactJson, formatClock, formatMs, prettyJson } from './format.js'
 import type { EventQueryScope } from './model.js'
 import {
@@ -14,12 +15,14 @@ import {
 export function EventsTab({
   events,
   filter,
+  visibility,
   scopes,
   selectedTraceId,
   onSelectedTraceIdChange,
 }: {
   events: DevtoolsEvent[]
   filter: string
+  visibility: EventVisibility
   scopes: ReadonlyMap<string, readonly EventQueryScope[]>
   selectedTraceId?: number | null
   onSelectedTraceIdChange?: (traceId: number | null) => void
@@ -28,15 +31,26 @@ export function EventsTab({
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const traceIndex = useMemo(() => buildTraceIndex(events), [events])
-  const rows = events
-    .filter(item => {
-      if (!filter) return true
-      return eventSearchText(item, scopes.get(eventQueryId(item.event) ?? ''))
-        .toLowerCase()
-        .includes(filter.toLowerCase())
-    })
-    .reverse()
+  const activities = useMemo(() => buildActivities(events, traceIndex), [events, traceIndex])
+  const normalizedFilter = filter.toLowerCase()
+  const rows: EventListRow[] =
+    visibility === 'activity'
+      ? activities.filter(activity =>
+          normalizedFilter ? activity.searchText.includes(normalizedFilter) : true,
+        )
+      : events
+          .filter(item => {
+            if (!normalizedFilter) return true
+            return eventSearchText(item, scopes.get(eventQueryId(item.event) ?? ''))
+              .toLowerCase()
+              .includes(normalizedFilter)
+          })
+          .reverse()
+          .map(item => rawEventRow(item, traceIndex))
   const selectedEvent = events.find(item => item.id === selectedEventId)
+  const selectedActivity = activities.find(
+    activity => activity.representative.id === selectedEventId,
+  )
   const traceEvents = useMemo(
     () =>
       selectedTraceId
@@ -53,8 +67,11 @@ export function EventsTab({
     ) {
       return
     }
-    setSelectedEventId(traceEvents.at(-1)!.id)
-  }, [selectedEvent, selectedTraceId, traceEvents, traceIndex])
+    const activity = activities.find(item => item.traceId === selectedTraceId)
+    setSelectedEventId(
+      visibility === 'activity' && activity ? activity.representative.id : traceEvents.at(-1)!.id,
+    )
+  }, [activities, selectedEvent, selectedTraceId, traceEvents, traceIndex, visibility])
   return (
     <section style={{ height: '100%', display: 'flex', minWidth: 0 }}>
       <div style={{ ...styles.scroll, flex: 1, minWidth: 0 }}>
@@ -71,33 +88,35 @@ export function EventsTab({
           }}
         >
           <span>Time</span>
-          <span>Event</span>
+          <span>{visibility === 'activity' ? 'Activity' : 'Event'}</span>
           <span>Scope</span>
           <span>Details</span>
         </div>
         {rows.length === 0 ? (
-          <div style={{ padding: 16, color: colors.muted }}>No matching events recorded.</div>
+          <div style={{ padding: 16, color: colors.muted }}>
+            No matching {visibility === 'activity' ? 'activity' : 'events'} recorded.
+          </div>
         ) : null}
-        {rows.map(item => {
-          const queryId = eventQueryId(item.event)
+        {rows.map(row => {
+          const item = row.representative
+          const queryId = row.queryId
           const queryScopes = queryId ? scopes.get(queryId) : undefined
-          const details = eventDetails(item)
           return (
             <div
-              key={item.id}
+              key={row.key}
               role='button'
               tabIndex={0}
               aria-pressed={item.id === selectedEventId}
               title='Select event details'
               onClick={() => {
                 setSelectedEventId(item.id)
-                onSelectedTraceIdChange?.(traceIdsForEvent(item.event, traceIndex)[0] ?? null)
+                onSelectedTraceIdChange?.(row.traceId ?? null)
               }}
               onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
                   setSelectedEventId(item.id)
-                  onSelectedTraceIdChange?.(traceIdsForEvent(item.event, traceIndex)[0] ?? null)
+                  onSelectedTraceIdChange?.(row.traceId ?? null)
                 }
               }}
               style={{
@@ -111,7 +130,7 @@ export function EventsTab({
               <span style={{ ...styles.code, color: colors.faint }}>
                 {formatClock(item.wallAt, { milliseconds: true })}
               </span>
-              <EventKind kind={item.event.kind} />
+              <EventKind kind={row.kind} />
               <EventScopeBadge scopes={queryScopes} queryId={queryId} />
               <span
                 style={{
@@ -120,9 +139,9 @@ export function EventsTab({
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}
-                title={details}
+                title={row.details}
               >
-                {details}
+                {row.details}
               </span>
             </div>
           )
@@ -131,8 +150,20 @@ export function EventsTab({
       {selectedEvent ? (
         <EventDetails
           item={selectedEvent}
-          traceEvents={traceEvents}
-          selectedTraceId={selectedTraceId ?? null}
+          relatedEvents={
+            selectedTraceId
+              ? traceEvents
+              : visibility === 'activity'
+                ? (selectedActivity?.events ?? [])
+                : []
+          }
+          relatedLabel={
+            selectedTraceId
+              ? `Causal trace #${selectedTraceId}`
+              : visibility === 'activity'
+                ? 'Related activity'
+                : null
+          }
           width={detailsWidth}
           onResizeStart={onDetailsResizeStart}
           onClose={() => setSelectedEventId(null)}
@@ -144,15 +175,15 @@ export function EventsTab({
 
 function EventDetails({
   item,
-  traceEvents,
-  selectedTraceId,
+  relatedEvents,
+  relatedLabel,
   width,
   onResizeStart,
   onClose,
 }: {
   item: DevtoolsEvent
-  traceEvents: DevtoolsEvent[]
-  selectedTraceId: number | null
+  relatedEvents?: DevtoolsEvent[]
+  relatedLabel: string | null
   width: number
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
@@ -199,10 +230,10 @@ function EventDetails({
           {payload === undefined ? 'No payload' : prettyJson(payload)}
         </pre>
       </DetailSection>
-      {selectedTraceId && traceEvents.length > 1 ? (
-        <DetailSection label={`Causal trace #${selectedTraceId}`}>
+      {relatedEvents && relatedEvents.length > 1 ? (
+        <DetailSection label={relatedLabel ?? 'Related activity'}>
           <div style={{ borderTop: `1px solid ${colors.rowBorder}` }}>
-            {traceEvents.map(traceEvent => (
+            {relatedEvents.map(traceEvent => (
               <div
                 key={traceEvent.id}
                 style={{
@@ -328,6 +359,281 @@ function EventScopeBadge({
 
 interface TraceIndex {
   byFetchId: ReadonlyMap<number, readonly number[]>
+}
+
+interface EventListRow {
+  key: string
+  representative: DevtoolsEvent
+  kind: string
+  details: string
+  queryId?: string
+  traceId?: number
+}
+
+interface ActivityRow extends EventListRow {
+  events: DevtoolsEvent[]
+  searchText: string
+}
+
+function rawEventRow(item: DevtoolsEvent, index: TraceIndex): EventListRow {
+  const queryId = eventQueryId(item.event)
+  const traceId = traceIdsForEvent(item.event, index)[0]
+  return {
+    key: `event:${item.id}`,
+    representative: item,
+    kind: item.event.kind,
+    details: eventDetails(item),
+    ...(queryId === undefined ? {} : { queryId }),
+    ...(traceId === undefined ? {} : { traceId }),
+  }
+}
+
+function buildActivities(events: readonly DevtoolsEvent[], index: TraceIndex): ActivityRow[] {
+  const grouped = new Map<string, { traceId?: number; events: DevtoolsEvent[] }>()
+  for (const item of events) {
+    const traceIds = traceIdsForEvent(item.event, index)
+    const add = (key: string, traceId?: number) => {
+      const group = grouped.get(key) ?? {
+        ...(traceId === undefined ? {} : { traceId }),
+        events: [],
+      }
+      group.events.push(item)
+      grouped.set(key, group)
+    }
+    if (traceIds.length > 0) {
+      for (const traceId of traceIds) add(`trace:${traceId}`, traceId)
+    } else {
+      add(activityGroupKey(item))
+    }
+  }
+
+  return [...grouped.entries()]
+    .map(([key, group]) => {
+      const representative = activityRepresentative(group.events)
+      const kind = activityKind(key, representative)
+      const details = activityDetails(key, representative, group.events)
+      const queryId = group.events.map(item => eventQueryId(item.event)).find(Boolean)
+      return {
+        key,
+        representative,
+        events: group.events,
+        kind,
+        details,
+        searchText: [kind, details, ...group.events.map(item => eventSearchText(item))]
+          .join(' ')
+          .toLowerCase(),
+        ...(queryId === undefined ? {} : { queryId }),
+        ...(group.traceId === undefined ? {} : { traceId: group.traceId }),
+      }
+    })
+    .sort((a, b) => b.representative.wallAt - a.representative.wallAt)
+}
+
+function activityGroupKey(item: DevtoolsEvent): string {
+  const event = item.event
+  switch (event.kind) {
+    case 'mutate:start':
+    case 'mutate:update':
+    case 'mutate:end':
+    case 'mutate:error':
+    case 'mutate:rollback':
+      return `mutation:${event.mutationId}`
+    case 'action:start':
+    case 'action:end':
+    case 'action:error':
+      return `action:${event.actionId}`
+    default:
+      return `event:${item.id}`
+  }
+}
+
+function activityRepresentative(events: readonly DevtoolsEvent[]): DevtoolsEvent {
+  const mutationOrActionStart = events.find(
+    item => item.event.kind === 'mutate:start' || item.event.kind === 'action:start',
+  )
+  if (mutationOrActionStart) return mutationOrActionStart
+
+  const connection = events.find(item => item.event.kind.startsWith('connection:'))
+  if (connection) return connection
+
+  const mutationCache = events.find(
+    item =>
+      item.event.kind === 'cache:updated' &&
+      (item.event.source === 'mutation' || item.event.source === 'optimistic'),
+  )
+  if (mutationCache) return mutationCache
+
+  return (
+    events.find(item => item.event.kind === 'realtime') ??
+    events.find(item => item.event.kind === 'cache:updated' && item.event.source === 'devtools') ??
+    events.find(item => item.event.kind === 'fetch:start') ??
+    events.find(item => item.event.kind === 'cache:updated') ??
+    events[0]!
+  )
+}
+
+function activityKind(key: string, representative: DevtoolsEvent): string {
+  if (key.startsWith('mutation:')) return 'mutation'
+  if (key.startsWith('action:')) return 'action'
+  const event = representative.event
+  if (event.kind.startsWith('connection:')) return 'connection'
+  if (event.kind.startsWith('fetch:')) return 'fetch'
+  if (event.kind.startsWith('reconcile:')) return 'reconcile'
+  if (event.kind === 'cache:updated') {
+    if (event.source === 'devtools') return 'cache edit'
+    if (event.source === 'optimistic') return 'optimistic'
+    if (event.source === 'mutation') return 'mutation cache'
+    return 'cache'
+  }
+  return event.kind
+}
+
+function activityDetails(
+  key: string,
+  representative: DevtoolsEvent,
+  events: readonly DevtoolsEvent[],
+): string {
+  if (key.startsWith('mutation:')) return mutationActivityDetails(representative, events)
+  if (key.startsWith('action:')) return actionActivityDetails(representative, events)
+
+  const event = representative.event
+  if (event.kind.startsWith('connection:')) {
+    const sweep = events.find(item => item.event.kind === 'reconnect:sweep')?.event
+    const fetches = events.filter(
+      item => item.event.kind === 'fetch:end' || item.event.kind === 'fetch:error',
+    ).length
+    return joinEventParts([
+      eventDetails(representative),
+      sweep?.kind === 'reconnect:sweep' && sweep.queryCount !== undefined
+        ? pluralActivity(sweep.queryCount, 'query swept', 'queries swept')
+        : '',
+      fetches > 0 ? pluralActivity(fetches, 'fetch', 'fetches') : '',
+    ])
+  }
+
+  if (event.kind === 'realtime') {
+    const effects = activityQueryEffects(events)
+    const fetches = events.filter(item => item.event.kind === 'fetch:start').length
+    return joinEventParts([
+      `${event.serviceName} ${event.type}${event.itemId === undefined ? '' : ` #${event.itemId}`}`,
+      effects.merged > 0 ? pluralActivity(effects.merged, 'query merged', 'queries merged') : '',
+      effects.reconcile > 0
+        ? pluralActivity(effects.reconcile, 'query reconciled', 'queries reconciled')
+        : '',
+      fetches > 0 ? pluralActivity(fetches, 'fetch', 'fetches') : '',
+    ])
+  }
+
+  if (event.kind === 'cache:updated') {
+    const effects = activityQueryEffects(events)
+    return joinEventParts([
+      `${event.serviceName} #${event.itemId}`,
+      event.source === 'devtools'
+        ? 'edited in memory'
+        : event.source === 'optimistic'
+          ? 'optimistic cache update'
+          : event.source === 'mutation'
+            ? 'mutation applied to cache'
+            : `${event.source} cache update`,
+      effects.merged > 0 ? pluralActivity(effects.merged, 'query updated', 'queries updated') : '',
+      effects.reconcile > 0
+        ? pluralActivity(effects.reconcile, 'query reconciled', 'queries reconciled')
+        : '',
+    ])
+  }
+
+  if (event.kind === 'fetch:start') {
+    const terminal = [...events]
+      .reverse()
+      .find(item => item.event.kind === 'fetch:end' || item.event.kind === 'fetch:error')
+    const attempts = events.filter(item => item.event.kind === 'fetch:start').length
+    return joinEventParts([
+      `${event.serviceName}.${event.method}`,
+      event.reason ?? '',
+      terminal?.event.kind === 'fetch:end'
+        ? pluralActivity(terminal.event.itemCount, 'row', 'rows')
+        : terminal?.event.kind === 'fetch:error'
+          ? errorMessage(terminal.event.error)
+          : 'in flight',
+      terminal?.event.kind === 'fetch:end' || terminal?.event.kind === 'fetch:error'
+        ? formatMs(terminal.event.durationMs)
+        : '',
+      attempts > 1 ? pluralActivity(attempts - 1, 'retry', 'retries') : '',
+    ])
+  }
+
+  return eventDetails(representative)
+}
+
+function activityQueryEffects(events: readonly DevtoolsEvent[]): {
+  merged: number
+  reconcile: number
+} {
+  const outcomes = new Map<string, 'merged' | 'reconcile'>()
+  for (const item of events) {
+    if (item.event.kind !== 'cache:updated') continue
+    for (const effect of item.event.queryEffects) outcomes.set(effect.queryId, effect.outcome)
+  }
+  return {
+    merged: [...outcomes.values()].filter(outcome => outcome === 'merged').length,
+    reconcile: [...outcomes.values()].filter(outcome => outcome === 'reconcile').length,
+  }
+}
+
+function mutationActivityDetails(
+  representative: DevtoolsEvent,
+  events: readonly DevtoolsEvent[],
+): string {
+  if (representative.event.kind !== 'mutate:start') return eventDetails(representative)
+  const start = representative.event
+  const terminal = [...events]
+    .reverse()
+    .find(
+      item =>
+        item.event.kind === 'mutate:end' ||
+        item.event.kind === 'mutate:error' ||
+        item.event.kind === 'mutate:rollback',
+    )
+  return joinEventParts([
+    `${start.serviceName}.${start.method}${start.id === undefined ? '' : ` #${start.id}`}`,
+    start.optimistic ? 'optimistic' : 'confirmed',
+    terminal?.event.kind === 'mutate:error'
+      ? errorMessage(terminal.event.error)
+      : terminal?.event.kind === 'mutate:rollback'
+        ? 'rolled back'
+        : terminal?.event.kind === 'mutate:end'
+          ? 'completed'
+          : 'in flight',
+    terminal?.event.kind === 'mutate:end' || terminal?.event.kind === 'mutate:error'
+      ? formatMs(terminal.event.durationMs)
+      : '',
+  ])
+}
+
+function actionActivityDetails(
+  representative: DevtoolsEvent,
+  events: readonly DevtoolsEvent[],
+): string {
+  if (representative.event.kind !== 'action:start') return eventDetails(representative)
+  const start = representative.event
+  const terminal = [...events]
+    .reverse()
+    .find(item => item.event.kind === 'action:end' || item.event.kind === 'action:error')
+  return joinEventParts([
+    start.name ?? '(anonymous action)',
+    terminal?.event.kind === 'action:error'
+      ? errorMessage(terminal.event.error)
+      : terminal?.event.kind === 'action:end'
+        ? 'completed'
+        : 'in flight',
+    terminal?.event.kind === 'action:end' || terminal?.event.kind === 'action:error'
+      ? formatMs(terminal.event.durationMs)
+      : '',
+  ])
+}
+
+function pluralActivity(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`
 }
 
 function buildTraceIndex(events: readonly DevtoolsEvent[]): TraceIndex {
@@ -504,6 +810,9 @@ function EventKind({ kind }: { kind: string }) {
 }
 
 function eventTone(kind: string): 'green' | 'amber' | 'red' | 'blue' | 'neutral' {
+  if (kind === 'connection' || kind === 'fetch' || kind === 'cache edit') return 'blue'
+  if (kind === 'mutation' || kind === 'mutation cache' || kind === 'optimistic') return 'amber'
+  if (kind === 'action') return 'green'
   if (kind === 'connection:connected' || kind === 'connection:reconnected') return 'green'
   if (
     kind === 'connection:disconnected' ||

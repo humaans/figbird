@@ -50,6 +50,16 @@ realtime, and connection marks link into the same chain. This metadata is emitte
 while something subscribes to `figbird.events`, and the extension continues to bound
 all retained history.
 
+The Events tab defaults to an **Activity** projection: one summary row per causal trace,
+mutation, or action. Supporting cache, reconciliation, retry, and sweep events remain in
+the row's details. **All events** exposes the complete raw instrumentation stream when a
+forensic view is needed.
+
+The Queries tab separates **Inactive queries** from the live view. These are still
+present in Figbird's cache but currently have no subscribers, so they remain inspectable
+until normal garbage collection removes them. **All queries** also includes bounded
+DevTools history for queries that are no longer present in Figbird.
+
 ## Cache inspection and editing
 
 The page bridge exposes a serialized projection of each service's normalized entities,
@@ -102,6 +112,6 @@ to expire.
 
 ## Scope
 
-The panel is read-only apart from clearing its local history and starting or stopping the
-element picker. It does not persist history across reloads, edit application state, or
-provide time travel.
+The panel is read-only apart from clearing local history, controlling the element picker,
+and explicitly replacing an existing cached entity in memory. It does not persist history
+across reloads, write cache edits to the server, or provide time travel.

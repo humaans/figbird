@@ -66,6 +66,8 @@ The shared browser extension version lives in `extensions/version.json`. See
 
 - The Figbird panel reports **Connected** after the page creates a Figbird instance.
 - Queries, relational details, causal events, the fetch timeline, normalized cache, and writes update live.
+- The Queries visibility menu separates live, inactive cached, skipped, and historical queries.
+- Events opens in grouped Activity mode; All events exposes the bounded raw stream.
 - Selecting a linked timeline or cache-provenance mark opens its causal event chain.
 - Cache JSON edits rerender affected subscribers without issuing a server request and can be undone.
 - **Inspect** highlights the page and filters to queries owned by the selected area.

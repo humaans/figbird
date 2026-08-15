@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { CacheTab, type DevtoolsCacheEditor } from './CacheTab.js'
 import { EventsTab } from './EventsTab.js'
-import { QueriesTab } from './QueriesTab.js'
+import { QueriesTab, operationIsInactive } from './QueriesTab.js'
 import { TimelineFollowControl, TimelineTab } from './TimelineTab.js'
 import { WritesTab } from './WritesTab.js'
 import type { Collector } from './collector.js'
@@ -18,7 +18,8 @@ import {
 } from './ui.js'
 
 type Tab = 'queries' | 'timeline' | 'events' | 'cache' | 'writes'
-export type QueryVisibility = 'active' | 'all' | 'skipped'
+export type QueryVisibility = 'active' | 'inactive' | 'all' | 'skipped'
+export type EventVisibility = 'activity' | 'all'
 
 export type DevtoolsInspectionSnapshot =
   | { kind: 'idle'; version: number }
@@ -67,6 +68,7 @@ export function FigbirdDevtoolsPanel({
   const [queryFilter, setQueryFilter] = useState('')
   const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
+  const [eventVisibility, setEventVisibility] = useState<EventVisibility>('activity')
   const [cacheFilter, setCacheFilter] = useState('')
   const [selectedTraceId, setSelectedTraceId] = useState<number | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
@@ -87,6 +89,7 @@ export function FigbirdDevtoolsPanel({
 
   const model = useMemo(() => buildDevtoolsModel(snapshot), [snapshot])
   const skippedQueryCount = model.operations.filter(operation => operation.summary.skipped).length
+  const inactiveQueryCount = model.operations.filter(operationIsInactive).length
   const timelineEmpty =
     snapshot.timeline.realtime.length === 0 &&
     snapshot.timeline.connection.length === 0 &&
@@ -143,7 +146,7 @@ export function FigbirdDevtoolsPanel({
               />
               <select
                 aria-label='Query visibility'
-                title='Skipped queries are hidden from the live view'
+                title='Choose live, inactive cached, skipped, or historical queries'
                 value={queryVisibility}
                 onChange={event => setQueryVisibility(event.currentTarget.value as QueryVisibility)}
                 style={{
@@ -154,6 +157,9 @@ export function FigbirdDevtoolsPanel({
                 }}
               >
                 <option value='active'>Live queries</option>
+                <option value='inactive'>
+                  Inactive queries{inactiveQueryCount > 0 ? ` (${inactiveQueryCount})` : ''}
+                </option>
                 <option value='all'>All queries</option>
                 <option value='skipped'>
                   Skipped queries{skippedQueryCount > 0 ? ` (${skippedQueryCount})` : ''}
@@ -204,12 +210,29 @@ export function FigbirdDevtoolsPanel({
             </>
           ) : null}
           {tab === 'events' ? (
-            <input
-              style={styles.input}
-              value={eventFilter}
-              onChange={event => setEventFilter(event.currentTarget.value)}
-              placeholder='Filter events'
-            />
+            <>
+              <input
+                style={styles.input}
+                value={eventFilter}
+                onChange={event => setEventFilter(event.currentTarget.value)}
+                placeholder={eventVisibility === 'activity' ? 'Filter activity' : 'Filter events'}
+              />
+              <select
+                aria-label='Event visibility'
+                title='Activity groups causal work; All events shows the raw instrumentation stream'
+                value={eventVisibility}
+                onChange={event => setEventVisibility(event.currentTarget.value as EventVisibility)}
+                style={{
+                  ...styles.input,
+                  width: 'auto',
+                  maxWidth: 'none',
+                  paddingRight: 24,
+                }}
+              >
+                <option value='activity'>Activity</option>
+                <option value='all'>All events</option>
+              </select>
+            </>
           ) : null}
           {tab === 'cache' ? (
             <input
@@ -263,6 +286,7 @@ export function FigbirdDevtoolsPanel({
             <EventsTab
               events={snapshot.events}
               filter={eventFilter}
+              visibility={eventVisibility}
               scopes={model.scopesByQueryId}
               selectedTraceId={selectedTraceId}
               onSelectedTraceIdChange={setSelectedTraceId}

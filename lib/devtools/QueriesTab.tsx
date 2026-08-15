@@ -11,6 +11,15 @@ interface QueryRow {
   localSubscriberCount: number
 }
 
+export function operationIsInactive(operation: DevtoolsOperation): boolean {
+  const queries = [operation.summary, ...operation.underlying.map(item => item.query)]
+  return (
+    operation.summary.skipped !== true &&
+    queries.some(query => query.present) &&
+    queries.every(query => query.subscriberCount === 0)
+  )
+}
+
 const QUERY_COLUMNS = [
   {
     label: 'query',
@@ -84,6 +93,7 @@ export function QueriesTab({
       const localSubscriberCount = inspectedQueryCounts?.get(operation.key) ?? 0
       if (inspectedQueryCounts && localSubscriberCount === 0) return []
       if (visibility === 'skipped' && query.skipped !== true) return []
+      if (visibility === 'inactive' && !operationIsInactive(operation)) return []
       if (visibility === 'active' && query.skipped === true) return []
       if (
         visibility === 'active' &&
