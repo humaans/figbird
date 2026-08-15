@@ -259,7 +259,50 @@ export class QueryStore<
     this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
-    this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep())
+    if (this.#adapter.subscribeToConnectionEvents) {
+      this.#adapter.subscribeToConnectionEvents(event => {
+        switch (event.type) {
+          case 'connected':
+            this.#events.emit({
+              kind: 'connection:connected',
+              ...(event.transport ? { transport: event.transport } : {}),
+              ...(event.connectionId ? { connectionId: event.connectionId } : {}),
+            })
+            break
+          case 'disconnected':
+            this.#events.emit({
+              kind: 'connection:disconnected',
+              ...(event.reason ? { reason: event.reason } : {}),
+              reconnecting: event.reconnecting,
+            })
+            break
+          case 'reconnected':
+            this.#events.emit({
+              kind: 'connection:reconnected',
+              ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
+              ...(event.transport ? { transport: event.transport } : {}),
+              ...(event.connectionId ? { connectionId: event.connectionId } : {}),
+            })
+            this.#scheduleReconnectSweep()
+            break
+          case 'error':
+            this.#events.emit({
+              kind: 'connection:error',
+              phase: event.phase,
+              error: event.error,
+            })
+            break
+          case 'reconnect-failed':
+            this.#events.emit({
+              kind: 'connection:reconnect-failed',
+              ...(event.error ? { error: event.error } : {}),
+            })
+            break
+        }
+      })
+    } else {
+      this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep())
+    }
   }
 
   // Public store API
@@ -1581,6 +1624,7 @@ export class QueryStore<
         serviceName,
         type,
         itemId: this.#getIdWarn(serviceName, item),
+        item,
       })
     }
   }

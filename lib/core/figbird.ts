@@ -287,10 +287,10 @@ export class Figbird<
   }
 
   /**
-   * Returns the entire internal state map keyed by service name — including the
-   * cached entities themselves, which `inspect()` deliberately omits. Debug-grade:
-   * internal shapes may change between versions; prefer `inspect()` for anything
-   * built to last.
+   * Returns the entire internal state map keyed by service name — including cached
+   * entities that are not part of a current query result. Debug-grade: internal
+   * shapes may change between versions; prefer `inspect()` for anything built to
+   * last.
    */
   getState(): Map<string, ServiceState<AdapterFindMeta<A>>> {
     return this.queryStore.getState()
@@ -943,8 +943,10 @@ export class Figbird<
               }
             : {}),
           classification: query.classification,
+          skipped: query.config.skip === true,
           status: query.state.status,
           isFetching: query.state.isFetching,
+          data: query.state.data,
           itemCount: Array.isArray(query.state.data)
             ? query.state.data.length
             : query.state.data
@@ -990,8 +992,12 @@ export interface InspectedQuery {
   /** Native adapter page details. Offset pages remain visible in `query` as `$skip`/`$limit`. */
   page?: { request: PageRequest; info?: PageInfo }
   classification: QueryNodeClass | 'get'
+  /** True when this entry was materialized with `skip: true`. */
+  skipped?: boolean
   status: 'loading' | 'success' | 'error'
   isFetching: boolean
+  /** Current result for this query. Debug-only and safe to inspect, not mutate. */
+  data?: unknown
   itemCount: number
   fetchedAt: number | undefined
   subscriberCount: number

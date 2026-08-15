@@ -22,6 +22,20 @@ The bridge serializes values before they cross the browser DevTools evaluation b
 Errors retain their name and message, bigint values become strings, and circular values
 are marked instead of breaking the panel.
 
+## Connection diagnostics
+
+Adapters may expose transport lifecycle events through Figbird's adapter-neutral
+connection observer. The Feathers adapter maps Socket.IO `connect`, `disconnect`,
+connection failure, and Manager reconnection state into this observer. A successful
+reconnection remains the single trigger for Figbird's active-query sweep.
+
+The panel retains these lifecycle events in the bounded event log and renders a
+**Connection** timeline lane. Red spans show detected offline intervals; the reconnect
+marker carries the final attempt count and transport so the refetch activity immediately
+after it can be correlated visually. Individual retry attempts are deliberately
+coalesced instead of filling the event buffer. Authentication payloads and tokens are
+never collected.
+
 ## Extension architecture
 
 ```

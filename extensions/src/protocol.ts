@@ -59,7 +59,14 @@ export function decodeEvent(event: DevtoolsWireEvent): FigbirdEvent {
   switch (event.kind) {
     case 'fetch:error':
     case 'mutate:error':
-    case 'action:error': {
+    case 'action:error':
+    case 'connection:error': {
+      const error = new Error(event.error.message)
+      error.name = event.error.name
+      return { ...event, error }
+    }
+    case 'connection:reconnect-failed': {
+      if (!event.error) return event
       const error = new Error(event.error.message)
       error.name = event.error.name
       return { ...event, error }

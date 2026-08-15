@@ -1,16 +1,28 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import type { QuerySpan } from './collector.js'
 import { formatClock, formatMs } from './format.js'
-import {
-  TimelineOverview,
-  TIMELINE_LABEL_WIDTH as LABEL_WIDTH,
-  type TimelineViewport,
-} from './TimelineOverview.js'
-import { useDevtoolsTheme, type DevtoolsColors } from './ui.js'
+import { TimelineOverview, type TimelineViewport } from './TimelineOverview.js'
+import { toneColor, useDevtoolsTheme, type DevtoolsColors } from './ui.js'
 
 const FOLLOW_THRESHOLD = 24
 const GRID_TICK_MS = 5_000
+const DEFAULT_LABEL_WIDTH = 340
+const MIN_LABEL_WIDTH = 240
+const MAX_LABEL_WIDTH = 640
+const TIMELINE_LANE_HEIGHT = 46
 export const TIMELINE_PIXELS_PER_SECOND = 64
+
+export interface TimelineMarker {
+  at: number
+  label: string
+  tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
+}
 
 export type TimelineLane =
   | {
@@ -27,8 +39,19 @@ export type TimelineLane =
       id: string
       label: string
       detail: string
+      context: string
       firstAt: number
       ticks: number[]
+    }
+  | {
+      kind: 'connection'
+      id: string
+      label: string
+      detail: string
+      context: string
+      firstAt: number
+      bars: QuerySpan[]
+      markers: TimelineMarker[]
     }
 
 export interface TimelineLayout {
@@ -61,6 +84,7 @@ export function TimelineCanvas({
   const axisScrollRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState<TimelineViewport>({ left: 0, width: 0 })
   const [availableTrackWidth, setAvailableTrackWidth] = useState(0)
+  const [labelWidth, setLabelWidth] = useState(DEFAULT_LABEL_WIDTH)
   const hasLayout = layout !== null
   const trackWidth = layout ? Math.max(layout.trackWidth, availableTrackWidth) : undefined
   const renderedLayout: RenderedTimelineLayout | null =
@@ -85,6 +109,23 @@ export function TimelineCanvas({
         : next,
     )
   }, [trackWidth])
+  const onLabelResizeStart = (event: ReactMouseEvent<HTMLSpanElement>) => {
+    event.preventDefault()
+    const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
+    const startX = event.clientX
+    const startWidth = labelWidth
+    const onMove = (move: MouseEvent) => {
+      setLabelWidth(
+        Math.max(MIN_LABEL_WIDTH, Math.min(MAX_LABEL_WIDTH, startWidth + move.clientX - startX)),
+      )
+    }
+    const onUp = () => {
+      ownerWindow.removeEventListener('mousemove', onMove)
+      ownerWindow.removeEventListener('mouseup', onUp)
+    }
+    ownerWindow.addEventListener('mousemove', onMove)
+    ownerWindow.addEventListener('mouseup', onUp)
+  }
 
   useLayoutEffect(() => {
     const horizontalScroll = trackScrollRef.current
@@ -136,6 +177,7 @@ export function TimelineCanvas({
         layout={renderedLayout}
         nowPoint={nowPoint}
         viewport={viewport}
+        labelWidth={labelWidth}
         onNavigate={ratio => {
           const scroll = trackScrollRef.current
           if (!scroll) return
@@ -155,7 +197,7 @@ export function TimelineCanvas({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: `${LABEL_WIDTH}px minmax(0, 1fr)`,
+          gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)`,
           minHeight: 38,
           flexShrink: 0,
           background: colors.bg,
@@ -164,6 +206,7 @@ export function TimelineCanvas({
         <div
           title={`Recording started ${formatTimelineClock(renderedLayout.start, wallClockOffset, true)}`}
           style={{
+            position: 'relative',
             color: colors.muted,
             padding: '7px 10px 0',
             borderBottom: `1px solid ${colors.border}`,
@@ -171,6 +214,23 @@ export function TimelineCanvas({
           }}
         >
           <TimelineLegend />
+          <span
+            role='separator'
+            aria-label='Resize timeline labels'
+            aria-orientation='vertical'
+            title='Resize timeline labels'
+            onMouseDown={onLabelResizeStart}
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: -4,
+              bottom: 0,
+              width: 8,
+              zIndex: 3,
+              cursor: 'col-resize',
+              borderRight: `1px solid ${colors.border}`,
+            }}
+          />
         </div>
         <div
           ref={axisScrollRef}
@@ -198,7 +258,7 @@ export function TimelineCanvas({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: `${LABEL_WIDTH}px minmax(0, 1fr)`,
+            gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)`,
             alignItems: 'start',
           }}
         >
@@ -207,7 +267,7 @@ export function TimelineCanvas({
               <TimelineLaneLabel
                 key={lane.id}
                 label={lane.label}
-                {...(lane.kind === 'query' ? { context: lane.context } : {})}
+                context={lane.context}
                 detail={lane.detail}
               />
             ))}
@@ -230,8 +290,10 @@ export function TimelineCanvas({
                 <TimelineLaneTrack
                   key={lane.id}
                   layout={renderedLayout}
-                  bars={lane.kind === 'query' ? lane.bars : []}
+                  bars={lane.kind === 'query' || lane.kind === 'connection' ? lane.bars : []}
                   ticks={lane.kind === 'realtime' ? lane.ticks : []}
+                  markers={lane.kind === 'connection' ? lane.markers : []}
+                  barLabel={lane.kind === 'connection' ? 'Offline' : 'Fetch'}
                   nowPoint={nowPoint}
                   wallClockOffset={wallClockOffset}
                 />
@@ -298,7 +360,7 @@ function TimelineLegend() {
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: colors.muted }}>
       <TimelineLegendItem color={colors.green} shape='bar' label='fetch' />
       <TimelineLegendItem color={colors.blue} shape='dot' label='realtime' />
-      <TimelineLegendItem color={colors.red} shape='bar' label='failed' />
+      <TimelineLegendItem color={colors.red} shape='bar' label='failed / offline' />
     </span>
   )
 }
@@ -344,16 +406,37 @@ function TimelineLaneLabel({
       data-timeline-lane={label}
       style={{
         ...styles.laneLabel,
-        height: 32,
+        height: TIMELINE_LANE_HEIGHT,
         boxSizing: 'border-box',
-        paddingLeft: 10,
+        padding: '6px 10px 4px',
         borderBottom: `1px solid ${colors.rowBorder}`,
       }}
       title={detail ? `${label} ${detail}` : label}
     >
-      <span style={{ color: colors.text, fontWeight: 600 }}>{label}</span>
+      <span
+        style={{
+          display: 'block',
+          color: colors.text,
+          fontWeight: 650,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {label}
+      </span>
       {context ? (
-        <span style={{ color: colors.faint, marginLeft: 6, whiteSpace: 'nowrap' }}>{context}</span>
+        <span
+          style={{
+            display: 'block',
+            color: colors.faint,
+            marginTop: 3,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {context}
+        </span>
       ) : null}
     </div>
   )
@@ -363,12 +446,16 @@ function TimelineLaneTrack({
   layout,
   bars,
   ticks,
+  markers,
+  barLabel,
   nowPoint,
   wallClockOffset,
 }: {
   layout: TimelineLayout
   bars: Array<{ startAt: number; endAt?: number; ok?: boolean }>
   ticks: number[]
+  markers: TimelineMarker[]
+  barLabel: 'Fetch' | 'Offline'
   nowPoint: number
   wallClockOffset: number
 }) {
@@ -378,7 +465,7 @@ function TimelineLaneTrack({
       style={{
         ...styles.laneTrack,
         width: layout.trackWidth,
-        height: 32,
+        height: TIMELINE_LANE_HEIGHT,
         boxSizing: 'border-box',
         borderBottom: `1px solid ${colors.rowBorder}`,
         ...timelineGridStyle(colors),
@@ -392,14 +479,16 @@ function TimelineLaneTrack({
         return (
           <span
             key={`${bar.startAt}:${index}`}
-            data-timeline-fetch={bar.ok === false ? 'failed' : 'success'}
+            {...(barLabel === 'Fetch'
+              ? { 'data-timeline-fetch': bar.ok === false ? 'failed' : 'success' }
+              : { 'data-timeline-outage': 'offline' })}
             title={[
-              `${bar.ok === false ? 'Failed fetch' : 'Fetch'} · ${formatMs(barEnd - bar.startAt)}`,
+              `${barLabel === 'Offline' ? 'Offline' : bar.ok === false ? 'Failed fetch' : 'Fetch'} · ${formatMs(barEnd - bar.startAt)}`,
               formatTimelineClock(bar.startAt, wallClockOffset, true),
             ].join('\n')}
             style={{
               position: 'absolute',
-              top: 13,
+              top: 19,
               left,
               width,
               height: 8,
@@ -430,7 +519,7 @@ function TimelineLaneTrack({
           title={`Realtime event\n${formatTimelineClock(tick, wallClockOffset, true)}`}
           style={{
             position: 'absolute',
-            top: 9,
+            top: 15,
             left: timeToPixels(tick, layout.start),
             width: 7,
             height: 7,
@@ -439,6 +528,24 @@ function TimelineLaneTrack({
             background: colors.blue,
             boxShadow: `0 0 0 1px ${colors.bg}`,
             transform: 'rotate(45deg)',
+          }}
+        />
+      ))}
+      {markers.map((marker, index) => (
+        <span
+          key={`${marker.at}:${marker.label}:${index}`}
+          title={`${marker.label}\n${formatTimelineClock(marker.at, wallClockOffset, true)}`}
+          style={{
+            position: 'absolute',
+            top: 14,
+            left: timeToPixels(marker.at, layout.start),
+            width: 9,
+            height: 9,
+            marginLeft: -5,
+            borderRadius: 999,
+            background: toneColor(colors, marker.tone),
+            border: `2px solid ${colors.bg}`,
+            boxSizing: 'border-box',
           }}
         />
       ))}

@@ -21,9 +21,12 @@ export interface DevtoolsWireError {
   name: string
 }
 
-type ToWireEvent<E> = E extends { error: Error }
-  ? Omit<E, 'error'> & { error: DevtoolsWireError }
-  : E
+type ToWireEvent<E> = E extends unknown
+  ? 'error' extends keyof E
+    ? Omit<E, 'error'> &
+        (E extends { error: Error } ? { error: DevtoolsWireError } : { error?: DevtoolsWireError })
+    : E
+  : never
 
 export type DevtoolsWireEvent = ToWireEvent<FigbirdEvent>
 
@@ -222,10 +225,15 @@ function toWireEvent(event: FigbirdEvent): DevtoolsWireEvent {
     case 'fetch:error':
     case 'mutate:error':
     case 'action:error':
+    case 'connection:error':
       return {
         ...event,
         error: { message: event.error.message, name: event.error.name },
       }
+    case 'connection:reconnect-failed':
+      return event.error
+        ? { ...event, error: { message: event.error.message, name: event.error.name } }
+        : event
     default:
       return event
   }

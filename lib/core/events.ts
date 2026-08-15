@@ -17,9 +17,10 @@ export type MutationEventMethod = MutationMethod | (string & {})
  * Observability events emitted by a Figbird instance — the same signal a dev tool
  * panel or trace logger would want to subscribe to.
  *
- * Events are intentionally lightweight. Mutation and action starts carry their
- * original arguments so an attached devtool can inspect the write; no result or
- * cache diffs are emitted, and emit() drops everything when nothing is listening.
+ * Events are intentionally bounded by consumers. Realtime events and mutation/action
+ * starts carry their original payloads so an attached devtool can inspect what
+ * happened; no result or cache diffs are emitted, and emit() drops everything when
+ * nothing is listening.
  */
 export type FigbirdEvent =
   | {
@@ -59,7 +60,30 @@ export type FigbirdEvent =
       serviceName: string
       type: EventType
       itemId: string | number | undefined
+      item?: unknown
     }
+  | {
+      kind: 'connection:connected'
+      transport?: string
+      connectionId?: string
+    }
+  | {
+      kind: 'connection:disconnected'
+      reason?: string
+      reconnecting: boolean
+    }
+  | {
+      kind: 'connection:reconnected'
+      attempt?: number
+      transport?: string
+      connectionId?: string
+    }
+  | {
+      kind: 'connection:error'
+      phase: 'connect' | 'reconnect'
+      error: Error
+    }
+  | { kind: 'connection:reconnect-failed'; error?: Error }
   | {
       kind: 'mutate:start'
       /** Correlates the start/end/error/rollback events of one mutation. */

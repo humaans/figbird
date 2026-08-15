@@ -664,7 +664,7 @@ test('devtools model keeps operation identity separate from shared fetch identit
       },
     ],
     events: [],
-    timeline: { startedAt: 0, laneOrder: [], realtime: [] },
+    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
     writes: [],
     inFlightWrites: 0,
   }
@@ -740,11 +740,12 @@ test('query details show a cursor operation as one inspectable page chain', t =>
       },
     ],
     events: [],
-    timeline: { startedAt: 0, laneOrder: [], realtime: [] },
+    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
     writes: [],
     inFlightWrites: 0,
   }
   const collector: Collector = {
+    eventLimit: 500,
     start() {},
     stop() {},
     subscribe: () => () => {},
@@ -752,6 +753,7 @@ test('query details show a cursor operation as one inspectable page chain', t =>
     clearEvents() {},
     clearTimeline() {},
     clearWrites() {},
+    reset() {},
   }
 
   render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
@@ -950,6 +952,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
         spans: [{ startAt: timelineAt - 20, endAt: timelineAt - 10, ok: true }],
         realtimeSeen: 0,
         reconciles: 0,
+        data: [{ id: 76, title: 'Visible issue' }],
       },
       {
         queryId: 'labels',
@@ -971,6 +974,10 @@ test('panel shows root queries and nests relation fetches in details', async t =
         spans: [{ startAt: timelineAt - 15, endAt: timelineAt - 5, ok: true }],
         realtimeSeen: 0,
         reconciles: 0,
+        data: [
+          { id: 1, issueId: 76, name: 'bug' },
+          { id: 2, issueId: 76, name: 'urgent' },
+        ],
       },
     ],
     relational: [
@@ -996,6 +1003,16 @@ test('panel shows root queries and nests relation fetches in details', async t =
           { path: '(root)', queryId: 'root' },
           { path: 'labels', queryId: 'labels' },
         ],
+        data: [
+          {
+            id: 76,
+            title: 'Visible issue',
+            labels: [
+              { id: 1, issueId: 76, name: 'bug' },
+              { id: 2, issueId: 76, name: 'urgent' },
+            ],
+          },
+        ],
       },
     ],
     events: [],
@@ -1003,6 +1020,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       startedAt: timelineAt - 25,
       laneOrder: ['query:root', 'query:labels', 'realtime:issues'],
       realtime: [{ at: timelineAt - 3, serviceName: 'issues' }],
+      connection: [],
     },
     writes: [],
     inFlightWrites: 0,
@@ -1069,6 +1087,18 @@ test('panel shows root queries and nests relation fetches in details', async t =
       serviceName: 'issues',
       type: 'patched',
       itemId: 76,
+      item: { id: 76, title: 'Updated issue' },
+    })
+    events.emit({
+      kind: 'connection:disconnected',
+      reason: 'transport close',
+      reconnecting: true,
+    })
+    events.emit({
+      kind: 'connection:reconnected',
+      attempt: 1,
+      transport: 'websocket',
+      connectionId: 'socket-2',
     })
     await Promise.resolve()
     await Promise.resolve()
@@ -1119,6 +1149,8 @@ test('panel shows root queries and nests relation fetches in details', async t =
 
   const devtoolsText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
   t.true(devtoolsText.includes('Query plan'))
+  t.true(devtoolsText.includes('Query data'))
+  t.true(devtoolsText.includes('Visible issue'))
   t.true(devtoolsText.includes('Parameters'))
   t.true(devtoolsText.includes('issueLabels'))
   t.false(devtoolsText.includes('Composition'))
@@ -1164,7 +1196,21 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const timelineLanes = $all('[data-timeline-lane]').map(lane =>
     lane.getAttribute('data-timeline-lane'),
   )
-  t.deepEqual(timelineLanes, ['issues.find', 'issueLabels.find', 'issues realtime'])
+  t.deepEqual(timelineLanes, ['issues.find', 'issueLabels.find', 'issues realtime', 'Connection'])
+  t.is($all('[data-timeline-outage="offline"]').length, 1)
+  t.true(timelineText.includes('websocket'))
+
+  const eventsButton = $all('button').find(button => button.textContent === 'events')
+  t.truthy(eventsButton)
+  click(eventsButton!)
+  const realtimeEventRow = $all('[title="Select event details"]').find(row =>
+    row.textContent?.includes('realtime'),
+  )
+  t.truthy(realtimeEventRow)
+  click(realtimeEventRow!)
+  const eventDetails = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
+  t.true(eventDetails.includes('Realtime payload'))
+  t.true(eventDetails.includes('Updated issue'))
 
   const largeElement = window.document.createElement('div')
   const largeHostFiber: Record<string, unknown> = { stateNode: largeElement }

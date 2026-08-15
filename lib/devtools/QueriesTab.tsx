@@ -1,4 +1,5 @@
-import { useState, type CSSProperties } from 'react'
+import { useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import type { QueryVisibility } from './Devtools.js'
 import { compactJson, formatAge, formatMs } from './format.js'
 import type { DevtoolsModel, DevtoolsOperation, QuerySummary } from './model.js'
 import { QueryDetails } from './QueryDetails.js'
@@ -13,42 +14,49 @@ interface QueryRow {
 const QUERY_COLUMNS = [
   {
     label: 'query',
-    width: '18%',
+    width: 250,
+    minWidth: 150,
     description:
-      'Root query operation. The dot shows its state: green active, amber cached, blue fetching, red error, or gray retained history.',
+      'Root query operation. The dot shows its state: green active, amber cached, blue fetching, red error, or gray skipped/retained history.',
   },
   {
     label: 'shape',
-    width: '38%',
+    width: 420,
+    minWidth: 180,
     description:
       'Query method, parameters, related data, and the number of underlying relation fetches.',
   },
   {
     label: 'class',
-    width: '12%',
+    width: 160,
+    minWidth: 105,
     description:
       'How Figbird maintains the result.\nlocal-exact: membership and ordering are provable locally.\nserver-window: a limited or sorted server result; uncertain changes trigger a refetch.\nserver-authoritative: the server decides membership; cursor queries may still merge updates proven not to move page boundaries.\nget: a direct lookup by ID.',
   },
   {
     label: 'rows',
-    width: '7%',
+    width: 75,
+    minWidth: 55,
     description: 'Number of items currently in the query result.',
   },
   {
     label: 'fetches',
-    width: '11%',
+    width: 175,
+    minWidth: 100,
     description:
       'Completed fetch attempts · realtime service events observed while the query was active · event-driven refetches · failed fetches. Extra counts appear only when non-zero.',
   },
   {
     label: 'last',
-    width: '7%',
+    width: 90,
+    minWidth: 65,
     description:
       'Duration of the most recently completed fetch. "cached" or "warm" means data was available without a measured fetch in this devtools session.',
   },
   {
     label: 'age',
-    width: '7%',
+    width: 80,
+    minWidth: 60,
     description: "Time since this query's data was last fetched.",
   },
 ] as const
@@ -56,45 +64,82 @@ const QUERY_COLUMNS = [
 export function QueriesTab({
   model,
   filter,
-  activeOnly,
+  visibility,
   inspectedQueryCounts,
 }: {
   model: DevtoolsModel
   filter: string
-  activeOnly: boolean
+  visibility: QueryVisibility
   inspectedQueryCounts: ReadonlyMap<string, number> | null
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const [selectedOperationKey, setSelectedOperationKey] = useState<string | null>(null)
+  const [columnWidths, setColumnWidths] = useState<number[]>(() =>
+    QUERY_COLUMNS.map(column => column.width),
+  )
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
-  const rows: QueryRow[] = model.operations.flatMap(operation => {
-    const query = operation.summary
-    const localSubscriberCount = inspectedQueryCounts?.get(operation.key) ?? 0
-    if (inspectedQueryCounts && localSubscriberCount === 0) return []
-    if (
-      activeOnly &&
-      query.subscriberCount === 0 &&
-      operation.underlying.every(item => item.query.subscriberCount === 0)
-    ) {
-      return []
+  const rows: QueryRow[] = model.operations
+    .flatMap(operation => {
+      const query = operation.summary
+      const localSubscriberCount = inspectedQueryCounts?.get(operation.key) ?? 0
+      if (inspectedQueryCounts && localSubscriberCount === 0) return []
+      if (visibility === 'skipped' && query.skipped !== true) return []
+      if (visibility === 'active' && query.skipped === true) return []
+      if (
+        visibility === 'active' &&
+        query.subscriberCount === 0 &&
+        operation.underlying.every(item => item.query.subscriberCount === 0)
+      ) {
+        return []
+      }
+      const haystack = [
+        query.serviceName,
+        query.method,
+        operation.composition?.detail ?? '',
+        JSON.stringify(query.query ?? {}),
+        ...operation.underlying.map(item =>
+          [
+            item.path,
+            item.query.serviceName,
+            item.query.method,
+            JSON.stringify(item.query.query ?? {}),
+          ].join(' '),
+        ),
+      ].join(' ')
+      if (!haystack.toLowerCase().includes(filter.toLowerCase())) return []
+      return [{ operation, localSubscriberCount }]
+    })
+    .sort((a, b) => {
+      const aQuery = a.operation.summary
+      const bQuery = b.operation.summary
+      return `${aQuery.serviceName}.${aQuery.method}`.localeCompare(
+        `${bQuery.serviceName}.${bQuery.method}`,
+        undefined,
+        { sensitivity: 'base' },
+      )
+    })
+
+  const onColumnResizeStart = (index: number, event: ReactMouseEvent<HTMLSpanElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
+    const startX = event.clientX
+    const startWidth = columnWidths[index]!
+    const minWidth = QUERY_COLUMNS[index]!.minWidth
+    const onMove = (move: MouseEvent) => {
+      setColumnWidths(current =>
+        current.map((width, columnIndex) =>
+          columnIndex === index ? Math.max(minWidth, startWidth + move.clientX - startX) : width,
+        ),
+      )
     }
-    const haystack = [
-      query.serviceName,
-      query.method,
-      operation.composition?.detail ?? '',
-      JSON.stringify(query.query ?? {}),
-      ...operation.underlying.map(item =>
-        [
-          item.path,
-          item.query.serviceName,
-          item.query.method,
-          JSON.stringify(item.query.query ?? {}),
-        ].join(' '),
-      ),
-    ].join(' ')
-    if (!haystack.toLowerCase().includes(filter.toLowerCase())) return []
-    return [{ operation, localSubscriberCount }]
-  })
+    const onUp = () => {
+      ownerWindow.removeEventListener('mousemove', onMove)
+      ownerWindow.removeEventListener('mouseup', onUp)
+    }
+    ownerWindow.addEventListener('mousemove', onMove)
+    ownerWindow.addEventListener('mouseup', onUp)
+  }
 
   const ellipsizedCode: CSSProperties = {
     ...styles.code,
@@ -108,16 +153,22 @@ export function QueriesTab({
   return (
     <section style={{ height: '100%', display: 'flex', minWidth: 0 }}>
       <div style={{ ...styles.scroll, flex: 1, minHeight: 0 }}>
-        <table style={styles.table}>
+        <table
+          style={{ ...styles.table, minWidth: columnWidths.reduce((sum, width) => sum + width, 0) }}
+        >
           <colgroup>
-            {QUERY_COLUMNS.map(column => (
-              <col key={column.label} style={{ width: column.width }} />
+            {QUERY_COLUMNS.map((column, index) => (
+              <col key={column.label} style={{ width: columnWidths[index] }} />
             ))}
           </colgroup>
           <thead>
             <tr>
-              {QUERY_COLUMNS.map(column => (
-                <th key={column.label} style={styles.th} title={column.description}>
+              {QUERY_COLUMNS.map((column, index) => (
+                <th
+                  key={column.label}
+                  style={{ ...styles.th, position: 'sticky' }}
+                  title={column.description}
+                >
                   <span
                     style={{
                       borderBottom: `1px dotted ${colors.faint}`,
@@ -126,6 +177,24 @@ export function QueriesTab({
                   >
                     {column.label}
                   </span>
+                  {index < QUERY_COLUMNS.length - 1 ? (
+                    <span
+                      role='separator'
+                      aria-label={`Resize ${column.label} column`}
+                      aria-orientation='vertical'
+                      onMouseDown={event => onColumnResizeStart(index, event)}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        right: -3,
+                        bottom: 0,
+                        width: 7,
+                        cursor: 'col-resize',
+                        zIndex: 2,
+                        borderRight: `1px solid ${colors.rowBorder}`,
+                      }}
+                    />
+                  ) : null}
                 </th>
               ))}
             </tr>

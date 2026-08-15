@@ -1,5 +1,6 @@
 import type {
   Adapter,
+  AdapterConnectionEvent,
   EventHandlers,
   MatcherContext,
   PageCursor,
@@ -226,6 +227,23 @@ interface ReconnectEventSource {
   on(event: string, listener: () => void): void
   off?: (event: string, listener: () => void) => void
   removeListener?: (event: string, listener: () => void) => void
+}
+
+type ConnectionEventListener = (...args: unknown[]) => void
+
+interface ConnectionEventSource {
+  on(event: string, listener: ConnectionEventListener): void
+  off?: (event: string, listener: ConnectionEventListener) => void
+  removeListener?: (event: string, listener: ConnectionEventListener) => void
+}
+
+interface SocketIoConnectionSource extends ConnectionEventSource {
+  active?: boolean
+  connected?: boolean
+  id?: string
+  io?: ConnectionEventSource & {
+    engine?: { transport?: { name?: string } }
+  }
 }
 
 /**
@@ -633,6 +651,124 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     }
   }
 
+  subscribeToConnectionEvents(handler: (event: AdapterConnectionEvent) => void): () => void {
+    const socket = this.#getSocketIoConnectionSource()
+    if (!socket) {
+      const source = this.#getReconnectEventSource()
+      if (!source) return () => {}
+      const onReconnect = () => handler({ type: 'reconnected' })
+      source.on('reconnect', onReconnect)
+      return () => {
+        if (source.off) source.off('reconnect', onReconnect)
+        else source.removeListener?.('reconnect', onReconnect)
+      }
+    }
+
+    const manager = socket.io
+    let disconnected = false
+    let reconnectAttempt: number | undefined
+    let lastReconnectError: Error | undefined
+    const listeners: Array<{
+      source: ConnectionEventSource
+      event: string
+      listener: ConnectionEventListener
+    }> = []
+    const listen = (
+      source: ConnectionEventSource | undefined,
+      event: string,
+      listener: ConnectionEventListener,
+    ) => {
+      if (!source) return
+      source.on(event, listener)
+      listeners.push({ source, event, listener })
+    }
+    const connectionDetails = () => ({
+      ...(manager?.engine?.transport?.name ? { transport: manager.engine.transport.name } : {}),
+      ...(socket.id ? { connectionId: socket.id } : {}),
+    })
+
+    listen(socket, 'connect', () => {
+      if (disconnected || reconnectAttempt !== undefined) {
+        handler({
+          type: 'reconnected',
+          ...(reconnectAttempt === undefined ? {} : { attempt: reconnectAttempt }),
+          ...connectionDetails(),
+        })
+      } else {
+        handler({ type: 'connected', ...connectionDetails() })
+      }
+      disconnected = false
+      reconnectAttempt = undefined
+      lastReconnectError = undefined
+    })
+    listen(socket, 'disconnect', (reason: unknown) => {
+      disconnected = true
+      handler({
+        type: 'disconnected',
+        ...(typeof reason === 'string' ? { reason } : {}),
+        reconnecting: socket.active === true,
+      })
+    })
+    listen(socket, 'connect_error', (error: unknown) => {
+      const captured = connectionError(error)
+      if (disconnected || reconnectAttempt !== undefined || socket.active === true) {
+        lastReconnectError = captured
+      } else {
+        handler({ type: 'error', phase: 'connect', error: captured })
+      }
+    })
+    listen(manager, 'reconnect_attempt', (attempt: unknown) => {
+      if (typeof attempt !== 'number') return
+      reconnectAttempt = attempt
+    })
+    listen(manager, 'reconnect_error', (error: unknown) => {
+      lastReconnectError = connectionError(error)
+    })
+    listen(manager, 'reconnect_failed', () =>
+      handler({
+        type: 'reconnect-failed',
+        ...(lastReconnectError ? { error: lastReconnectError } : {}),
+      }),
+    )
+    if (!manager) {
+      listen(socket, 'reconnect', (attempt: unknown) => {
+        handler({
+          type: 'reconnected',
+          ...(typeof attempt === 'number' ? { attempt } : {}),
+          ...connectionDetails(),
+        })
+        disconnected = false
+        reconnectAttempt = undefined
+        lastReconnectError = undefined
+      })
+    }
+
+    return () => {
+      for (const { source, event, listener } of listeners) {
+        if (source.off) source.off(event, listener)
+        else source.removeListener?.(event, listener)
+      }
+    }
+  }
+
+  #getSocketIoConnectionSource(): SocketIoConnectionSource | null {
+    const candidates = [
+      (this.feathers as { io?: unknown }).io,
+      (this.feathers as { socket?: unknown }).socket,
+    ]
+    for (const candidate of candidates) {
+      if (
+        candidate &&
+        typeof candidate === 'object' &&
+        'on' in candidate &&
+        typeof candidate.on === 'function'
+      ) {
+        return candidate as SocketIoConnectionSource
+      }
+    }
+    return null
+  }
+
   #getReconnectEventSource(): ReconnectEventSource | null {
     const io = (this.feathers as { io?: { io?: unknown } }).io
     const candidates = [
@@ -750,4 +886,12 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   findMeta(window: { total: number; limit: number; skip: number }): FeathersFindMeta {
     return window
   }
+}
+
+function connectionError(value: unknown): Error {
+  if (value instanceof Error) return value
+  if (typeof value === 'object' && value !== null && 'message' in value) {
+    return new Error(String(value.message))
+  }
+  return new Error(String(value))
 }

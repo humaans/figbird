@@ -167,6 +167,8 @@ export interface InspectedRelationalQuery {
   service: string
   ast: QueryAST
   pagination?: InspectedPagination
+  /** Current assembled result when the relational query has settled successfully. */
+  data?: unknown
   nodes: Array<{
     path: string
     role?: 'junction'
@@ -317,12 +319,14 @@ export class RelationalQueryRef<
           break
       }
     }
+    const snapshot = this.getSnapshot()
     return {
       key: this.#queryId,
       ...(this.#name ? { name: this.#name } : {}),
       service: this.#ast.service,
       ast: this.#ast,
       ...(this.#pagedRoot ? { pagination: this.#pagedRoot.inspectPagination() } : {}),
+      ...(snapshot.status === 'success' ? { data: snapshot.data } : {}),
       nodes,
     }
   }
