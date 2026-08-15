@@ -22,11 +22,8 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
-  isQueryDefinition,
-  splitDefinitionRest,
-  type ArgsAndOptions,
-  type ArgsAndRequiredOptions,
-  type QueryDefinition,
+  type QueryInput,
+  type QueryRequest,
   type RelationalPaginationState,
   type RelationalQueryState,
 } from '../core/figbird.js'
@@ -95,10 +92,8 @@ export interface QueryRefLike<T> {
 
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
-  query<B extends AnyQueryBuilder>(builder: B): QueryRefLike<QueryBuilderResult<B>>
   query<Args, B extends AnyQueryBuilder>(
-    definition: QueryDefinition<Args, B>,
-    args: Args,
+    queryOrBuilder: QueryInput<B, Args>,
   ): QueryRefLike<QueryBuilderResult<B>>
 }
 
@@ -182,44 +177,27 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
     : T
 
 /**
- * The `useQuery` call surface — builder/definition × suspense/non-suspense. Declared
+ * The `useQuery` call surface — query input × suspense/non-suspense. Declared
  * once and shared by the root export (schema-agnostic) and the `createHooks` kit
  * (bound to a schema), so the two can never drift.
  */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueryHook<S extends Schema = any> {
-  // Builder, non-suspense — returns the tagged union, never throws
-  <B extends AnyQueryBuilder<S>>(
-    query: B,
+  <Args, B extends AnyQueryBuilder<S>>(
+    query: QueryInput<B, Args>,
     options: UseQueryOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
-  // Definition, non-suspense — args omittable when the definition takes none
-  <Args, B extends AnyQueryBuilder<S>>(
-    definition: QueryDefinition<Args, B>,
-    ...rest: ArgsAndRequiredOptions<Args, UseQueryOptions & { suspense: false }>
-  ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
-  // Builder
-  <B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
-    query: B,
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+    query: QueryInput<B, Args>,
     options?: O,
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-  // Definition — args omittable when the definition takes none
-  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
-    definition: QueryDefinition<Args, B>,
-    ...rest: ArgsAndOptions<Args, O>
-  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-  // Definition, nullable args — `null` skips the query without invoking the build
-  // function, so the skip condition lives in the args: `useQuery(def, id ? { id } : null)`.
-  // Non-suspense variant:
+  // A nullable bound request is the conditional-query form: `useQuery(id ? detail({ id }) : null)`.
   <Args, B extends AnyQueryBuilder<S>>(
-    definition: QueryDefinition<Args, B>,
-    args: Args | null,
+    request: QueryRequest<Args, B> | null,
     options: UseQueryOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
-  // Suspense variant — data widens with `undefined` exactly like `skip`:
   <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
-    definition: QueryDefinition<Args, B>,
-    args: Args | null,
+    request: QueryRequest<Args, B> | null,
     options?: O,
   ): SuspenseQueryResult<QueryBuilderResult<B> | undefined, QueryBuilderKind<B>>
 }
@@ -238,12 +216,8 @@ export interface UseQueryHook<S extends Schema = any> {
  * across a param change, wrap the param state update in `startTransition` — React keeps
  * the previous render committed while the new data resolves.
  */
-export const useQuery: UseQueryHook = ((
-  queryOrDefinition: unknown,
-  argsOrOptions?: unknown,
-  maybeOptions?: UseQueryOptions,
-): unknown =>
-  useQueryImpl(useFigbird(), queryOrDefinition, argsOrOptions, maybeOptions)) as UseQueryHook
+export const useQuery: UseQueryHook = ((query: unknown, options?: UseQueryOptions): unknown =>
+  useQueryImpl(useFigbird(), query, options)) as UseQueryHook
 
 /**
  * Instance-taking dispatch behind the context-bound `useQuery`. Resolves the
@@ -252,44 +226,15 @@ export const useQuery: UseQueryHook = ((
  */
 export function useQueryImpl(
   figbird: FigbirdLike,
-  queryOrDefinition: unknown,
-  argsOrOptions?: unknown,
-  maybeOptions?: UseQueryOptions,
+  query: unknown,
+  options: UseQueryOptions = {},
 ): unknown {
   let qRef: QueryRefLike<unknown> | null = null
-  let options: UseQueryOptions
-  if (isQueryDefinition(queryOrDefinition)) {
-    const definition = queryOrDefinition
-    // `null` args skip the query — the definition's build function is never invoked
-    // (it may dereference its args), so the condition lives in the args themselves:
-    // `useQuery(issueDetail, id ? { id } : null)`. Checked on the raw argument,
-    // before splitDefinitionRest's zero-arg option folding, so a literal `null`
-    // first slot means skip for zero-arg definitions too.
-    if (argsOrOptions === null) {
-      options = maybeOptions ?? {}
-    } else {
-      // Zero-arg definitions take options in the args slot (see ArgsAndOptions).
-      const { args, options: split } = splitDefinitionRest<UseQueryOptions>(
-        definition,
-        argsOrOptions,
-        maybeOptions,
-      )
-      options = split ?? {}
-      if (!options.skip) {
-        // figbird.query() owns definition resolution (validate → build → intern) —
-        // the hook never builds a builder itself.
-        qRef = figbird.query(definition as QueryDefinition<unknown, AnyQueryBuilder>, args)
-      }
-    }
-  } else {
-    options = (argsOrOptions as UseQueryOptions | undefined) ?? {}
-    if (!options.skip) {
-      qRef = figbird.query(queryOrDefinition as AnyQueryBuilder)
-    }
+  if (!options.skip && query !== null) {
+    qRef = figbird.query(query as QueryInput<AnyQueryBuilder>)
   }
-  // Both branches end at the same single hook call, so the hook sequence is stable
-  // across renders (a call site never flips between definition and builder), and
-  // identical when args flip null <-> real or `skip` toggles.
+  // Every input shape ends at the same single hook call, so the hook sequence is stable
+  // when a request flips null <-> real or `skip` toggles.
   return useQueryForRef(qRef, options)
 }
 
@@ -320,8 +265,8 @@ export function projectSuspenseResult<T>(
  * The shared hook body. `qRef` is reference-stable across renders while subscribed
  * because `figbird.query()` interns refs by AST hash — no memoization here. (If the
  * ref was evicted between renders, this picks up the freshly interned instance
- * instead of pinning the stale one.) A null `qRef` is a skipped query: `skip: true`,
- * or a null-args definition whose build function never ran.
+ * instead of pinning the stale one.) A null `qRef` is a skipped query: either
+ * `skip: true` or a nullable request whose factory was never called.
  */
 function useQueryForRef<T>(qRef: QueryRefLike<T> | null, options: UseQueryOptions): unknown {
   const { suspense = true, staleTime } = options

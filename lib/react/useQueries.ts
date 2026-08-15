@@ -25,6 +25,7 @@
 
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { RelationalQueryState } from '../core/figbird.js'
+import type { QueryInput, QueryInputBuilder } from '../core/queryDefinition.js'
 import { suspensePromiseAll } from '../core/relationalQuery.js'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import type { Schema } from '../core/schema.js'
@@ -42,6 +43,9 @@ export interface UseQueriesOptions {
   staleTime?: number
 }
 
+/** A heterogeneous tuple erases each request's args while retaining its builder. */
+type SchemaQueryInput<S extends Schema> = QueryInput<AnyQueryBuilder<S>>
+
 /**
  * The `useQueries` call surface — declared once and shared by the root export
  * (schema-agnostic) and the `createHooks` kit (bound to a schema), like `UseQueryHook`.
@@ -56,10 +60,15 @@ export interface UseQueriesOptions {
  */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueriesHook<S extends Schema = any> {
-  <Bs extends readonly AnyQueryBuilder<S>[]>(
-    queries: readonly [...Bs],
+  <Queries extends readonly SchemaQueryInput<S>[]>(
+    queries: readonly [...Queries],
     options?: UseQueriesOptions,
-  ): { [K in keyof Bs]: SuspenseQueryResult<QueryBuilderResult<Bs[K]>, QueryBuilderKind<Bs[K]>> }
+  ): {
+    [K in keyof Queries]: SuspenseQueryResult<
+      QueryBuilderResult<QueryInputBuilder<Queries[K]>>,
+      QueryBuilderKind<QueryInputBuilder<Queries[K]>>
+    >
+  }
 }
 
 /**
@@ -73,7 +82,7 @@ export interface UseQueriesHook<S extends Schema = any> {
  * data. See `UseQueriesHook` for the per-element contract.
  */
 export const useQueries: UseQueriesHook = ((
-  queries: readonly AnyQueryBuilder[],
+  queries: readonly SchemaQueryInput<Schema>[],
   options?: UseQueriesOptions,
 ): unknown => useQueriesImpl(useFigbird(), queries, options)) as UseQueriesHook
 
@@ -82,7 +91,7 @@ export const useQueries: UseQueriesHook = ((
  */
 export function useQueriesImpl(
   figbird: FigbirdLike,
-  queries: readonly AnyQueryBuilder[],
+  queries: readonly SchemaQueryInput<Schema>[],
   options: UseQueriesOptions = {},
 ): unknown {
   const { staleTime } = options

@@ -1,6 +1,6 @@
 import test from 'ava'
 import React from 'react'
-import { createSchema, createHooks, service, useQueries } from '../lib'
+import { createSchema, createHooks, defineQuery, service, useQueries } from '../lib'
 import { createTestApp, dom } from './helpers'
 
 interface Issue {
@@ -57,6 +57,10 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
 test('useQueries: fetches all queries in parallel under a single suspension', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
+  const openIssues = defineQuery(({ status }: { status: string }) =>
+    figbird.q.issues.where({ status }),
+  )
+  const allUsers = defineQuery(() => figbird.q.users)
 
   // Record when each service's find is *issued* and delay resolution, so a
   // sequential waterfall would be observable: with per-query suspension, `users`
@@ -73,7 +77,7 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
   }
 
   function Dashboard() {
-    const [issues, users] = useQueries([figbird.q.issues, figbird.q.users])
+    const [issues, users] = useQueries([openIssues({ status: 'open' }), allUsers])
     // Type-inference assertions — the tuple element types flow from each builder.
     const issueRows: Issue[] = issues.data
     const userRows: User[] = users.data

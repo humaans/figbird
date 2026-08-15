@@ -26,6 +26,13 @@ Writes can use `optimisticPatch` when the local projection differs from the serv
 Relational filters apply projected changes locally, then reconcile once after the record's
 writes settle.
 
+Query definitions are callable factories: `definition(args)` validates and binds concrete
+inputs into an inert request, preserving a Standard Schema's input and normalized output types.
+Core methods and React hooks share one `QueryInput` contract and runtime resolution path for
+builders, bound requests, and argumentless definitions. The exported `AnyQueryInput<Schema>`
+erases result types at adapter boundaries, so routers never need to know Figbird's definition,
+argument, or internal builder shape.
+
 Realtime handling is safer across all APIs. Fetches and overlapping refetches no
 longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries
 remain fixed snapshots. When an item being viewed is removed, `useGet` and `useQuery`
@@ -62,7 +69,7 @@ Breaking:
   relationship helpers.
 - `figbird.query(desc)` → `figbird.queryDesc(desc)`
 - `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
-- `figbird.query(builder | definition, args?)` is now the non-React mirror of `useQuery`
+- `figbird.query(builder | request)` is now the non-React mirror of `useQuery`
 - Constructor option `eventBatchProcessingInterval` renamed to `eventBatchInterval`.
 - Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
 - Removed orphaned exports: the `Item`/`Create`/`Update`/`Patch`/`Query`/`Methods`/

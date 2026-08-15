@@ -10,19 +10,9 @@
  * without depending on the constructor surface.
  */
 export const QUERY_DEFINITION_BRAND: unique symbol = Symbol.for('figbird.queryDefinition')
+export const QUERY_REQUEST_BRAND: unique symbol = Symbol.for('figbird.queryRequest')
 
-/**
- * An args-keyed query factory produced by `defineQuery`. Definitions are inert — they
- * hold no cache state and no instance dependency. The cache key is derived from the
- * underlying builder's AST hash, which means `prepare(def, args)` and `useQuery(def, args)`
- * collapse to the same `RelationalQueryRef`.
- *
- * `prepare` and `useQuery` run `validate` at the call site before invoking `build`.
- * Validation throws `QueryArgsError` on failure; on success the (possibly normalized)
- * value returned by `validate` is what feeds into `build`, so the cache key reflects
- * the normalized args rather than the raw input.
- */
-export interface QueryDefinition<Args, B> {
+interface QueryDefinitionCore<Args, B> {
   readonly [QUERY_DEFINITION_BRAND]: true
   /** Optional label for errors/devtools — empty string when unnamed. Never identity. */
   readonly name: string
@@ -31,51 +21,93 @@ export interface QueryDefinition<Args, B> {
 }
 
 /**
- * Trailing parameters for definition-consuming APIs (`prepare`, `prefetch`,
- * `useQuery`): `args` is required when the definition's build function declares them;
- * zero-arg definitions (`QueryDefinition<void, B>`) skip the args slot entirely, so
- * options come second-positionally — `useQuery(def, { suspense: false })`, no middle
- * `undefined`.
+ * A concrete query definition with validated, normalized arguments. Requests are
+ * inert and instance-independent, so routers can carry them as opaque route data.
  */
-export type ArgsAndOptions<Args, Options> = [Args] extends [void]
-  ? [options?: Options]
-  : [args: Args, options?: Options]
-
-/**
- * Like `ArgsAndOptions`, but the options are required — used by overloads that
- * discriminate on an option literal (e.g. `{ suspense: false }`).
- */
-export type ArgsAndRequiredOptions<Args, Options> = [Args] extends [void]
-  ? [options: Options]
-  : [args: Args, options: Options]
-
-/**
- * Runtime companion to `ArgsAndOptions`: split a definition call's trailing values
- * into args and options. A definition whose build function declares no parameters
- * takes options in the first slot; the legacy `(undefined, options)` spelling is
- * tolerated. @internal
- */
-export function splitDefinitionRest<Options>(
-  definition: QueryDefinition<unknown, unknown>,
-  first: unknown,
-  second: unknown,
-): { args: unknown; options: Options | undefined } {
-  if (definition.build.length === 0) {
-    return { args: undefined, options: (first ?? second) as Options | undefined }
-  }
-  return { args: first, options: second as Options | undefined }
+export interface QueryRequest<Args, B> {
+  readonly [QUERY_REQUEST_BRAND]: true
+  /** The originating definition's input is already bound and therefore hidden. */
+  readonly definition: QueryDefinitionCore<Args, B>
+  readonly args: Args
 }
+
+/**
+ * An args-keyed query factory produced by `defineQuery`. Definitions are inert — they
+ * hold no cache state and no instance dependency. The cache key is derived from the
+ * underlying builder's AST hash, which means `prepare(def(args))` and
+ * `useQuery(def(args))` collapse to the same `RelationalQueryRef`.
+ *
+ * Calling the definition validates at the binding site and returns an inert request.
+ * Validation throws `QueryArgsError` on failure; on success the (possibly normalized)
+ * value feeds into `build`, so the cache key reflects normalized args rather than raw input.
+ */
+export interface QueryDefinition<Args, B, Input = Args> extends QueryDefinitionCore<Args, B> {
+  /** Validate and bind args into an inert request accepted by query consumers. */
+  (args: Input): QueryRequest<Args, B>
+}
+
+/**
+ * Every query shape accepted by Figbird's read APIs: a builder, a bound request,
+ * or an argumentless definition. Adapter packages can depend on this contract
+ * without reproducing Figbird's input union.
+ */
+export type QueryInput<B, Args = unknown> =
+  B | QueryRequest<Args, B> | QueryDefinition<void, B, void>
+
+/** Extract the underlying builder from any supported query input. */
+export type QueryInputBuilder<T> =
+  T extends QueryRequest<unknown, infer B>
+    ? B
+    : T extends QueryDefinition<void, infer B, void>
+      ? B
+      : T
 
 /**
  * Type guard for `QueryDefinition`. Useful in router prepare resolvers and overloaded
  * hook signatures that accept either a definition or a builder.
  */
-export function isQueryDefinition(value: unknown): value is QueryDefinition<unknown, unknown> {
+export function isQueryDefinition(
+  value: unknown,
+): value is QueryDefinition<unknown, unknown, never> {
+  return (
+    typeof value === 'function' &&
+    (value as { [QUERY_DEFINITION_BRAND]?: unknown })[QUERY_DEFINITION_BRAND] === true
+  )
+}
+
+/** Type guard for a concrete query produced by calling a query definition. */
+export function isQueryRequest(value: unknown): value is QueryRequest<unknown, unknown> {
   return (
     typeof value === 'object' &&
     value !== null &&
-    (value as { [QUERY_DEFINITION_BRAND]?: unknown })[QUERY_DEFINITION_BRAND] === true
+    (value as { [QUERY_REQUEST_BRAND]?: unknown })[QUERY_REQUEST_BRAND] === true
   )
+}
+
+interface ResolvedQueryInput<B> {
+  builder: B
+  name: string | undefined
+}
+
+/** Resolve every public query input through one runtime path. @internal */
+export function resolveQueryInput<Args, B>(input: QueryInput<B, Args>): ResolvedQueryInput<B> {
+  if (isQueryRequest(input)) {
+    // The runtime brand proves the shape; retain the caller's generic builder and args.
+    const request = input as QueryRequest<Args, B>
+    return {
+      builder: request.definition.build(request.args),
+      name: request.definition.name,
+    }
+  }
+  if (isQueryDefinition(input)) {
+    // Only argumentless definitions are members of QueryInput.
+    const definition = input as QueryDefinition<void, B, void>
+    return {
+      builder: definition.build(definition.validate(undefined)),
+      name: definition.name,
+    }
+  }
+  return { builder: input as B, name: undefined }
 }
 
 /**
@@ -97,7 +129,7 @@ export interface StandardSchemaV1<Input = unknown, Output = Input> {
   }
 }
 
-// Companion namespace — `import type` consumers can read InferOutput / Result / Issue.
+// Companion namespace — `import type` consumers can read InferInput / InferOutput / Result / Issue.
 // oxlint-disable-next-line @typescript-eslint/no-namespace
 export namespace StandardSchemaV1 {
   export interface Issue {
@@ -112,13 +144,15 @@ export namespace StandardSchemaV1 {
     readonly issues: ReadonlyArray<Issue>
   }
   export type Result<Output> = SuccessResult<Output> | FailureResult
+  export type InferInput<S extends StandardSchemaV1> =
+    S extends StandardSchemaV1<infer Input, unknown> ? Input : never
   export type InferOutput<S extends StandardSchemaV1> =
     S extends StandardSchemaV1<unknown, infer Output> ? Output : never
 }
 
 /**
- * Thrown when a `QueryDefinition`'s `argsSchema` rejects the args passed to
- * `figbird.prepare(def, args)` or `useQuery(def, args)`. Surfaces the definition name
+ * Thrown when a `QueryDefinition`'s `argsSchema` rejects the input passed to the
+ * callable definition. Surfaces the definition name
  * (so error reporting tells you *which* query was misconfigured) plus the raw issues
  * the validator produced.
  *
@@ -155,7 +189,7 @@ function formatStandardSchemaIssues(issues: ReadonlyArray<StandardSchemaV1.Issue
 /**
  * Run a Standard Schema's `validate` synchronously against `args`. Returns the
  * validated/normalized value, or throws `QueryArgsError` on failure or async result.
- * Internal helper — `prepare` and `useQuery` (definition + args overload) call it.
+ * Internal helper used when a callable definition binds its input into a request.
  */
 export function validateQueryArgs<T>(
   queryName: string,
@@ -187,14 +221,14 @@ export interface DefineQuery<TBuilder = unknown> {
   <TSchema extends StandardSchemaV1, B extends TBuilder>(
     argsSchema: TSchema,
     build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B, StandardSchemaV1.InferInput<TSchema>>
   <B extends TBuilder>(name: string, build: () => B): QueryDefinition<void, B>
   <Args, B extends TBuilder>(name: string, build: (args: Args) => B): QueryDefinition<Args, B>
   <TSchema extends StandardSchemaV1, B extends TBuilder>(
     name: string,
     argsSchema: TSchema,
     build: (args: StandardSchemaV1.InferOutput<TSchema>) => B,
-  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B>
+  ): QueryDefinition<StandardSchemaV1.InferOutput<TSchema>, B, StandardSchemaV1.InferInput<TSchema>>
 }
 
 /**
@@ -204,15 +238,16 @@ export interface DefineQuery<TBuilder = unknown> {
  * `createHooks(schema)` in app code; this standalone export serves core-only and
  * non-React consumers.
  *
- * Args are typed from the build function. Pass a Standard Schema validator before the
- * build function when args arrive from untrusted sources (URL params, storage) — it
- * runs at every `prepare()`/`useQuery()` call site and throws `QueryArgsError`.
+ * Without a schema, args are typed from the build function. With a Standard Schema,
+ * the callable definition accepts its input type, while the build function receives
+ * its validated output type. Validation runs when the definition binds a request and
+ * throws `QueryArgsError`.
  *
  * The name is optional metadata, never identity (identity is the AST hash): it labels
  * `QueryArgsError` messages and devtools. Skip it unless you want those labels.
  *
- * A zero-param build produces a `QueryDefinition<void, B>`, whose consumers
- * (`prepare`, `prefetch`, `useQuery`) may omit the `args` argument entirely.
+ * A zero-param build produces a `QueryDefinition<void, B>` that consumers can use
+ * directly without first binding a request.
  */
 export const defineQuery: DefineQuery = ((
   a: string | StandardSchemaV1 | ((args: unknown) => unknown),
@@ -223,24 +258,32 @@ export const defineQuery: DefineQuery = ((
   const [x, y] = typeof a === 'string' ? [b, c] : [a, b]
   const argsSchema = y ? (x as StandardSchemaV1) : null
   const build = (y ?? x) as (args: unknown) => unknown
-  return {
-    [QUERY_DEFINITION_BRAND]: true,
-    name,
-    build,
-    validate: argsSchema
-      ? (args: unknown) => validateQueryArgs(name || '(anonymous)', argsSchema, args)
-      : (args: unknown) => args,
-  }
+  const validate = argsSchema
+    ? (args: unknown) => validateQueryArgs(name || '(anonymous)', argsSchema, args)
+    : (args: unknown) => args
+  let definition: QueryDefinition<unknown, unknown>
+  definition = ((args: unknown) => ({
+    [QUERY_REQUEST_BRAND]: true,
+    definition,
+    args: validate(args),
+  })) as unknown as QueryDefinition<unknown, unknown>
+  Object.defineProperties(definition, {
+    [QUERY_DEFINITION_BRAND]: { value: true },
+    name: { value: name, configurable: true },
+    build: { value: build },
+    validate: { value: validate },
+  })
+  return definition
 }) as DefineQuery
 
 /**
- * Handle returned by `figbird.prepare(definition, args)` — an explicit lease on a
+ * Handle returned by `figbird.prepare(definition(args))` — an explicit lease on a
  * query. `promise` resolves when the data is ready (rejects with what a Suspense read
  * would throw); `release()` drops the pin that keeps the underlying ref alive — when
  * no other subscriber remains, the ref tears down and the cache entry is evicted.
  *
  * Routers commonly attach their own metadata (e.g. a blocking/deferred priority) by
- * spreading: `{ ...figbird.prepare(def, args), priority: 'route' }` — that vocabulary
+ * spreading: `{ ...figbird.prepare(def(args)), priority: 'route' }` — that vocabulary
  * belongs to the router, not to figbird.
  */
 export interface PreparedQuery {
