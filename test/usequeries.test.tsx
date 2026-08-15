@@ -60,6 +60,7 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
   const openIssues = defineQuery(({ status }: { status: string }) =>
     figbird.q.issues.where({ status }),
   )
+  const allUsers = defineQuery(() => figbird.q.users)
 
   // Record when each service's find is *issued* and delay resolution, so a
   // sequential waterfall would be observable: with per-query suspension, `users`
@@ -76,7 +77,7 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
   }
 
   function Dashboard() {
-    const [issues, users] = useQueries([openIssues({ status: 'open' }), figbird.q.users])
+    const [issues, users] = useQueries([openIssues({ status: 'open' }), allUsers])
     // Type-inference assertions — the tuple element types flow from each builder.
     const issueRows: Issue[] = issues.data
     const userRows: User[] = users.data

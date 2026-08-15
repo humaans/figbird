@@ -161,7 +161,7 @@ Omitted payload types default sensibly: `Partial<item>` for create and patch, `i
 - `.orderBy('title')` — autocompletes item fields without rejecting computed ones
 - `.related('author')` — relation names come from the schema; the result type assembles automatically, nesting included
 - `m.tasks.create(...)` — payloads and return types from the service definition; declared custom `methods` appear on the handle, fully typed
-- `useQuery(definition, args)` — args typed from the definition's build function (or validated by its Standard Schema)
+- `useQuery(definition(args))` — input typed from the definition's build function or Standard Schema
 
 ## Queries
 
@@ -320,12 +320,11 @@ const { data } = useQuery(q.issues.get(id), { skip: id == null })
 // data: Issue | undefined — the type reflects that a skipped query has no data
 ```
 
-With definitions, put the condition in the args instead — `null` skips the query
-without ever invoking the definition's build function, so no non-null assertion
-is needed to satisfy the args type:
+With definitions, conditionally bind the request — `null` skips the query without
+invoking the definition's build function, so no non-null assertion is needed:
 
 ```ts
-const { data } = useQuery(issueDetail, id ? { id } : null)
+const { data } = useQuery(id ? issueDetail({ id }) : null)
 ```
 
 ### Several queries at once
@@ -803,8 +802,7 @@ non-React code, and `prepare`/`prefetch` exist as instance methods).
 A query definition is an args-keyed query factory. Call it with concrete inputs when the
 query needs to cross an integration boundary, such as a router. The result is an inert,
 instance-independent request: it contains no cache state and can be forwarded as an opaque
-value. A component can consume the request directly, or use the legacy definition-plus-args
-form; both resolve to the **same cache entry**:
+value. Every consumer accepts that same request and resolves it to the **same cache entry**:
 
 ```ts
 export const issueDetail = defineQuery(({ id }: { id: number }) =>
@@ -817,7 +815,7 @@ const request = issueDetail({ id: 42 })
 const { data } = useQuery(request)
 ```
 
-Args are typed from the build function. When args arrive from an untrusted source like URL params or storage, pass a [Standard Schema](https://github.com/standard-schema/standard-schema) validator (zod, valibot, arktype…) as the middle argument. Calling the definition validates and normalizes immediately, turning silent cache-splits (`{ id: "42" }` vs `{ id: 42 }`) into loud failures:
+Without a schema, args are typed from the build function. When args arrive from an untrusted source like URL params or storage, pass a [Standard Schema](https://github.com/standard-schema/standard-schema) validator (zod, valibot, arktype…) as the middle argument. The callable definition accepts the schema's input type and the build function receives its validated output type. Calling the definition validates and normalizes immediately, turning silent cache-splits (`{ id: "42" }` vs `{ id: 42 }`) into loud failures:
 
 ```ts
 export const issueDetail = defineQuery(
@@ -846,8 +844,8 @@ const data = {
 }
 ```
 
-Preparation is an _earlier read_, not a different one. The component may call
-`useQuery(request)` or `useQuery(issueDetail, { id })`; both converge on the same cache key.
+Preparation is an _earlier read_, not a different one. The component calls
+`useQuery(request)` and converges on the same cache key.
 
 ### prefetch
 
@@ -1182,12 +1180,12 @@ export const issueDetail = defineQuery(({ id }: { id: number }) =>
 <Row onMouseEnter={() => prefetch(issueDetail({ id }))} />
 
 // 4. The screen just reads — warm visits render synchronously, no fallback
-const { data } = useQuery(issueDetail, { id })
+const { data } = useQuery(issueDetail({ id }))
 ```
 
 Because all three paths resolve to the same builder AST hash, there is no coordination to do.
 Preparation is simply an earlier read. The router does not need to understand Figbird's
-definition, args, or request shape; its data adapter receives the request as an opaque value.
+definition, input, or request shape; its data adapter receives the request as an opaque value.
 
 ## Using outside React
 
@@ -1205,8 +1203,8 @@ ref.getSnapshot()
 ref.refetch()
 unsub()
 
-// Definitions work too — same cache entry as useQuery(issueDetail, { id })
-figbird.query(issueDetail, { id: 42 })
+// Bound requests share the same cache entry as useQuery(issueDetail({ id: 42 }))
+figbird.query(issueDetail({ id: 42 }))
 
 // Writes — the m proxy works outside React too (it's not a hook anywhere)
 await figbird.m.tasks.patch(id, { done: true }) // optimistic by default
@@ -1382,7 +1380,7 @@ inline in render needs no dependency arrays. Also available as `figbird.q`.
 ```ts
 // Suspense (default)
 const { data, error, isFetching, refetch } = useQuery(builder)
-const { data } = useQuery(definition, args)
+const { data } = useQuery(definition(args))
 
 // Paginated builders widen the result
 const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQuery(
@@ -1527,25 +1525,23 @@ const request = definition(args)
 Args-keyed query factory. A pure value, not tied to an instance. Calling it validates and
 normalizes concrete args into an inert `QueryRequest`, also independent of an instance.
 `query`, `prepare`, `prefetch`, `explain`, `useQuery`, and `useQueries` accept that request.
-Legacy definition-plus-args calls remain supported and share the same cache entry.
+Argumentless definitions can be passed directly without first creating a request.
 The `createHooks` kit returns a schema-typed version; the standalone export from
 `'figbird'` serves non-React code. See [Preparation](#preparation).
 
 ## figbird.prepare
 
 ```ts
-const { key, promise, release } = figbird.prepare(definition, args, { staleTime? })
 const { key, promise, release } = figbird.prepare(definition(args), { staleTime? })
 ```
 
-Starts a query and returns an awaitable lease, the router-grade primitive. `args` may be
-omitted when the definition's build function takes none. See [prepare](#prepare).
+Starts a query and returns an awaitable lease, the router-grade primitive. Argumentless
+definitions can be passed directly. See [prepare](#prepare).
 
 ## figbird.prefetch
 
 ```ts
-figbird.prefetch(definition, args, { staleTime? }) // staleTime defaults to 30s
-figbird.prefetch(definition(args), { staleTime? })
+figbird.prefetch(definition(args), { staleTime? }) // staleTime defaults to 30s
 ```
 
 Idempotent, fire-and-forget speculative warming with a self-releasing pin. See
@@ -1660,8 +1656,8 @@ const figbird = new Figbird({
 | Member                                            | Description                                                                                                                                                 |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `q`                                               | The builder proxy — `q.issues.where(...)`. Requires a schema.                                                                                               |
-| `prepare(request, opts?)`                         | Awaitable query lease for routers. Also accepts the legacy `(definition, args, opts?)` form. See [figbird.prepare](#figbirdprepare).                                     |
-| `prefetch(request, opts?)`                        | Idempotent speculative warming. Also accepts the legacy `(definition, args, opts?)` form. See [figbird.prefetch](#figbirdprefetch).                                      |
+| `prepare(request, opts?)`                         | Awaitable query lease for routers. Argumentless definitions can be passed directly. See [figbird.prepare](#figbirdprepare).                                     |
+| `prefetch(request, opts?)`                        | Idempotent speculative warming. Argumentless definitions can be passed directly. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
 | `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
@@ -1669,7 +1665,7 @@ const figbird = new Figbird({
 | `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
 | `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |
-| `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts a bound request or `(definition, args)`. See [Using outside React](#using-outside-react).               |
+| `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts a bound request or argumentless definition. See [Using outside React](#using-outside-react).               |
 | `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                                |
 | `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                                             |
 | `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.                   |
@@ -1768,7 +1764,7 @@ for QA and packaging details.
 ## figbird.explain
 
 ```ts
-figbird.explain(builderOrDefinition, args?)
+figbird.explain(builderOrRequest)
 // → { nodes: [{ path, service, kind, class, reasons, realtime, via? }] }
 ```
 

@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
-import { isQueryRequest, type QueryRequest, type RelationalQueryState } from '../core/figbird.js'
+import type { QueryDefinition, QueryRequest, RelationalQueryState } from '../core/figbird.js'
 import { suspensePromiseAll } from '../core/relationalQuery.js'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import type { Schema } from '../core/schema.js'
@@ -47,10 +47,17 @@ type QueryInput<S extends Schema> =
   // A heterogeneous tuple needs to erase each request's args while retaining its builder.
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   | QueryRequest<any, AnyQueryBuilder<S>>
+  | QueryDefinition<void, AnyQueryBuilder<S>, void>
 
 type QueryInputBuilder<T> =
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  T extends QueryRequest<any, infer B> ? B : T extends AnyQueryBuilder ? T : never
+  T extends QueryRequest<any, infer B>
+    ? B
+    : T extends QueryDefinition<void, infer B, void>
+      ? B
+      : T extends AnyQueryBuilder
+        ? T
+        : never
 
 /**
  * The `useQueries` call surface — declared once and shared by the root export
@@ -108,9 +115,7 @@ export function useQueriesImpl(
   // its identity element-wise: the subscription and snapshot cache key off actual
   // ref changes, and an evicted-then-re-interned ref is a new instance that
   // correctly busts the pin.
-  const refs = useStableArray(
-    queries.map(query => (isQueryRequest(query) ? figbird.query(query) : figbird.query(query))),
-  )
+  const refs = useStableArray(queries.map(query => figbird.query(query)))
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {

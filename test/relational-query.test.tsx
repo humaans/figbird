@@ -2907,9 +2907,9 @@ test('defineQuery + prepare: prepare key is stable for identical args', t => {
     figbird.q.issues.get(id),
   )
 
-  const a = figbird.prepare(issueDetail, { id: 1 })
-  const b = figbird.prepare(issueDetail, { id: 1 })
-  const c = figbird.prepare(issueDetail, { id: 2 })
+  const a = figbird.prepare(issueDetail({ id: 1 }))
+  const b = figbird.prepare(issueDetail({ id: 1 }))
+  const c = figbird.prepare(issueDetail({ id: 2 }))
 
   t.is(a.key, b.key, 'identical args must share a cache key')
   t.not(a.key, c.key, 'different args must produce different cache keys')
@@ -3192,12 +3192,12 @@ test('prepare and prefetch install staleTime before materializing a warm query',
     q.issues.get(id).related('creator'),
   )
 
-  const first = figbird.prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  const first = figbird.prepare(issueDetail({ id: 1 }), { staleTime: 60_000 })
   await first.promise
   first.release()
   await new Promise(resolve => setTimeout(resolve, 10))
 
-  const second = figbird.prepare(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  const second = figbird.prepare(issueDetail({ id: 1 }), { staleTime: 60_000 })
   await second.promise
   await new Promise(resolve => setTimeout(resolve, 10))
 
@@ -3206,7 +3206,7 @@ test('prepare and prefetch install staleTime before materializing a warm query',
   second.release()
   await new Promise(resolve => setTimeout(resolve, 10))
 
-  figbird.prefetch(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  figbird.prefetch(issueDetail({ id: 1 }), { staleTime: 60_000 })
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.get, 1, 'prefetch must respect fresh root data')
   t.is(feathers.service('users').counts.find, 1, 'prefetch must respect fresh relation data')
@@ -3219,14 +3219,14 @@ test('staleTime: stricter subscriber revalidates an already-live relational quer
   )
 
   // A speculative read keeps the relational ref alive with a lenient freshness window.
-  figbird.prefetch(issueDetail, { id: 1 }, { staleTime: 60_000 })
+  figbird.prefetch(issueDetail({ id: 1 }), { staleTime: 60_000 })
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.get, 1)
   t.is(feathers.service('users').counts.find, 1)
 
   // A normal subscriber has staleTime 0. Even though it joins the already-live
   // relational ref, its stricter tolerance must propagate to the root and relation refs.
-  const ref = figbird.query(issueDetail, { id: 1 })
+  const ref = figbird.query(issueDetail({ id: 1 }))
   const unsub = ref.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
 
@@ -3242,9 +3242,9 @@ test('prefetch: idempotent within staleTime and warms the cache for a later read
   )
 
   // Hover-spam: repeated calls within staleTime must not re-trigger fetches.
-  figbird.prefetch(issueDetail, { id: 1 })
-  figbird.prefetch(issueDetail, { id: 1 })
-  figbird.prefetch(issueDetail, { id: 1 })
+  figbird.prefetch(issueDetail({ id: 1 }))
+  figbird.prefetch(issueDetail({ id: 1 }))
+  figbird.prefetch(issueDetail({ id: 1 }))
   await new Promise(resolve => setTimeout(resolve, 10))
 
   // `.get(id)` fetches via the resource verb, so count `get` calls.
@@ -3288,8 +3288,8 @@ test('defineQuery: typed-args form (no validator, no name) builds and prepares',
   const issueDetail = defineQuery(({ id }: { id: number }) => figbird.q.issues.get(id))
   t.is(issueDetail.name, '')
 
-  const a = figbird.prepare(issueDetail, { id: 1 })
-  const b = figbird.prepare(issueDetail, { id: 1 })
+  const a = figbird.prepare(issueDetail({ id: 1 }))
+  const b = figbird.prepare(issueDetail({ id: 1 }))
   t.is(a.key, b.key, 'same args must map to the same cache key')
   t.false('priority' in a, 'prepare handles carry no router vocabulary')
 
@@ -3297,20 +3297,17 @@ test('defineQuery: typed-args form (no validator, no name) builds and prepares',
   b.release()
 })
 
-test('defineQuery: zero-arg definition takes options in the args slot', async t => {
+test('defineQuery: argumentless definitions are direct query inputs', async t => {
   const { App, figbird } = createApp()
   const { render, unmount, flush, $ } = dom()
 
   const allIssues = defineQuery(() => figbird.q.issues)
 
-  // prepare(def, options) — no middle undefined.
   const prepared = figbird.prepare(allIssues, { staleTime: 60_000 })
   await prepared.promise
 
-  // prefetch(def, options) — same shape.
   figbird.prefetch(allIssues, { staleTime: 60_000 })
 
-  // useQuery(def, options) — options land straight after the definition, both modes.
   function NonSuspense() {
     const result = useQuery(allIssues, { suspense: false })
     return <div className='count'>{result.status === 'success' ? result.data.length : '…'}</div>
@@ -3322,15 +3319,6 @@ test('defineQuery: zero-arg definition takes options in the args slot', async t 
   )
   await flush()
   t.is($('.count')!.innerHTML, '3')
-
-  // The old (undefined, options) spelling is still tolerated at runtime.
-  const legacy = (figbird.prepare as (...a: unknown[]) => { key: string; release: () => void })(
-    allIssues,
-    undefined,
-    { staleTime: 60_000 },
-  )
-  t.is(legacy.key, prepared.key, 'legacy (undefined, options) hits the same cache entry')
-  legacy.release()
 
   prepared.release()
   unmount()
@@ -3980,10 +3968,10 @@ test('chained one: realtime on intermediate and destination re-resolves the edge
 })
 
 // ============================================================================
-// Null-args skip for definitions
+// Nullable request skip
 // ============================================================================
 
-test('useQuery definition: null args skip without invoking build or fetching', async t => {
+test('useQuery: null request skips without invoking the factory or fetching', async t => {
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -3994,7 +3982,7 @@ test('useQuery definition: null args skip without invoking build or fetching', a
   })
 
   function Issue({ id }: { id: number | null }) {
-    const { data } = useQuery(issueDetail, id ? { id } : null)
+    const { data } = useQuery(id ? issueDetail({ id }) : null)
     return <div className='detail'>{data?.title ?? 'none'}</div>
   }
 
@@ -4008,13 +3996,13 @@ test('useQuery definition: null args skip without invoking build or fetching', a
   await flush()
 
   t.is($('.detail')?.innerHTML, 'none')
-  t.is(buildCalls, 0, 'build is never invoked for null args')
+  t.is(buildCalls, 0, 'factory is never invoked for a null request')
   t.is(feathers.service('issues').counts.get, 0, 'nothing fetched')
 
   unmount()
 })
 
-test('useQuery definition: args flipping from null to real starts the query', async t => {
+test('useQuery: request flipping from null to real starts the query', async t => {
   const { App, figbird } = createApp()
   const { render, unmount, flush, $, act } = dom()
 
@@ -4024,7 +4012,7 @@ test('useQuery definition: args flipping from null to real starts the query', as
   function Issue() {
     const [id, _setId] = React.useState<number | null>(null)
     setId = _setId
-    const { data } = useQuery(issueDetail, id ? { id } : null)
+    const { data } = useQuery(id ? issueDetail({ id }) : null)
     return <div className='detail'>{data?.title ?? 'none'}</div>
   }
 
@@ -4135,14 +4123,14 @@ test('suspense: remounting after a cold error refetches and recovers', async t =
   unmount()
 })
 
-test('useQuery definition: null skips zero-arg definitions too', async t => {
+test('useQuery: a null argumentless request skips the query', async t => {
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, $ } = dom()
 
   const allIssues = defineQuery(() => figbird.q.issues)
 
   function Issues({ enabled }: { enabled: boolean }) {
-    const { data } = useQuery(allIssues, enabled ? undefined : null)
+    const { data } = useQuery(enabled ? allIssues() : null)
     return <div className='all'>{data ? data.length : 'skipped'}</div>
   }
 

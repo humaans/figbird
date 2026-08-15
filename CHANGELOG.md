@@ -27,7 +27,8 @@ Relational filters apply projected changes locally, then reconcile once after th
 writes settle.
 
 Query definitions are callable factories: `definition(args)` validates and binds concrete
-inputs into an inert request. Core methods and React hooks consume those requests directly,
+inputs into an inert request, preserving a Standard Schema's input and normalized output types.
+Core methods and React hooks consume those requests directly,
 while argumentless definitions can be passed as requests themselves, so routers never need
 to know Figbird's definition or argument shape.
 
@@ -67,7 +68,7 @@ Breaking:
   relationship helpers.
 - `figbird.query(desc)` → `figbird.queryDesc(desc)`
 - `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
-- `figbird.query(builder | definition, args?)` is now the non-React mirror of `useQuery`
+- `figbird.query(builder | request)` is now the non-React mirror of `useQuery`
 - Constructor option `eventBatchProcessingInterval` renamed to `eventBatchInterval`.
 - Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
 - Removed orphaned exports: the `Item`/`Create`/`Update`/`Patch`/`Query`/`Methods`/

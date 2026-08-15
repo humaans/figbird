@@ -28,8 +28,6 @@ import {
 import {
   isQueryDefinition,
   isQueryRequest,
-  splitDefinitionRest,
-  type ArgsAndOptions,
   type PreparedQuery,
   type QueryDefinition,
   type QueryRequest,
@@ -123,12 +121,9 @@ export {
   QUERY_DEFINITION_BRAND,
   QUERY_REQUEST_BRAND,
   QueryArgsError,
-  splitDefinitionRest,
   validateQueryArgs,
 } from './queryDefinition.js'
 export type {
-  ArgsAndOptions,
-  ArgsAndRequiredOptions,
   DefineQuery,
   PreparedQuery,
   QueryDefinition,
@@ -315,7 +310,7 @@ export class Figbird<
 
   /**
    * Materialize a query and return its live reference — the non-React mirror of
-   * `useQuery`. Accepts a builder, a bound request, or a definition plus args. The returned
+   * `useQuery`. Accepts a builder, a bound request, or an argumentless definition. The returned
    * RelationalQueryRef manages sub-queries and assembles related data.
    *
    * @example
@@ -338,31 +333,12 @@ export class Figbird<
    * // Refetch
    * qRef.refetch()
    *
-   * // Definition form — same cache entry as useQuery(issueDetail, { id })
-   * const ref = figbird.query(issueDetail, { id: 42 })
+   * // Bound request form — same cache entry as useQuery(issueDetail({ id: 42 }))
+   * const ref = figbird.query(issueDetail({ id: 42 }))
    * ```
    */
-  query<B extends AnyQueryBuilder<S>>(
-    builder: B,
-  ): RelationalQueryRef<
-    QueryBuilderResult<B>,
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
-  >
   query<Args, B extends AnyQueryBuilder<S>>(
-    query: QueryDefinition<Args, B>,
-    ...rest: ArgsAndOptions<Args, never>
-  ): RelationalQueryRef<
-    QueryBuilderResult<B>,
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
-  >
-  query<Args, B extends AnyQueryBuilder<S>>(
-    request: QueryRequest<Args, B>,
+    queryOrBuilder: B | QueryRequest<Args, B> | QueryDefinition<void, B, void>,
   ): RelationalQueryRef<
     QueryBuilderResult<B>,
     S,
@@ -372,8 +348,7 @@ export class Figbird<
   >
   query<B extends AnyQueryBuilder<S>>(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    queryOrBuilder: B | QueryDefinition<unknown, B> | QueryRequest<unknown, B>,
-    args?: unknown,
+    queryOrBuilder: B | QueryDefinition<void, B, void> | QueryRequest<unknown, B>,
   ): RelationalQueryRef<
     QueryBuilderResult<B>,
     S,
@@ -389,15 +364,10 @@ export class Figbird<
       )
     }
     const request = isQueryRequest(queryOrBuilder) ? queryOrBuilder : null
-    const definition = request
-      ? request.definition
-      : isQueryDefinition(queryOrBuilder)
-        ? queryOrBuilder
-        : null
     const builder: B = request
       ? request.definition.build(request.args)
-      : definition
-        ? definition.build(definition.validate(args))
+      : isQueryDefinition(queryOrBuilder)
+        ? queryOrBuilder.build(queryOrBuilder.validate(undefined))
         : (queryOrBuilder as B)
     if (!queryBuilderUsesSchema(builder, this.schema)) {
       throw new Error('The query builder uses a different schema from this Figbird instance')
@@ -427,18 +397,20 @@ export class Figbird<
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
     }
+    const definition =
+      request?.definition ?? (isQueryDefinition(queryOrBuilder) ? queryOrBuilder : null)
     ref.setDisplayName(definition?.name)
     return ref
   }
 
   /**
    * Pre-warm a query before any component reads it. Returns a `PreparedQuery` handle whose
-   * `promise` resolves when the same `useQuery(query, args)` would have data ready and
+   * `promise` resolves when the same `useQuery(request)` would have data ready and
    * rejects with the error a Suspense read would throw. Holds the cache entry alive until
    * `release()` is called or the underlying ref's last subscriber unmounts.
    *
    * Designed for router preparation, hover prefetch, and parents that can see child needs
-   * earlier than the child itself. The component still reads via `useQuery(query, args)` —
+   * earlier than the child itself. The component still reads via `useQuery(request)` —
    * preparation is an earlier read, not a different read.
    *
    * @example
@@ -448,42 +420,21 @@ export class Figbird<
    *   path: '/issues/:id',
    *   resolver: () => import('./pages/IssueDetail/screen'),
    *   prepare: ({ figbird, params }) => [
-   *     { ...figbird.prepare(issueDetail, { id: Number(params.id) }), priority: 'route' },
+   *     { ...figbird.prepare(issueDetail({ id: Number(params.id) })), priority: 'route' },
    *   ],
    * })
    * ```
    */
   prepare<Args, B extends AnyQueryBuilder<S>>(
-    query: QueryDefinition<Args, B>,
-    ...rest: ArgsAndOptions<Args, { staleTime?: number }>
-  ): PreparedQuery
-  prepare<Args, B extends AnyQueryBuilder<S>>(
-    request: QueryRequest<Args, B>,
+    request: QueryRequest<Args, B> | QueryDefinition<void, B, void>,
     options?: { staleTime?: number },
   ): PreparedQuery
   prepare(
-    query: QueryDefinition<unknown, AnyQueryBuilder<S>> | QueryRequest<unknown, AnyQueryBuilder<S>>,
-    argsOrOptions?: unknown,
-    maybeOptions?: { staleTime?: number },
-  ): PreparedQuery {
-    if (isQueryRequest(query)) {
-      return this.#prepareRequest(query, argsOrOptions as { staleTime?: number } | undefined)
-    }
-    const { args, options } = splitDefinitionRest<{ staleTime?: number }>(
-      query,
-      argsOrOptions,
-      maybeOptions,
-    )
-    // query() owns definition resolution (validate → build → intern), so the
-    // "definition + args collapses to one cache entry" contract lives in one place.
-    return this.#prepareRequest(query(args), options)
-  }
-
-  #prepareRequest(
-    request: QueryRequest<unknown, AnyQueryBuilder<S>>,
+    query:
+      QueryDefinition<void, AnyQueryBuilder<S>, void> | QueryRequest<unknown, AnyQueryBuilder<S>>,
     options?: { staleTime?: number },
   ): PreparedQuery {
-    const ref = this.query(request)
+    const ref = this.query(query)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
@@ -517,40 +468,20 @@ export class Figbird<
    *
    * @example
    * ```ts
-   * <Row onMouseEnter={() => figbird.prefetch(issueDetail, { id: issue.id })} />
+   * <Row onMouseEnter={() => figbird.prefetch(issueDetail({ id: issue.id }))} />
    * ```
    */
   prefetch<Args, B extends AnyQueryBuilder<S>>(
-    query: QueryDefinition<Args, B>,
-    ...rest: ArgsAndOptions<Args, { staleTime?: number }>
-  ): void
-  prefetch<Args, B extends AnyQueryBuilder<S>>(
-    request: QueryRequest<Args, B>,
+    request: QueryRequest<Args, B> | QueryDefinition<void, B, void>,
     options?: { staleTime?: number },
   ): void
   prefetch(
-    query: QueryDefinition<unknown, AnyQueryBuilder<S>> | QueryRequest<unknown, AnyQueryBuilder<S>>,
-    argsOrOptions?: unknown,
-    maybeOptions?: { staleTime?: number },
-  ): void {
-    if (isQueryRequest(query)) {
-      this.#prefetchRequest(query, argsOrOptions as { staleTime?: number } | undefined)
-      return
-    }
-    const { args, options } = splitDefinitionRest<{ staleTime?: number }>(
-      query,
-      argsOrOptions,
-      maybeOptions,
-    )
-    this.#prefetchRequest(query(args), options)
-  }
-
-  #prefetchRequest(
-    request: QueryRequest<unknown, AnyQueryBuilder<S>>,
+    query:
+      QueryDefinition<void, AnyQueryBuilder<S>, void> | QueryRequest<unknown, AnyQueryBuilder<S>>,
     options?: { staleTime?: number },
   ): void {
+    const ref = this.query(query)
     const staleTime = options?.staleTime ?? 30_000
-    const ref = this.query(request)
     const hash = ref.hash()
 
     const now = Date.now()
@@ -906,25 +837,21 @@ export class Figbird<
    * Use it to answer "why did adding `.limit(30)` change realtime behavior", to
    * assert a query's class in tests, or to power devtools.
    */
-  explain<B extends AnyQueryBuilder<S>>(builder: B): ExplainReport
-  explain<Args, B extends AnyQueryBuilder<S>>(request: QueryRequest<Args, B>): ExplainReport
-  explain<Args>(
-    query: QueryDefinition<Args, AnyQueryBuilder<S>>,
-    ...rest: ArgsAndOptions<Args, never>
+  explain<Args, B extends AnyQueryBuilder<S>>(
+    query: B | QueryRequest<Args, B> | QueryDefinition<void, B, void>,
   ): ExplainReport
   explain(
     queryOrBuilder:
       | AnyQueryBuilder<S>
-      | QueryDefinition<unknown, AnyQueryBuilder<S>>
+      | QueryDefinition<void, AnyQueryBuilder<S>, void>
       | QueryRequest<unknown, AnyQueryBuilder<S>>,
-    args?: unknown,
   ): ExplainReport {
     // Resolved without interning — explain never materializes a query. The walk
     // itself lives in queryClassification.ts, next to the plans it reports on.
     const builder = isQueryRequest(queryOrBuilder)
       ? queryOrBuilder.definition.build(queryOrBuilder.args)
       : isQueryDefinition(queryOrBuilder)
-        ? queryOrBuilder.build(queryOrBuilder.validate(args))
+        ? queryOrBuilder.build(queryOrBuilder.validate(undefined))
         : queryOrBuilder
     const nodes = explainQuery(
       builder.toAST(),
