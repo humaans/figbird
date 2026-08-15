@@ -552,6 +552,15 @@ function ActivityDetails({
           />
         ) : null}
         {activity.write ? <DetailStat label='Write ID' value={activity.write.id} /> : null}
+        {activity.write?.initiatingAction ? (
+          <DetailStat label='Action' value={activity.write.initiatingAction.name} />
+        ) : null}
+        {activity.write?.initiatingAction?.durationMs !== undefined ? (
+          <DetailStat
+            label='Action duration'
+            value={formatMs(activity.write.initiatingAction.durationMs)}
+          />
+        ) : null}
       </div>
       {activity.write ? (
         <>

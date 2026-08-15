@@ -7,6 +7,8 @@ import type { DevtoolsModel } from './model.js'
 export type TimelineActivityKind = 'fetch' | 'realtime' | 'connection' | 'write'
 export type TimelineActivityTone = 'green' | 'amber' | 'red' | 'blue' | 'neutral'
 
+const ACTION_WRAPPER_START_TOLERANCE_MS = 10
+
 export interface TimelineActivity {
   id: string
   kind: TimelineActivityKind
@@ -30,6 +32,11 @@ export interface TimelineActivity {
     optimistic: boolean
     payload: unknown
     args: readonly unknown[]
+    initiatingAction?: {
+      id: string
+      name: string
+      durationMs?: number
+    }
   }
   error: boolean
   searchText: string
@@ -52,9 +59,9 @@ export function buildTimelineActivities(
     ...snapshot.timeline.connection.map((item, index) =>
       connectionActivity(item.at, item.event, index, eventContext),
     ),
-    ...snapshot.writes
-      .filter(write => write.startedAt >= snapshot.timeline.startedAt)
-      .map(writeActivity),
+    ...buildWriteActivities(
+      snapshot.writes.filter(write => write.startedAt >= snapshot.timeline.startedAt),
+    ),
   ]
   return activities.sort((a, b) => a.startAt - b.startAt || a.id.localeCompare(b.id))
 }
@@ -270,22 +277,55 @@ function connectionActivity(
   })
 }
 
-function writeActivity(write: WriteRecord): TimelineActivity {
+function buildWriteActivities(writes: readonly WriteRecord[]): TimelineActivity[] {
+  const mutations = writes.filter(write => write.type === 'mutation')
+  const collapsedActionIds = new Set<string>()
+  const actionByMutationId = new Map<string, WriteRecord>()
+  const actions = writes
+    .filter(
+      write => write.type === 'action' && write.status === 'success' && write.endedAt !== undefined,
+    )
+    .sort((a, b) => (a.durationMs ?? Infinity) - (b.durationMs ?? Infinity))
+
+  for (const action of actions) {
+    const candidates = mutations.filter(mutation => actionContainsMutation(action, mutation))
+    if (candidates.length !== 1) continue
+
+    const mutation = candidates[0]!
+    if (actionByMutationId.has(mutation.id)) continue
+    collapsedActionIds.add(action.id)
+    actionByMutationId.set(mutation.id, action)
+  }
+
+  return writes
+    .filter(write => !collapsedActionIds.has(write.id))
+    .map(write => writeActivity(write, actionByMutationId.get(write.id)))
+}
+
+function actionContainsMutation(action: WriteRecord, mutation: WriteRecord): boolean {
+  if (action.endedAt === undefined) return false
+  if (mutation.startedAt < action.startedAt) return false
+  if (mutation.startedAt - action.startedAt > ACTION_WRAPPER_START_TOLERANCE_MS) return false
+  return (mutation.endedAt ?? Infinity) <= action.endedAt
+}
+
+function writeActivity(write: WriteRecord, initiatingAction?: WriteRecord): TimelineActivity {
   const failed = write.status === 'error' || write.status === 'rollback'
   const label =
     write.type === 'action'
       ? (write.name ?? '(anonymous action)')
       : `${write.serviceName ?? ''}.${write.method ?? ''}${write.itemId === undefined ? '' : ` #${write.itemId}`}`
+  const actionName = initiatingAction?.name ?? (initiatingAction ? '(anonymous action)' : undefined)
   return searchable({
     id: `write:${write.id}`,
     kind: 'write',
     startAt: write.startedAt,
     ...(write.endedAt === undefined ? {} : { endAt: write.endedAt }),
     label,
-    detail: write.type,
+    detail: actionName ? `${actionName} action` : write.type,
     status: write.status,
     tone: failed ? 'red' : write.status === 'in-flight' ? 'amber' : 'green',
-    trigger: write.type === 'action' ? 'action' : 'UI mutation',
+    trigger: initiatingAction || write.type === 'action' ? 'action' : 'UI mutation',
     effect: write.optimistic
       ? write.rolledBack
         ? 'optimistic rollback'
@@ -301,6 +341,17 @@ function writeActivity(write: WriteRecord): TimelineActivity {
       optimistic: write.optimistic ?? false,
       payload: writePayload(write),
       args: write.args ?? [],
+      ...(initiatingAction && actionName
+        ? {
+            initiatingAction: {
+              id: initiatingAction.id,
+              name: actionName,
+              ...(initiatingAction.durationMs === undefined
+                ? {}
+                : { durationMs: initiatingAction.durationMs }),
+            },
+          }
+        : {}),
     },
     error: failed,
   })
