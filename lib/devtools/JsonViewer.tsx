@@ -99,7 +99,7 @@ export function JsonViewer({
               margin: 0,
             }}
           >
-            <HighlightedJson text={safePrettyJson(value)} />
+            <HighlightedJson text={prettyNormalizedJson(normalized)} />
           </pre>
         ) : (
           <JsonTreeRoot value={normalized} expandAll={expandAll} />
@@ -354,32 +354,11 @@ function normalizeJson(
   return normalized
 }
 
-function safePrettyJson(value: unknown): string {
-  const seen = new WeakSet<object>()
-  try {
-    return (
-      JSON.stringify(
-        value,
-        (_key, item: unknown) => {
-          if (typeof item === 'undefined') return '[undefined]'
-          if (typeof item === 'bigint') return `${String(item)}n`
-          if (typeof item === 'function') return `[Function ${item.name || 'anonymous'}]`
-          if (typeof item === 'symbol') return String(item)
-          if (item instanceof Error) return { name: item.name, message: item.message }
-          if (item instanceof Map) return Object.fromEntries(item)
-          if (item instanceof Set) return [...item]
-          if (item && typeof item === 'object') {
-            if (seen.has(item)) return '[Circular]'
-            seen.add(item)
-          }
-          return item
-        },
-        2,
-      ) ?? String(value)
-    )
-  } catch {
-    return '[unserializable value]'
-  }
+function prettyNormalizedJson(value: JsonTreeValue): string {
+  return (
+    JSON.stringify(value, (_key, item: unknown) => (isSpecial(item) ? item.text : item), 2) ??
+    String(value)
+  )
 }
 
 function isContainer(

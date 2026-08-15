@@ -1,5 +1,5 @@
 import test from 'ava'
-import type { QueryState } from '../lib'
+import type { FigbirdEvent, QueryState } from '../lib'
 import { createTestApp } from './helpers'
 import {
   collectEvents,
@@ -229,10 +229,12 @@ test('m: resolves service path aliases', async t => {
   t.is(patched.name, 'Grace')
 })
 
-test('mutate events carry a correlating mutationId', async t => {
+test('mutate events carry correlating mutation and causal ids', async t => {
   const { figbird } = createTestApp(schema, services())
   const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
+  const observed: FigbirdEvent[] = []
+  figbird.events.subscribe(event => observed.push(event))
 
   await m.notes.patch(1, { content: 'a' })
   await m.notes.patch(2, { content: 'b' })
@@ -243,6 +245,19 @@ test('mutate events carry a correlating mutationId', async t => {
   t.is(ids[0], ids[1], 'first start/end pair correlates')
   t.is(ids[2], ids[3], 'second start/end pair correlates')
   t.not(ids[0], ids[2], 'distinct mutations get distinct ids')
+
+  const traces = events.map(event => ('traceId' in event ? event.traceId : undefined))
+  t.is(traces[0], traces[1], 'first mutation lifecycle shares one causal trace')
+  t.is(traces[2], traces[3], 'second mutation lifecycle shares one causal trace')
+  t.not(traces[0], traces[2], 'distinct mutations get distinct causal traces')
+  t.true(
+    observed.some(event => event.kind === 'cache:updated' && event.traceId === traces[0]),
+    'the mutation cache transition joins the mutation trace',
+  )
+  t.false(
+    observed.some(event => event.kind === 'realtime'),
+    'mutation acknowledgements are not reported as realtime traffic',
+  )
 })
 
 // ----- the optimistic-create id contract -----

@@ -96,6 +96,8 @@ const DEFAULT_RETRIES = 3
 type StoreResponse<TMeta> =
   QueryResponse<unknown, TMeta | undefined> | PageResponse<unknown[], TMeta>
 
+type MutationTraceCause = Extract<TraceCause, { kind: 'mutation' }> & { mutationId: number }
+
 function resolveCreateOptimisticItem(desc: CreateMutationDescriptor): unknown {
   const { optimistic } = desc
   return optimistic == null || typeof optimistic === 'boolean' ? desc.data : optimistic
@@ -105,12 +107,9 @@ function mergeTraceCauses(
   current: readonly TraceCause[],
   next: readonly TraceCause[],
 ): TraceCause[] {
-  const keyed = new Map<string, TraceCause>()
+  const keyed = new Map<number, TraceCause>()
   for (const cause of [...current, ...next]) {
-    const key = `${cause.kind}:${cause.traceId}${
-      cause.kind === 'mutation' ? `:${cause.mutationId ?? ''}` : ''
-    }`
-    keyed.set(key, cause)
+    keyed.set(cause.traceId, cause)
   }
   return [...keyed.values()]
 }
@@ -124,12 +123,13 @@ interface MutationTrackingEntry {
 }
 
 interface MutationTrackingHooks<T> {
-  onSuccess?: (result: T) => void
-  onError?: (error: Error, mutationId: number) => void
+  onSuccess?: (result: T, cause: MutationTraceCause) => void
+  onError?: (error: Error, cause: MutationTraceCause) => void
 }
 
 interface TrackedMutation<T> {
   mutationId: number
+  cause: MutationTraceCause
   promise: Promise<T>
 }
 
@@ -138,6 +138,7 @@ interface QueuedMutation {
   args: unknown[]
   optimistic: boolean
   attempt: GatedMutationAttempt
+  cause?: MutationTraceCause
 }
 
 interface AppliedEventEffect {
@@ -376,11 +377,12 @@ export class QueryStore<
     }
 
     const traceId = this.#nextTraceId++
+    const cause = { kind: 'manual' as const, traceId }
     const queryEffects = new Map<string, 'merged' | 'reconcile'>()
     const event: ProcessedRealtimeEvent = {
       origin: 'authoritative',
       source: 'devtools',
-      traceId,
+      cause,
       serviceName,
       type: 'patched',
       item,
@@ -692,8 +694,8 @@ export class QueryStore<
       control: undefined,
       run: () => this.#adapter.mutate(serviceName, method, [...args]),
       hooks: {
-        onSuccess: item =>
-          this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item }),
+        onSuccess: (item, cause) =>
+          this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item }, cause),
       },
     })
     return registration.promise as Promise<InferMutationData<S, D>>
@@ -762,21 +764,27 @@ export class QueryStore<
       control,
       ...(optimistic
         ? {
-            project: () =>
-              this.#processEvent(desc.serviceName, { type: 'created', item: optimisticItem }),
+            project: (cause: MutationTraceCause) =>
+              this.#processEvent(
+                desc.serviceName,
+                { type: 'created', item: optimisticItem },
+                cause,
+              ),
           }
         : {}),
       run: () => this.#adapter.mutate(desc.serviceName, desc.method, [...args]),
       hooks: {
         // Apply the cache update before ending the tracker entry, so by the time a
         // `useMutating` subscriber sees "not busy" the data is already in the cache.
-        onSuccess: item => this.#processEvent(desc.serviceName, { type: 'created', item }),
-        onError: (_error, mutationId) => {
+        onSuccess: (item, cause) =>
+          this.#processEvent(desc.serviceName, { type: 'created', item }, cause),
+        onError: (_error, cause) => {
           if (!optimistic) return
-          this.#processEvent(desc.serviceName, { type: 'removed', item: optimisticItem })
+          this.#processEvent(desc.serviceName, { type: 'removed', item: optimisticItem }, cause)
           this.#events.emit({
             kind: 'mutate:rollback',
-            mutationId,
+            mutationId: cause.mutationId,
+            traceId: cause.traceId,
             serviceName: desc.serviceName,
             method: desc.method,
           })
@@ -801,11 +809,15 @@ export class QueryStore<
       control,
       run: () => this.#adapter.mutate(desc.serviceName, desc.method, [...args]),
       hooks: {
-        onSuccess: item =>
-          this.#processEvent(desc.serviceName, {
-            type: MUTATION_EVENT_TYPE[desc.method],
-            item,
-          }),
+        onSuccess: (item, cause) =>
+          this.#processEvent(
+            desc.serviceName,
+            {
+              type: MUTATION_EVENT_TYPE[desc.method],
+              item,
+            },
+            cause,
+          ),
       },
     })
   }
@@ -841,13 +853,15 @@ export class QueryStore<
       },
       () => entry.attempt.promise,
       {
-        onSuccess: item => this.#settleQueuedMutation(lane, entry, { ok: true, item }),
-        onError: (error, mutationId) => {
-          this.#settleQueuedMutation(lane, entry, { ok: false, error })
+        onSuccess: (item, cause) =>
+          this.#settleQueuedMutation(lane, entry, { ok: true, item }, cause),
+        onError: (error, cause) => {
+          this.#settleQueuedMutation(lane, entry, { ok: false, error }, cause)
           if (optimistic) {
             this.#events.emit({
               kind: 'mutate:rollback',
-              mutationId,
+              mutationId: cause.mutationId,
+              traceId: cause.traceId,
               serviceName: desc.serviceName,
               method: desc.method,
               id,
@@ -857,7 +871,8 @@ export class QueryStore<
       },
     )
 
-    this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true)
+    entry.cause = tracked.cause
+    this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
     entry.attempt.whenReady(() => {
       this.#expediteMutationPredecessors(lane, entry)
       this.#drainMutationLane(lane)
@@ -870,10 +885,11 @@ export class QueryStore<
         const projection = this.#mutationLanes.replaceTail(lane, entry, next)
         if (!projection) return false
         entry.args = this.#buildMutationArgs(next)
-        this.#applyProjection(projection, true)
+        this.#applyProjection(projection, true, tracked.cause)
         this.#events.emit({
           kind: 'mutate:update',
           mutationId: tracked.mutationId,
+          traceId: tracked.cause.traceId,
           serviceName: next.serviceName,
           method: next.method,
           id,
@@ -882,7 +898,7 @@ export class QueryStore<
         })
         return true
       },
-      cancel: error => this.#cancelQueuedMutation(lane, entry, error),
+      cancel: error => this.#cancelQueuedMutation(lane, entry, error, tracked.cause),
     }
   }
 
@@ -928,10 +944,15 @@ export class QueryStore<
     }
   }
 
-  #cancelQueuedMutation(lane: MutationLane, entry: QueuedMutation, error: Error): void {
+  #cancelQueuedMutation(
+    lane: MutationLane,
+    entry: QueuedMutation,
+    error: Error,
+    cause: TraceCause,
+  ): void {
     if (!entry.attempt.cancel(error)) return
     const projection = this.#mutationLanes.cancel(lane, entry)
-    if (projection) this.#applyProjection(projection, true)
+    if (projection) this.#applyProjection(projection, true, cause)
     this.#drainMutationLane(lane)
   }
 
@@ -939,6 +960,7 @@ export class QueryStore<
     lane: MutationLane,
     entry: QueuedMutation,
     outcome: { ok: true; item: unknown } | { ok: false; error: Error },
+    cause: TraceCause,
   ): void {
     const settlement = this.#mutationLanes.settle(lane, entry, outcome)
     if (!settlement) return
@@ -950,7 +972,7 @@ export class QueryStore<
       this.#fetchEventJournal.record([settlement.authoritativeEvent])
     }
 
-    const projected = this.#applyProjection(settlement.projection, true)
+    const projected = this.#applyProjection(settlement.projection, true, cause)
     if (!projected && settlement.authoritativeEvent && !this.#mutationLanes.peekNext(lane)) {
       this.#publishAppliedEvent(settlement.authoritativeEvent)
     }
@@ -973,8 +995,8 @@ export class QueryStore<
     this.#drainMutationLane(lane)
   }
 
-  #applyProjection(change: ProjectionChange, immediate: boolean): boolean {
-    const event = this.#queuedProjectionEvent(change)
+  #applyProjection(change: ProjectionChange, immediate: boolean, cause?: TraceCause): boolean {
+    const event = this.#queuedProjectionEvent(change, cause)
     if (!event) return false
     this.#eventQueue.push(event)
     if (immediate) this.#processQueuedEvents()
@@ -1039,15 +1061,15 @@ export class QueryStore<
   }: {
     tracking: MutationTrackingEntry
     control: ScheduledMutationControl | undefined
-    project?: () => void
+    project?: (cause: MutationTraceCause) => void
     run: () => Promise<unknown>
     hooks?: MutationTrackingHooks<unknown>
   }): RegisteredMutation {
     const attempt = new GatedMutationAttempt(control)
     const tracked = this.#trackMutation(
       tracking,
-      () => {
-        project?.()
+      cause => {
+        project?.(cause)
         return attempt.promise
       },
       hooks,
@@ -1078,29 +1100,36 @@ export class QueryStore<
    */
   #trackMutation<T>(
     entry: MutationTrackingEntry,
-    run: () => Promise<T>,
+    run: (cause: MutationTraceCause) => Promise<T>,
     hooks?: MutationTrackingHooks<T>,
   ): TrackedMutation<T> {
     const { serviceName, method, id, optimistic, args } = entry
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
     const mutationId = this.#mutations.start({ serviceName, method, ...idField })
+    const cause = {
+      kind: 'mutation' as const,
+      traceId: this.#nextTraceId++,
+      mutationId,
+    }
     this.#events.emit({
       kind: 'mutate:start',
       mutationId,
+      traceId: cause.traceId,
       serviceName,
       method,
       ...idField,
       optimistic,
       args,
     })
-    const promise = run().then(
+    const promise = run(cause).then(
       result => {
-        hooks?.onSuccess?.(result)
+        hooks?.onSuccess?.(result, cause)
         this.#mutations.end(mutationId)
         this.#events.emit({
           kind: 'mutate:end',
           mutationId,
+          traceId: cause.traceId,
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
@@ -1111,11 +1140,12 @@ export class QueryStore<
       },
       (err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err))
-        hooks?.onError?.(error, mutationId)
+        hooks?.onError?.(error, cause)
         this.#mutations.end(mutationId)
         this.#events.emit({
           kind: 'mutate:error',
           mutationId,
+          traceId: cause.traceId,
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
@@ -1126,7 +1156,7 @@ export class QueryStore<
         throw error
       },
     )
-    return { mutationId, promise }
+    return { mutationId, cause, promise }
   }
 
   // Query lifecycle
@@ -1217,12 +1247,12 @@ export class QueryStore<
         if (journal.overflowed) {
           this.#discardFetchedResponse(queryId)
         } else {
-          const cacheTraceId = context.causes[0]?.traceId
+          const cacheCause = context.causes[0]
           this.#fetched({
             queryId,
             result,
             journalEvents: journal.events,
-            ...(cacheTraceId === undefined ? {} : { traceId: cacheTraceId }),
+            ...(cacheCause === undefined ? {} : { cause: cacheCause }),
           })
         }
         this.#recordFetchStats(queryId, { ok: true, durationMs })
@@ -1458,12 +1488,12 @@ export class QueryStore<
     queryId,
     result,
     journalEvents,
-    traceId,
+    cause,
   }: {
     queryId: string
     result: StoreResponse<TMeta>
     journalEvents: readonly ProcessedRealtimeEvent[]
-    traceId?: number
+    cause?: TraceCause
   }): void {
     let shouldRefetch = false
     let hadEffectiveJournalEvents = false
@@ -1492,9 +1522,15 @@ export class QueryStore<
         for (const item of responseItems) {
           const itemId = getId(item)
           if (itemId === undefined || rebasePlan.itemIds.has(entityKey(itemId))) continue
-          const accepted = this.#acceptLaneAuthoritative(query.desc.serviceName, 'updated', item)
+          const accepted = this.#acceptLaneAuthoritative(
+            query.desc.serviceName,
+            'updated',
+            item,
+            'fetch',
+            cause,
+          )
           if (!accepted.handled || !accepted.projection) continue
-          const projectionEvent = this.#queuedProjectionEvent(accepted.projection)
+          const projectionEvent = this.#queuedProjectionEvent(accepted.projection, cause)
           if (projectionEvent) fetchedProjectionEvents.push(projectionEvent)
         }
       }
@@ -1581,7 +1617,7 @@ export class QueryStore<
                     item,
                     previousItem: currentItem ?? null,
                     itemId: key,
-                    ...(traceId === undefined ? {} : { traceId }),
+                    ...(cause === undefined ? {} : { cause }),
                   },
                   reconcileQueryIds: new Set(),
                   queryEffects: new Map([[queryId, 'merged']]),
@@ -1647,7 +1683,7 @@ export class QueryStore<
             service,
             serviceName: query.desc.serviceName,
             processedEvents: diffEvents.map(event =>
-              traceId === undefined ? event : { ...event, traceId },
+              cause === undefined ? event : { ...event, cause },
             ),
             touch,
             excludeQueryId: queryId,
@@ -1798,11 +1834,11 @@ export class QueryStore<
     this.#realtime.add(serviceName)
   }
 
-  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): number[] {
-    const traceIds: number[] = []
+  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): TraceCause[] {
+    const causes: TraceCause[] = []
     for (const item of items) {
       const traceId = this.#nextTraceId++
-      traceIds.push(traceId)
+      causes.push({ kind: 'realtime', traceId })
       this.#events.emit({
         kind: 'realtime',
         traceId,
@@ -1812,7 +1848,7 @@ export class QueryStore<
         item,
       })
     }
-    return traceIds
+    return causes
   }
 
   /** Push an authoritative event onto the atomic queue. */
@@ -1820,7 +1856,7 @@ export class QueryStore<
     serviceName: string,
     event: Event,
     source: 'realtime' | 'mutation',
-    traceId: number,
+    cause: TraceCause,
   ): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
@@ -1829,11 +1865,11 @@ export class QueryStore<
       serviceName,
       type: event.type,
       items,
-      traceIds: [traceId],
+      causes: [cause],
     })
   }
 
-  #queuedProjectionEvent(change: ProjectionChange): QueuedEvent | null {
+  #queuedProjectionEvent(change: ProjectionChange, cause?: TraceCause): QueuedEvent | null {
     const event = this.#projectionEvent(change)
     if (!event) return null
     return {
@@ -1843,44 +1879,62 @@ export class QueryStore<
       type: event.type,
       items: Array.isArray(event.item) ? event.item : [event.item],
       mutationLaneKey: change.lane.key,
+      ...(cause === undefined ? {} : { causes: [cause] }),
     }
   }
 
   /** Apply an event immediately — used for mutation results and optimistic writes. */
-  #processEvent(serviceName: string, event: Event): void {
-    this.#ingestAuthoritativeEvent(serviceName, event, true, 'mutation')
+  #processEvent(serviceName: string, event: Event, cause: TraceCause): void {
+    this.#ingestAuthoritativeEvent(serviceName, event, {
+      immediate: true,
+      source: 'mutation',
+      cause,
+    })
   }
 
   /** Queue a realtime event for batched processing. */
   #queueEvent(serviceName: string, event: Event): void {
-    this.#ingestAuthoritativeEvent(serviceName, event, false, 'realtime')
+    this.#ingestAuthoritativeEvent(serviceName, event, {
+      immediate: false,
+      source: 'realtime',
+    })
   }
 
   #ingestAuthoritativeEvent(
     serviceName: string,
     event: Event,
-    immediate: boolean,
-    source: 'realtime' | 'mutation',
+    context:
+      | { immediate: false; source: 'realtime' }
+      | { immediate: true; source: 'mutation'; cause: TraceCause },
   ): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
-    const traceIds = this.#emitRealtimeForItems(serviceName, event.type, items)
+    const causes =
+      context.source === 'realtime'
+        ? this.#emitRealtimeForItems(serviceName, event.type, items)
+        : items.map(() => context.cause)
     for (const [index, item] of items.entries()) {
-      const accepted = this.#acceptLaneAuthoritative(serviceName, event.type, item)
+      const accepted = this.#acceptLaneAuthoritative(
+        serviceName,
+        event.type,
+        item,
+        context.source,
+        causes[index],
+      )
       if (!accepted.handled) {
         this.#enqueueAuthoritativeEvent(
           serviceName,
           { type: event.type, item },
-          source,
-          traceIds[index]!,
+          context.source,
+          causes[index]!,
         )
         continue
       }
-      if (accepted.projection) this.#applyProjection(accepted.projection, false)
+      if (accepted.projection) this.#applyProjection(accepted.projection, false, causes[index])
     }
 
     if (this.#eventQueue.length === 0) return
 
-    if (immediate) {
+    if (context.immediate) {
       this.#processQueuedEvents()
       return
     }
@@ -1903,6 +1957,8 @@ export class QueryStore<
     serviceName: string,
     type: Event['type'],
     item: unknown,
+    source: 'realtime' | 'mutation' | 'fetch',
+    cause?: TraceCause,
   ): LaneAuthoritativeAcceptance {
     const id = this.#peekId(item)
     const lane = id === undefined ? undefined : this.#mutationLanes.get(serviceName, id)
@@ -1911,7 +1967,13 @@ export class QueryStore<
       this.#adapter.isItemStale(current, next),
     )
     if (!transition) return { handled: true, projection: null }
-    this.#fetchEventJournal.record([transition.event])
+    this.#fetchEventJournal.record([
+      {
+        ...transition.event,
+        source,
+        ...(cause === undefined ? {} : { cause }),
+      },
+    ])
     return { handled: true, projection: transition.projection }
   }
 
@@ -1985,29 +2047,27 @@ export class QueryStore<
   ): PublishedEventEffects {
     const immediateReconciles = new Set<string>()
     const reconcileCauses = new Map<string, TraceCause[]>()
-    const traceIds = new Map<ProcessedRealtimeEvent, number>()
+    const resolvedEffects = effects.map(effect => ({
+      ...effect,
+      cause: effect.event.cause ?? this.#fallbackEventCause(effect.event.source),
+    }))
     const hasAuthoritative =
       refetchPolicy === 'realtime' &&
       effects.some(effect => effect.event.origin === 'authoritative')
-    const addReconcile = (queryId: string, cause: TraceCause | null) => {
+    const addReconcile = (queryId: string, cause: TraceCause) => {
       immediateReconciles.add(queryId)
-      if (!cause) return
       const current = reconcileCauses.get(queryId) ?? []
       reconcileCauses.set(queryId, mergeTraceCauses(current, [cause]))
     }
 
-    for (const { event, reconcileQueryIds, queryEffects, observabilityOnly } of effects) {
-      const traceId = event.traceId ?? this.#nextTraceId++
-      traceIds.set(event, traceId)
+    for (const {
+      event,
+      reconcileQueryIds,
+      queryEffects,
+      observabilityOnly,
+      cause,
+    } of resolvedEffects) {
       if (observabilityOnly) continue
-      const cause: TraceCause | null =
-        event.source === 'realtime'
-          ? { kind: 'realtime', traceId }
-          : event.source === 'mutation' || event.source === 'optimistic'
-            ? { kind: 'mutation', traceId }
-            : event.source === 'fetch'
-              ? { kind: 'fetch-rebase', traceId }
-              : null
       const deferred =
         event.origin === 'projection' &&
         this.#mutationLanes.deferQueryIds(event.mutationLaneKey, reconcileQueryIds)
@@ -2046,10 +2106,10 @@ export class QueryStore<
       }
     }
 
-    for (const { event, queryEffects } of effects) {
+    for (const { event, queryEffects, cause } of resolvedEffects) {
       this.#events.emit({
         kind: 'cache:updated',
-        traceId: traceIds.get(event)!,
+        traceId: cause.traceId,
         source: event.source,
         serviceName: event.serviceName,
         type: event.type,
@@ -2061,6 +2121,14 @@ export class QueryStore<
     }
 
     return { reconcileQueryIds: immediateReconciles, reconcileCauses }
+  }
+
+  #fallbackEventCause(source: ProcessedRealtimeEvent['source']): TraceCause {
+    const traceId = this.#nextTraceId++
+    if (source === 'realtime') return { kind: 'realtime', traceId }
+    if (source === 'mutation' || source === 'optimistic') return { kind: 'mutation', traceId }
+    if (source === 'fetch') return { kind: 'fetch-rebase', traceId }
+    return { kind: 'manual', traceId }
   }
 
   /** Publish an authoritative transition whose entity-cache effect already happened. */

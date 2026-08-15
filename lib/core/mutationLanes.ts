@@ -5,6 +5,7 @@ import {
   type MutationDescriptor,
   type ProcessedProjectionEvent,
   type ProcessedRealtimeEvent,
+  type TraceCause,
 } from './queryTypes.js'
 
 export const ABSENT = Symbol('figbird.absent')
@@ -13,6 +14,7 @@ export type ProjectedEntity = unknown | typeof ABSENT
 export interface MutationLaneEntry {
   desc: MutationDescriptor
   optimistic: boolean
+  cause?: TraceCause
 }
 
 /** Opaque identity for a lane; mutable lane state stays inside MutationLanes. */
@@ -177,6 +179,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
           item: eventItem,
           previousItem,
           itemId: entityKey(state.id),
+          ...(entry.cause === undefined ? {} : { cause: entry.cause }),
         }
       }
     }
@@ -270,6 +273,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       if (lane.serviceName !== serviceName || !lane.entries.some(entry => entry.optimistic))
         continue
       const previousItem = lane.base === ABSENT ? null : lane.base
+      const cause = [...lane.entries].reverse().find(entry => entry.optimistic)?.cause
       if (lane.visible === ABSENT) {
         if (!lane.lastPresent) continue
         events.push({
@@ -281,6 +285,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
           previousItem,
           itemId: entityKey(lane.id),
           mutationLaneKey: lane.key,
+          ...(cause === undefined ? {} : { cause }),
         })
       } else {
         events.push({
@@ -292,6 +297,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
           previousItem,
           itemId: entityKey(lane.id),
           mutationLaneKey: lane.key,
+          ...(cause === undefined ? {} : { cause }),
         })
       }
     }

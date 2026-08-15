@@ -1,4 +1,5 @@
-import type { EventType } from './queryTypes.js'
+import type { EventType, TraceCause } from './queryTypes.js'
+export type { TraceCause } from './queryTypes.js'
 
 /**
  * Mutation method names (subset usable in observability events).
@@ -12,14 +13,6 @@ export type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
  */
 // oxlint-disable-next-line @typescript-eslint/no-empty-object-type
 export type MutationEventMethod = MutationMethod | (string & {})
-
-export type TraceCause =
-  | { kind: 'realtime'; traceId: number }
-  | { kind: 'reconnect'; traceId: number }
-  | { kind: 'mutation'; traceId: number; mutationId?: number }
-  | { kind: 'fetch-rebase'; traceId: number }
-  | { kind: 'manual'; traceId: number }
-  | { kind: 'subscription'; traceId: number }
 
 export type FetchReason = 'subscription' | 'manual' | 'reconcile' | 'retry' | 'follow-up'
 
@@ -140,6 +133,7 @@ export type FigbirdEvent =
       kind: 'mutate:start'
       /** Correlates the start/end/error/rollback events of one mutation. */
       mutationId: number
+      traceId?: number
       serviceName: string
       method: MutationEventMethod
       id?: string | number
@@ -150,6 +144,7 @@ export type FigbirdEvent =
       /** An unsent queued mutation was coalesced with newer arguments. */
       kind: 'mutate:update'
       mutationId: number
+      traceId?: number
       serviceName: string
       method: MutationEventMethod
       id?: string | number
@@ -159,6 +154,7 @@ export type FigbirdEvent =
   | {
       kind: 'mutate:end'
       mutationId: number
+      traceId?: number
       serviceName: string
       method: MutationEventMethod
       durationMs: number
@@ -168,6 +164,7 @@ export type FigbirdEvent =
   | {
       kind: 'mutate:error'
       mutationId: number
+      traceId?: number
       serviceName: string
       method: MutationEventMethod
       durationMs: number
@@ -178,6 +175,7 @@ export type FigbirdEvent =
   | {
       kind: 'mutate:rollback'
       mutationId: number
+      traceId?: number
       serviceName: string
       method: MutationEventMethod
       id?: string | number

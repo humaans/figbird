@@ -169,7 +169,7 @@ export function applyEventsToService<TMeta>({
   for (const event of events) {
     const { type, items } = event
     for (const [index, item] of items.entries()) {
-      const traceId = event.traceIds?.[index]
+      const cause = event.causes?.[index]
       if (type === 'created') {
         const incomingId = getId(item)
         if (incomingId !== undefined) {
@@ -183,7 +183,7 @@ export function applyEventsToService<TMeta>({
             previousItem,
             itemId,
             source: event.source,
-            ...(traceId === undefined ? {} : { traceId }),
+            ...(cause === undefined ? {} : { cause }),
             ...(event.origin === 'projection'
               ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
               : { origin: event.origin }),
@@ -203,7 +203,7 @@ export function applyEventsToService<TMeta>({
               previousItem: currItem ?? null,
               itemId,
               source: event.source,
-              ...(traceId === undefined ? {} : { traceId }),
+              ...(cause === undefined ? {} : { cause }),
               ...(event.origin === 'projection'
                 ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
                 : { origin: event.origin }),
@@ -223,7 +223,7 @@ export function applyEventsToService<TMeta>({
             previousItem,
             itemId,
             source: event.source,
-            ...(traceId === undefined ? {} : { traceId }),
+            ...(cause === undefined ? {} : { cause }),
             ...(event.origin === 'projection'
               ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
               : { origin: event.origin }),

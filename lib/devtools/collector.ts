@@ -438,6 +438,7 @@ class FigbirdCollector implements Collector {
       ...service,
       entities: service.entities.map(entity => ({
         ...entity,
+        value: snapshotValue(entity.value),
         ...(this.#cacheProvenance.has(`${service.serviceName}:${entity.id}`)
           ? { lastChange: this.#cacheProvenance.get(`${service.serviceName}:${entity.id}`)! }
           : {}),
@@ -662,10 +663,7 @@ class FigbirdCollector implements Collector {
     if (event.fetchId !== undefined) {
       this.#fetchTraces.set(event.fetchId, {
         ...(event.reason ? { reason: event.reason } : {}),
-        traceIds:
-          event.causes?.flatMap(cause =>
-            cause.kind === 'realtime' || cause.kind === 'reconnect' ? [cause.traceId] : [],
-          ) ?? [],
+        traceIds: event.causes?.map(cause => cause.traceId) ?? [],
       })
     }
     const record = this.#ensureFetchRecord(event, at, true)
@@ -886,6 +884,7 @@ class FigbirdCollector implements Collector {
         return {
           kind: event.kind,
           mutationId: event.mutationId,
+          ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
           serviceName: event.serviceName,
           method: event.method,
           optimistic: event.optimistic,

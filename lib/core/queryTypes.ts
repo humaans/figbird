@@ -23,6 +23,14 @@ export interface Event {
   item: unknown
 }
 
+export type TraceCause =
+  | { kind: 'realtime'; traceId: number }
+  | { kind: 'reconnect'; traceId: number }
+  | { kind: 'mutation'; traceId: number; mutationId?: number }
+  | { kind: 'fetch-rebase'; traceId: number }
+  | { kind: 'manual'; traceId: number }
+  | { kind: 'subscription'; traceId: number }
+
 /**
  * Queued event for batch processing
  */
@@ -31,7 +39,7 @@ interface QueuedEventBase {
   type: EventType
   items: unknown[]
   source: 'realtime' | 'mutation' | 'optimistic'
-  traceIds?: readonly number[]
+  causes?: readonly TraceCause[]
 }
 
 /** Internal entity changes waiting at the store's atomic event boundary. */
@@ -52,7 +60,7 @@ interface ProcessedEventBase {
   /** Always defined — events whose item has no resolvable id are never applied. */
   itemId: EntityKey
   source: 'realtime' | 'mutation' | 'fetch' | 'optimistic' | 'devtools'
-  traceId?: number
+  cause?: TraceCause
 }
 
 /** An optimistic entity change after cache application. */

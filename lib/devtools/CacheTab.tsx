@@ -297,16 +297,24 @@ function CacheEntityDetails({
     if (!editor) return
     setSaving(true)
     setMessage(null)
-    const result = await editor.update(service.serviceName, entity.id, value)
-    setSaving(false)
-    if (!result.ok) {
-      setMessage({ tone: 'red', text: result.error ?? 'Cache edit failed' })
-      return
+    try {
+      const result = await editor.update(service.serviceName, entity.id, value)
+      if (!result.ok) {
+        setMessage({ tone: 'red', text: result.error ?? 'Cache edit failed' })
+        return
+      }
+      if (rememberUndo) setUndoValue(entity.value)
+      else setUndoValue(null)
+      setEditing(false)
+      setMessage({ tone: 'green', text: 'Applied in memory. No server request was sent.' })
+    } catch (error) {
+      setMessage({
+        tone: 'red',
+        text: error instanceof Error ? error.message : 'Cache edit failed',
+      })
+    } finally {
+      setSaving(false)
     }
-    if (rememberUndo) setUndoValue(entity.value)
-    else setUndoValue(null)
-    setEditing(false)
-    setMessage({ tone: 'green', text: 'Applied in memory. No server request was sent.' })
   }
 
   return (
