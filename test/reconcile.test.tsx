@@ -180,6 +180,23 @@ test('cooldown: a trailing refetch is skipped when the last subscriber left', as
   const state = figbird.getState().get('notes')
   const pending = Array.from(state!.queries.values()).some(q => q.pending)
   t.true(pending)
+
+  // A failed ephemeral reconciliation must be forgotten with the query. Otherwise
+  // a query that no longer exists leaves the instance permanently in `error`.
+  const ephemeral = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find' },
+    { realtime: 'refetch', fetchPolicy: 'network-only' },
+  )
+  const unsubscribeEphemeral = ephemeral.subscribe(() => {})
+  await sleep(20)
+  const failure = Object.assign(new Error('bad request'), { code: 400 })
+  notes.find = () => Promise.reject(failure)
+  notes.emit('created', { id: 12, content: 'fails to reconcile' })
+  await sleep(20)
+  t.is(figbird.sync.getSnapshot().phase, 'error')
+
+  unsubscribeEphemeral()
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
 })
 
 test('hidden tabs: event-driven reconciliation defers; local-exact merges keep flowing', async t => {
@@ -241,21 +258,33 @@ test('hidden tabs: a reconnect while hidden defers the refetch-all until visible
   await sleep(20)
   const baseline = notes.counts.find
 
+  io.emit('disconnect')
+  t.is(figbird.sync.getSnapshot().phase, 'offline')
+  io.emit('connect')
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
+
   // Visible reconnect: refetches immediately (existing behavior).
   io.emit('reconnect')
+  t.is(figbird.sync.getSnapshot().phase, 'restoring')
+  t.is(figbird.sync.getSnapshot().pendingReconciliations, 1)
   await sleep(20)
   t.is(notes.counts.find, baseline + 1)
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
 
   // Hidden reconnect: deferred...
   visibility.set(true)
   io.emit('reconnect')
   await sleep(20)
   t.is(notes.counts.find, baseline + 1, 'hidden tabs do not replay the reconnect storm')
+  t.is(figbird.sync.getSnapshot().phase, 'restoring')
+  t.is(figbird.sync.getSnapshot().pendingReconciliations, 1)
 
   // ...and reconciled once on return.
   visibility.set(false)
   await sleep(20)
   t.is(notes.counts.find, baseline + 2)
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
+  t.is(figbird.sync.getSnapshot().pendingReconciliations, 0)
 
   unsub()
 })
@@ -281,11 +310,14 @@ test('reconnect jitter delays and coalesces a visible-tab sweep', async t => {
 
   io.emit('reconnect')
   io.emit('reconnect')
+  t.is(figbird.sync.getSnapshot().phase, 'restoring')
+  t.is(figbird.sync.getSnapshot().pendingReconciliations, 1)
   await sleep(25)
   t.is(notes.counts.find, baseline, 'the sweep stays inside the configured delay')
 
   await sleep(35)
   t.is(notes.counts.find, baseline + 1, 'two reconnects coalesce into one sweep')
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
   unsub()
 })
 

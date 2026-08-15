@@ -1,5 +1,6 @@
 import type {
   Adapter,
+  AdapterConnectionState,
   EventHandlers,
   MatcherContext,
   PageCursor,
@@ -228,6 +229,11 @@ interface ReconnectEventSource {
   removeListener?: (event: string, listener: () => void) => void
 }
 
+interface ConnectionEventSource extends ReconnectEventSource {
+  connected?: boolean
+  active?: boolean
+}
+
 /**
  * Typed Feathers service for a specific service in the schema.
  * Provides full type safety for CRUD methods and custom methods.
@@ -353,6 +359,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #operators: Record<string, CustomOperatorRegistration>
   #defaultPagination: FeathersPagination | undefined
   #pagination: Record<string, FeathersPagination>
+  #observedConnectionState: AdapterConnectionState | undefined
 
   /** Names of custom operators registered for every service. */
   get customOperators(): readonly string[] {
@@ -633,6 +640,39 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     }
   }
 
+  getConnectionState(): AdapterConnectionState {
+    if (this.#observedConnectionState) return this.#observedConnectionState
+    const socket = this.#getConnectionEventSource()
+    if (!socket) return 'connected'
+    if (socket.connected === true) return 'connected'
+    if (socket.active === true) return 'connecting'
+    return socket.connected === false ? 'disconnected' : 'connected'
+  }
+
+  subscribeToConnectionState(handler: () => void): () => void {
+    const socket = this.#getConnectionEventSource()
+    if (!socket) return () => {}
+    const connected = () => {
+      this.#observedConnectionState = 'connected'
+      handler()
+    }
+    const disconnected = () => {
+      this.#observedConnectionState = 'disconnected'
+      handler()
+    }
+    socket.on('connect', connected)
+    socket.on('disconnect', disconnected)
+    return () => {
+      if (socket.off) {
+        socket.off('connect', connected)
+        socket.off('disconnect', disconnected)
+      } else {
+        socket.removeListener?.('connect', connected)
+        socket.removeListener?.('disconnect', disconnected)
+      }
+    }
+  }
+
   #getReconnectEventSource(): ReconnectEventSource | null {
     const io = (this.feathers as { io?: { io?: unknown } }).io
     const candidates = [
@@ -656,6 +696,25 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       }
     }
 
+    return null
+  }
+
+  #getConnectionEventSource(): ConnectionEventSource | null {
+    const candidates = [
+      (this.feathers as { io?: unknown }).io,
+      (this.feathers as { socket?: unknown }).socket,
+      (this.feathers as { primus?: unknown }).primus,
+    ]
+    for (const candidate of candidates) {
+      if (
+        candidate &&
+        typeof candidate === 'object' &&
+        'on' in candidate &&
+        typeof candidate.on === 'function'
+      ) {
+        return candidate as ConnectionEventSource
+      }
+    }
     return null
   }
 

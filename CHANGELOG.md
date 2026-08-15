@@ -40,6 +40,9 @@ return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
 
 Also included:
 
+- `useSyncStatus()` for one canonical application-facing view of connectivity, active reads,
+  queued and retryable failed writes, event/reconnect reconciliation, and the last fully synced
+  time.
 - Import-safe schema bindings through `createHooks(schema)`. The generated hooks resolve their
   runtime from `FigbirdProvider`, and `useMutations()` returns that instance's typed write proxy.
   Imperative code uses `figbird.m`, `figbird.prepare`, and other instance methods directly, so

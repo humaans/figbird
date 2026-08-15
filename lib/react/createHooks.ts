@@ -37,6 +37,8 @@ import type { MutationQueueDefinition } from '../core/mutationQueue.js'
 import { useFind, useGet, type QueryResult } from './useQueryByDesc.js'
 import { useQueries, type UseQueriesHook } from './useQueries.js'
 import { useQuery, type UseQueryHook } from './useQuery.js'
+import { useSyncStatusImpl } from './useSyncStatus.js'
+import type { SyncStatus } from '../core/syncTracker.js'
 
 /**
  * Strongly-typed call signatures per service name.
@@ -113,6 +115,8 @@ export interface FigbirdHooks<S extends Schema, A extends Adapter = Adapter> {
   useAction: UseActionHook
   useMutating: UseMutatingForSchema<S>
   useMutationQueue: UseMutationQueueHook<S>
+  /** Unified reads, writes, connectivity, and reconciliation status. */
+  useSyncStatus: () => SyncStatus
 }
 
 /**
@@ -169,6 +173,10 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
   function useTypedMutationQueue(definition?: MutationQueueDefinition, key?: string) {
     return useMutationQueueImpl(useBoundFigbird(), definition, key)
   }
+
+  function useTypedSyncStatus(): SyncStatus {
+    return useSyncStatusImpl(useBoundFigbird())
+  }
   function useTypedFeathers() {
     const adapter = useBoundFigbird().adapter as { feathers?: FeathersClient }
     if (!adapter.feathers) {
@@ -209,5 +217,6 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
     useAction,
     useMutating: useTypedMutating as UseMutatingForSchema<S>,
     useMutationQueue: useTypedMutationQueue as UseMutationQueueHook<S>,
+    useSyncStatus: useTypedSyncStatus,
   }
 }

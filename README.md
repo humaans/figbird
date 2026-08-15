@@ -39,7 +39,7 @@ const figbird = new Figbird({
   schema,
 })
 
-export const { useQuery, useMutations, useAction, q } = createHooks(schema)
+export const { useQuery, useMutations, useAction, useSyncStatus, q } = createHooks(schema)
 
 function Notes() {
   const { data: notes } = useQuery(q.notes.where({ read: false }).related('author'))

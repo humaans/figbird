@@ -73,6 +73,83 @@ body {
   font-size: 12px;
 }
 
+.sync-status {
+  --sync-color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 118px;
+  padding: 3px 9px 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.sync-status.synced {
+  --sync-color: var(--open);
+}
+
+.sync-status.offline {
+  --sync-color: #d97706;
+  color: #92400e;
+  border-color: #fde2b7;
+  background: #fffaf0;
+}
+
+.sync-status.error {
+  --sync-color: var(--danger);
+  color: #991b1b;
+  border-color: #fecaca;
+  background: #fff5f5;
+}
+
+.sync-status-orbit {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--sync-color) 42%, transparent);
+  border-radius: 50%;
+}
+
+.sync-status-core {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--sync-color);
+}
+
+.sync-status.syncing .sync-status-orbit,
+.sync-status.restoring .sync-status-orbit {
+  border-top-color: var(--sync-color);
+  animation: sync-orbit 800ms linear infinite;
+}
+
+.sync-status.error .sync-status-core {
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+@keyframes sync-orbit {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-status.syncing .sync-status-orbit,
+  .sync-status.restoring .sync-status-orbit {
+    animation: none;
+  }
+}
+
 /* ----- Grid ----- */
 
 .grid {

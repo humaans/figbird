@@ -489,3 +489,88 @@ test('useMutating: service filter resolves schema aliases to transport paths', a
   })
   t.is(probe.read(), 'false')
 })
+
+test('useSyncStatus: replays pending writes and settles one-shot failures', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, services())
+  const { useSyncStatus } = createHooks(schema)
+  const d = dom()
+
+  function Probe() {
+    const sync = useSyncStatus()
+    return <output>{JSON.stringify(sync)}</output>
+  }
+
+  const read = () => JSON.parse(d.$('output')!.textContent!) as ReturnType<typeof useSyncStatus>
+  const observedWriteCounts: Array<readonly [number, number]> = []
+  const unsubscribeMutating = figbird.mutating.subscribe(() => {
+    observedWriteCounts.push([
+      figbird.mutating.getSnapshot().length,
+      figbird.sync.getSnapshot().pendingWrites,
+    ])
+  })
+
+  t.is(figbird.sync.getSnapshot().phase, 'synced')
+  t.is(figbird.sync.getSnapshot().lastSyncedAt, null)
+
+  const queryGate = deferred<{ total: number; limit: number; skip: number; data: MockItem[] }>()
+  feathers.service('notes').find = () => queryGate.promise
+  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsubscribeQuery = query.subscribe(() => {})
+  t.is(figbird.sync.getSnapshot().fetchingQueries, 1)
+  t.is(figbird.sync.getSnapshot().phase, 'synced', 'ordinary reads do not flash global sync UI')
+  queryGate.resolve({
+    total: 1,
+    limit: 10,
+    skip: 0,
+    data: [{ id: 1, content: 'hello' }],
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(figbird.sync.getSnapshot().fetchingQueries, 0)
+  t.is(figbird.sync.getSnapshot().lastSyncedAt, null)
+  unsubscribeQuery()
+
+  const first = deferred<MockItem>()
+  feathers.service('notes').patch = () => first.promise
+  const failedWrite = figbird.m.notes.patch(1, { content: 'offline' })
+
+  // The hook subscribes after the call and still receives the canonical active snapshot.
+  d.render(
+    <App>
+      <Probe />
+    </App>,
+  )
+  t.is(read().phase, 'syncing')
+  t.is(read().pendingWrites, 1)
+
+  await d.flush(async () => {
+    first.reject(new Error('offline'))
+    await t.throwsAsync(failedWrite, { message: 'offline' })
+  })
+  t.is(read().phase, 'synced')
+  t.is(read().pendingWrites, 0)
+  t.is(read().failedWrites, 0, 'settled one-shot errors are owned by the calling action')
+
+  const retry = deferred<MockItem>()
+  feathers.service('notes').patch = () => retry.promise
+  let retriedWrite!: Promise<Note>
+  await d.flush(() => {
+    retriedWrite = figbird.m.notes.patch(1, { content: 'online' })
+  })
+  t.is(read().phase, 'syncing')
+  t.is(read().pendingWrites, 1)
+  t.is(read().failedWrites, 0)
+
+  await d.flush(async () => {
+    retry.resolve({ id: 1, content: 'online' })
+    await retriedWrite
+  })
+  t.is(read().phase, 'synced')
+  t.is(read().pendingWrites, 0)
+  t.is(read().failedWrites, 0)
+  t.is(typeof read().lastSyncedAt, 'number')
+  t.true(
+    observedWriteCounts.every(([mutating, pendingWrites]) => mutating === pendingWrites),
+    'mutating and sync snapshots share one authoritative registry',
+  )
+  unsubscribeMutating()
+})

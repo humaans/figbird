@@ -18,6 +18,7 @@ import {
   type MutationQueueHost,
 } from './mutationQueue.js'
 import type { MutationActivity } from './mutationTracker.js'
+import type { SyncActivity } from './syncTracker.js'
 import {
   createQueryBuilderProxy,
   queryBuilderUsesSchema,
@@ -108,6 +109,7 @@ export type {
   MutationSchedule,
 } from './mutationQueue.js'
 export type { InFlightMutation, MutationActivity } from './mutationTracker.js'
+export type { SyncActivity, SyncPhase, SyncStatus } from './syncTracker.js'
 export {
   defineQuery,
   isQueryDefinition,
@@ -790,6 +792,11 @@ export class Figbird<
    */
   get mutating(): MutationActivity {
     return this.queryStore.mutations
+  }
+
+  /** Canonical aggregate state behind `useSyncStatus()`. */
+  get sync(): SyncActivity {
+    return this.queryStore.sync
   }
 
   /**
