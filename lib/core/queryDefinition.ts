@@ -47,6 +47,22 @@ export interface QueryDefinition<Args, B, Input = Args> extends QueryDefinitionC
 }
 
 /**
+ * Every query shape accepted by Figbird's read APIs: a builder, a bound request,
+ * or an argumentless definition. Adapter packages can depend on this contract
+ * without reproducing Figbird's input union.
+ */
+export type QueryInput<B, Args = unknown> =
+  B | QueryRequest<Args, B> | QueryDefinition<void, B, void>
+
+/** Extract the underlying builder from any supported query input. */
+export type QueryInputBuilder<T> =
+  T extends QueryRequest<unknown, infer B>
+    ? B
+    : T extends QueryDefinition<void, infer B, void>
+      ? B
+      : T
+
+/**
  * Type guard for `QueryDefinition`. Useful in router prepare resolvers and overloaded
  * hook signatures that accept either a definition or a builder.
  */
@@ -66,6 +82,32 @@ export function isQueryRequest(value: unknown): value is QueryRequest<unknown, u
     value !== null &&
     (value as { [QUERY_REQUEST_BRAND]?: unknown })[QUERY_REQUEST_BRAND] === true
   )
+}
+
+interface ResolvedQueryInput<B> {
+  builder: B
+  name: string | undefined
+}
+
+/** Resolve every public query input through one runtime path. @internal */
+export function resolveQueryInput<Args, B>(input: QueryInput<B, Args>): ResolvedQueryInput<B> {
+  if (isQueryRequest(input)) {
+    // The runtime brand proves the shape; retain the caller's generic builder and args.
+    const request = input as QueryRequest<Args, B>
+    return {
+      builder: request.definition.build(request.args),
+      name: request.definition.name,
+    }
+  }
+  if (isQueryDefinition(input)) {
+    // Only argumentless definitions are members of QueryInput.
+    const definition = input as QueryDefinition<void, B, void>
+    return {
+      builder: definition.build(definition.validate(undefined)),
+      name: definition.name,
+    }
+  }
+  return { builder: input as B, name: undefined }
 }
 
 /**

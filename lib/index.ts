@@ -38,6 +38,7 @@ export type {
   MutationsProxy,
   PreparedQuery,
   QueryDefinition,
+  QueryInput,
   QueryRequest,
   ReconnectJitter,
   RetryDelay,

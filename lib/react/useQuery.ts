@@ -22,7 +22,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
-  type QueryDefinition,
+  type QueryInput,
   type QueryRequest,
   type RelationalPaginationState,
   type RelationalQueryState,
@@ -93,7 +93,7 @@ export interface QueryRefLike<T> {
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
   query<Args, B extends AnyQueryBuilder>(
-    queryOrBuilder: B | QueryRequest<Args, B> | QueryDefinition<void, B, void>,
+    queryOrBuilder: QueryInput<B, Args>,
   ): QueryRefLike<QueryBuilderResult<B>>
 }
 
@@ -184,11 +184,11 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueryHook<S extends Schema = any> {
   <Args, B extends AnyQueryBuilder<S>>(
-    query: B | QueryRequest<Args, B> | QueryDefinition<void, B, void>,
+    query: QueryInput<B, Args>,
     options: UseQueryOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
   <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
-    query: B | QueryRequest<Args, B> | QueryDefinition<void, B, void>,
+    query: QueryInput<B, Args>,
     options?: O,
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
   // A nullable bound request is the conditional-query form: `useQuery(id ? detail({ id }) : null)`.
@@ -231,12 +231,7 @@ export function useQueryImpl(
 ): unknown {
   let qRef: QueryRefLike<unknown> | null = null
   if (!options.skip && query !== null) {
-    qRef = figbird.query(
-      query as
-        | AnyQueryBuilder
-        | QueryRequest<unknown, AnyQueryBuilder>
-        | QueryDefinition<void, AnyQueryBuilder, void>,
-    )
+    qRef = figbird.query(query as QueryInput<AnyQueryBuilder>)
   }
   // Every input shape ends at the same single hook call, so the hook sequence is stable
   // when a request flips null <-> real or `skip` toggles.

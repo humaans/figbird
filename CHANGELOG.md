@@ -28,9 +28,9 @@ writes settle.
 
 Query definitions are callable factories: `definition(args)` validates and binds concrete
 inputs into an inert request, preserving a Standard Schema's input and normalized output types.
-Core methods and React hooks consume those requests directly,
-while argumentless definitions can be passed as requests themselves, so routers never need
-to know Figbird's definition or argument shape.
+Core methods and React hooks share one exported `QueryInput` contract and runtime resolution
+path for builders, bound requests, and argumentless definitions, so routers never need to
+know Figbird's definition or argument shape.
 
 Realtime handling is safer across all APIs. Fetches and overlapping refetches no
 longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries

@@ -25,13 +25,7 @@ import {
   type QueryBuilderProxy,
   type QueryBuilderResult,
 } from './queryBuilder.js'
-import {
-  isQueryDefinition,
-  isQueryRequest,
-  type PreparedQuery,
-  type QueryDefinition,
-  type QueryRequest,
-} from './queryDefinition.js'
+import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
 import { explainQuery, type ExplainReport, type QueryNodeClass } from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
@@ -127,6 +121,7 @@ export type {
   DefineQuery,
   PreparedQuery,
   QueryDefinition,
+  QueryInput,
   QueryRequest,
   StandardSchemaV1,
 } from './queryDefinition.js'
@@ -338,17 +333,7 @@ export class Figbird<
    * ```
    */
   query<Args, B extends AnyQueryBuilder<S>>(
-    queryOrBuilder: B | QueryRequest<Args, B> | QueryDefinition<void, B, void>,
-  ): RelationalQueryRef<
-    QueryBuilderResult<B>,
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
-  >
-  query<B extends AnyQueryBuilder<S>>(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    queryOrBuilder: B | QueryDefinition<void, B, void> | QueryRequest<unknown, B>,
+    queryOrBuilder: QueryInput<B, Args>,
   ): RelationalQueryRef<
     QueryBuilderResult<B>,
     S,
@@ -363,12 +348,7 @@ export class Figbird<
           'Pass schema to Figbird constructor: new Figbird({ schema, adapter })',
       )
     }
-    const request = isQueryRequest(queryOrBuilder) ? queryOrBuilder : null
-    const builder: B = request
-      ? request.definition.build(request.args)
-      : isQueryDefinition(queryOrBuilder)
-        ? queryOrBuilder.build(queryOrBuilder.validate(undefined))
-        : (queryOrBuilder as B)
+    const { builder, name } = resolveQueryInput(queryOrBuilder)
     if (!queryBuilderUsesSchema(builder, this.schema)) {
       throw new Error('The query builder uses a different schema from this Figbird instance')
     }
@@ -397,9 +377,7 @@ export class Figbird<
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
     }
-    const definition =
-      request?.definition ?? (isQueryDefinition(queryOrBuilder) ? queryOrBuilder : null)
-    ref.setDisplayName(definition?.name)
+    ref.setDisplayName(name)
     return ref
   }
 
@@ -426,12 +404,7 @@ export class Figbird<
    * ```
    */
   prepare<Args, B extends AnyQueryBuilder<S>>(
-    request: QueryRequest<Args, B> | QueryDefinition<void, B, void>,
-    options?: { staleTime?: number },
-  ): PreparedQuery
-  prepare(
-    query:
-      QueryDefinition<void, AnyQueryBuilder<S>, void> | QueryRequest<unknown, AnyQueryBuilder<S>>,
+    query: QueryInput<B, Args>,
     options?: { staleTime?: number },
   ): PreparedQuery {
     const ref = this.query(query)
@@ -472,12 +445,7 @@ export class Figbird<
    * ```
    */
   prefetch<Args, B extends AnyQueryBuilder<S>>(
-    request: QueryRequest<Args, B> | QueryDefinition<void, B, void>,
-    options?: { staleTime?: number },
-  ): void
-  prefetch(
-    query:
-      QueryDefinition<void, AnyQueryBuilder<S>, void> | QueryRequest<unknown, AnyQueryBuilder<S>>,
+    query: QueryInput<B, Args>,
     options?: { staleTime?: number },
   ): void {
     const ref = this.query(query)
@@ -837,22 +805,10 @@ export class Figbird<
    * Use it to answer "why did adding `.limit(30)` change realtime behavior", to
    * assert a query's class in tests, or to power devtools.
    */
-  explain<Args, B extends AnyQueryBuilder<S>>(
-    query: B | QueryRequest<Args, B> | QueryDefinition<void, B, void>,
-  ): ExplainReport
-  explain(
-    queryOrBuilder:
-      | AnyQueryBuilder<S>
-      | QueryDefinition<void, AnyQueryBuilder<S>, void>
-      | QueryRequest<unknown, AnyQueryBuilder<S>>,
-  ): ExplainReport {
+  explain<Args, B extends AnyQueryBuilder<S>>(queryOrBuilder: QueryInput<B, Args>): ExplainReport {
     // Resolved without interning — explain never materializes a query. The walk
     // itself lives in queryClassification.ts, next to the plans it reports on.
-    const builder = isQueryRequest(queryOrBuilder)
-      ? queryOrBuilder.definition.build(queryOrBuilder.args)
-      : isQueryDefinition(queryOrBuilder)
-        ? queryOrBuilder.build(queryOrBuilder.validate(undefined))
-        : queryOrBuilder
+    const { builder } = resolveQueryInput(queryOrBuilder)
     const nodes = explainQuery(
       builder.toAST(),
       this.schema?.relationships,

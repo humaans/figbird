@@ -3306,7 +3306,11 @@ test('defineQuery: argumentless definitions are direct query inputs', async t =>
   const prepared = figbird.prepare(allIssues, { staleTime: 60_000 })
   await prepared.promise
 
+  const builderPrepared = figbird.prepare(figbird.q.issues, { staleTime: 60_000 })
+  t.is(builderPrepared.key, prepared.key)
+
   figbird.prefetch(allIssues, { staleTime: 60_000 })
+  figbird.prefetch(figbird.q.issues, { staleTime: 60_000 })
 
   function NonSuspense() {
     const result = useQuery(allIssues, { suspense: false })
@@ -3321,6 +3325,7 @@ test('defineQuery: argumentless definitions are direct query inputs', async t =>
   t.is($('.count')!.innerHTML, '3')
 
   prepared.release()
+  builderPrepared.release()
   unmount()
 })
 

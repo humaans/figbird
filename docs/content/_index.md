@@ -1526,6 +1526,8 @@ Args-keyed query factory. A pure value, not tied to an instance. Calling it vali
 normalizes concrete args into an inert `QueryRequest`, also independent of an instance.
 `query`, `prepare`, `prefetch`, `explain`, `useQuery`, and `useQueries` accept that request.
 Argumentless definitions can be passed directly without first creating a request.
+These three forms share the exported `QueryInput` type, which adapter packages can use
+without reproducing Figbird's input union.
 The `createHooks` kit returns a schema-typed version; the standalone export from
 `'figbird'` serves non-React code. See [Preparation](#preparation).
 
