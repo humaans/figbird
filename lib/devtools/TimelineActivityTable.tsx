@@ -12,12 +12,14 @@ import { TimelineOverview } from './TimelineOverview.js'
 import type { TimelineActivity, TimelineExtent } from './timelineModel.js'
 import {
   Badge,
+  ColumnResizeHandle,
   DetailSection,
   DetailStat,
   DetailsPane,
   buttonStyle,
   toneColor,
   useDetailsPaneWidth,
+  useResizableColumns,
   useDevtoolsTheme,
 } from './ui.js'
 
@@ -68,9 +70,7 @@ export function TimelineActivityTable({
   const [filter, setFilter] = useState('')
   const [range, setRange] = useState<TimelineRange | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [columnWidths, setColumnWidths] = useState<number[]>(() =>
-    COLUMNS.map(column => column.width),
-  )
+  const [columnWidths, onColumnResizeStart] = useResizableColumns(COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const selected = activities.find(activity => activity.id === selectedId)
   const normalizedFilter = filter.trim().toLowerCase()
@@ -114,28 +114,6 @@ export function TimelineActivityTable({
   const displayExtent = range ?? extent
   const visibleSelection =
     selected && rows.some(activity => activity.id === selected.id) ? selected : null
-
-  const onColumnResizeStart = (index: number, event: ReactMouseEvent<HTMLSpanElement>) => {
-    event.preventDefault()
-    event.stopPropagation()
-    const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
-    const startX = event.clientX
-    const startWidth = columnWidths[index]!
-    const minWidth = COLUMNS[index]!.minWidth
-    const onMove = (move: MouseEvent) => {
-      setColumnWidths(current =>
-        current.map((width, columnIndex) =>
-          columnIndex === index ? Math.max(minWidth, startWidth + move.clientX - startX) : width,
-        ),
-      )
-    }
-    const onUp = () => {
-      ownerWindow.removeEventListener('mousemove', onMove)
-      ownerWindow.removeEventListener('mouseup', onUp)
-    }
-    ownerWindow.addEventListener('mousemove', onMove)
-    ownerWindow.addEventListener('mouseup', onUp)
-  }
 
   return (
     <>
@@ -235,21 +213,9 @@ export function TimelineActivityTable({
                         {formatOffset(displayExtent.end - displayExtent.start)}
                       </span>
                     ) : null}
-                    <span
-                      role='separator'
-                      aria-label={`Resize ${column.label} column`}
-                      aria-orientation='vertical'
+                    <ColumnResizeHandle
+                      label={column.label}
                       onMouseDown={event => onColumnResizeStart(index, event)}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        right: -4,
-                        bottom: 0,
-                        width: 8,
-                        cursor: 'col-resize',
-                        zIndex: 2,
-                        borderRight: `1px solid ${colors.border}`,
-                      }}
                     />
                   </th>
                 ))}

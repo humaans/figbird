@@ -4,17 +4,31 @@ import { formatClock, formatMs } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
 import {
   Badge,
+  ColumnResizeHandle,
   DetailSection,
   DetailStat,
   DetailsPane,
+  resizableGridTemplate,
   useDetailsPaneWidth,
+  useResizableColumns,
   useDevtoolsTheme,
 } from './ui.js'
+
+const WRITE_COLUMNS = [
+  { label: 'Status', width: 96, minWidth: 78 },
+  { label: 'Operation', width: 360, minWidth: 180 },
+  { label: 'Duration', width: 80, minWidth: 64 },
+  { label: 'Started', width: 90, minWidth: 76 },
+] as const
 
 export function WritesTab({ writes, inFlight }: { writes: WriteRecord[]; inFlight: number }) {
   const { colors, styles } = useDevtoolsTheme()
   const [selectedWriteId, setSelectedWriteId] = useState<string | null>(null)
+  const [columnWidths, onColumnResizeStart] = useResizableColumns(WRITE_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
+  const gridTemplateColumns = resizableGridTemplate(columnWidths, 1)
+  const gridMinWidth =
+    columnWidths.reduce((sum, width) => sum + width, 0) + (WRITE_COLUMNS.length - 1) * 8
   const actions = writes.filter(write => write.type === 'action')
   const mutations = writes.filter(write => write.type === 'mutation')
   const optimisticInFlight = mutations.filter(
@@ -28,6 +42,8 @@ export function WritesTab({ writes, inFlight }: { writes: WriteRecord[]; inFligh
         <div
           style={{
             ...styles.writeRow,
+            gridTemplateColumns,
+            minWidth: gridMinWidth,
             position: 'sticky',
             top: 0,
             zIndex: 1,
@@ -37,43 +53,58 @@ export function WritesTab({ writes, inFlight }: { writes: WriteRecord[]; inFligh
             borderBottom: `1px solid ${colors.border}`,
           }}
         >
-          <span>Status</span>
-          <span>
-            Operation
-            {inFlight > 0 ? (
-              <span style={{ color: colors.blue, marginLeft: 8 }}>{inFlight} in flight</span>
-            ) : null}
-            {optimisticInFlight > 0 ? (
-              <span
-                style={{ color: colors.amber, marginLeft: 8 }}
-                title='Already projected into the cache; may still be scheduled or saving'
-              >
-                {optimisticInFlight} projected
-              </span>
-            ) : null}
-          </span>
-          <span>Duration</span>
-          <span>Started</span>
+          {WRITE_COLUMNS.map((column, index) => (
+            <span
+              key={column.label}
+              style={{
+                position: 'relative',
+                alignSelf: 'stretch',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              {column.label}
+              {index === 1 && inFlight > 0 ? (
+                <span style={{ color: colors.blue, marginLeft: 8 }}>{inFlight} in flight</span>
+              ) : null}
+              {index === 1 && optimisticInFlight > 0 ? (
+                <span
+                  style={{ color: colors.amber, marginLeft: 8 }}
+                  title='Already projected into the cache; may still be scheduled or saving'
+                >
+                  {optimisticInFlight} projected
+                </span>
+              ) : null}
+              <ColumnResizeHandle
+                label={column.label}
+                onMouseDown={event => onColumnResizeStart(index, event)}
+              />
+            </span>
+          ))}
         </div>
         {writes.length === 0 ? (
           <div style={{ padding: 16, color: colors.muted }}>No writes recorded.</div>
         ) : (
           <>
-            <SectionTitle title='Actions' count={actions.length} />
+            <SectionTitle title='Actions' count={actions.length} minWidth={gridMinWidth} />
             {actions.map(write => (
               <WriteRow
                 key={write.id}
                 write={write}
                 selected={write.id === selectedWriteId}
+                gridTemplateColumns={gridTemplateColumns}
+                minWidth={gridMinWidth}
                 onSelect={() => setSelectedWriteId(write.id)}
               />
             ))}
-            <SectionTitle title='Mutations' count={mutations.length} />
+            <SectionTitle title='Mutations' count={mutations.length} minWidth={gridMinWidth} />
             {mutations.map(write => (
               <WriteRow
                 key={write.id}
                 write={write}
                 selected={write.id === selectedWriteId}
+                gridTemplateColumns={gridTemplateColumns}
+                minWidth={gridMinWidth}
                 onSelect={() => setSelectedWriteId(write.id)}
               />
             ))}
@@ -92,11 +123,21 @@ export function WritesTab({ writes, inFlight }: { writes: WriteRecord[]; inFligh
   )
 }
 
-function SectionTitle({ title, count }: { title: string; count: number }) {
+function SectionTitle({
+  title,
+  count,
+  minWidth,
+}: {
+  title: string
+  count: number
+  minWidth: number
+}) {
   const { colors } = useDevtoolsTheme()
   return (
     <div
       style={{
+        minWidth,
+        boxSizing: 'border-box',
         padding: '6px 10px',
         background: colors.toolbar,
         borderTop: `1px solid ${colors.border}`,
@@ -113,10 +154,14 @@ function SectionTitle({ title, count }: { title: string; count: number }) {
 function WriteRow({
   write,
   selected,
+  gridTemplateColumns,
+  minWidth,
   onSelect,
 }: {
   write: WriteRecord
   selected: boolean
+  gridTemplateColumns: string
+  minWidth: number
   onSelect: () => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
@@ -139,6 +184,8 @@ function WriteRow({
       }}
       style={{
         ...styles.writeRow,
+        gridTemplateColumns,
+        minWidth,
         color: write.rolledBack || write.status === 'error' ? colors.red : colors.text,
         cursor: 'pointer',
         background: selected ? colors.activeButtonBg : undefined,

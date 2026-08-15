@@ -450,6 +450,77 @@ export function DetailStat({ label, value }: { label: string; value: string }) {
   )
 }
 
+export interface ResizableColumn {
+  width: number
+  minWidth: number
+}
+
+export function useResizableColumns(
+  columns: readonly ResizableColumn[],
+): [number[], (index: number, event: ReactMouseEvent<HTMLElement>) => void] {
+  const [widths, setWidths] = useState<number[]>(() => columns.map(column => column.width))
+  const onResizeStart = useCallback(
+    (index: number, event: ReactMouseEvent<HTMLElement>) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
+      const startX = event.clientX
+      const startWidth = widths[index]!
+      const minWidth = columns[index]!.minWidth
+      const onMove = (move: MouseEvent) => {
+        setWidths(current =>
+          current.map((width, columnIndex) =>
+            columnIndex === index ? Math.max(minWidth, startWidth + move.clientX - startX) : width,
+          ),
+        )
+      }
+      const onUp = () => {
+        ownerWindow.removeEventListener('mousemove', onMove)
+        ownerWindow.removeEventListener('mouseup', onUp)
+      }
+      ownerWindow.addEventListener('mousemove', onMove)
+      ownerWindow.addEventListener('mouseup', onUp)
+    },
+    [columns, widths],
+  )
+  return [widths, onResizeStart]
+}
+
+export function ColumnResizeHandle({
+  label,
+  onMouseDown,
+}: {
+  label: string
+  onMouseDown: (event: ReactMouseEvent<HTMLSpanElement>) => void
+}) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <span
+      role='separator'
+      aria-label={`Resize ${label} column`}
+      aria-orientation='vertical'
+      title={`Resize ${label} column`}
+      onMouseDown={onMouseDown}
+      style={{
+        position: 'absolute',
+        top: 0,
+        right: -4,
+        bottom: 0,
+        width: 8,
+        cursor: 'col-resize',
+        zIndex: 2,
+        borderRight: `1px solid ${colors.border}`,
+      }}
+    />
+  )
+}
+
+export function resizableGridTemplate(widths: readonly number[], flexibleIndex: number): string {
+  return widths
+    .map((width, index) => (index === flexibleIndex ? `minmax(${width}px, 1fr)` : `${width}px`))
+    .join(' ')
+}
+
 export function useDetailsPaneWidth(): [number, (event: ReactMouseEvent<HTMLDivElement>) => void] {
   const [width, setWidth] = useState(DEFAULT_DETAILS_WIDTH)
   const onResizeStart = useCallback(

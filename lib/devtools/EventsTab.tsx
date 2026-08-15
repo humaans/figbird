@@ -18,13 +18,23 @@ import { formatClock } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
 import type { EventQueryScope } from './model.js'
 import {
+  ColumnResizeHandle,
   DetailSection,
   DetailStat,
   DetailsPane,
+  resizableGridTemplate,
   toneColor,
   useDetailsPaneWidth,
+  useResizableColumns,
   useDevtoolsTheme,
 } from './ui.js'
+
+const EVENT_COLUMNS = [
+  { label: 'Time', width: 108, minWidth: 84 },
+  { label: 'Activity', width: 132, minWidth: 96 },
+  { label: 'Scope', width: 140, minWidth: 96 },
+  { label: 'Details', width: 360, minWidth: 180 },
+] as const
 
 export function EventsTab({
   events,
@@ -43,7 +53,11 @@ export function EventsTab({
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
+  const [columnWidths, onColumnResizeStart] = useResizableColumns(EVENT_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
+  const gridTemplateColumns = resizableGridTemplate(columnWidths, 3)
+  const gridMinWidth =
+    columnWidths.reduce((sum, width) => sum + width, 0) + (EVENT_COLUMNS.length - 1) * 10
   const traceIndex = useMemo(() => buildTraceIndex(events), [events])
   const activities = useMemo(() => buildActivities(events, traceIndex), [events, traceIndex])
   const normalizedFilter = filter.toLowerCase()
@@ -93,6 +107,8 @@ export function EventsTab({
         <div
           style={{
             ...styles.eventRow,
+            gridTemplateColumns,
+            minWidth: gridMinWidth,
             position: 'sticky',
             top: 0,
             zIndex: 1,
@@ -102,10 +118,23 @@ export function EventsTab({
             borderBottom: `1px solid ${colors.border}`,
           }}
         >
-          <span>Time</span>
-          <span>{visibility === 'activity' ? 'Activity' : 'Event'}</span>
-          <span>Scope</span>
-          <span>Details</span>
+          {EVENT_COLUMNS.map((column, index) => (
+            <span
+              key={column.label}
+              style={{
+                position: 'relative',
+                alignSelf: 'stretch',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              {index === 1 && visibility !== 'activity' ? 'Event' : column.label}
+              <ColumnResizeHandle
+                label={column.label}
+                onMouseDown={event => onColumnResizeStart(index, event)}
+              />
+            </span>
+          ))}
         </div>
         {rows.length === 0 ? (
           <div style={{ padding: 16, color: colors.muted }}>
@@ -136,6 +165,8 @@ export function EventsTab({
               }}
               style={{
                 ...styles.eventRow,
+                gridTemplateColumns,
+                minWidth: gridMinWidth,
                 cursor: 'pointer',
                 outline: 'none',
                 background: item.id === selectedEventId ? colors.activeButtonBg : undefined,

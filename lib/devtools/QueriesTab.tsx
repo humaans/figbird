@@ -1,10 +1,15 @@
-import { useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, type CSSProperties } from 'react'
 import type { QueryVisibility } from './Devtools.js'
 import { compactJson, formatAge, formatMs } from './format.js'
 import type { DevtoolsModel, DevtoolsOperation, QuerySummary } from './model.js'
 import { QueryDetails } from './QueryDetails.js'
 import { ClassBadge, plural, QueryStatusDot } from './QueryPresentation.js'
-import { useDetailsPaneWidth, useDevtoolsTheme } from './ui.js'
+import {
+  ColumnResizeHandle,
+  useDetailsPaneWidth,
+  useResizableColumns,
+  useDevtoolsTheme,
+} from './ui.js'
 
 interface QueryRow {
   operation: DevtoolsOperation
@@ -83,9 +88,7 @@ export function QueriesTab({
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const [selectedOperationKey, setSelectedOperationKey] = useState<string | null>(null)
-  const [columnWidths, setColumnWidths] = useState<number[]>(() =>
-    QUERY_COLUMNS.map(column => column.width),
-  )
+  const [columnWidths, onColumnResizeStart] = useResizableColumns(QUERY_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const rows: QueryRow[] = model.operations
     .flatMap(operation => {
@@ -129,28 +132,6 @@ export function QueriesTab({
       )
     })
 
-  const onColumnResizeStart = (index: number, event: ReactMouseEvent<HTMLSpanElement>) => {
-    event.preventDefault()
-    event.stopPropagation()
-    const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
-    const startX = event.clientX
-    const startWidth = columnWidths[index]!
-    const minWidth = QUERY_COLUMNS[index]!.minWidth
-    const onMove = (move: MouseEvent) => {
-      setColumnWidths(current =>
-        current.map((width, columnIndex) =>
-          columnIndex === index ? Math.max(minWidth, startWidth + move.clientX - startX) : width,
-        ),
-      )
-    }
-    const onUp = () => {
-      ownerWindow.removeEventListener('mousemove', onMove)
-      ownerWindow.removeEventListener('mouseup', onUp)
-    }
-    ownerWindow.addEventListener('mousemove', onMove)
-    ownerWindow.addEventListener('mouseup', onUp)
-  }
-
   const ellipsizedCode: CSSProperties = {
     ...styles.code,
     display: 'block',
@@ -187,24 +168,10 @@ export function QueriesTab({
                   >
                     {column.label}
                   </span>
-                  {index < QUERY_COLUMNS.length - 1 ? (
-                    <span
-                      role='separator'
-                      aria-label={`Resize ${column.label} column`}
-                      aria-orientation='vertical'
-                      onMouseDown={event => onColumnResizeStart(index, event)}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        right: -3,
-                        bottom: 0,
-                        width: 7,
-                        cursor: 'col-resize',
-                        zIndex: 2,
-                        borderRight: `1px solid ${colors.rowBorder}`,
-                      }}
-                    />
-                  ) : null}
+                  <ColumnResizeHandle
+                    label={column.label}
+                    onMouseDown={event => onColumnResizeStart(index, event)}
+                  />
                 </th>
               ))}
             </tr>

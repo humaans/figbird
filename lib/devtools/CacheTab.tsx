@@ -5,12 +5,21 @@ import { JsonViewer } from './JsonViewer.js'
 import type { DevtoolsModel } from './model.js'
 import {
   Badge,
+  ColumnResizeHandle,
   DetailSection,
   DetailsPane,
   buttonStyle,
   useDetailsPaneWidth,
+  useResizableColumns,
   useDevtoolsTheme,
 } from './ui.js'
+
+const CACHE_COLUMNS = [
+  { label: 'entity', width: 150, minWidth: 90 },
+  { label: 'value', width: 310, minWidth: 160 },
+  { label: 'queries', width: 110, minWidth: 76 },
+  { label: 'provenance', width: 150, minWidth: 110 },
+] as const
 
 export interface DevtoolsCacheEditor {
   update(
@@ -40,7 +49,9 @@ export function CacheTab({
   )
   const [serviceName, setServiceName] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [columnWidths, onColumnResizeStart] = useResizableColumns(CACHE_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
+  const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0)
 
   useEffect(() => {
     if (serviceName && orderedServices.some(service => service.serviceName === serviceName)) return
@@ -154,19 +165,23 @@ export function CacheTab({
         {!service ? (
           <div style={{ padding: 16, color: colors.muted }}>No entities cached yet.</div>
         ) : (
-          <table style={{ ...styles.table, minWidth: 680 }}>
+          <table style={{ ...styles.table, minWidth: tableWidth }}>
             <colgroup>
-              <col style={{ width: 150 }} />
-              <col />
-              <col style={{ width: 110 }} />
-              <col style={{ width: 150 }} />
+              {CACHE_COLUMNS.map((column, index) => (
+                <col key={column.label} style={{ width: columnWidths[index] }} />
+              ))}
             </colgroup>
             <thead>
               <tr>
-                <th style={styles.th}>entity</th>
-                <th style={styles.th}>value</th>
-                <th style={styles.th}>queries</th>
-                <th style={styles.th}>provenance</th>
+                {CACHE_COLUMNS.map((column, index) => (
+                  <th key={column.label} style={{ ...styles.th, position: 'sticky' }}>
+                    {column.label}
+                    <ColumnResizeHandle
+                      label={column.label}
+                      onMouseDown={event => onColumnResizeStart(index, event)}
+                    />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
