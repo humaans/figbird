@@ -194,6 +194,7 @@ test('Figbird methods infer types from schema (query, subscribe, mutate)', t => 
   const findSubscribeStateType = getTypeAtPosition(fixturePath, 'FindSubscribeState')
   const getSubscribeStateType = getTypeAtPosition(fixturePath, 'GetSubscribeState')
   const createResultType = getTypeAtPosition(fixturePath, 'CreateResult')
+  const preparedRouteQueryType = getTypeAtPosition(fixturePath, 'PreparedRouteQuery')
 
   // Query subscribe param should carry QueryState with inferred data + Feathers meta
   t.is(
@@ -207,6 +208,7 @@ test('Figbird methods infer types from schema (query, subscribe, mutate)', t => 
 
   // Mutate create should resolve to Person
   t.is(createResultType, 'Person')
+  t.is(preparedRouteQueryType, 'import("figbird").PreparedQuery')
 })
 
 test('optional query definitions are inferred', t => {

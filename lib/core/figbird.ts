@@ -125,6 +125,14 @@ export type {
   QueryRequest,
   StandardSchemaV1,
 } from './queryDefinition.js'
+
+/**
+ * Query input with its result type intentionally erased for integration boundaries
+ * such as router data adapters. Use `QueryInput<B, Args>` when preserving a specific
+ * builder's result type matters.
+ */
+export type AnyQueryInput<S extends Schema = AnySchema> = QueryInput<AnyQueryBuilder<S>>
+
 export { RelationalQueryRef } from './relationalQuery.js'
 export type { RelationalPaginationState, RelationalQueryState } from './relationalQuery.js'
 

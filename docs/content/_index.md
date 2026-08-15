@@ -839,8 +839,8 @@ queries: ({ params }) => [issueDetail({ id: Number(params.id) })]
 queries: [customFieldsQuery, rolesQuery]
 
 const data = {
-  prepare: request => figbird.prepare(request),
-  prefetch: request => figbird.prefetch(request),
+  prepare: (request: AnyQueryInput<typeof schema>) => figbird.prepare(request),
+  prefetch: (request: AnyQueryInput<typeof schema>) => figbird.prefetch(request),
 }
 ```
 
@@ -1526,8 +1526,9 @@ Args-keyed query factory. A pure value, not tied to an instance. Calling it vali
 normalizes concrete args into an inert `QueryRequest`, also independent of an instance.
 `query`, `prepare`, `prefetch`, `explain`, `useQuery`, and `useQueries` accept that request.
 Argumentless definitions can be passed directly without first creating a request.
-These three forms share the exported `QueryInput` type, which adapter packages can use
-without reproducing Figbird's input union.
+These three forms share the generic `QueryInput` contract. Adapter packages can use
+`AnyQueryInput<Schema>` to erase the result type at their integration boundary without
+reproducing Figbird's input union or importing internal builder types.
 The `createHooks` kit returns a schema-typed version; the standalone export from
 `'figbird'` serves non-React code. See [Preparation](#preparation).
 

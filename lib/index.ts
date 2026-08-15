@@ -15,6 +15,7 @@ export {
 } from './core/figbird.js'
 
 export type {
+  AnyQueryInput,
   CreateMutationOptions,
   DefineQuery,
   EventType,
