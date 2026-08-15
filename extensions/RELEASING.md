@@ -62,8 +62,10 @@ Use `make release-extensions VERSION=0.2.0` to choose a different version.
 
 The command checks the publisher configuration and version before creating the PR. Approve and
 merge the PR to submit the Firefox extension for Mozilla signing and the private Chrome extension
-for review. The release workflow saves the signed Firefox XPI in the matching
-`devtools-v<version>` GitHub prerelease.
+for review. The release workflow saves the Chrome ZIP and signed Firefox XPI in the matching
+`devtools-v<version>` GitHub prerelease. Team members can unzip the Chrome archive and load its
+folder from `chrome://extensions` using **Developer mode → Load unpacked** while store review is
+pending.
 
 To release only one browser, open **Actions → Release browser devtools → Run workflow** on the
 default branch and select the required inputs.
@@ -72,5 +74,8 @@ default branch and select the required inputs.
   signed XPI as both a workflow artifact and a `devtools-v<version>` GitHub prerelease asset.
 - **Upload Chrome** uploads the new ZIP but leaves it in the dashboard for inspection.
 - **Submit Chrome** uploads and submits it for private-store review. It also enables **Upload Chrome** automatically.
+
+Every workflow run also saves the Chrome ZIP in the versioned GitHub prerelease, independently
+of whether the Chrome Web Store upload or submission inputs are enabled.
 
 Use upload-only for the first automated rehearsal. Use submit only after the artifact has passed local QA. Store review can outlive the workflow; check the publisher dashboard if Mozilla selects the add-on for manual review.
