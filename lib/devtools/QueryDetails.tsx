@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { QueryRecord } from './collector.js'
-import { compactJson, formatMs, prettyJson } from './format.js'
+import { compactJson, formatMs } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
 import type {
   DevtoolsOperation,
@@ -271,43 +271,9 @@ export function QueryDetails({
       >
         <JsonViewer value={activeQuery.data} />
       </QueryDetailSection>
-      <details
-        key={activeQueryId ?? operation.key}
-        style={{
-          borderTop: `1px solid ${colors.rowBorder}`,
-          padding: '11px 0',
-        }}
-      >
-        <summary
-          style={{
-            color: colors.text,
-            cursor: 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          Parameters
-          <code
-            title={prettyJson(activeQuery.query ?? {})}
-            style={{
-              ...styles.code,
-              display: 'inline-block',
-              maxWidth: 'calc(100% - 90px)',
-              color: colors.muted,
-              fontWeight: 400,
-              marginLeft: 8,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              verticalAlign: 'bottom',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {compactJson(activeQuery.query ?? {})}
-          </code>
-        </summary>
-        <div style={{ marginTop: 9 }}>
-          <JsonViewer value={activeQuery.query ?? {}} />
-        </div>
-      </details>
+      <QueryDetailSection label='Parameters'>
+        <JsonViewer value={activeQuery.query ?? {}} />
+      </QueryDetailSection>
     </DetailsPane>
   )
 }
