@@ -155,7 +155,7 @@ export function makeStyles(colors: DevtoolsColors) {
       color: colors.muted,
       fontWeight: 600,
       padding: '6px 10px',
-      borderBottom: `1px solid ${colors.border}`,
+      boxShadow: `inset 0 -1px ${colors.border}`,
       position: 'sticky',
       top: 0,
       background: colors.bg,
