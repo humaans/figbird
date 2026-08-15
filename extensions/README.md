@@ -68,6 +68,7 @@ The shared browser extension version lives in `extensions/version.json`. See
 - Queries, relational details, causal events, the fetch timeline, normalized cache, and writes update live.
 - The Queries visibility menu separates live, inactive cached, skipped, and historical queries.
 - Events opens in grouped Activity mode; All events exposes the bounded raw stream.
+- JSON details open as a collapsible highlighted tree, with Expand all and Raw views.
 - Selecting a linked timeline or cache-provenance mark opens its causal event chain.
 - Cache JSON edits rerender affected subscribers without issuing a server request and can be undone.
 - **Inspect** highlights the page and filters to queries owned by the selected area.

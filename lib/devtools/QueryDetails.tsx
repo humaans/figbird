@@ -8,6 +8,7 @@ import {
 } from 'react'
 import type { QueryRecord } from './collector.js'
 import { compactJson, formatMs, prettyJson } from './format.js'
+import { JsonViewer } from './JsonViewer.js'
 import type {
   DevtoolsOperation,
   OperationPagination,
@@ -268,22 +269,7 @@ export function QueryDetails({
         label='Query data'
         meta={activeQuery.skipped ? 'skipped' : plural(activeQuery.itemCount, 'row', 'rows')}
       >
-        <pre
-          style={{
-            ...styles.code,
-            maxHeight: 360,
-            overflow: 'auto',
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-            margin: 0,
-            padding: 10,
-            color: activeQuery.data === undefined ? colors.faint : colors.text,
-            background: colors.panel2,
-            borderRadius: 4,
-          }}
-        >
-          {activeQuery.data === undefined ? 'No data available' : prettyJson(activeQuery.data)}
-        </pre>
+        <JsonViewer value={activeQuery.data} />
       </QueryDetailSection>
       <details
         key={activeQueryId ?? operation.key}
@@ -318,19 +304,9 @@ export function QueryDetails({
             {compactJson(activeQuery.query ?? {})}
           </code>
         </summary>
-        <pre
-          style={{
-            ...styles.code,
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-            margin: '9px 0 0',
-            padding: 10,
-            background: colors.panel2,
-            borderRadius: 4,
-          }}
-        >
-          {prettyJson(activeQuery.query ?? {})}
-        </pre>
+        <div style={{ marginTop: 9 }}>
+          <JsonViewer value={activeQuery.query ?? {}} />
+        </div>
       </details>
     </DetailsPane>
   )

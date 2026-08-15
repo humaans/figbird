@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { DevtoolsEvent } from './collector.js'
 import type { EventVisibility } from './Devtools.js'
-import { compactJson, formatClock, formatMs, prettyJson } from './format.js'
+import { compactJson, formatClock, formatMs } from './format.js'
+import { JsonViewer } from './JsonViewer.js'
 import type { EventQueryScope } from './model.js'
 import {
   DetailSection,
@@ -215,20 +216,7 @@ function EventDetails({
         {queryId ? <DetailStat label='Query ID' value={queryId} /> : null}
       </div>
       <DetailSection label={item.event.kind === 'realtime' ? 'Realtime payload' : 'Event payload'}>
-        <pre
-          style={{
-            ...styles.code,
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-            margin: 0,
-            padding: 10,
-            color: payload === undefined ? colors.faint : colors.text,
-            background: colors.panel2,
-            borderRadius: 4,
-          }}
-        >
-          {payload === undefined ? 'No payload' : prettyJson(payload)}
-        </pre>
+        <JsonViewer value={payload} emptyLabel='No payload' />
       </DetailSection>
       {relatedEvents && relatedEvents.length > 1 ? (
         <DetailSection label={relatedLabel ?? 'Related activity'}>
@@ -262,17 +250,7 @@ function EventDetails({
         </DetailSection>
       ) : null}
       <DetailSection label='Full event'>
-        <pre
-          style={{
-            ...styles.code,
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-            margin: 0,
-            color: colors.muted,
-          }}
-        >
-          {prettyJson(displayEvent(item.event))}
-        </pre>
+        <JsonViewer value={displayEvent(item.event)} />
       </DetailSection>
     </DetailsPane>
   )

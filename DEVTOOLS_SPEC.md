@@ -60,6 +60,12 @@ present in Figbird's cache but currently have no subscribers, so they remain ins
 until normal garbage collection removes them. **All queries** also includes bounded
 DevTools history for queries that are no longer present in Figbird.
 
+Read-only JSON values use a shared syntax-highlighted browser. The root is expanded so
+top-level properties are immediately visible, nested containers are individually
+collapsible, and **Expand all** opens the complete value. **Raw** switches to highlighted
+formatted JSON. The cache editor remains a JSON textarea because it accepts replacement
+input rather than only inspecting a value.
+
 ## Cache inspection and editing
 
 The page bridge exposes a serialized projection of each service's normalized entities,

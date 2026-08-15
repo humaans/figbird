@@ -1,6 +1,7 @@
 import { useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { WriteRecord } from './collector.js'
-import { formatClock, formatMs, prettyJson } from './format.js'
+import { formatClock, formatMs } from './format.js'
+import { JsonViewer } from './JsonViewer.js'
 import {
   Badge,
   DetailSection,
@@ -186,7 +187,7 @@ function WriteDetails({
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
 }) {
-  const { colors, styles } = useDevtoolsTheme()
+  const { colors } = useDevtoolsTheme()
   const label =
     write.type === 'action'
       ? (write.name ?? '(anonymous action)')
@@ -226,21 +227,10 @@ function WriteDetails({
         </DetailSection>
       ) : null}
       <DetailSection label='Payload'>
-        <pre
-          style={{
-            ...styles.code,
-            whiteSpace: 'pre-wrap',
-            margin: 0,
-            color: payload === undefined ? colors.faint : colors.text,
-          }}
-        >
-          {payload === undefined ? 'No payload' : prettyJson(payload)}
-        </pre>
+        <JsonViewer value={payload} emptyLabel='No payload' />
       </DetailSection>
       <DetailSection label='Arguments'>
-        <pre style={{ ...styles.code, whiteSpace: 'pre-wrap', margin: 0 }}>
-          {prettyJson(write.args ?? [])}
-        </pre>
+        <JsonViewer value={write.args ?? []} />
       </DetailSection>
       <span style={{ color: colors.faint }} title={write.id}>
         Write ID

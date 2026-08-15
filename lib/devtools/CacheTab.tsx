@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { compactJson, formatAge, formatClock, prettyJson } from './format.js'
 import type { DevtoolsCacheEntity, DevtoolsCacheService } from './collector.js'
+import { JsonViewer } from './JsonViewer.js'
 import type { DevtoolsModel } from './model.js'
 import {
   Badge,
@@ -415,21 +416,7 @@ function CacheEntityDetails({
         </DetailSection>
       ) : (
         <DetailSection label='Current value'>
-          <pre
-            style={{
-              ...styles.code,
-              maxHeight: 360,
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              overflowWrap: 'anywhere',
-              margin: 0,
-              padding: 10,
-              background: colors.panel2,
-              borderRadius: 4,
-            }}
-          >
-            {prettyJson(entity.value)}
-          </pre>
+          <JsonViewer value={entity.value} />
         </DetailSection>
       )}
 
