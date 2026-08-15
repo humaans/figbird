@@ -29,13 +29,14 @@ type TimelineVisibility = 'all' | 'fetch' | 'realtime' | 'write' | 'connection' 
 
 const COLUMNS = [
   { label: 'Time', width: 96, minWidth: 78 },
-  { label: 'Activity', width: 250, minWidth: 160 },
+  { label: 'Activity', width: 190, minWidth: 130 },
+  { label: 'Context', width: 125, minWidth: 80 },
   { label: 'Status', width: 94, minWidth: 78 },
-  { label: 'Trigger', width: 120, minWidth: 88 },
-  { label: 'Cache effect', width: 150, minWidth: 100 },
-  { label: 'Result', width: 145, minWidth: 100 },
-  { label: 'Duration', width: 82, minWidth: 66 },
-  { label: 'Waterfall', width: 240, minWidth: 150 },
+  { label: 'Trigger', width: 110, minWidth: 80 },
+  { label: 'Cache effect', width: 135, minWidth: 90 },
+  { label: 'Result', width: 125, minWidth: 85 },
+  { label: 'Duration', width: 78, minWidth: 62 },
+  { label: 'Waterfall', width: 200, minWidth: 130 },
 ] as const
 
 const VISIBILITY_OPTIONS: Array<{ value: TimelineVisibility; label: string }> = [
@@ -316,35 +317,21 @@ function ActivityRow({
       <td style={styles.td}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
           <ActivityIcon activity={activity} />
-          <span style={{ minWidth: 0 }}>
-            <strong
-              style={{
-                display: 'block',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontWeight: 650,
-              }}
-            >
-              {activity.label}
-            </strong>
-            {activity.detail ? (
-              <span
-                style={{
-                  display: 'block',
-                  color: colors.faint,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  marginTop: 2,
-                }}
-              >
-                {activity.detail}
-              </span>
-            ) : null}
-          </span>
+          <strong
+            title={activity.label}
+            style={{
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontWeight: 650,
+            }}
+          >
+            {activity.label}
+          </strong>
         </span>
       </td>
+      <EllipsisCell value={activity.detail || '—'} />
       <td style={styles.td}>
         <Badge tone={activity.tone}>{activity.status}</Badge>
       </td>
@@ -426,7 +413,7 @@ function Waterfall({
     <div
       style={{
         position: 'relative',
-        height: 30,
+        height: 26,
         overflow: 'hidden',
         backgroundImage: `repeating-linear-gradient(to right, ${colors.rowBorder} 0, ${colors.rowBorder} 1px, transparent 1px, transparent 25%)`,
       }}
@@ -439,7 +426,7 @@ function Waterfall({
         aria-hidden='true'
         style={{
           position: 'absolute',
-          top: point ? 10 : 11,
+          top: point ? 8 : 9,
           left: `${left}%`,
           width: point ? 8 : `max(4px, ${right - left}%)`,
           height: point ? 8 : 7,
