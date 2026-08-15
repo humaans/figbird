@@ -138,6 +138,8 @@ export { useFind, useGet } from './react/useQueryByDesc.js'
 // useQuery is the unified, Suspense-by-default builder hook; pass { suspense: false }
 // for the explicit tagged-union variant.
 export { useQuery } from './react/useQuery.js'
+// useWindowQuery keeps a bounded set of relational pages around a visible index range.
+export { useWindowQuery } from './react/useWindowQuery.js'
 // useQueries suspends on several independent queries at once — one boundary, all
 // fetches in parallel, no sequential waterfall.
 export { useQueries } from './react/useQueries.js'
@@ -151,6 +153,14 @@ export type {
   UseQueryHook,
   UseQueryOptions,
 } from './react/useQuery.js'
+export type {
+  SuspenseWindowQueryResult,
+  UseWindowQueryHook,
+  UseWindowQueryOptions,
+  WindowQueryResult,
+  WindowRange,
+} from './react/useWindowQuery.js'
+export type { WindowQueryConfig, WindowQueryState } from './core/windowQuery.js'
 export type { UseQueriesHook, UseQueriesOptions } from './react/useQueries.js'
 
 // Query-related types for advanced usage

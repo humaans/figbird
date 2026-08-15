@@ -37,6 +37,7 @@ import type { MutationQueueDefinition } from '../core/mutationQueue.js'
 import { useFind, useGet, type QueryResult } from './useQueryByDesc.js'
 import { useQueries, type UseQueriesHook } from './useQueries.js'
 import { useQuery, type UseQueryHook } from './useQuery.js'
+import { useWindowQuery, type UseWindowQueryHook } from './useWindowQuery.js'
 
 /**
  * Strongly-typed call signatures per service name.
@@ -105,6 +106,8 @@ export interface FigbirdHooks<S extends Schema, A extends Adapter = Adapter> {
   /** Return the Figbird instance supplied by the nearest provider. */
   useFigbird: () => Figbird<S, A>
   useQuery: UseQueryHook<S>
+  /** Query a bounded, viewport-indexed relational list. */
+  useWindowQuery: UseWindowQueryHook<S>
   useQueries: UseQueriesHook<S>
   q: QueryBuilderProxy<S>
   defineQuery: DefineQueryForSchema<S>
@@ -202,6 +205,7 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
     useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
     useFigbird: useBoundFigbird,
     useQuery: useQuery as UseQueryHook<S>,
+    useWindowQuery: useWindowQuery as UseWindowQueryHook<S>,
     useQueries: useQueries as UseQueriesHook<S>,
     q,
     defineQuery: baseDefineQuery as DefineQueryForSchema<S>,

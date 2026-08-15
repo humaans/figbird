@@ -1856,6 +1856,27 @@ button.primary:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+.archive-search {
+  width: 190px;
+  flex: none;
+}
+
+.archive-sort {
+  height: 28px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 26px 0 9px;
+  color: var(--text-muted);
+  background: var(--surface);
+  font: inherit;
+}
+
+.archive-sort:focus {
+  outline: none;
+  border-color: var(--text-dim);
+}
+
 .archive-stat-value {
   color: var(--text);
   font-size: 12px;
@@ -1904,7 +1925,19 @@ button.primary:hover:not(:disabled) {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
   scrollbar-color: var(--border) transparent;
+}
+
+.archive-scroll::-webkit-scrollbar {
+  width: 12px;
+}
+
+.archive-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid var(--surface);
+  border-radius: 999px;
+  background: var(--border);
 }
 
 .archive-virtual-space {
@@ -2084,7 +2117,8 @@ button.primary:hover:not(:disabled) {
   }
 
   .archive-stat-wide,
-  .archive-prefetch-state {
+  .archive-prefetch-state,
+  .archive-search {
     display: none;
   }
 }

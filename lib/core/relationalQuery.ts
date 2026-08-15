@@ -1,5 +1,5 @@
 import { hashObject } from './hash.js'
-import type { MatcherContext, PageSource } from '../adapters/adapter.js'
+import type { MatcherContext, PageInfo, PageRequest, PageSource } from '../adapters/adapter.js'
 import { cursorQueryCanKeepPrefix, cursorQueryInputsUnchanged } from './cursorMaintenance.js'
 import type { QueryAST } from './queryBuilder.js'
 import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
@@ -169,6 +169,17 @@ export interface InspectedRelationalQuery {
   }>
 }
 
+/** Internal root override used by window queries to materialize one native page. */
+export interface RelationalPageRoot {
+  page: PageRequest
+  realtime: 'disabled' | 'refetch'
+}
+
+interface RelationalQueryOptions {
+  pageRoot?: RelationalPageRoot
+  ephemeralRoot?: boolean
+}
+
 /**
  * Reference to a relational query with nested relations.
  * Manages multiple sub-queries and assembles data on-the-fly from entity caches.
@@ -243,18 +254,23 @@ export class RelationalQueryRef<
 
   #onEvict: (() => void) | null = null
   #name: string | undefined
+  #pageRoot: RelationalPageRoot | null
+  #ephemeralRoot: boolean
 
   constructor(
     host: RelationalQueryHost<TParams, TMeta, TQuery>,
     ast: QueryAST,
     schema: S,
     onEvict?: () => void,
+    options?: RelationalQueryOptions,
   ) {
     this.#host = host
     this.#ast = ast
     this.#schema = schema
-    this.#queryId = `rq/${hashObject(ast)}`
+    this.#queryId = `rq/${hashObject(options?.pageRoot ? { ast, page: options.pageRoot.page } : ast)}`
     this.#onEvict = onEvict ?? null
+    this.#pageRoot = options?.pageRoot ?? null
+    this.#ephemeralRoot = options?.ephemeralRoot ?? false
   }
 
   /** Returns internal details of this query reference (for debugging/testing). */
@@ -320,6 +336,21 @@ export class RelationalQueryRef<
    */
   kind(): QueryAST['kind'] {
     return this.#ast.kind
+  }
+
+  /** Native continuation metadata for an internally page-backed relational query. */
+  pageInfo(): PageInfo | undefined {
+    return this.#root?.pageInfo()
+  }
+
+  /** Server-reported result-set size for this root window, when available. */
+  total(): number | undefined {
+    return this.#root?.total()
+  }
+
+  /** Root row identity, excluding relation-only updates. */
+  rootRevision(): unknown {
+    return this.#root?.revision()
   }
 
   /**
@@ -896,8 +927,14 @@ export class RelationalQueryRef<
       return
     }
 
-    const rootDesc: QueryDescriptor =
-      this.#ast.kind === 'get'
+    const rootDesc: QueryDescriptor = this.#pageRoot
+      ? {
+          serviceName,
+          method: 'find',
+          params: { query: this.#ast.query },
+          page: this.#pageRoot.page,
+        }
+      : this.#ast.kind === 'get'
         ? {
             serviceName,
             method: 'get',
@@ -912,13 +949,16 @@ export class RelationalQueryRef<
 
     this.#root = new SingleQueryRoot({
       queryRef: this.#query(rootDesc, {
-        realtime: this.#realtimeMode,
-        fetchPolicy: 'swr',
+        realtime: this.#pageRoot?.realtime ?? this.#realtimeMode,
+        // Window blocks are deliberately ephemeral: once a block leaves the retained
+        // viewport set, its QueryStore index is vacuumed with the last subscription.
+        // Normal relational queries keep their usual SWR cache lifetime.
+        fetchPolicy: this.#ephemeralRoot ? 'network-only' : 'swr',
         // .all() fetches every page (rootAllPages — shared with explain()); when
         // unfiltered, success marks the service fully materialized.
         ...(rootAllPages(this.#ast.kind) ? { allPages: true } : {}),
         ...(this.#ast.kind !== 'get' ? matcherConfig : {}),
-        ...(this.#ast.server ? { server: true } : {}),
+        ...(this.#ast.server || this.#pageRoot ? { server: true } : {}),
       }),
       isGet: this.#ast.kind === 'get',
       onRows,

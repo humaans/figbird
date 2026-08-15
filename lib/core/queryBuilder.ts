@@ -595,3 +595,18 @@ export type QueryBuilderKind<B> =
  */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyQueryBuilder<S extends Schema = any> = QueryBuilder<S, any, any, any, any, any>
+
+/** A list-producing find builder accepted by viewport/window query consumers. */
+/* oxlint-disable @typescript-eslint/no-explicit-any -- public overload seam preserves concrete builder types */
+export type AnyWindowQueryBuilder<S extends Schema = any> = QueryBuilder<
+  S,
+  any,
+  any,
+  any,
+  'many',
+  'find'
+>
+/* oxlint-enable @typescript-eslint/no-explicit-any */
+
+/** Extract one assembled row from a list-producing query builder. */
+export type QueryBuilderItem<B> = QueryBuilderResult<B> extends Array<infer T> ? T : never

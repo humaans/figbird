@@ -8,6 +8,7 @@ import {
   type PageRequest,
 } from '../adapters/adapter.js'
 import { registerDevtoolsInstance } from './devtoolsBridge.js'
+import { hashObject } from './hash.js'
 import type { FigbirdEvents } from './events.js'
 import { createMutationsProxy, type MutationsHost, type MutationsProxy } from './mutations.js'
 import {
@@ -22,7 +23,9 @@ import {
   createQueryBuilderProxy,
   queryBuilderUsesSchema,
   type AnyQueryBuilder,
+  type AnyWindowQueryBuilder,
   type QueryBuilderProxy,
+  type QueryBuilderItem,
   type QueryBuilderResult,
 } from './queryBuilder.js'
 import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
@@ -47,6 +50,7 @@ import {
   type ServiceState,
 } from './queryTypes.js'
 import { RelationalQueryRef, type InspectedRelationalQuery } from './relationalQuery.js'
+import { WindowQueryRef, type WindowQueryConfig } from './windowQuery.js'
 export type { InspectedRelationalQuery } from './relationalQuery.js'
 import type {
   AnySchema,
@@ -192,6 +196,12 @@ export class Figbird<
   // (see RelationalQueryRef#cleanup).
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   #relationalQueryCache: Map<string, RelationalQueryRef<any, S, any, any, any>> = new Map()
+
+  // Window refs are interned independently from ordinary relational refs because their
+  // range is subscriber state rather than query identity. Multiple readers of the same
+  // list share retained blocks while contributing their own visible ranges.
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  #windowQueryCache: Map<string, WindowQueryRef<any, S, any, any, any>> = new Map()
 
   // Keyed mutation queues outlive individual React owners while work remains,
   // allowing a remounted feature to reconnect to its pending/error state.
@@ -384,6 +394,56 @@ export class Figbird<
       )
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
+    }
+    ref.setDisplayName(name)
+    return ref
+  }
+
+  /**
+   * Materialize a viewport-indexed relational query. The builder describes list
+   * identity (filters, ordering, relations); the hook supplies each reader's range.
+   * Offset services address blocks directly, while native cursor services retain
+   * index checkpoints and advance only as far as required.
+   */
+  window<Args, B extends AnyWindowQueryBuilder<S>>(
+    queryOrBuilder: QueryInput<B, Args>,
+    config: WindowQueryConfig,
+  ): WindowQueryRef<QueryBuilderItem<B>, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>> {
+    type T = QueryBuilderItem<B>
+    if (!this.schema) {
+      throw new Error(
+        'Cannot use window queries without a schema. ' +
+          'Pass schema to Figbird constructor: new Figbird({ schema, adapter })',
+      )
+    }
+    const { builder, name } = resolveQueryInput(queryOrBuilder)
+    if (!queryBuilderUsesSchema(builder, this.schema)) {
+      throw new Error('The query builder uses a different schema from this Figbird instance')
+    }
+    const ast = builder.toAST()
+    if (ast.kind !== 'find' || ast.cardinality !== 'many') {
+      throw new Error('useWindowQuery() requires a list-producing find builder')
+    }
+    if (ast.query.$limit !== undefined || ast.query.$skip !== undefined) {
+      throw new Error('useWindowQuery() owns $limit/$skip; remove .limit() and .skip()')
+    }
+
+    const hash = hashObject({ ast, window: config })
+    const cached = this.#windowQueryCache.get(hash)
+    let ref = cached as
+      WindowQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>> | undefined
+    if (!ref) {
+      ref = new WindowQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
+        this,
+        ast,
+        this.schema,
+        config,
+        () => {
+          if (this.#windowQueryCache.get(hash) === ref) this.#windowQueryCache.delete(hash)
+        },
+      )
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+      this.#windowQueryCache.set(hash, ref as WindowQueryRef<any, S, any, any, any>)
     }
     ref.setDisplayName(name)
     return ref

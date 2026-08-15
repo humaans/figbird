@@ -376,6 +376,55 @@ const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQuer
 The server owns page boundaries. Figbird merges a realtime event locally only when it
 can prove that the event leaves the current window unchanged; otherwise it refetches.
 
+### Virtualized windows
+
+`useWindowQuery` is the indexed, bounded counterpart to `.paginate()`. Give it the
+row range reported by React Window, TanStack Virtual, or another virtualizer; it
+returns a sparse `ReadonlyMap` keyed by absolute row index:
+
+```tsx
+const { data: rows, total, isFetching, error } = useWindowQuery(
+  q.archivedIssues
+    .where(search ? { $search: search } : {})
+    .orderBy(sortField, sortDirection)
+    .related('assignee')
+    .related('labels'),
+  {
+    range: { start: firstVisible, end: lastVisible + 1 },
+    pageSize: 40,
+    preloadPages: 1,
+    maxPages: 5,
+  },
+)
+
+const row = rows.get(absoluteIndex) // undefined while that block is arriving
+```
+
+The range is end-exclusive. Figbird fetches every block intersecting it, preloads
+the configured number of adjacent blocks, assembles relations per block, and evicts
+the least-recently-used distant blocks. `maxPages` is a retention target; active
+readers can temporarily require more blocks. Evicted root query indexes are removed
+from the query store, while normalized entities remain available to ordinary Figbird
+queries and relation fan-ins.
+
+The hook detects the adapter's pagination capability:
+
+- Offset services jump straight to any requested index with `$skip` and `$limit`.
+- Cursor services walk forward from their nearest known cursor checkpoint. They do
+  not pretend a cursor is a random-access offset; a future seek-capable adapter can
+  optimize that walk without changing the hook API.
+
+When the server reports `total`, give it to the virtualizer as its item count to get
+a full-size scrollbar and direct scrollbar jumps. Restoring a saved scroll offset is
+then an application concern: initialize the virtualizer and `range` from that offset.
+On offset services only the restored block and its neighbors load—not the whole
+prefix. Cursor services necessarily advance through the cursor chain to reach it.
+
+Filtering and ordering belong on the builder, so server-side search and sort create
+a new query identity automatically. Builders passed to `useWindowQuery` must produce
+a list and must not use `.limit()`, `.skip()`, `.paginate()`, or `.all()`; the window
+controller owns those boundaries.
+
 ### Cursor pagination
 
 Pagination uses `$limit` and `$skip` by default. Configure cursor-backed Feathers
@@ -1413,6 +1462,31 @@ suspension for the set (see [Several queries at once](#several-queries-at-once))
 Each element has the `useQuery` suspense result shape for its builder (`data`,
 `error`, `isFetching`, `refetch`, plus the `loadMore`/`hasMore`/… family on a
 `.paginate()` element). Suspense-only. Options: `staleTime?: number`.
+
+## useWindowQuery
+
+```ts
+const { data, total, error, isFetching, refetch } = useWindowQuery(
+  q.issues.orderBy('updatedAt', 'desc').related('assignee'),
+  {
+    range: { start, end }, // end-exclusive visible indexes
+    pageSize: 40,
+    preloadPages: 1,      // default: 1
+    maxPages: 5,          // default: 5
+  },
+)
+```
+
+`data` is a sparse `ReadonlyMap<number, Item>` indexed into the complete server
+result, while `total` is the server-reported count when available. Missing entries
+are blocks currently loading. The hook is Suspense-native for its first window and
+keeps the previous window mounted during later movement; pass `{ suspense: false }`
+for the tagged-union form. It accepts the same `skip` and `staleTime` options and the
+same builder, bound-request, and argumentless-definition inputs as `useQuery`.
+
+Offset adapters jump directly; cursor adapters advance sequentially and reuse cursor
+checkpoints. Relations, filtering, and sorting are part of each fetched block. See
+[Virtualized windows](#virtualized-windows) for lifecycle and restoration semantics.
 
 ## m and useMutations
 

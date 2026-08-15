@@ -1,23 +1,33 @@
 /**
- * A deliberately deep archive combining Figbird's relational pagination with
- * TanStack Virtual. The query owns server/cache concerns; the virtualizer owns
- * which of the loaded rows are mounted in the DOM.
+ * A deep, relational archive driven by Figbird's viewport query and rendered with
+ * TanStack Virtual. Query windows and DOM windows stay independent and bounded.
  */
 
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
+import { useDebouncedTransition } from 'figbird'
 import { Explain } from '../../components/Explain'
 import { StatusDot } from '../../components/ui'
-import { q, useQuery, type ArchivedIssue, type Label, type Team, type User } from '../../figbird'
+import {
+  q,
+  useWindowQuery,
+  type ArchivedIssue,
+  type Label,
+  type Team,
+  type User,
+} from '../../figbird'
 
 const PAGE_SIZE = 40
 const ROW_HEIGHT = 72
 const RESTORE_KEY = 'figbird-demo:archive-scroll'
+const INITIAL_WINDOW_SIZE = 18
 
 interface SavedPosition {
   offset: number
   index: number
 }
+
+type ArchiveSort = 'deleted-desc' | 'deleted-asc' | 'title-asc'
 
 type ArchiveRow = ArchivedIssue & {
   assignee: User | null
@@ -52,12 +62,11 @@ export function ArchivePage() {
           <div className='archive-kicker'>Cold storage / 5,000 records</div>
           <h1 className='archive-title'>The long tail</h1>
           <p className='archive-deck'>
-            Relational pages arrive just ahead of the viewport. Only the visible ledger rows exist
-            in the DOM.
+            A bounded relational data window follows the virtualized viewport in either direction.
           </p>
         </div>
         <div className='archive-head-note'>
-          Scroll deep, then reload. Your exact place is restored.
+          Grab the scrollbar or reload deep in the list. Only that window is fetched.
         </div>
       </header>
       <Suspense fallback={<ArchiveSkeleton />}>
@@ -68,84 +77,76 @@ export function ArchivePage() {
 }
 
 function VirtualArchive() {
+  const savedPosition = useRef(readSavedPosition())
+  const initialIndex = savedPosition.current?.index ?? 0
+  const [range, setRange] = useState({
+    start: initialIndex,
+    end: initialIndex + INITIAL_WINDOW_SIZE,
+  })
+  const [searchInput, setSearchInput] = useState('')
+  const search = useDebouncedTransition(searchInput.trim(), 250)
+  const [sort, setSort] = useState<ArchiveSort>('deleted-desc')
+  const queryIdentity = `${search}\u0000${sort}`
+  const committedIdentity = useRef(queryIdentity)
+  const queryChanged = committedIdentity.current !== queryIdentity
+  const requestedRange = queryChanged ? { start: 0, end: INITIAL_WINDOW_SIZE } : range
+
+  let archiveQuery = q.archivedIssues.where(search === '' ? {} : { $search: search })
+  archiveQuery =
+    sort === 'title-asc'
+      ? archiveQuery.orderBy('title', 'asc').orderBy('id', 'asc')
+      : sort === 'deleted-asc'
+        ? archiveQuery.orderBy('deletedAt', 'asc').orderBy('id', 'asc')
+        : archiveQuery.orderBy('deletedAt', 'desc').orderBy('id', 'desc')
+
   const {
     data: rows,
     total,
-    hasMore,
-    loadMore,
-    isLoadingMore,
     isFetching,
-    loadMoreError,
-  } = useQuery(
-    q.archivedIssues
-      .orderBy('deletedAt', 'desc')
-      .paginate({ pageSize: PAGE_SIZE, includeTotal: true })
-      .related('assignee')
-      .related('team')
-      .related('labels'),
-  )
+    error,
+  } = useWindowQuery(archiveQuery.related('assignee').related('team').related('labels'), {
+    range: requestedRange,
+    pageSize: PAGE_SIZE,
+    preloadPages: 1,
+    maxPages: 5,
+  })
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const savedPosition = useRef(readSavedPosition())
-  const restored = useRef(savedPosition.current === null)
-  const [restoreComplete, setRestoreComplete] = useState(restored.current)
 
   const virtualizer = useVirtualizer({
-    count: hasMore ? rows.length + 1 : rows.length,
+    count: total ?? Math.max(1, requestedRange.end),
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 5,
-    getItemKey: index => rows[index]?.id ?? 'archive-loader',
-    onChange: instance => persistPosition(instance, restored.current),
+    initialOffset: savedPosition.current?.offset ?? 0,
+    getItemKey: index => index,
+    onChange: instance => {
+      if (committedIdentity.current !== queryIdentity) return
+      persistPosition(instance)
+      const items = instance.getVirtualItems()
+      const first = items[0]?.index
+      const last = items.at(-1)?.index
+      if (first === undefined || last === undefined) return
+      setRange(current =>
+        current.start === first && current.end === last + 1
+          ? current
+          : { start: first, end: last + 1 },
+      )
+    },
   })
+
+  useEffect(() => {
+    if (!queryChanged) return
+    committedIdentity.current = queryIdentity
+    savedPosition.current = null
+    sessionStorage.removeItem(RESTORE_KEY)
+    setRange({ start: 0, end: INITIAL_WINDOW_SIZE })
+    virtualizer.scrollToOffset(0)
+  }, [queryChanged, queryIdentity, virtualizer])
+
   const virtualRows = virtualizer.getVirtualItems()
-  const lastVirtualIndex = virtualRows.at(-1)?.index
-
-  // There is no public "page 2 query" to prefetch: pagination cursors belong to
-  // the query ref. Calling loadMore one viewport early is the appropriate prefetch
-  // primitive, and the ref deduplicates overlapping calls.
-  useEffect(() => {
-    if (
-      restoreComplete &&
-      lastVirtualIndex != null &&
-      lastVirtualIndex >= rows.length - 12 &&
-      hasMore &&
-      !isLoadingMore
-    ) {
-      loadMore()
-    }
-  }, [hasMore, isLoadingMore, lastVirtualIndex, loadMore, restoreComplete, rows.length])
-
-  // Reload recovery first rebuilds the paginated prefix needed to reach the saved
-  // row, then asks the virtualizer to land on the exact pixel offset. This works
-  // without persisting Figbird's cache or teaching the server about UI state.
-  useEffect(() => {
-    if (restoreComplete) return
-    const target = savedPosition.current
-    if (target === null) {
-      restored.current = true
-      setRestoreComplete(true)
-      return
-    }
-    if (rows.length <= target.index && hasMore) {
-      if (!isLoadingMore) loadMore()
-      return
-    }
-
-    const frame = requestAnimationFrame(() => {
-      virtualizer.scrollToOffset(target.offset, { align: 'start' })
-      restored.current = true
-      setRestoreComplete(true)
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [hasMore, isLoadingMore, loadMore, restoreComplete, rows.length, virtualizer])
-
-  const mountedRows = virtualRows.filter(item => item.index < rows.length).length
-  const visibleStart = virtualRows.find(item => item.index < rows.length)?.index ?? 0
-  const visibleEnd =
-    virtualRows
-      .slice()
-      .reverse()
-      .find(item => item.index < rows.length)?.index ?? Math.max(0, rows.length - 1)
+  const mountedRows = virtualRows.filter(item => rows.has(item.index)).length
+  const visibleStart = virtualRows[0]?.index ?? requestedRange.start
+  const visibleEnd = virtualRows.at(-1)?.index ?? Math.max(0, requestedRange.end - 1)
 
   const jumpToTop = () => {
     sessionStorage.removeItem(RESTORE_KEY)
@@ -155,9 +156,26 @@ function VirtualArchive() {
   return (
     <section className='archive-ledger'>
       <div className='archive-toolbar'>
+        <input
+          value={searchInput}
+          onChange={event => setSearchInput(event.target.value)}
+          className='search-input compact archive-search'
+          placeholder='Search archive…'
+          aria-label='Search archived issues'
+        />
+        <select
+          className='archive-sort'
+          value={sort}
+          onChange={event => setSort(event.target.value as ArchiveSort)}
+          aria-label='Sort archived issues'
+        >
+          <option value='deleted-desc'>Recently deleted</option>
+          <option value='deleted-asc'>Oldest deleted</option>
+          <option value='title-asc'>Title A–Z</option>
+        </select>
         <div className='archive-stat'>
-          <span className='archive-stat-value'>{rows.length.toLocaleString()}</span>
-          <span>loaded</span>
+          <span className='archive-stat-value'>{rows.size.toLocaleString()}</span>
+          <span>cached</span>
         </div>
         <div className='archive-stat'>
           <span className='archive-stat-value'>{mountedRows}</span>
@@ -165,38 +183,38 @@ function VirtualArchive() {
         </div>
         <div className='archive-stat archive-stat-wide'>
           <span className='archive-stat-value'>
-            {visibleStart + 1}–{visibleEnd + 1}
+            {visibleStart + 1}–{Math.min(visibleEnd + 1, total ?? Infinity)}
           </span>
-          <span>render window</span>
+          <span>of {total?.toLocaleString() ?? 'unknown'}</span>
         </div>
-        <StatusDot active={isFetching || isLoadingMore} />
+        <StatusDot active={isFetching} />
         <span className='archive-prefetch-state'>
-          {isLoadingMore
-            ? 'preloading next page…'
-            : hasMore
-              ? 'next page armed'
-              : 'archive complete'}
+          {isFetching ? 'fetching window…' : 'adjacent pages ready'}
         </span>
         <button className='link archive-top-button' onClick={jumpToTop}>
           ↑ Top
         </button>
         <Explain
-          label='Virtualized relational pagination'
-          query={`q.archivedIssues
-  .orderBy('deletedAt', 'desc')
-  .paginate({ pageSize: 40, includeTotal: true })
-  .related('assignee')     // one
-  .related('team')         // one
-  .related('labels')       // many, two-hop junction
-
-// TanStack Virtual mounts visible rows only.
-// loadMore() runs one viewport before the edge.`}
+          label='Windowed relational query'
+          query={`useWindowQuery(
+  q.archivedIssues
+    .where(search)
+    .orderBy(sortField, direction)
+    .related('assignee')
+    .related('team')
+    .related('labels'),
+  {
+    range: { start, end },
+    pageSize: 40,
+    preloadPages: 1,
+    maxPages: 5,
+  },
+)`}
         >
-          Figbird fetches and assembles each page, including an assignee, team, and the two-hop
-          label list for every row. TanStack Virtual independently limits DOM work. Near the end of
-          the loaded window, <code>loadMore()</code> warms the next page before it is visible.
-          Scroll position is stored as a row plus pixel offset; reload reconstructs only the prefix
-          needed to reach it.
+          TanStack Virtual reports the visible indexes. Figbird fetches those server blocks plus one
+          page on either side, assembles all three relations, and evicts distant blocks. Search and
+          sorting create a new server-authoritative list identity; a deep reload starts at the saved
+          window rather than rebuilding the prefix.
         </Explain>
       </div>
 
@@ -211,7 +229,7 @@ function VirtualArchive() {
       <div ref={scrollRef} className='archive-scroll' role='list' aria-label='Archived issues'>
         <div className='archive-virtual-space' style={{ height: virtualizer.getTotalSize() }}>
           {virtualRows.map(virtualRow => {
-            const row = rows[virtualRow.index]
+            const row = rows.get(virtualRow.index) as ArchiveRow | undefined
             return (
               <div
                 key={virtualRow.key}
@@ -224,9 +242,7 @@ function VirtualArchive() {
                 {row ? (
                   <ArchiveLedgerRow row={row} index={virtualRow.index} />
                 ) : (
-                  <div className='archive-loader'>
-                    <span className='spinner archive-spinner' /> Fetching the next {PAGE_SIZE}…
-                  </div>
+                  <ArchiveWindowPlaceholder />
                 )}
               </div>
             )
@@ -234,28 +250,30 @@ function VirtualArchive() {
         </div>
       </div>
 
-      {!restoreComplete && savedPosition.current ? (
-        <div className='archive-restore'>
-          Restoring row{' '}
-          {Math.min(savedPosition.current.index + 1, total ?? Infinity).toLocaleString()}…{' '}
-          {rows.length.toLocaleString()} loaded
+      {error ? (
+        <div className='archive-error'>
+          This window failed to refresh. Scroll away and back to retry.
         </div>
-      ) : null}
-      {loadMoreError ? (
-        <div className='archive-error'>Next page failed. Scroll again to retry.</div>
       ) : null}
     </section>
   )
 }
 
-function persistPosition(virtualizer: Virtualizer<HTMLDivElement, Element>, canPersist: boolean) {
-  if (!canPersist) return
+function persistPosition(virtualizer: Virtualizer<HTMLDivElement, Element>) {
   const offset = virtualizer.scrollOffset ?? 0
   const value: SavedPosition = {
     offset,
     index: Math.max(0, Math.floor(offset / ROW_HEIGHT)),
   }
   sessionStorage.setItem(RESTORE_KEY, JSON.stringify(value))
+}
+
+function ArchiveWindowPlaceholder() {
+  return (
+    <div className='archive-loader' aria-label='Loading row'>
+      <span className='spinner archive-spinner' /> Fetching this window…
+    </div>
+  )
 }
 
 function ArchiveLedgerRow({ row, index }: { row: ArchiveRow; index: number }) {
@@ -288,8 +306,8 @@ function ArchiveLedgerRow({ row, index }: { row: ArchiveRow; index: number }) {
 
 function ArchiveSkeleton() {
   return (
-    <section className='archive-ledger archive-skeleton' aria-label='Loading archive'>
-      <div className='archive-toolbar'>Opening the archive…</div>
+    <section className='archive-ledger archive-skeleton' aria-label='Loading archive window'>
+      <div className='archive-toolbar'>Opening the requested archive window…</div>
       {Array.from({ length: 9 }, (_, index) => (
         <div key={index} className='archive-skeleton-row' />
       ))}

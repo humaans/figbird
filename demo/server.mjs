@@ -94,6 +94,23 @@ class SlowMemoryService extends MemoryService {
   }
 }
 
+class ArchiveMemoryService extends SlowMemoryService {
+  find(params = {}) {
+    const { $search, ...query } = params.query ?? {}
+    if (typeof $search !== 'string' || $search.trim() === '') {
+      return super.find(params)
+    }
+    const term = $search.trim().toLocaleLowerCase()
+    const matchingIds = Object.values(this.store)
+      .filter(row => row.title.toLocaleLowerCase().includes(term))
+      .map(row => row.id)
+    return super.find({
+      ...params,
+      query: { ...query, id: { $in: matchingIds } },
+    })
+  }
+}
+
 const app = feathers()
 
 app.configure(
@@ -114,7 +131,7 @@ const users = new SlowMemoryService({ multi: false, paginate: false }, { speed: 
 const teams = new SlowMemoryService({ multi: false, paginate: false }, { speed: 0.6 })
 const labels = new SlowMemoryService({ multi: false, paginate: false }, { speed: 0.6 })
 const issues = new SlowMemoryService({ multi: false, paginate: { default: 50, max: 200 } })
-const archivedIssues = new SlowMemoryService(
+const archivedIssues = new ArchiveMemoryService(
   { multi: false, paginate: { default: 50, max: 200 } },
   { speed: 0.9 },
 )
