@@ -71,8 +71,10 @@ export function TimelineActivityTable({
   const [filter, setFilter] = useState('')
   const [range, setRange] = useState<TimelineRange | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [availableTableWidth, setAvailableTableWidth] = useState(0)
   const [columnWidths, onColumnResizeStart] = useResizableColumns(COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
+  const hasExtent = extent !== null
   const selected = activities.find(activity => activity.id === selectedId)
   const normalizedFilter = filter.trim().toLowerCase()
   const rows = activities.filter(activity => {
@@ -86,7 +88,18 @@ export function TimelineActivityTable({
     if (range && !intersects(activity, range, nowPoint)) return false
     return normalizedFilter ? activity.searchText.includes(normalizedFilter) : true
   })
-  const totalWidth = columnWidths.reduce((sum, width) => sum + width, 0)
+  const waterfallIndex = COLUMNS.length - 1
+  const fixedColumnsWidth = columnWidths
+    .slice(0, waterfallIndex)
+    .reduce((sum, width) => sum + width, 0)
+  const waterfallWidth = Math.max(
+    columnWidths[waterfallIndex]!,
+    availableTableWidth - fixedColumnsWidth,
+  )
+  const renderedColumnWidths = columnWidths.map((width, index) =>
+    index === waterfallIndex ? waterfallWidth : width,
+  )
+  const totalWidth = renderedColumnWidths.reduce((sum, width) => sum + width, 0)
 
   useEffect(() => {
     if (follow) setRange(null)
@@ -101,6 +114,24 @@ export function TimelineActivityTable({
     if (!scroll || !follow) return
     scroll.scrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
   }, [activities.length, follow])
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll) return
+
+    const measure = () => {
+      setAvailableTableWidth(current =>
+        current === scroll.clientWidth ? current : scroll.clientWidth,
+      )
+    }
+
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(scroll)
+    return () => observer.disconnect()
+  }, [hasExtent])
 
   if (!extent) {
     return (
@@ -201,7 +232,7 @@ export function TimelineActivityTable({
           <table style={{ ...styles.table, minWidth: totalWidth, width: totalWidth }}>
             <colgroup>
               {COLUMNS.map((column, index) => (
-                <col key={column.label} style={{ width: columnWidths[index] }} />
+                <col key={column.label} style={{ width: renderedColumnWidths[index] }} />
               ))}
             </colgroup>
             <thead>
