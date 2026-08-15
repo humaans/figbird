@@ -13,14 +13,29 @@ export type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 // oxlint-disable-next-line @typescript-eslint/no-empty-object-type
 export type MutationEventMethod = MutationMethod | (string & {})
 
+export type TraceCause =
+  | { kind: 'realtime'; traceId: number }
+  | { kind: 'reconnect'; traceId: number }
+  | { kind: 'mutation'; traceId: number; mutationId?: number }
+  | { kind: 'fetch-rebase'; traceId: number }
+  | { kind: 'manual'; traceId: number }
+  | { kind: 'subscription'; traceId: number }
+
+export type FetchReason = 'subscription' | 'manual' | 'reconcile' | 'retry' | 'follow-up'
+
+export interface CacheQueryEffect {
+  queryId: string
+  outcome: 'merged' | 'reconcile'
+}
+
 /**
  * Observability events emitted by a Figbird instance — the same signal a dev tool
  * panel or trace logger would want to subscribe to.
  *
  * Events are intentionally bounded by consumers. Realtime events and mutation/action
  * starts carry their original payloads so an attached devtool can inspect what
- * happened; no result or cache diffs are emitted, and emit() drops everything when
- * nothing is listening.
+ * happened. Cache transitions may include before/after values for attached devtools,
+ * and emit() drops everything when nothing is listening.
  */
 export type FigbirdEvent =
   | {
@@ -29,6 +44,10 @@ export type FigbirdEvent =
       method: 'find' | 'get'
       queryId: string
       generation: number
+      fetchId?: number
+      reason?: FetchReason
+      attempt?: number
+      causes?: readonly TraceCause[]
       resourceId?: string | number
       params?: unknown
     }
@@ -38,6 +57,7 @@ export type FigbirdEvent =
       method: 'find' | 'get'
       queryId: string
       generation: number
+      fetchId?: number
       durationMs: number
       itemCount: number
     }
@@ -47,6 +67,7 @@ export type FigbirdEvent =
       method: 'find' | 'get'
       queryId: string
       generation: number
+      fetchId?: number
       durationMs: number
       error: Error
     }
@@ -54,36 +75,67 @@ export type FigbirdEvent =
       kind: 'reconcile:started'
       queryId: string
       serviceName: string
+      causes?: readonly TraceCause[]
+    }
+  | {
+      kind: 'reconcile:decision'
+      queryId: string
+      serviceName: string
+      decision: 'fetch-now' | 'coalesced' | 'deferred-hidden' | 'inactive'
+      causes?: readonly TraceCause[]
+    }
+  | {
+      kind: 'reconnect:sweep'
+      traceId?: number
+      phase: 'scheduled' | 'started'
+      delayMs: number
+      queryCount?: number
     }
   | {
       kind: 'realtime'
+      traceId?: number
       serviceName: string
       type: EventType
       itemId: string | number | undefined
       item?: unknown
     }
   | {
+      kind: 'cache:updated'
+      traceId?: number
+      source: 'realtime' | 'mutation' | 'fetch' | 'optimistic' | 'devtools'
+      serviceName: string
+      type: EventType
+      itemId: string | number
+      item: unknown
+      previousItem: unknown | null
+      queryEffects: readonly CacheQueryEffect[]
+    }
+  | {
       kind: 'connection:connected'
+      traceId?: number
       transport?: string
       connectionId?: string
     }
   | {
       kind: 'connection:disconnected'
+      traceId?: number
       reason?: string
       reconnecting: boolean
     }
   | {
       kind: 'connection:reconnected'
+      traceId?: number
       attempt?: number
       transport?: string
       connectionId?: string
     }
   | {
       kind: 'connection:error'
+      traceId?: number
       phase: 'connect' | 'reconnect'
       error: Error
     }
-  | { kind: 'connection:reconnect-failed'; error?: Error }
+  | { kind: 'connection:reconnect-failed'; traceId?: number; error?: Error }
   | {
       kind: 'mutate:start'
       /** Correlates the start/end/error/rollback events of one mutation. */

@@ -29,11 +29,19 @@ import {
   type QueryBuilderResult,
 } from './queryBuilder.js'
 import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
-import { explainQuery, type ExplainReport, type QueryNodeClass } from './queryClassification.js'
+import {
+  explainQuery,
+  explainQueryNode,
+  isServerMaintained,
+  type ClassificationReason,
+  type ExplainReport,
+  type QueryNodeClass,
+} from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
 import {
   QueryStore,
+  type DevtoolsCacheEditResult,
   type ReconnectJitter,
   type RetryDelay,
   type VisibilitySource,
@@ -927,6 +935,15 @@ export class Figbird<
         const stats = this.queryStore.getQueryStats(query.queryId)
         const generation = this.queryStore.getQueryGeneration(query.queryId)
         if (generation === undefined) continue
+        const explanation =
+          query.desc.method === 'find'
+            ? explainQueryNode(q, {
+                server: query.config.server,
+                allPages: 'allPages' in query.config && query.config.allPages === true,
+                localOperators: locallySupportedOperators(this.adapter, serviceName),
+                snapshot: query.config.realtime === 'disabled',
+              })
+            : null
         rows.push({
           queryId: query.queryId,
           generation,
@@ -943,6 +960,13 @@ export class Figbird<
               }
             : {}),
           classification: query.classification,
+          classificationReasons: explanation?.reasons ?? [],
+          realtimeStrategy:
+            query.config.realtime === 'disabled'
+              ? 'manual'
+              : query.config.realtime === 'refetch' || isServerMaintained(query.classification)
+                ? 'refetch'
+                : 'merge',
           skipped: query.config.skip === true,
           status: query.state.status,
           isFetching: query.state.isFetching,
@@ -962,6 +986,28 @@ export class Figbird<
       }
     }
     return rows
+  }
+
+  /** Read-only normalized entity-cache projection for attached devtools. */
+  inspectCache(): InspectedCacheService[] {
+    return [...this.queryStore.getState()].map(([serviceName, service]) => ({
+      serviceName,
+      ...(service.materialized ? { materialized: service.materialized } : {}),
+      entities: [...service.entities].map(([id, value]) => ({
+        id,
+        value,
+        queryIds: [...(service.itemQueryIndex.get(id) ?? [])],
+      })),
+    }))
+  }
+
+  /** @internal Browser-devtools command; changes only the in-memory cache. */
+  editCacheEntity(
+    serviceName: string,
+    itemId: string | number,
+    item: unknown,
+  ): DevtoolsCacheEditResult {
+    return this.queryStore.editCacheEntity(serviceName, itemId, item)
   }
 
   /**
@@ -992,6 +1038,8 @@ export interface InspectedQuery {
   /** Native adapter page details. Offset pages remain visible in `query` as `$skip`/`$limit`. */
   page?: { request: PageRequest; info?: PageInfo }
   classification: QueryNodeClass | 'get'
+  classificationReasons?: ClassificationReason[]
+  realtimeStrategy?: 'merge' | 'refetch' | 'manual'
   /** True when this entry was materialized with `skip: true`. */
   skipped?: boolean
   status: 'loading' | 'success' | 'error'
@@ -1005,4 +1053,16 @@ export interface InspectedQuery {
   errorCount: number
   lastDurationMs?: number
   totalDurationMs: number
+}
+
+export interface InspectedCacheEntity {
+  id: string
+  value: unknown
+  queryIds: string[]
+}
+
+export interface InspectedCacheService {
+  serviceName: string
+  materialized?: { queryId: string; fetchedAt: number }
+  entities: InspectedCacheEntity[]
 }

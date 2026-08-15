@@ -8,6 +8,7 @@ import { ExtensionSession } from './remote.js'
 function Panel() {
   const session = useMemo(() => new ExtensionSession(), [])
   const collector = useMemo(() => createCollector(session.figbird, { heartbeatMs: 0 }), [session])
+  const cacheEditor = useMemo(() => ({ update: session.editCacheEntity }), [session])
   const status = useSyncExternalStore(session.subscribeStatus, session.getStatus, session.getStatus)
 
   useEffect(() => {
@@ -30,7 +31,12 @@ function Panel() {
   useEffect(() => session.subscribeReset(() => collector.reset()), [collector, session])
 
   return (
-    <FigbirdDevtoolsPanel collector={collector} inspection={session.inspection} status={status} />
+    <FigbirdDevtoolsPanel
+      collector={collector}
+      inspection={session.inspection}
+      cacheEditor={cacheEditor}
+      status={status}
+    />
   )
 }
 

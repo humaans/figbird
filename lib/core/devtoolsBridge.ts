@@ -1,5 +1,5 @@
 import type { FigbirdEvent, FigbirdEvents } from './events.js'
-import type { InspectedQuery } from './figbird.js'
+import type { InspectedCacheService, InspectedQuery } from './figbird.js'
 import type { InspectedRelationalQuery } from './relationalQuery.js'
 import type { InFlightMutation, MutationActivity } from './mutationTracker.js'
 import { CappedBuffer } from './cappedBuffer.js'
@@ -12,7 +12,13 @@ interface DevtoolsSource {
   events: FigbirdEvents
   mutating: MutationActivity
   inspect(): InspectedQuery[]
+  inspectCache(): InspectedCacheService[]
   inspectRelational(): InspectedRelationalQuery[]
+  editCacheEntity(
+    serviceName: string,
+    itemId: string | number,
+    item: unknown,
+  ): { ok: boolean; error?: string; traceId?: number }
   subscribeToStateChanges(fn: (state: unknown) => void): () => void
 }
 
@@ -43,6 +49,7 @@ export interface DevtoolsBridgeConnection {
 }
 
 export interface DevtoolsWireRead {
+  cache: InspectedCacheService[]
   events: DevtoolsWireEvent[]
   inFlightMutations: readonly InFlightMutation[]
   queries: DevtoolsWireQuery[]
@@ -67,6 +74,12 @@ interface DevtoolsPageBridge {
   protocol: 2
   connect(instanceId?: number): DevtoolsBridgeConnection | null
   disconnect(sessionId: string): void
+  editCacheEntityJson(
+    sessionId: string,
+    serviceName: string,
+    itemIdJson: string,
+    itemJson: string,
+  ): string
   readJson(sessionId: string, version: number | null): string | null
   register(source: DevtoolsSource): void
 }
@@ -109,7 +122,9 @@ function isPageBridge(value: unknown): value is DevtoolsPageBridge {
     'connect' in value &&
     typeof value.connect === 'function' &&
     'readJson' in value &&
-    typeof value.readJson === 'function'
+    typeof value.readJson === 'function' &&
+    'editCacheEntityJson' in value &&
+    typeof value.editCacheEntityJson === 'function'
   )
 }
 
@@ -177,6 +192,26 @@ function createPageBridge(): DevtoolsPageBridge {
       closeSession(sessionId)
     },
 
+    editCacheEntityJson(sessionId, serviceName, itemIdJson, itemJson) {
+      const session = sessions.get(sessionId)
+      if (!session) return '{"ok":false,"error":"Devtools session expired"}'
+      refreshExpiry(sessionId, session)
+      try {
+        const itemId = JSON.parse(itemIdJson) as unknown
+        if (typeof itemId !== 'string' && typeof itemId !== 'number') {
+          return '{"ok":false,"error":"Entity ID must be a string or number"}'
+        }
+        const result = session.source.editCacheEntity(serviceName, itemId, JSON.parse(itemJson))
+        session.version++
+        return JSON.stringify(result)
+      } catch (error) {
+        return JSON.stringify({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+
     readJson(sessionId, version) {
       const session = sessions.get(sessionId)
       if (!session) return null
@@ -188,6 +223,7 @@ function createPageBridge(): DevtoolsPageBridge {
         protocol: 2,
         version: session.version,
         read: {
+          cache: session.source.inspectCache(),
           events: session.events.drain().map(toWireEvent),
           inFlightMutations: session.source.mutating.getSnapshot(),
           queries: session.source.inspect(),

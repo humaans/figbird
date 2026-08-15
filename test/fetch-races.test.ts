@@ -160,6 +160,7 @@ function ids(data: unknown): number[] {
 function processedEvent(itemId: number): ProcessedRealtimeEvent {
   return {
     origin: 'authoritative',
+    source: 'realtime',
     serviceName: 'notes',
     type: 'patched',
     item: { id: itemId },

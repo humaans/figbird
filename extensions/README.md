@@ -65,7 +65,9 @@ The shared browser extension version lives in `extensions/version.json`. See
 ## QA checklist
 
 - The Figbird panel reports **Connected** after the page creates a Figbird instance.
-- Queries, relational details, events, the fetch timeline, and writes update live.
+- Queries, relational details, causal events, the fetch timeline, normalized cache, and writes update live.
+- Selecting a linked timeline or cache-provenance mark opens its causal event chain.
+- Cache JSON edits rerender affected subscribers without issuing a server request and can be undone.
 - **Inspect** highlights the page and filters to queries owned by the selected area.
 - Reloading or navigating the inspected tab reconnects the panel.
 - Closing the panel for five seconds ends the page-side debug session.

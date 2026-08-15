@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { CacheTab, type DevtoolsCacheEditor } from './CacheTab.js'
 import { EventsTab } from './EventsTab.js'
 import { QueriesTab } from './QueriesTab.js'
 import { TimelineFollowControl, TimelineTab } from './TimelineTab.js'
@@ -16,7 +17,7 @@ import {
   type DevtoolsThemeMode,
 } from './ui.js'
 
-type Tab = 'queries' | 'timeline' | 'events' | 'writes'
+type Tab = 'queries' | 'timeline' | 'events' | 'cache' | 'writes'
 export type QueryVisibility = 'active' | 'all' | 'skipped'
 
 export type DevtoolsInspectionSnapshot =
@@ -41,6 +42,7 @@ export interface DevtoolsInspectionController {
 export interface FigbirdDevtoolsPanelProps {
   collector: Collector
   inspection?: DevtoolsInspectionController
+  cacheEditor?: DevtoolsCacheEditor
   status?: string
   theme?: DevtoolsThemeMode
 }
@@ -53,6 +55,7 @@ const getEmptyInspection = () => EMPTY_INSPECTION
 export function FigbirdDevtoolsPanel({
   collector,
   inspection,
+  cacheEditor,
   status,
   theme = 'system',
 }: FigbirdDevtoolsPanelProps) {
@@ -64,6 +67,8 @@ export function FigbirdDevtoolsPanel({
   const [queryFilter, setQueryFilter] = useState('')
   const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
+  const [cacheFilter, setCacheFilter] = useState('')
+  const [selectedTraceId, setSelectedTraceId] = useState<number | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
 
   useEffect(() => {
@@ -116,7 +121,7 @@ export function FigbirdDevtoolsPanel({
       >
         <header style={styles.header}>
           <span style={styles.brand}>figbird</span>
-          {(['queries', 'timeline', 'events', 'writes'] as const).map(item => (
+          {(['queries', 'timeline', 'events', 'cache', 'writes'] as const).map(item => (
             <TabButton
               key={item}
               active={tab === item}
@@ -206,6 +211,14 @@ export function FigbirdDevtoolsPanel({
               placeholder='Filter events'
             />
           ) : null}
+          {tab === 'cache' ? (
+            <input
+              style={styles.input}
+              value={cacheFilter}
+              onChange={event => setCacheFilter(event.currentTarget.value)}
+              placeholder='Filter entity ID or value'
+            />
+          ) : null}
           {tab === 'events' ? (
             <span
               title='The oldest event is discarded when the bounded buffer is full'
@@ -240,6 +253,10 @@ export function FigbirdDevtoolsPanel({
               model={model}
               follow={timelineFollow}
               onFollowChange={setTimelineFollow}
+              onTraceSelect={traceId => {
+                setSelectedTraceId(traceId)
+                setTab('events')
+              }}
             />
           ) : null}
           {tab === 'events' ? (
@@ -247,6 +264,20 @@ export function FigbirdDevtoolsPanel({
               events={snapshot.events}
               filter={eventFilter}
               scopes={model.scopesByQueryId}
+              selectedTraceId={selectedTraceId}
+              onSelectedTraceIdChange={setSelectedTraceId}
+            />
+          ) : null}
+          {tab === 'cache' ? (
+            <CacheTab
+              services={snapshot.cache ?? []}
+              model={model}
+              filter={cacheFilter}
+              {...(cacheEditor ? { editor: cacheEditor } : {})}
+              onViewTrace={traceId => {
+                setSelectedTraceId(traceId)
+                setTab('events')
+              }}
             />
           ) : null}
           {tab === 'writes' ? (

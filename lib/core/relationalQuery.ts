@@ -1397,8 +1397,9 @@ export class RelationalQueryRef<
 
     const unsubscribeEvents = this.#host.queryStore.subscribeToProcessedEvents(event => {
       if (!affectsFilter(event)) return
-      if (event.origin === 'projection') {
-        const laneKeys = new Set([event.mutationLaneKey])
+      if (event.origin === 'projection' || event.source === 'devtools') {
+        const laneKeys =
+          event.origin === 'projection' ? new Set([event.mutationLaneKey]) : new Set<string>()
         for (const queryId of this.#root?.queryIds() ?? []) {
           this.#host.queryStore.reapplyQuery(queryId, laneKeys)
         }

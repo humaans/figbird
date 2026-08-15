@@ -134,6 +134,36 @@ export function QueryDetails({
           {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
         </span>
       </div>
+      <QueryDetailSection label='Realtime handling'>
+        <div
+          style={{
+            padding: '8px 10px',
+            background: colors.panel2,
+            borderLeft: `3px solid ${
+              activeQuery.realtimeStrategy === 'merge'
+                ? colors.green
+                : activeQuery.realtimeStrategy === 'manual'
+                  ? colors.faint
+                  : colors.amber
+            }`,
+          }}
+        >
+          <strong style={{ fontWeight: 650 }}>
+            {activeQuery.realtimeStrategy === 'merge'
+              ? 'Merges events locally'
+              : activeQuery.realtimeStrategy === 'manual'
+                ? 'Manual realtime'
+                : 'Reconciles uncertain events'}
+          </strong>
+          <div style={{ color: colors.muted, marginTop: 3 }}>
+            {activeQuery.classificationReasons?.length
+              ? activeQuery.classificationReasons.map(classificationReasonLabel).join(' · ')
+              : activeQuery.classification === 'get'
+                ? 'Direct entity lookup'
+                : 'Membership and ordering are locally provable'}
+          </div>
+        </div>
+      </QueryDetailSection>
       {activeQuery.lastError ? (
         <div
           title={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
@@ -304,6 +334,25 @@ export function QueryDetails({
       </details>
     </DetailsPane>
   )
+}
+
+function classificationReasonLabel(reason: { code: string; detail?: string }): string {
+  switch (reason.code) {
+    case 'server-flag':
+      return `forced server authority${reason.detail ? ` by ${reason.detail}` : ''}`
+    case 'native-pagination':
+      return 'native cursor pagination'
+    case 'select-projection':
+      return `projected rows${reason.detail ? ` via ${reason.detail}` : ''}`
+    case 'server-only-operator':
+      return `server-only operator ${reason.detail ?? ''}`.trim()
+    case 'window-filter':
+      return `window boundary ${reason.detail ?? ''}`.trim()
+    case 'snapshot':
+      return 'snapshot query ignores realtime'
+    default:
+      return reason.detail ?? reason.code
+  }
 }
 
 function PaginationDetails({

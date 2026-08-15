@@ -1,5 +1,5 @@
 import type { FigbirdEvent, FigbirdEvents } from '../../lib/core/events.js'
-import type { InspectedQuery } from '../../lib/core/figbird.js'
+import type { InspectedCacheService, InspectedQuery } from '../../lib/core/figbird.js'
 import type { InFlightMutation, MutationActivity } from '../../lib/core/mutationTracker.js'
 import type { InspectedRelationalQuery } from '../../lib/core/relationalQuery.js'
 import type { DevtoolsBridgeConnection, DevtoolsWireRead } from '../../lib/core/devtoolsBridge.js'
@@ -22,6 +22,7 @@ interface InspectedWindowApi {
 declare const chrome: { devtools: { inspectedWindow: InspectedWindowApi } }
 
 class RemoteFigbird implements FigbirdLikeForDevtools {
+  #cache: InspectedCacheService[] = []
   #eventListeners = new Set<(event: FigbirdEvent) => void>()
   #mutatingListeners = new Set<() => void>()
   #mutations: readonly InFlightMutation[] = []
@@ -49,6 +50,10 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
 
   inspect(): InspectedQuery[] {
     return this.#queries
+  }
+
+  inspectCache(): InspectedCacheService[] {
+    return this.#cache
   }
 
   inspectRelational(): InspectedRelationalQuery[] {
@@ -93,6 +98,7 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
   reset(): void {
     this.cancelPending()
     this.#queries = []
+    this.#cache = []
     this.#relational = []
     this.#mutations = []
     for (const listener of this.#stateListeners) listener(undefined)
@@ -108,6 +114,7 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
       fetchedAt: query.fetchedAt,
       query: query.query,
     }))
+    this.#cache = read.cache
     this.#relational = read.relational
     this.#mutations = read.inFlightMutations
     for (const event of read.events) {
@@ -148,6 +155,25 @@ export class ExtensionSession {
   subscribeReset = (listener: () => void): (() => void) => {
     this.#resetListeners.add(listener)
     return () => this.#resetListeners.delete(listener)
+  }
+
+  editCacheEntity = async (
+    serviceName: string,
+    itemId: string | number,
+    item: unknown,
+  ): Promise<{ ok: boolean; error?: string; traceId?: number }> => {
+    try {
+      const sessionId = this.#connection?.sessionId
+      if (!sessionId) return { ok: false, error: 'Figbird is not connected' }
+      const expression = `${BRIDGE_EXPRESSION}?.editCacheEntityJson(${JSON.stringify(sessionId)},${JSON.stringify(serviceName)},${JSON.stringify(JSON.stringify(itemId))},${JSON.stringify(JSON.stringify(item))})`
+      const value = await this.#evaluate(expression)
+      if (typeof value !== 'string') return { ok: false, error: 'Invalid cache edit response' }
+      const parsed: unknown = JSON.parse(value)
+      if (!isCacheEditResult(parsed)) return { ok: false, error: 'Invalid cache edit response' }
+      return parsed
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   start(): void {
@@ -235,6 +261,15 @@ export class ExtensionSession {
     this.#status = status
     for (const listener of this.#statusListeners) listener()
   }
+}
+
+function isCacheEditResult(
+  value: unknown,
+): value is { ok: boolean; error?: string; traceId?: number } {
+  if (typeof value !== 'object' || value === null || !('ok' in value)) return false
+  if (typeof value.ok !== 'boolean') return false
+  if ('error' in value && value.error !== undefined && typeof value.error !== 'string') return false
+  return !('traceId' in value) || value.traceId === undefined || typeof value.traceId === 'number'
 }
 
 function evaluateInspectedWindow(expression: string): Promise<unknown> {

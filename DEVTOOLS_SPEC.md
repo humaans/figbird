@@ -36,6 +36,33 @@ after it can be correlated visually. Individual retry attempts are deliberately
 coalesced instead of filling the event buffer. Authentication payloads and tokens are
 never collected.
 
+## Causal traces
+
+Runtime events carry stable, session-local identifiers where one operation causes
+another. Realtime items and reconnections are trace roots. Cache updates retain the
+root identifier, reconciliation decisions record whether work started, coalesced,
+deferred while hidden, or became pending while inactive, and fetch attempts carry
+their reason, retry attempt, and causes. Fetch end/error events share a fetch ID with
+their start event.
+
+The event details pane assembles those events into one causal chain. Timeline fetch,
+realtime, and connection marks link into the same chain. This metadata is emitted only
+while something subscribes to `figbird.events`, and the extension continues to bound
+all retained history.
+
+## Cache inspection and editing
+
+The page bridge exposes a serialized projection of each service's normalized entities,
+their current query memberships, and complete-set materialization marker. The collector
+adds session-local provenance from cache-update events (fetch, realtime, mutation,
+optimistic projection, or devtools edit).
+
+An attached extension session may replace one existing entity in memory. The edited
+JSON must retain the same entity ID. Figbird reapplies locally decidable query results
+and replaces the value in query results that already contain the entity; it never sends
+a service mutation or server request. The panel labels this behavior explicitly and
+offers a one-step undo. Later fetches or realtime events may overwrite the edit.
+
 ## Extension architecture
 
 ```

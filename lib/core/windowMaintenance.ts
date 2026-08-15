@@ -168,7 +168,8 @@ export function applyEventsToService<TMeta>({
 }): void {
   for (const event of events) {
     const { type, items } = event
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
+      const traceId = event.traceIds?.[index]
       if (type === 'created') {
         const incomingId = getId(item)
         if (incomingId !== undefined) {
@@ -181,6 +182,8 @@ export function applyEventsToService<TMeta>({
             item,
             previousItem,
             itemId,
+            source: event.source,
+            ...(traceId === undefined ? {} : { traceId }),
             ...(event.origin === 'projection'
               ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
               : { origin: event.origin }),
@@ -199,6 +202,8 @@ export function applyEventsToService<TMeta>({
               item,
               previousItem: currItem ?? null,
               itemId,
+              source: event.source,
+              ...(traceId === undefined ? {} : { traceId }),
               ...(event.origin === 'projection'
                 ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
                 : { origin: event.origin }),
@@ -217,6 +222,8 @@ export function applyEventsToService<TMeta>({
             item,
             previousItem,
             itemId,
+            source: event.source,
+            ...(traceId === undefined ? {} : { traceId }),
             ...(event.origin === 'projection'
               ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
               : { origin: event.origin }),
@@ -260,6 +267,7 @@ export function diffCompleteSet<TMeta>({
         item: previousItem,
         previousItem,
         itemId,
+        source: 'fetch',
       })
     }
   }
@@ -275,6 +283,7 @@ export function diffCompleteSet<TMeta>({
         item,
         previousItem: null,
         itemId,
+        source: 'fetch',
       })
     } else if (previousItem !== item) {
       events.push({
@@ -284,6 +293,7 @@ export function diffCompleteSet<TMeta>({
         item,
         previousItem,
         itemId,
+        source: 'fetch',
       })
     }
   }
@@ -513,7 +523,7 @@ export function updateQueriesFromEvents<TMeta>({
   excludeQueryId?: string
   /** The backend's implicit order for queries without `$sort` — see QueryStore options. */
   defaultSort?: Record<string, number> | undefined
-}): void {
+}): Map<string, 'merged' | 'reconcile'> {
   const context: QueryEventContext<TMeta> = {
     service,
     touch,
@@ -522,15 +532,21 @@ export function updateQueriesFromEvents<TMeta>({
     itemRemoved,
     defaultSort,
   }
+  const effects = new Map<string, 'merged' | 'reconcile'>()
   for (const event of appliedItems) {
     for (const [queryId, query] of service.queries) {
       if (queryId === excludeQueryId || query.config.realtime !== 'merge') continue
       if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') continue
-      if (applyMergeEventToQuery(context, queryId, event) === 'reconcile') {
+      const result = applyMergeEventToQuery(context, queryId, event)
+      if (result === 'reconcile') {
         serverMaintainedQueriesToRefetch.add(queryId)
+        effects.set(queryId, 'reconcile')
+      } else if (result === 'applied') {
+        effects.set(queryId, 'merged')
       }
     }
   }
+  return effects
 }
 
 export type QueryReapplyResult = 'applied' | 'reconcile' | 'ignored'

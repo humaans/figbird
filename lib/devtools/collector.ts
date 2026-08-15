@@ -2,6 +2,7 @@ import type {
   FigbirdEvent,
   FigbirdEvents,
   InspectedQuery,
+  InspectedCacheService,
   InspectedRelationalQuery,
   MutationActivity,
 } from '../core/figbird.js'
@@ -12,6 +13,7 @@ export interface FigbirdLikeForDevtools {
   events: FigbirdEvents
   mutating?: MutationActivity
   inspect(): InspectedQuery[]
+  inspectCache?(): InspectedCacheService[]
   inspectRelational?(): InspectedRelationalQuery[]
   subscribeToStateChanges?(fn: (state: unknown) => void): () => void
 }
@@ -28,6 +30,9 @@ export interface QuerySpan {
   startAt: number
   endAt?: number
   ok?: boolean
+  fetchId?: number
+  reason?: string
+  traceIds?: number[]
 }
 
 export interface QueryRecord extends Omit<
@@ -60,6 +65,7 @@ export interface DevtoolsEvent {
 export interface TimelineRealtimeEvent {
   at: number
   serviceName: string
+  traceId?: number
 }
 
 type ConnectionFigbirdEvent = Extract<
@@ -105,12 +111,32 @@ export interface WriteRecord {
 }
 
 export interface DevtoolsSnapshot {
+  cache?: DevtoolsCacheService[]
   queries: QueryRecord[]
   relational: InspectedRelationalQuery[]
   events: DevtoolsEvent[]
   timeline: DevtoolsTimeline
   writes: WriteRecord[]
   inFlightWrites: number
+}
+
+export interface DevtoolsCacheEntity {
+  id: string
+  value: unknown
+  queryIds: string[]
+  lastChange?: {
+    at: number
+    wallAt: number
+    source: 'realtime' | 'mutation' | 'fetch' | 'optimistic' | 'devtools'
+    traceId: number
+    type: 'created' | 'updated' | 'patched' | 'removed'
+  }
+}
+
+export interface DevtoolsCacheService {
+  serviceName: string
+  materialized?: { queryId: string; fetchedAt: number }
+  entities: DevtoolsCacheEntity[]
 }
 
 export interface Collector {
@@ -155,6 +181,7 @@ interface InternalRelationalQuery {
 }
 
 const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
+  cache: [],
   queries: [],
   relational: [],
   events: [],
@@ -335,6 +362,8 @@ class FigbirdCollector implements Collector {
   #nextEventId = 1
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
+  #cacheProvenance = new Map<string, NonNullable<DevtoolsCacheEntity['lastChange']>>()
+  #fetchTraces = new Map<number, { reason?: string; traceIds: number[] }>()
 
   readonly eventLimit: number
 
@@ -405,7 +434,17 @@ class FigbirdCollector implements Collector {
         return `${a.serviceName}:${a.queryId}`.localeCompare(`${b.serviceName}:${b.queryId}`)
       })
     const writes = Array.from(this.#writes.values()).sort((a, b) => a.startedAt - b.startedAt)
+    const cache = (this.#figbird.inspectCache?.() ?? []).map(service => ({
+      ...service,
+      entities: service.entities.map(entity => ({
+        ...entity,
+        ...(this.#cacheProvenance.has(`${service.serviceName}:${entity.id}`)
+          ? { lastChange: this.#cacheProvenance.get(`${service.serviceName}:${entity.id}`)! }
+          : {}),
+      })),
+    }))
     this.#snapshot = {
+      cache,
       queries,
       relational: [...this.#relational.values()].map(record => record.inspected),
       events: this.#events.toArray(),
@@ -458,6 +497,8 @@ class FigbirdCollector implements Collector {
     this.#nextEventId = 1
     this.#realtimeByService.clear()
     this.#writes.clear()
+    this.#cacheProvenance.clear()
+    this.#fetchTraces.clear()
     this.#scheduleNotify()
   }
 
@@ -495,7 +536,11 @@ class FigbirdCollector implements Collector {
         break
       case 'realtime':
         this.#recordTimelineLane(`realtime:${event.serviceName}`)
-        this.#timelineRealtime.push({ at, serviceName: event.serviceName })
+        this.#timelineRealtime.push({
+          at,
+          serviceName: event.serviceName,
+          ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
+        })
         this.#realtimeByService.set(
           event.serviceName,
           (this.#realtimeByService.get(event.serviceName) ?? 0) + 1,
@@ -508,6 +553,17 @@ class FigbirdCollector implements Collector {
       case 'connection:reconnect-failed':
         this.#recordTimelineLane('connection')
         this.#timelineConnection.push({ at, event: this.#captureConnectionEvent(event) })
+        break
+      case 'cache:updated':
+        if (event.traceId !== undefined) {
+          this.#cacheProvenance.set(`${event.serviceName}:${String(event.itemId)}`, {
+            at,
+            wallAt: Date.now(),
+            source: event.source,
+            traceId: event.traceId,
+            type: event.type,
+          })
+        }
         break
       case 'reconcile:started':
         {
@@ -603,6 +659,15 @@ class FigbirdCollector implements Collector {
   }
 
   #recordFetchStart(event: Extract<FetchEvent, { kind: 'fetch:start' }>, at: number): void {
+    if (event.fetchId !== undefined) {
+      this.#fetchTraces.set(event.fetchId, {
+        ...(event.reason ? { reason: event.reason } : {}),
+        traceIds:
+          event.causes?.flatMap(cause =>
+            cause.kind === 'realtime' || cause.kind === 'reconnect' ? [cause.traceId] : [],
+          ) ?? [],
+      })
+    }
     const record = this.#ensureFetchRecord(event, at, true)
     if (record.current?.generation !== event.generation) return
     const current = {
@@ -677,7 +742,16 @@ class FigbirdCollector implements Collector {
 
     const observedStartAt = at - event.durationMs
     const startAt = Math.max(observedStartAt, this.#timelineStartedAt)
-    metrics.spans.push({ startAt, endAt: at, ok })
+    const trace = event.fetchId === undefined ? undefined : this.#fetchTraces.get(event.fetchId)
+    metrics.spans.push({
+      startAt,
+      endAt: at,
+      ok,
+      ...(event.fetchId === undefined ? {} : { fetchId: event.fetchId }),
+      ...(trace?.reason ? { reason: trace.reason } : {}),
+      ...(trace && trace.traceIds.length > 0 ? { traceIds: trace.traceIds } : {}),
+    })
+    if (event.fetchId !== undefined) this.#fetchTraces.delete(event.fetchId)
 
     const currentMatches = record.current?.generation === event.generation
     const retainedMatches =

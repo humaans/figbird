@@ -30,6 +30,8 @@ interface QueuedEventBase {
   serviceName: string
   type: EventType
   items: unknown[]
+  source: 'realtime' | 'mutation' | 'optimistic'
+  traceIds?: readonly number[]
 }
 
 /** Internal entity changes waiting at the store's atomic event boundary. */
@@ -49,6 +51,8 @@ interface ProcessedEventBase {
   previousItem: unknown | null
   /** Always defined — events whose item has no resolvable id are never applied. */
   itemId: EntityKey
+  source: 'realtime' | 'mutation' | 'fetch' | 'optimistic' | 'devtools'
+  traceId?: number
 }
 
 /** An optimistic entity change after cache application. */

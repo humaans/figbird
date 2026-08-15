@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { QuerySpan } from './collector.js'
+import type { TimelineTick } from './TimelineCanvas.js'
 import { useDevtoolsTheme } from './ui.js'
 
 const OVERVIEW_HEIGHT = 42
@@ -11,7 +12,7 @@ export interface TimelineViewport {
 
 type TimelineOverviewLane =
   | { kind: 'query'; id: string; bars: QuerySpan[] }
-  | { kind: 'realtime'; id: string; ticks: number[] }
+  | { kind: 'realtime'; id: string; ticks: TimelineTick[] }
   | { kind: 'connection'; id: string; bars: QuerySpan[]; markers: Array<{ at: number }> }
 
 interface TimelineOverviewLayout {
@@ -141,7 +142,10 @@ function drawOverview(
     }
     if (lane.kind === 'realtime' || lane.kind === 'connection') {
       context.fillStyle = colors.blue
-      const ticks = lane.kind === 'realtime' ? lane.ticks : lane.markers.map(marker => marker.at)
+      const ticks =
+        lane.kind === 'realtime'
+          ? lane.ticks.map(tick => tick.at)
+          : lane.markers.map(marker => marker.at)
       for (const tick of ticks) {
         context.fillRect(timelineRatio(tick, layout) * width, top, 2, markHeight)
       }

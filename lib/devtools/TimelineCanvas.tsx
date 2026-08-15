@@ -22,6 +22,12 @@ export interface TimelineMarker {
   at: number
   label: string
   tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
+  traceId?: number
+}
+
+export interface TimelineTick {
+  at: number
+  traceId?: number
 }
 
 export type TimelineLane =
@@ -41,7 +47,7 @@ export type TimelineLane =
       detail: string
       context: string
       firstAt: number
-      ticks: number[]
+      ticks: TimelineTick[]
     }
   | {
       kind: 'connection'
@@ -70,6 +76,7 @@ export function TimelineCanvas({
   wallClockOffset,
   follow,
   onFollowChange,
+  onTraceSelect,
 }: {
   lanes: TimelineLane[]
   layout: TimelineLayout | null
@@ -77,6 +84,7 @@ export function TimelineCanvas({
   wallClockOffset: number
   follow: boolean
   onFollowChange: (value: boolean) => void
+  onTraceSelect?: (traceId: number) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const verticalScrollRef = useRef<HTMLDivElement>(null)
@@ -296,6 +304,7 @@ export function TimelineCanvas({
                   barLabel={lane.kind === 'connection' ? 'Offline' : 'Fetch'}
                   nowPoint={nowPoint}
                   wallClockOffset={wallClockOffset}
+                  {...(onTraceSelect ? { onTraceSelect } : {})}
                 />
               ))}
             </div>
@@ -450,14 +459,16 @@ function TimelineLaneTrack({
   barLabel,
   nowPoint,
   wallClockOffset,
+  onTraceSelect,
 }: {
   layout: TimelineLayout
-  bars: Array<{ startAt: number; endAt?: number; ok?: boolean }>
-  ticks: number[]
+  bars: QuerySpan[]
+  ticks: TimelineTick[]
   markers: TimelineMarker[]
   barLabel: 'Fetch' | 'Offline'
   nowPoint: number
   wallClockOffset: number
+  onTraceSelect?: (traceId: number) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   return (
@@ -477,7 +488,8 @@ function TimelineLaneTrack({
         const width = Math.max(9, timeToPixels(barEnd, bar.startAt))
         const color = bar.ok === false ? colors.red : colors.green
         return (
-          <span
+          <button
+            type='button'
             key={`${bar.startAt}:${index}`}
             {...(barLabel === 'Fetch'
               ? { 'data-timeline-fetch': bar.ok === false ? 'failed' : 'success' }
@@ -487,6 +499,9 @@ function TimelineLaneTrack({
               formatTimelineClock(bar.startAt, wallClockOffset, true),
             ].join('\n')}
             style={{
+              border: 0,
+              padding: 0,
+              cursor: bar.traceIds?.[0] === undefined ? 'default' : 'pointer',
               position: 'absolute',
               top: 19,
               left,
@@ -496,6 +511,10 @@ function TimelineLaneTrack({
               borderRadius: 999,
               background: `linear-gradient(180deg, color-mix(in srgb, ${color} 76%, white), ${color})`,
               boxShadow: `0 0 0 1px color-mix(in srgb, ${color} 62%, ${colors.bg})`,
+            }}
+            onClick={() => {
+              const traceId = bar.traceIds?.[0]
+              if (traceId !== undefined) onTraceSelect?.(traceId)
             }}
           >
             <span
@@ -510,19 +529,26 @@ function TimelineLaneTrack({
                 opacity: 0.9,
               }}
             />
-          </span>
+          </button>
         )
       })}
       {ticks.map((tick, index) => (
-        <span
-          key={`${tick}:${index}`}
-          title={`Realtime event\n${formatTimelineClock(tick, wallClockOffset, true)}`}
+        <button
+          type='button'
+          key={`${tick.at}:${index}`}
+          title={`Realtime event\n${formatTimelineClock(tick.at, wallClockOffset, true)}`}
+          onClick={() => {
+            if (tick.traceId !== undefined) onTraceSelect?.(tick.traceId)
+          }}
           style={{
             position: 'absolute',
             top: 15,
-            left: timeToPixels(tick, layout.start),
+            left: timeToPixels(tick.at, layout.start),
             width: 7,
             height: 7,
+            border: 0,
+            padding: 0,
+            cursor: tick.traceId === undefined ? 'default' : 'pointer',
             marginLeft: -4,
             borderRadius: 2,
             background: colors.blue,
@@ -532,9 +558,13 @@ function TimelineLaneTrack({
         />
       ))}
       {markers.map((marker, index) => (
-        <span
+        <button
+          type='button'
           key={`${marker.at}:${marker.label}:${index}`}
           title={`${marker.label}\n${formatTimelineClock(marker.at, wallClockOffset, true)}`}
+          onClick={() => {
+            if (marker.traceId !== undefined) onTraceSelect?.(marker.traceId)
+          }}
           style={{
             position: 'absolute',
             top: 14,
@@ -546,6 +576,8 @@ function TimelineLaneTrack({
             background: toneColor(colors, marker.tone),
             border: `2px solid ${colors.bg}`,
             boxSizing: 'border-box',
+            padding: 0,
+            cursor: marker.traceId === undefined ? 'default' : 'pointer',
           }}
         />
       ))}

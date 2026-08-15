@@ -7,7 +7,7 @@ import {
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
-import { FigbirdEventEmitter } from './events.js'
+import { FigbirdEventEmitter, type FetchReason, type TraceCause } from './events.js'
 import { MutationTracker } from './mutationTracker.js'
 import { GatedMutationAttempt } from './gatedMutationAttempt.js'
 import {
@@ -101,6 +101,20 @@ function resolveCreateOptimisticItem(desc: CreateMutationDescriptor): unknown {
   return optimistic == null || typeof optimistic === 'boolean' ? desc.data : optimistic
 }
 
+function mergeTraceCauses(
+  current: readonly TraceCause[],
+  next: readonly TraceCause[],
+): TraceCause[] {
+  const keyed = new Map<string, TraceCause>()
+  for (const cause of [...current, ...next]) {
+    const key = `${cause.kind}:${cause.traceId}${
+      cause.kind === 'mutation' ? `:${cause.mutationId ?? ''}` : ''
+    }`
+    keyed.set(key, cause)
+  }
+  return [...keyed.values()]
+}
+
 interface MutationTrackingEntry {
   serviceName: string
   method: string
@@ -129,11 +143,18 @@ interface QueuedMutation {
 interface AppliedEventEffect {
   event: ProcessedRealtimeEvent
   reconcileQueryIds: Set<string>
+  queryEffects: Map<string, 'merged' | 'reconcile'>
+  observabilityOnly?: boolean
 }
 
 interface PublishedEventEffects {
   reconcileQueryIds: Set<string>
-  refetchService: boolean
+  reconcileCauses: Map<string, TraceCause[]>
+}
+
+interface FetchContext {
+  reason: Exclude<FetchReason, 'retry'>
+  causes: TraceCause[]
 }
 
 type LaneAuthoritativeAcceptance =
@@ -144,6 +165,12 @@ export interface QueryFetchStats {
   errorCount: number
   lastDurationMs?: number
   totalDurationMs: number
+}
+
+export interface DevtoolsCacheEditResult {
+  ok: boolean
+  error?: string
+  traceId?: number
 }
 
 function documentVisibility(): VisibilitySource {
@@ -181,6 +208,9 @@ export class QueryStore<
   #queryGenerations: Map<string, number> = new Map()
   #queryStats: Map<string, QueryFetchStats> = new Map()
   #nextQueryGeneration = 1
+  #nextTraceId = 1
+  #nextFetchId = 1
+  #followupFetchContexts = new Map<string, FetchContext>()
 
   #fetchEventJournal = new FetchEventJournal()
   #mutationLanes: MutationLanes<QueuedMutation>
@@ -191,9 +221,9 @@ export class QueryStore<
   #visibility: VisibilitySource
   #reconcileWindows: Map<
     string,
-    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null }
+    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null; causes: TraceCause[] }
   > = new Map()
-  #deferredWhileHidden: Set<string> = new Set()
+  #deferredWhileHidden: Map<string, TraceCause[]> = new Map()
 
   #defaultSort: Record<string, number> | undefined
   #retry: number | false
@@ -261,10 +291,12 @@ export class QueryStore<
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
     if (this.#adapter.subscribeToConnectionEvents) {
       this.#adapter.subscribeToConnectionEvents(event => {
+        const traceId = this.#nextTraceId++
         switch (event.type) {
           case 'connected':
             this.#events.emit({
               kind: 'connection:connected',
+              traceId,
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
             })
@@ -272,6 +304,7 @@ export class QueryStore<
           case 'disconnected':
             this.#events.emit({
               kind: 'connection:disconnected',
+              traceId,
               ...(event.reason ? { reason: event.reason } : {}),
               reconnecting: event.reconnecting,
             })
@@ -279,15 +312,17 @@ export class QueryStore<
           case 'reconnected':
             this.#events.emit({
               kind: 'connection:reconnected',
+              traceId,
               ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
             })
-            this.#scheduleReconnectSweep()
+            this.#scheduleReconnectSweep(traceId)
             break
           case 'error':
             this.#events.emit({
               kind: 'connection:error',
+              traceId,
               phase: event.phase,
               error: event.error,
             })
@@ -295,13 +330,14 @@ export class QueryStore<
           case 'reconnect-failed':
             this.#events.emit({
               kind: 'connection:reconnect-failed',
+              traceId,
               ...(event.error ? { error: event.error } : {}),
             })
             break
         }
       })
     } else {
-      this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep())
+      this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep(this.#nextTraceId++))
     }
   }
 
@@ -324,6 +360,82 @@ export class QueryStore<
   /** Returns the state for a specific service by name. */
   getServiceState(serviceName: string): ServiceState<TMeta> | undefined {
     return this.#state.get(serviceName)
+  }
+
+  /** Apply an in-memory entity edit from an attached devtool without touching the server. */
+  editCacheEntity(serviceName: string, itemId: ItemId, item: unknown): DevtoolsCacheEditResult {
+    const service = this.#state.get(serviceName)
+    const key = entityKey(itemId)
+    const previousItem = service?.entities.get(key)
+    if (!service || previousItem === undefined) {
+      return { ok: false, error: `Entity ${serviceName} #${String(itemId)} is not cached` }
+    }
+    const nextId = this.#peekId(item)
+    if (nextId === undefined || entityKey(nextId) !== key) {
+      return { ok: false, error: 'Edited JSON must retain the entity ID' }
+    }
+
+    const traceId = this.#nextTraceId++
+    const queryEffects = new Map<string, 'merged' | 'reconcile'>()
+    const event: ProcessedRealtimeEvent = {
+      origin: 'authoritative',
+      source: 'devtools',
+      traceId,
+      serviceName,
+      type: 'patched',
+      item,
+      previousItem,
+      itemId: key,
+    }
+    const touched = this.#transactOverServiceByName(serviceName, (current, touch) => {
+      current.entities.set(key, item)
+      const getId = this.#getIdReader(serviceName)
+      for (const queryId of current.queries.keys()) {
+        const result = reapplyQueryFromEntities({
+          service: current,
+          queryId,
+          touch,
+          getId,
+          itemAdded: meta => this.#adapter.itemAdded(meta),
+          itemRemoved: meta => this.#adapter.itemRemoved(meta),
+          defaultSort: this.#defaultSort,
+        })
+        if (result === 'applied') {
+          queryEffects.set(queryId, 'merged')
+          continue
+        }
+        if (
+          applyVisibleEventToQuery({
+            service: current,
+            queryId,
+            event,
+            touch,
+            getId,
+            itemRemoved: meta => this.#adapter.itemRemoved(meta),
+          })
+        ) {
+          queryEffects.set(queryId, 'merged')
+        }
+      }
+    })
+    if (touched.size > 0) this.#notify(touched)
+    else this.#invokeGlobalListeners()
+    // Let relational queries recompute filters and assembled values from the edit.
+    // Consumers distinguish this source from authoritative server events, so this
+    // remains a purely local operation and never schedules a reconciliation fetch.
+    this.#emitProcessedEvent(event)
+    this.#events.emit({
+      kind: 'cache:updated',
+      traceId,
+      source: 'devtools',
+      serviceName,
+      type: 'patched',
+      itemId,
+      item,
+      previousItem,
+      queryEffects: [...queryEffects].map(([queryId, outcome]) => ({ queryId, outcome })),
+    })
+    return { ok: true, traceId }
   }
 
   /** Returns the current state for a query by id, if present. */
@@ -496,17 +608,24 @@ export class QueryStore<
         !isFresh) ||
       (q.state.status === 'error' && !q.state.isFetching)
     ) {
-      this.#queue(queryId)
+      this.#queue(queryId, {
+        reason: 'subscription',
+        causes: [{ kind: 'subscription', traceId: this.#nextTraceId++ }],
+      })
     }
   }
 
   /** Refetch a specific query by id. */
-  refetch(queryId: string): void {
+  refetch(queryId: string, context?: FetchContext): void {
     const q = this.#getQuery(queryId)
     if (!q) return
+    const fetchContext = context ?? {
+      reason: 'manual' as const,
+      causes: [{ kind: 'manual' as const, traceId: this.#nextTraceId++ }],
+    }
 
     if (!q.state.isFetching) {
-      this.#queue(queryId)
+      this.#queue(queryId, fetchContext)
     } else {
       // Mark as dirty to refetch after current fetch completes
       this.#transactOverService(queryId, (service, query) => {
@@ -515,6 +634,7 @@ export class QueryStore<
           dirty: true,
         })
       })
+      this.#followupFetchContexts.set(queryId, fetchContext)
     }
   }
 
@@ -1010,14 +1130,22 @@ export class QueryStore<
   }
 
   // Query lifecycle
-  async #queue(queryId: string): Promise<void> {
+  async #queue(queryId: string, context?: FetchContext): Promise<void> {
+    const fetchContext = context ?? {
+      reason: 'subscription' as const,
+      causes: [{ kind: 'subscription' as const, traceId: this.#nextTraceId++ }],
+    }
     this.#fetching({ queryId })
     const generation = this.#queryGenerations.get(queryId)
     if (generation === undefined) return
 
     let retryAttempt = 0
     while (true) {
-      const outcome = await this.#runFetchAttempt(queryId, generation)
+      const outcome = await this.#runFetchAttempt(queryId, generation, {
+        reason: retryAttempt === 0 ? fetchContext.reason : 'retry',
+        attempt: retryAttempt,
+        causes: fetchContext.causes,
+      })
       if (outcome.kind !== 'failed') return
 
       const query = this.#getQuery(queryId)
@@ -1046,13 +1174,18 @@ export class QueryStore<
     }
   }
 
-  async #runFetchAttempt(queryId: string, generation: number): Promise<FetchAttemptOutcome> {
+  async #runFetchAttempt(
+    queryId: string,
+    generation: number,
+    context: { reason: FetchReason; attempt: number; causes: TraceCause[] },
+  ): Promise<FetchAttemptOutcome> {
     const query = this.#getQuery(queryId)
     if (!query || this.#queryGenerations.get(queryId) !== generation) {
       return { kind: 'stale' }
     }
 
     const startedAt = Date.now()
+    const fetchId = this.#nextFetchId++
     const trace = {
       generation,
       serviceName: query.desc.serviceName,
@@ -1067,6 +1200,10 @@ export class QueryStore<
       method: trace.method,
       queryId,
       generation,
+      fetchId,
+      reason: context.reason,
+      attempt: context.attempt,
+      ...(context.causes.length > 0 ? { causes: context.causes } : {}),
       ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
       params: trace.params,
     })
@@ -1080,7 +1217,13 @@ export class QueryStore<
         if (journal.overflowed) {
           this.#discardFetchedResponse(queryId)
         } else {
-          this.#fetched({ queryId, result, journalEvents: journal.events })
+          const cacheTraceId = context.causes[0]?.traceId
+          this.#fetched({
+            queryId,
+            result,
+            journalEvents: journal.events,
+            ...(cacheTraceId === undefined ? {} : { traceId: cacheTraceId }),
+          })
         }
         this.#recordFetchStats(queryId, { ok: true, durationMs })
       }
@@ -1093,6 +1236,7 @@ export class QueryStore<
         method: trace.method,
         queryId,
         generation,
+        fetchId,
         durationMs,
         itemCount,
       })
@@ -1112,6 +1256,7 @@ export class QueryStore<
         method: trace.method,
         queryId,
         generation,
+        fetchId,
         durationMs,
         error,
       })
@@ -1139,6 +1284,15 @@ export class QueryStore<
     return (
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     )
+  }
+
+  #takeFollowupFetchContext(queryId: string): FetchContext {
+    const context = this.#followupFetchContexts.get(queryId) ?? {
+      reason: 'follow-up' as const,
+      causes: [{ kind: 'fetch-rebase' as const, traceId: this.#nextTraceId++ }],
+    }
+    this.#followupFetchContexts.delete(queryId)
+    return context
   }
 
   #resolveRetryDelay(delay: RetryDelay, attempt: number, error: Error): number {
@@ -1304,10 +1458,12 @@ export class QueryStore<
     queryId,
     result,
     journalEvents,
+    traceId,
   }: {
     queryId: string
     result: StoreResponse<TMeta>
     journalEvents: readonly ProcessedRealtimeEvent[]
+    traceId?: number
   }): void {
     let shouldRefetch = false
     let hadEffectiveJournalEvents = false
@@ -1415,6 +1571,23 @@ export class QueryStore<
             const currentItem = service.entities.get(key)
             if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
               service.entities.set(key, item)
+              if (!isCompleteSet && currentItem !== item) {
+                eventEffects.push({
+                  event: {
+                    origin: 'authoritative',
+                    source: 'fetch',
+                    serviceName: query.desc.serviceName,
+                    type: currentItem === undefined ? 'created' : 'updated',
+                    item,
+                    previousItem: currentItem ?? null,
+                    itemId: key,
+                    ...(traceId === undefined ? {} : { traceId }),
+                  },
+                  reconcileQueryIds: new Set(),
+                  queryEffects: new Map([[queryId, 'merged']]),
+                  observabilityOnly: true,
+                })
+              }
             }
           }
           addQueryToItemIndex(service, itemId, queryId)
@@ -1473,7 +1646,9 @@ export class QueryStore<
           ...this.#updateQueriesForEvents({
             service,
             serviceName: query.desc.serviceName,
-            processedEvents: diffEvents,
+            processedEvents: diffEvents.map(event =>
+              traceId === undefined ? event : { ...event, traceId },
+            ),
             touch,
             excludeQueryId: queryId,
           }),
@@ -1511,7 +1686,7 @@ export class QueryStore<
 
     if (shouldRefetch && shouldRunFollowup) {
       serverMaintainedQueriesToRefetch.delete(queryId)
-      this.#queue(queryId)
+      this.#queue(queryId, this.#takeFollowupFetchContext(queryId))
     } else if (hadEffectiveJournalEvents && query?.config.realtime !== 'disabled') {
       // Even exact replay cannot prove every server-maintained membership/order
       // edge. One gated trailing reconciliation guarantees convergence.
@@ -1521,6 +1696,9 @@ export class QueryStore<
     for (const id of serverMaintainedQueriesToRefetch) {
       this.#requestReconcile(id, {
         force: id === service?.materialized?.queryId,
+        ...(publishedEffects.reconcileCauses.has(id)
+          ? { causes: publishedEffects.reconcileCauses.get(id)! }
+          : {}),
       })
     }
   }
@@ -1550,7 +1728,7 @@ export class QueryStore<
     const isMaterializedRoot =
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     if (shouldRefetch && (this.#listenerCount(queryId) > 0 || isMaterializedRoot)) {
-      this.#queue(queryId)
+      this.#queue(queryId, this.#takeFollowupFetchContext(queryId))
     }
   }
 
@@ -1567,7 +1745,10 @@ export class QueryStore<
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     const isMaterializedRoot =
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
-    this.#requestReconcile(queryId, { force: isMaterializedRoot })
+    this.#requestReconcile(queryId, {
+      force: isMaterializedRoot,
+      causes: [{ kind: 'fetch-rebase', traceId: this.#nextTraceId++ }],
+    })
     // An immediate reconciliation has already restored isFetching=true; hidden
     // or inactive queries expose the settled state and remain pending instead.
     this.#notify(touched)
@@ -1617,26 +1798,38 @@ export class QueryStore<
     this.#realtime.add(serviceName)
   }
 
-  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): void {
+  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): number[] {
+    const traceIds: number[] = []
     for (const item of items) {
+      const traceId = this.#nextTraceId++
+      traceIds.push(traceId)
       this.#events.emit({
         kind: 'realtime',
+        traceId,
         serviceName,
         type,
         itemId: this.#getIdWarn(serviceName, item),
         item,
       })
     }
+    return traceIds
   }
 
   /** Push an authoritative event onto the atomic queue. */
-  #enqueueAuthoritativeEvent(serviceName: string, event: Event): void {
+  #enqueueAuthoritativeEvent(
+    serviceName: string,
+    event: Event,
+    source: 'realtime' | 'mutation',
+    traceId: number,
+  ): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
       origin: 'authoritative',
+      source,
       serviceName,
       type: event.type,
       items,
+      traceIds: [traceId],
     })
   }
 
@@ -1645,6 +1838,7 @@ export class QueryStore<
     if (!event) return null
     return {
       origin: 'projection',
+      source: 'optimistic',
       serviceName: change.lane.serviceName,
       type: event.type,
       items: Array.isArray(event.item) ? event.item : [event.item],
@@ -1654,21 +1848,31 @@ export class QueryStore<
 
   /** Apply an event immediately — used for mutation results and optimistic writes. */
   #processEvent(serviceName: string, event: Event): void {
-    this.#ingestAuthoritativeEvent(serviceName, event, true)
+    this.#ingestAuthoritativeEvent(serviceName, event, true, 'mutation')
   }
 
   /** Queue a realtime event for batched processing. */
   #queueEvent(serviceName: string, event: Event): void {
-    this.#ingestAuthoritativeEvent(serviceName, event, false)
+    this.#ingestAuthoritativeEvent(serviceName, event, false, 'realtime')
   }
 
-  #ingestAuthoritativeEvent(serviceName: string, event: Event, immediate: boolean): void {
+  #ingestAuthoritativeEvent(
+    serviceName: string,
+    event: Event,
+    immediate: boolean,
+    source: 'realtime' | 'mutation',
+  ): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
-    this.#emitRealtimeForItems(serviceName, event.type, items)
-    for (const item of items) {
+    const traceIds = this.#emitRealtimeForItems(serviceName, event.type, items)
+    for (const [index, item] of items.entries()) {
       const accepted = this.#acceptLaneAuthoritative(serviceName, event.type, item)
       if (!accepted.handled) {
-        this.#enqueueAuthoritativeEvent(serviceName, { type: event.type, item })
+        this.#enqueueAuthoritativeEvent(
+          serviceName,
+          { type: event.type, item },
+          source,
+          traceIds[index]!,
+        )
         continue
       }
       if (accepted.projection) this.#applyProjection(accepted.projection, false)
@@ -1759,7 +1963,7 @@ export class QueryStore<
     const getId = this.#getIdReader(serviceName)
     return processedEvents.map(event => {
       const reconcileQueryIds = new Set<string>()
-      updateQueriesFromEvents({
+      const queryEffects = updateQueriesFromEvents({
         service,
         appliedItems: [event],
         touch,
@@ -1770,7 +1974,7 @@ export class QueryStore<
         ...(excludeQueryId ? { excludeQueryId } : {}),
         defaultSort: this.#defaultSort,
       })
-      return { event, reconcileQueryIds }
+      return { event, reconcileQueryIds, queryEffects }
     })
   }
 
@@ -1780,12 +1984,35 @@ export class QueryStore<
     refetchPolicy: 'realtime' | 'none',
   ): PublishedEventEffects {
     const immediateReconciles = new Set<string>()
-    for (const { event, reconcileQueryIds } of effects) {
+    const reconcileCauses = new Map<string, TraceCause[]>()
+    const traceIds = new Map<ProcessedRealtimeEvent, number>()
+    const hasAuthoritative =
+      refetchPolicy === 'realtime' &&
+      effects.some(effect => effect.event.origin === 'authoritative')
+    const addReconcile = (queryId: string, cause: TraceCause | null) => {
+      immediateReconciles.add(queryId)
+      if (!cause) return
+      const current = reconcileCauses.get(queryId) ?? []
+      reconcileCauses.set(queryId, mergeTraceCauses(current, [cause]))
+    }
+
+    for (const { event, reconcileQueryIds, queryEffects, observabilityOnly } of effects) {
+      const traceId = event.traceId ?? this.#nextTraceId++
+      traceIds.set(event, traceId)
+      if (observabilityOnly) continue
+      const cause: TraceCause | null =
+        event.source === 'realtime'
+          ? { kind: 'realtime', traceId }
+          : event.source === 'mutation' || event.source === 'optimistic'
+            ? { kind: 'mutation', traceId }
+            : event.source === 'fetch'
+              ? { kind: 'fetch-rebase', traceId }
+              : null
       const deferred =
         event.origin === 'projection' &&
         this.#mutationLanes.deferQueryIds(event.mutationLaneKey, reconcileQueryIds)
       if (!deferred) {
-        for (const queryId of reconcileQueryIds) immediateReconciles.add(queryId)
+        for (const queryId of reconcileQueryIds) addReconcile(queryId, cause)
       }
 
       // Relational filters need projected dependency changes immediately so
@@ -1796,26 +2023,44 @@ export class QueryStore<
         !this.#mutationLanes.deferProjection(event.mutationLaneKey, event)
       this.#emitProcessedEvent(event)
       if (projectionSettled) this.#emitProjectionSettlement(event)
-    }
 
-    const refetchService =
-      refetchPolicy === 'realtime' && effects.some(({ event }) => event.origin === 'authoritative')
-    if (refetchPolicy === 'realtime' && effects.length > 0 && !refetchService) {
-      const refetchableQueryIds = this.#refetchableQueryIds(serviceName)
-      for (const { event } of effects) {
-        if (event.origin === 'projection') {
+      if (refetchPolicy === 'realtime') {
+        const refetchableQueryIds = this.#refetchableQueryIds(serviceName)
+        if (event.origin === 'authoritative') {
+          for (const queryId of refetchableQueryIds) {
+            queryEffects.set(queryId, 'reconcile')
+            addReconcile(queryId, cause)
+          }
+        } else if (!hasAuthoritative) {
           const deferred = this.#mutationLanes.deferQueryIds(
             event.mutationLaneKey,
             refetchableQueryIds,
           )
           if (!deferred) {
-            for (const queryId of refetchableQueryIds) immediateReconciles.add(queryId)
+            for (const queryId of refetchableQueryIds) {
+              queryEffects.set(queryId, 'reconcile')
+              addReconcile(queryId, cause)
+            }
           }
         }
       }
     }
 
-    return { reconcileQueryIds: immediateReconciles, refetchService }
+    for (const { event, queryEffects } of effects) {
+      this.#events.emit({
+        kind: 'cache:updated',
+        traceId: traceIds.get(event)!,
+        source: event.source,
+        serviceName: event.serviceName,
+        type: event.type,
+        itemId: event.itemId,
+        item: event.item,
+        previousItem: event.previousItem,
+        queryEffects: [...queryEffects].map(([queryId, outcome]) => ({ queryId, outcome })),
+      })
+    }
+
+    return { reconcileQueryIds: immediateReconciles, reconcileCauses }
   }
 
   /** Publish an authoritative transition whose entity-cache effect already happened. */
@@ -1831,8 +2076,13 @@ export class QueryStore<
     })
     this.#notify(touched)
     const published = this.#publishServiceEventEffects(event.serviceName, effects, 'realtime')
-    for (const queryId of published.reconcileQueryIds) this.#requestReconcile(queryId)
-    if (published.refetchService) this.#refetchRefetchableQueries(event.serviceName)
+    for (const queryId of published.reconcileQueryIds) {
+      this.#requestReconcile(queryId, {
+        ...(published.reconcileCauses.has(queryId)
+          ? { causes: published.reconcileCauses.get(queryId)! }
+          : {}),
+      })
+    }
   }
 
   #processQueuedEvents(): void {
@@ -1897,9 +2147,12 @@ export class QueryStore<
           // ones through the gate (cooldown + hidden-tab deferral); the gate marks
           // inactive cached ones pending so their next subscription reconciles.
           for (const queryId of publishedEffects.reconcileQueryIds) {
-            this.#requestReconcile(queryId)
+            this.#requestReconcile(queryId, {
+              ...(publishedEffects.reconcileCauses.has(queryId)
+                ? { causes: publishedEffects.reconcileCauses.get(queryId)! }
+                : {}),
+            })
           }
-          if (publishedEffects.refetchService) this.#refetchRefetchableQueries(serviceName)
         }
       }
     } finally {
@@ -1925,10 +2178,6 @@ export class QueryStore<
         // Internal invalidation listeners should not break mutation settlement.
       }
     }
-  }
-
-  #refetchRefetchableQueries(serviceName: string): void {
-    for (const queryId of this.#refetchableQueryIds(serviceName)) this.#requestReconcile(queryId)
   }
 
   #refetchableQueryIds(serviceName: string): string[] {
@@ -1958,21 +2207,31 @@ export class QueryStore<
    *   edge — isolated changes stay as fast as today); further events within
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
-  #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
+  #requestReconcile(
+    queryId: string,
+    { force = false, causes = [] }: { force?: boolean; causes?: readonly TraceCause[] } = {},
+  ): void {
+    const mergedCauses = mergeTraceCauses([], causes)
     if (!force && this.#listenerCount(queryId) === 0) {
+      this.#emitReconcileDecision(queryId, 'inactive', mergedCauses)
       this.#markQueryPending(queryId)
       return
     }
 
     if (this.#visibility.isHidden()) {
-      this.#deferredWhileHidden.add(queryId)
+      this.#deferredWhileHidden.set(
+        queryId,
+        mergeTraceCauses(this.#deferredWhileHidden.get(queryId) ?? [], mergedCauses),
+      )
+      this.#emitReconcileDecision(queryId, 'deferred-hidden', mergedCauses)
       this.#markQueryPending(queryId)
       return
     }
 
     if (this.#reconcileCooldown <= 0) {
-      this.#emitReconcileStarted(queryId)
-      this.refetch(queryId)
+      this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
+      this.#emitReconcileStarted(queryId, mergedCauses)
+      this.refetch(queryId, { reason: 'reconcile', causes: mergedCauses })
       return
     }
 
@@ -1980,25 +2239,36 @@ export class QueryStore<
     const window = this.#reconcileWindows.get(queryId)
 
     if (!window || now - window.lastAt >= this.#reconcileCooldown) {
-      this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
-      this.#emitReconcileStarted(queryId)
-      this.refetch(queryId)
+      this.#reconcileWindows.set(queryId, {
+        lastAt: now,
+        trailing: window?.trailing ?? null,
+        causes: [],
+      })
+      this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
+      this.#emitReconcileStarted(queryId, mergedCauses)
+      this.refetch(queryId, { reason: 'reconcile', causes: mergedCauses })
       return
     }
 
+    window.causes = mergeTraceCauses(window.causes, mergedCauses)
+    this.#emitReconcileDecision(queryId, 'coalesced', mergedCauses)
     if (window.trailing) return // the pending trailing refetch already covers this
 
     const timer = setTimeout(
       () => {
         const current = this.#reconcileWindows.get(queryId)
-        if (current) current.trailing = null
+        const trailingCauses = current?.causes ?? []
+        if (current) {
+          current.trailing = null
+          current.causes = []
+        }
         if (!this.#getQuery(queryId)) {
           this.#reconcileWindows.delete(queryId)
           return
         }
         // Re-enter the gate after the window expires unless the tab went hidden or
         // the last subscriber left in the meantime.
-        this.#requestReconcile(queryId)
+        this.#requestReconcile(queryId, { causes: trailingCauses })
       },
       window.lastAt + this.#reconcileCooldown - now,
     )
@@ -2007,10 +2277,32 @@ export class QueryStore<
     window.trailing = timer
   }
 
-  #emitReconcileStarted(queryId: string): void {
+  #emitReconcileDecision(
+    queryId: string,
+    decision: 'fetch-now' | 'coalesced' | 'deferred-hidden' | 'inactive',
+    causes: readonly TraceCause[],
+  ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName !== undefined) {
-      this.#events.emit({ kind: 'reconcile:started', queryId, serviceName })
+      this.#events.emit({
+        kind: 'reconcile:decision',
+        queryId,
+        serviceName,
+        decision,
+        ...(causes.length > 0 ? { causes } : {}),
+      })
+    }
+  }
+
+  #emitReconcileStarted(queryId: string, causes: readonly TraceCause[]): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (serviceName !== undefined) {
+      this.#events.emit({
+        kind: 'reconcile:started',
+        queryId,
+        serviceName,
+        ...(causes.length > 0 ? { causes } : {}),
+      })
     }
   }
 
@@ -2019,9 +2311,9 @@ export class QueryStore<
     if (this.#visibility.isHidden() || this.#deferredWhileHidden.size === 0) return
     const deferred = Array.from(this.#deferredWhileHidden)
     this.#deferredWhileHidden.clear()
-    for (const queryId of deferred) {
+    for (const [queryId, causes] of deferred) {
       if (!this.#getQuery(queryId)) continue
-      this.#requestReconcile(queryId)
+      this.#requestReconcile(queryId, { causes })
     }
   }
 
@@ -2061,12 +2353,13 @@ export class QueryStore<
     }
   }
 
-  #refetchActiveQueries(): void {
+  #activeReconnectQueries(): Array<{ queryId: string; force: boolean }> {
+    const queryIds = new Map<string, boolean>()
     for (const service of this.getState().values()) {
       // Materialization roots reconcile even with no subscribers — every local read
       // depends on their completeness, and events may have been missed while offline.
       if (service.materialized) {
-        this.#requestReconcile(service.materialized.queryId, { force: true })
+        queryIds.set(service.materialized.queryId, true)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
@@ -2075,24 +2368,55 @@ export class QueryStore<
           (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId)) &&
           this.#listenerCount(query.queryId) > 0
         ) {
-          this.#requestReconcile(query.queryId)
+          queryIds.set(query.queryId, false)
         }
       }
     }
+    return [...queryIds].map(([queryId, force]) => ({ queryId, force }))
   }
 
-  #scheduleReconnectSweep(): void {
+  #refetchActiveQueries(
+    traceId: number,
+    queries: readonly { queryId: string; force: boolean }[],
+  ): void {
+    for (const query of queries) {
+      this.#requestReconcile(query.queryId, {
+        force: query.force,
+        causes: [{ kind: 'reconnect', traceId }],
+      })
+    }
+  }
+
+  #scheduleReconnectSweep(traceId: number): void {
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
     if (delay === 0) {
-      this.#refetchActiveQueries()
+      const queries = this.#activeReconnectQueries()
+      this.#events.emit({
+        kind: 'reconnect:sweep',
+        traceId,
+        phase: 'started',
+        delayMs: 0,
+        queryCount: queries.length,
+      })
+      this.#refetchActiveQueries(traceId, queries)
       return
     }
 
+    this.#events.emit({ kind: 'reconnect:sweep', traceId, phase: 'scheduled', delayMs: delay })
+
     const timer = setTimeout(() => {
       this.#reconnectSweepTimer = null
-      this.#refetchActiveQueries()
+      const queries = this.#activeReconnectQueries()
+      this.#events.emit({
+        kind: 'reconnect:sweep',
+        traceId,
+        phase: 'started',
+        delayMs: delay,
+        queryCount: queries.length,
+      })
+      this.#refetchActiveQueries(traceId, queries)
     }, delay)
     ;(timer as { unref?: () => void }).unref?.()
     this.#reconnectSweepTimer = timer

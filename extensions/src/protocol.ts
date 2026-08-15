@@ -9,6 +9,7 @@ interface WireEnvelopeShape {
   protocol: 2
   version: number
   read: {
+    cache?: unknown[]
     events: unknown[]
     inFlightMutations: unknown[]
     queries: unknown[]
@@ -50,7 +51,9 @@ export function parseWireRead(value: unknown): ParsedWireRead | null {
   // Protocol 2 defines the collection item shapes. The envelope check guards the
   // transport boundary without duplicating every domain type in the extension.
   return {
-    read: envelope.read as unknown as DevtoolsWireRead | null,
+    read: envelope.read
+      ? ({ ...envelope.read, cache: envelope.read.cache ?? [] } as unknown as DevtoolsWireRead)
+      : null,
     version: envelope.version,
   }
 }

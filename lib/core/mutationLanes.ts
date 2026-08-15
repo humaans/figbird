@@ -171,6 +171,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       if (eventItem !== null && eventItem !== undefined) {
         authoritativeEvent = {
           origin: 'authoritative',
+          source: 'mutation',
           serviceName: state.serviceName,
           type,
           item: eventItem,
@@ -216,6 +217,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       projection: this.#reproject(state),
       event: {
         origin: 'authoritative',
+        source: 'realtime',
         serviceName: state.serviceName,
         type,
         item,
@@ -272,6 +274,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
         if (!lane.lastPresent) continue
         events.push({
           origin: 'projection',
+          source: 'optimistic',
           serviceName,
           type: 'removed',
           item: lane.lastPresent,
@@ -282,6 +285,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       } else {
         events.push({
           origin: 'projection',
+          source: 'optimistic',
           serviceName,
           type: lane.base === ABSENT ? 'created' : 'patched',
           item: lane.visible,

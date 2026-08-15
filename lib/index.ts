@@ -83,7 +83,13 @@ export type { QueryAST, QueryBuilderProxy } from './core/queryBuilder.js'
 
 // query classification report types (returned by figbird.explain / figbird.inspect)
 export type { ClassificationReason, QueryNodeClass } from './core/queryClassification.js'
-export type { ExplainNode, ExplainReport, InspectedQuery } from './core/figbird.js'
+export type {
+  ExplainNode,
+  ExplainReport,
+  InspectedCacheEntity,
+  InspectedCacheService,
+  InspectedQuery,
+} from './core/figbird.js'
 
 // relational query
 export { RelationalQueryRef } from './core/figbird.js'

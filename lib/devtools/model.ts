@@ -152,6 +152,10 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
         }
       : {}),
     classification: latest.classification,
+    ...(latest.classificationReasons
+      ? { classificationReasons: latest.classificationReasons }
+      : {}),
+    ...(latest.realtimeStrategy ? { realtimeStrategy: latest.realtimeStrategy } : {}),
     skipped: roots.every(query => query.skipped === true),
     status: roots.some(query => query.status === 'error')
       ? 'error'

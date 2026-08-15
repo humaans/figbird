@@ -8,6 +8,7 @@ import {
   type TimelineLane,
   type TimelineLayout,
   type TimelineMarker,
+  type TimelineTick,
 } from './TimelineCanvas.js'
 import { buttonStyle, useDevtoolsTheme } from './ui.js'
 
@@ -30,7 +31,7 @@ type RawTimelineLane =
       context: string
       detail: string
       firstAt: number
-      ticks: number[]
+      ticks: TimelineTick[]
     }
   | {
       kind: 'connection'
@@ -88,17 +89,19 @@ export function TimelineTab({
   model,
   follow,
   onFollowChange,
+  onTraceSelect,
 }: {
   snapshot: DevtoolsSnapshot
   model: DevtoolsModel
   follow: boolean
   onFollowChange: (value: boolean) => void
+  onTraceSelect?: (traceId: number) => void
 }) {
   const rawLanes = useMemo(() => {
-    const realtimeByService = new Map<string, number[]>()
+    const realtimeByService = new Map<string, TimelineTick[]>()
     for (const item of snapshot.timeline.realtime) {
       const ticks = realtimeByService.get(item.serviceName) ?? []
-      ticks.push(item.at)
+      ticks.push({ at: item.at, ...(item.traceId === undefined ? {} : { traceId: item.traceId }) })
       realtimeByService.set(item.serviceName, ticks)
     }
     const queryLanes: RawTimelineLane[] = snapshot.queries
@@ -128,7 +131,7 @@ export function TimelineTab({
       label: `${serviceName} realtime`,
       context: `${ticks.length} ${ticks.length === 1 ? 'event' : 'events'} retained`,
       detail: `All retained realtime events emitted by ${serviceName}`,
-      firstAt: Math.min(...ticks),
+      firstAt: Math.min(...ticks.map(tick => tick.at)),
       ticks,
     }))
     const connectionLane = buildConnectionLane(snapshot.timeline.connection)
@@ -179,6 +182,7 @@ export function TimelineTab({
         wallClockOffset={wallClockOffset}
         follow={follow}
         onFollowChange={onFollowChange}
+        {...(onTraceSelect ? { onTraceSelect } : {})}
       />
     </section>
   )
@@ -207,7 +211,7 @@ function timelineLayout(
         points.push(span.startAt, span.endAt ?? nowPoint)
       }
     } else if (lane.kind === 'realtime') {
-      points.push(...lane.ticks)
+      points.push(...lane.ticks.map(tick => tick.at))
     } else {
       for (const span of lane.bars) points.push(span.startAt, span.endAt ?? nowPoint)
       points.push(...lane.markers.map(marker => marker.at))
@@ -234,12 +238,22 @@ function buildConnectionLane(events: TimelineConnectionEvent[]): RawTimelineLane
     const event = item.event
     switch (event.kind) {
       case 'connection:connected':
-        markers.push({ at: item.at, label: connectionEventLabel(event), tone: 'green' })
+        markers.push({
+          at: item.at,
+          label: connectionEventLabel(event),
+          tone: 'green',
+          ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
+        })
         break
       case 'connection:disconnected':
         if (offlineStart === undefined) offlineStart = item.at
         latestAttempt = undefined
-        markers.push({ at: item.at, label: connectionEventLabel(event), tone: 'red' })
+        markers.push({
+          at: item.at,
+          label: connectionEventLabel(event),
+          tone: 'red',
+          ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
+        })
         break
       case 'connection:reconnected':
         latestAttempt = event.attempt
@@ -248,11 +262,21 @@ function buildConnectionLane(events: TimelineConnectionEvent[]): RawTimelineLane
           bars.push({ startAt: offlineStart, endAt: item.at, ok: false })
           offlineStart = undefined
         }
-        markers.push({ at: item.at, label: connectionEventLabel(event), tone: 'green' })
+        markers.push({
+          at: item.at,
+          label: connectionEventLabel(event),
+          tone: 'green',
+          ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
+        })
         break
       case 'connection:error':
       case 'connection:reconnect-failed':
-        markers.push({ at: item.at, label: connectionEventLabel(event), tone: 'red' })
+        markers.push({
+          at: item.at,
+          label: connectionEventLabel(event),
+          tone: 'red',
+          ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
+        })
         break
     }
   }
