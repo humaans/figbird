@@ -118,7 +118,6 @@ export interface DevtoolsSnapshot {
   events: DevtoolsEvent[]
   timeline: DevtoolsTimeline
   writes: WriteRecord[]
-  inFlightWrites: number
 }
 
 export interface DevtoolsCacheEntity {
@@ -148,7 +147,6 @@ export interface Collector {
   getSnapshot(): DevtoolsSnapshot
   clearEvents(): void
   clearTimeline(): void
-  clearWrites(): void
   reset(): void
 }
 
@@ -188,7 +186,6 @@ const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
   events: [],
   timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
   writes: [],
-  inFlightWrites: 0,
 }
 
 function errorMessage(error: unknown): string {
@@ -457,7 +454,6 @@ class FigbirdCollector implements Collector {
         connection: this.#timelineConnection.toArray(),
       },
       writes,
-      inFlightWrites: this.#figbird.mutating?.getSnapshot().length ?? 0,
     }
     this.#dirty = false
     return this.#snapshot
@@ -471,18 +467,12 @@ class FigbirdCollector implements Collector {
   clearTimeline(): void {
     this.#timelineRealtime.clear()
     this.#timelineConnection.clear()
+    this.#clearSettledWrites()
     this.#timelineStartedAt = now()
     this.#timelineLaneOrder = []
     this.#timelineLaneIds.clear()
     for (const record of this.#queries.values()) {
       record.metrics.spans.clear()
-    }
-    this.#scheduleNotify()
-  }
-
-  clearWrites(): void {
-    for (const [id, write] of this.#writes) {
-      if (write.status !== 'in-flight') this.#writes.delete(id)
     }
     this.#scheduleNotify()
   }
@@ -515,6 +505,12 @@ class FigbirdCollector implements Collector {
       }
     }
     queueMicrotask(flush)
+  }
+
+  #clearSettledWrites(): void {
+    for (const [id, write] of this.#writes) {
+      if (write.status !== 'in-flight') this.#writes.delete(id)
+    }
   }
 
   #recordEvent(event: FigbirdEvent): void {

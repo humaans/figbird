@@ -24,6 +24,13 @@ export interface TimelineActivity {
   traceId?: number
   durationMs?: number
   payload?: unknown
+  write?: {
+    id: string
+    type: WriteRecord['type']
+    optimistic: boolean
+    payload: unknown
+    args: readonly unknown[]
+  }
   error: boolean
   searchText: string
 }
@@ -288,9 +295,25 @@ function writeActivity(write: WriteRecord): TimelineActivity {
     ...(write.serviceName === undefined ? {} : { serviceName: write.serviceName }),
     ...(write.traceId === undefined ? {} : { traceId: write.traceId }),
     ...(write.durationMs === undefined ? {} : { durationMs: write.durationMs }),
-    ...(write.args === undefined ? {} : { payload: write.args }),
+    write: {
+      id: write.id,
+      type: write.type,
+      optimistic: write.optimistic ?? false,
+      payload: writePayload(write),
+      args: write.args ?? [],
+    },
     error: failed,
   })
+}
+
+function writePayload(write: WriteRecord): unknown {
+  const args = write.args
+  if (!args || args.length === 0) return undefined
+  if (write.type === 'action') return args.length === 1 ? args[0] : args
+  if (write.method === 'create') return args[0]
+  if (write.method === 'update' || write.method === 'patch') return args[1]
+  if (write.method === 'remove') return undefined
+  return args.length === 1 ? args[0] : args
 }
 
 function cacheEffect(events: readonly DevtoolsEvent[], fallback: string): string {

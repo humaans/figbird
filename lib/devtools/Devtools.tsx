@@ -3,7 +3,6 @@ import { CacheTab, type DevtoolsCacheEditor } from './CacheTab.js'
 import { EventsTab } from './EventsTab.js'
 import { QueriesTab, operationIsInactive } from './QueriesTab.js'
 import { TimelineFollowControl, TimelineTab } from './TimelineTab.js'
-import { WritesTab } from './WritesTab.js'
 import type { Collector } from './collector.js'
 import { buildDevtoolsModel } from './model.js'
 import {
@@ -17,7 +16,7 @@ import {
   type DevtoolsThemeMode,
 } from './ui.js'
 
-type Tab = 'queries' | 'timeline' | 'events' | 'cache' | 'writes'
+type Tab = 'queries' | 'timeline' | 'events' | 'cache'
 export type QueryVisibility = 'active' | 'inactive' | 'all' | 'skipped'
 export type EventVisibility = 'activity' | 'all'
 
@@ -104,9 +103,7 @@ export function FigbirdDevtoolsPanel({
       ? { disabled: snapshot.events.length === 0, run: () => collector.clearEvents() }
       : tab === 'timeline'
         ? { disabled: timelineEmpty, run: clearTimeline }
-        : tab === 'writes'
-          ? { disabled: snapshot.writes.length === 0, run: () => collector.clearWrites() }
-          : null
+        : null
   const inspected = inspectionSnapshot.kind === 'selected' ? inspectionSnapshot : null
 
   return (
@@ -125,17 +122,8 @@ export function FigbirdDevtoolsPanel({
       >
         <header style={styles.header}>
           <span style={styles.brand}>figbird</span>
-          {(['queries', 'timeline', 'events', 'cache', 'writes'] as const).map(item => (
-            <TabButton
-              key={item}
-              active={tab === item}
-              onClick={() => setTab(item)}
-              label={
-                item === 'writes' && snapshot.inFlightWrites > 0
-                  ? `writes (${snapshot.inFlightWrites})`
-                  : item
-              }
-            />
+          {(['queries', 'timeline', 'events', 'cache'] as const).map(item => (
+            <TabButton key={item} active={tab === item} onClick={() => setTab(item)} label={item} />
           ))}
           {tab === 'queries' ? (
             <>
@@ -304,9 +292,6 @@ export function FigbirdDevtoolsPanel({
                 setTab('events')
               }}
             />
-          ) : null}
-          {tab === 'writes' ? (
-            <WritesTab writes={snapshot.writes} inFlight={snapshot.inFlightWrites} />
           ) : null}
         </main>
       </section>

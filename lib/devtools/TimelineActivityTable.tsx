@@ -88,6 +88,13 @@ export function TimelineActivityTable({
     if (range && !intersects(activity, range, nowPoint)) return false
     return normalizedFilter ? activity.searchText.includes(normalizedFilter) : true
   })
+  const inFlightWriteCount = activities.filter(
+    activity => activity.kind === 'write' && activity.status === 'in-flight',
+  ).length
+  const projectedWriteCount = activities.filter(
+    activity =>
+      activity.kind === 'write' && activity.status === 'in-flight' && activity.write?.optimistic,
+  ).length
   const waterfallIndex = COLUMNS.length - 1
   const fixedColumnsWidth = columnWidths
     .slice(0, waterfallIndex)
@@ -188,6 +195,16 @@ export function TimelineActivityTable({
             key={option.value}
             type='button'
             aria-pressed={visibility === option.value}
+            title={
+              option.value === 'write' && inFlightWriteCount > 0
+                ? [
+                    `${inFlightWriteCount} in flight`,
+                    projectedWriteCount > 0 ? `${projectedWriteCount} projected` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : undefined
+            }
             onClick={() => {
               setVisibility(option.value)
               setSelectedId(null)
@@ -195,6 +212,16 @@ export function TimelineActivityTable({
             style={buttonStyle(colors, visibility === option.value)}
           >
             {option.label}
+            {option.value === 'write' && inFlightWriteCount > 0 ? (
+              <span style={{ color: colors.blue, marginLeft: 6 }}>
+                {inFlightWriteCount} in flight
+              </span>
+            ) : null}
+            {option.value === 'write' && projectedWriteCount > 0 ? (
+              <span style={{ color: colors.amber, marginLeft: 6 }}>
+                {projectedWriteCount} projected
+              </span>
+            ) : null}
           </button>
         ))}
         <span style={{ flex: 1 }} />
@@ -491,7 +518,7 @@ function ActivityDetails({
   return (
     <DetailsPane
       title={activity.label}
-      subtitle={activity.kind}
+      subtitle={activity.write?.type ?? activity.kind}
       width={width}
       onResizeStart={onResizeStart}
       onClose={onClose}
@@ -518,8 +545,24 @@ function ActivityDetails({
         />
         {activity.serviceName ? <DetailStat label='Service' value={activity.serviceName} /> : null}
         {activity.queryId ? <DetailStat label='Query ID' value={activity.queryId} /> : null}
+        {activity.write?.type === 'mutation' ? (
+          <DetailStat
+            label='Cache mode'
+            value={activity.write.optimistic ? 'projected immediately' : 'after confirmation'}
+          />
+        ) : null}
+        {activity.write ? <DetailStat label='Write ID' value={activity.write.id} /> : null}
       </div>
-      {activity.payload !== undefined ? (
+      {activity.write ? (
+        <>
+          <DetailSection label='Payload'>
+            <JsonViewer value={activity.write.payload} emptyLabel='No payload' />
+          </DetailSection>
+          <DetailSection label='Arguments'>
+            <JsonViewer value={activity.write.args} />
+          </DetailSection>
+        </>
+      ) : activity.payload !== undefined ? (
         <DetailSection label={activity.kind === 'realtime' ? 'Event payload' : 'Parameters'}>
           <JsonViewer value={activity.payload} />
         </DetailSection>

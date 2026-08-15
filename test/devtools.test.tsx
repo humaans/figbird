@@ -516,7 +516,7 @@ test('collector bounds inactive query and settled write history', t => {
   }
   t.is(collector.getSnapshot().writes.length, 2)
 
-  collector.clearWrites()
+  collector.clearTimeline()
   t.is(collector.getSnapshot().writes.length, 0)
 
   for (let mutationId = 4; mutationId <= 6; mutationId++) {
@@ -666,7 +666,6 @@ test('devtools model keeps operation identity separate from shared fetch identit
     events: [],
     timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
     writes: [],
-    inFlightWrites: 0,
   }
 
   const model = buildDevtoolsModel(snapshot)
@@ -742,7 +741,6 @@ test('query details show a cursor operation as one inspectable page chain', t =>
     events: [],
     timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
     writes: [],
-    inFlightWrites: 0,
   }
   const collector: Collector = {
     eventLimit: 500,
@@ -752,7 +750,6 @@ test('query details show a cursor operation as one inspectable page chain', t =>
     getSnapshot: () => snapshot,
     clearEvents() {},
     clearTimeline() {},
-    clearWrites() {},
     reset() {},
   }
 
@@ -1023,7 +1020,6 @@ test('panel shows root queries and nests relation fetches in details', async t =
       connection: [],
     },
     writes: [],
-    inFlightWrites: 0,
   }
   const events = new FigbirdEventEmitter()
   const inspectedRows = snapshot.queries.map(inspectedRow)
