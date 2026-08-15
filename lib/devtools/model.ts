@@ -87,9 +87,17 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
       })
     }
 
+    const summary = summarizeRootFetches(rootFetches)
     operations.push({
       key: group.key,
-      summary: summarizeRootFetches(rootFetches),
+      summary:
+        group.data === undefined
+          ? summary
+          : {
+              ...summary,
+              data: group.data,
+              itemCount: Array.isArray(group.data) ? group.data.length : 1,
+            },
       rootFetches,
       underlying: [...underlyingByPath.values()],
       composition: describeComposition(group.ast, group.name, group.pagination),
@@ -132,7 +140,19 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
     method: latest.method,
     ...(latest.resourceId !== undefined ? { resourceId: latest.resourceId } : {}),
     query: latest.query,
+    ...(roots.some(query => query.data !== undefined)
+      ? {
+          data: roots.flatMap(query =>
+            Array.isArray(query.data)
+              ? query.data
+              : query.data === undefined || query.data === null
+                ? []
+                : [query.data],
+          ),
+        }
+      : {}),
     classification: latest.classification,
+    skipped: roots.every(query => query.skipped === true),
     status: roots.some(query => query.status === 'error')
       ? 'error'
       : roots.some(query => query.status === 'loading')

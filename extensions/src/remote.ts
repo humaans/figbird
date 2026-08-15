@@ -90,6 +90,15 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
     this.#renderFrame = null
   }
 
+  reset(): void {
+    this.cancelPending()
+    this.#queries = []
+    this.#relational = []
+    this.#mutations = []
+    for (const listener of this.#stateListeners) listener(undefined)
+    for (const listener of this.#mutatingListeners) listener()
+  }
+
   #flush(): void {
     const read = this.#pending
     this.#pending = null
@@ -122,6 +131,7 @@ export class ExtensionSession {
   #statusListeners = new Set<() => void>()
   #timer: ReturnType<typeof setInterval> | null = null
   #version: number | null = null
+  #resetListeners = new Set<() => void>()
 
   constructor(evaluate: Evaluate = evaluateInspectedWindow) {
     this.#evaluate = evaluate
@@ -133,6 +143,11 @@ export class ExtensionSession {
   subscribeStatus = (listener: () => void): (() => void) => {
     this.#statusListeners.add(listener)
     return () => this.#statusListeners.delete(listener)
+  }
+
+  subscribeReset = (listener: () => void): (() => void) => {
+    this.#resetListeners.add(listener)
+    return () => this.#resetListeners.delete(listener)
   }
 
   start(): void {
@@ -182,8 +197,7 @@ export class ExtensionSession {
       )
       if (generation !== this.#generation) return
       if (!poll) {
-        this.#connection = null
-        this.#version = null
+        this.#resetConnection()
         this.inspection.reset()
         this.#setStatus('Reconnecting')
         return
@@ -193,13 +207,21 @@ export class ExtensionSession {
       await this.inspection.refresh()
     } catch {
       if (generation !== this.#generation) return
-      this.#connection = null
-      this.#version = null
+      this.#resetConnection()
       this.inspection.reset()
       this.#setStatus('Cannot inspect this page')
     } finally {
       this.#polling = false
     }
+  }
+
+  #resetConnection(): void {
+    const hadConnection = this.#connection !== null || this.#version !== null
+    this.#connection = null
+    this.#version = null
+    if (!hadConnection) return
+    this.figbird.reset()
+    for (const listener of this.#resetListeners) listener()
   }
 
   async #disconnect(sessionId: string): Promise<void> {

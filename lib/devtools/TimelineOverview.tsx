@@ -2,8 +2,6 @@ import { useEffect, useRef } from 'react'
 import type { QuerySpan } from './collector.js'
 import { useDevtoolsTheme } from './ui.js'
 
-export const TIMELINE_LABEL_WIDTH = 220
-
 const OVERVIEW_HEIGHT = 42
 
 export interface TimelineViewport {
@@ -14,6 +12,7 @@ export interface TimelineViewport {
 type TimelineOverviewLane =
   | { kind: 'query'; id: string; bars: QuerySpan[] }
   | { kind: 'realtime'; id: string; ticks: number[] }
+  | { kind: 'connection'; id: string; bars: QuerySpan[]; markers: Array<{ at: number }> }
 
 interface TimelineOverviewLayout {
   start: number
@@ -25,12 +24,14 @@ export function TimelineOverview({
   layout,
   nowPoint,
   viewport,
+  labelWidth,
   onNavigate,
 }: {
   lanes: TimelineOverviewLane[]
   layout: TimelineOverviewLayout
   nowPoint: number
   viewport: TimelineViewport
+  labelWidth: number
   onNavigate: (ratio: number) => void
 }) {
   const { colors } = useDevtoolsTheme()
@@ -51,7 +52,7 @@ export function TimelineOverview({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: `${TIMELINE_LABEL_WIDTH}px minmax(0, 1fr)`,
+        gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)`,
         minHeight: OVERVIEW_HEIGHT,
         flexShrink: 0,
         borderBottom: `1px solid ${colors.border}`,
@@ -130,16 +131,18 @@ function drawOverview(
   for (const [laneIndex, lane] of lanes.entries()) {
     const markHeight = Math.min(3, Math.max(1, laneHeight * 0.5))
     const top = 5 + laneIndex * laneHeight + Math.max(0, (laneHeight - markHeight) / 2)
-    if (lane.kind === 'query') {
+    if (lane.kind === 'query' || lane.kind === 'connection') {
       for (const bar of lane.bars) {
         const left = timelineRatio(bar.startAt, layout) * width
         const right = timelineRatio(bar.endAt ?? nowPoint, layout) * width
         context.fillStyle = bar.ok === false ? colors.red : colors.green
         context.fillRect(left, top, Math.max(1, right - left), markHeight)
       }
-    } else {
+    }
+    if (lane.kind === 'realtime' || lane.kind === 'connection') {
       context.fillStyle = colors.blue
-      for (const tick of lane.ticks) {
+      const ticks = lane.kind === 'realtime' ? lane.ticks : lane.markers.map(marker => marker.at)
+      for (const tick of ticks) {
         context.fillRect(timelineRatio(tick, layout) * width, top, 2, markHeight)
       }
     }

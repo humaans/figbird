@@ -975,6 +975,8 @@ test('figbird.query: reconnect refetches active queries after missed events', as
     reconnectJitter: 0,
   })
   const peopleService = feathers.service('people')
+  const connectionKinds: string[] = []
+  const unsubscribeEvents = figbird.events.subscribe(event => connectionKinds.push(event.kind))
   const queryRef = figbird.queryDesc({
     serviceName: 'people',
     method: 'find',
@@ -1002,8 +1004,10 @@ test('figbird.query: reconnect refetches active queries after missed events', as
 
   t.is(peopleService.counts.find, initialFindCount + 1)
   t.deepEqual(latestNames, ['Alicia'])
+  t.true(connectionKinds.includes('connection:reconnected'))
 
   unsubscribe()
+  unsubscribeEvents()
 })
 
 // ============================================================================

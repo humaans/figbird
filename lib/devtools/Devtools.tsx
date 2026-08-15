@@ -17,6 +17,7 @@ import {
 } from './ui.js'
 
 type Tab = 'queries' | 'timeline' | 'events' | 'writes'
+export type QueryVisibility = 'active' | 'all' | 'skipped'
 
 export type DevtoolsInspectionSnapshot =
   | { kind: 'idle'; version: number }
@@ -61,7 +62,7 @@ export function FigbirdDevtoolsPanel({
   const themeValue = useMemo(() => ({ colors, styles }), [colors, styles])
   const [tab, setTab] = useState<Tab>('queries')
   const [queryFilter, setQueryFilter] = useState('')
-  const [queryActiveOnly, setQueryActiveOnly] = useState(true)
+  const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
   const [timelineFollow, setTimelineFollow] = useState(true)
 
@@ -80,8 +81,10 @@ export function FigbirdDevtoolsPanel({
   )
 
   const model = useMemo(() => buildDevtoolsModel(snapshot), [snapshot])
+  const skippedQueryCount = model.operations.filter(operation => operation.summary.skipped).length
   const timelineEmpty =
     snapshot.timeline.realtime.length === 0 &&
+    snapshot.timeline.connection.length === 0 &&
     snapshot.queries.every(query => query.spans.length === 0)
   const clearTimeline = useCallback(() => {
     collector.clearTimeline()
@@ -133,22 +136,24 @@ export function FigbirdDevtoolsPanel({
                 onChange={event => setQueryFilter(event.currentTarget.value)}
                 placeholder='Filter service or query'
               />
-              <label
+              <select
+                aria-label='Query visibility'
+                title='Skipped queries are hidden from the live view'
+                value={queryVisibility}
+                onChange={event => setQueryVisibility(event.currentTarget.value as QueryVisibility)}
                 style={{
-                  color: colors.muted,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  whiteSpace: 'nowrap',
+                  ...styles.input,
+                  width: 'auto',
+                  maxWidth: 'none',
+                  paddingRight: 24,
                 }}
               >
-                <input
-                  type='checkbox'
-                  checked={queryActiveOnly}
-                  onChange={event => setQueryActiveOnly(event.currentTarget.checked)}
-                />
-                active only
-              </label>
+                <option value='active'>Live queries</option>
+                <option value='all'>All queries</option>
+                <option value='skipped'>
+                  Skipped queries{skippedQueryCount > 0 ? ` (${skippedQueryCount})` : ''}
+                </option>
+              </select>
               {inspection ? (
                 <button
                   type='button'
@@ -201,6 +206,14 @@ export function FigbirdDevtoolsPanel({
               placeholder='Filter events'
             />
           ) : null}
+          {tab === 'events' ? (
+            <span
+              title='The oldest event is discarded when the bounded buffer is full'
+              style={{ color: colors.muted, whiteSpace: 'nowrap' }}
+            >
+              {snapshot.events.length} / {collector.eventLimit} retained
+            </span>
+          ) : null}
           {tab === 'timeline' ? (
             <TimelineFollowControl value={timelineFollow} onChange={setTimelineFollow} />
           ) : null}
@@ -217,7 +230,7 @@ export function FigbirdDevtoolsPanel({
             <QueriesTab
               model={model}
               filter={queryFilter}
-              activeOnly={queryActiveOnly}
+              visibility={queryVisibility}
               inspectedQueryCounts={inspected?.queryCounts ?? null}
             />
           ) : null}

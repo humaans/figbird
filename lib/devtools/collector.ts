@@ -62,10 +62,28 @@ export interface TimelineRealtimeEvent {
   serviceName: string
 }
 
+type ConnectionFigbirdEvent = Extract<
+  FigbirdEvent,
+  {
+    kind:
+      | 'connection:connected'
+      | 'connection:disconnected'
+      | 'connection:reconnected'
+      | 'connection:error'
+      | 'connection:reconnect-failed'
+  }
+>
+
+export interface TimelineConnectionEvent {
+  at: number
+  event: ConnectionFigbirdEvent
+}
+
 export interface DevtoolsTimeline {
   startedAt: number
   laneOrder: string[]
   realtime: TimelineRealtimeEvent[]
+  connection: TimelineConnectionEvent[]
 }
 
 export interface WriteRecord {
@@ -96,6 +114,7 @@ export interface DevtoolsSnapshot {
 }
 
 export interface Collector {
+  readonly eventLimit: number
   start(): void
   stop(): void
   subscribe(fn: () => void): () => void
@@ -103,6 +122,7 @@ export interface Collector {
   clearEvents(): void
   clearTimeline(): void
   clearWrites(): void
+  reset(): void
 }
 
 type CapturedQueryState = Omit<
@@ -138,7 +158,7 @@ const EMPTY_SNAPSHOT: DevtoolsSnapshot = {
   queries: [],
   relational: [],
   events: [],
-  timeline: { startedAt: 0, laneOrder: [], realtime: [] },
+  timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
   writes: [],
   inFlightWrites: 0,
 }
@@ -308,6 +328,7 @@ class FigbirdCollector implements Collector {
   #relational: Map<string, InternalRelationalQuery> = new Map()
   #events: CappedBuffer<DevtoolsEvent>
   #timelineRealtime: CappedBuffer<TimelineRealtimeEvent>
+  #timelineConnection: CappedBuffer<TimelineConnectionEvent>
   #timelineStartedAt = now()
   #timelineLaneOrder: string[] = []
   #timelineLaneIds = new Set<string>()
@@ -315,14 +336,18 @@ class FigbirdCollector implements Collector {
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
 
+  readonly eventLimit: number
+
   constructor(figbird: FigbirdLikeForDevtools, options: ResolvedCollectorOptions) {
     this.#figbird = figbird
     this.#heartbeatMs = options.heartbeatMs
     this.#queryHistoryLimit = options.queryHistoryLimit
     this.#spanLimit = options.spanLimit
     this.#writeLimit = options.writeLimit
+    this.eventLimit = options.eventLimit
     this.#events = new CappedBuffer(options.eventLimit)
     this.#timelineRealtime = new CappedBuffer(options.eventLimit)
+    this.#timelineConnection = new CappedBuffer(options.eventLimit)
   }
 
   start(): void {
@@ -388,6 +413,7 @@ class FigbirdCollector implements Collector {
         startedAt: this.#timelineStartedAt,
         laneOrder: [...this.#timelineLaneOrder],
         realtime: this.#timelineRealtime.toArray(),
+        connection: this.#timelineConnection.toArray(),
       },
       writes,
       inFlightWrites: this.#figbird.mutating?.getSnapshot().length ?? 0,
@@ -403,6 +429,7 @@ class FigbirdCollector implements Collector {
 
   clearTimeline(): void {
     this.#timelineRealtime.clear()
+    this.#timelineConnection.clear()
     this.#timelineStartedAt = now()
     this.#timelineLaneOrder = []
     this.#timelineLaneIds.clear()
@@ -416,6 +443,21 @@ class FigbirdCollector implements Collector {
     for (const [id, write] of this.#writes) {
       if (write.status !== 'in-flight') this.#writes.delete(id)
     }
+    this.#scheduleNotify()
+  }
+
+  reset(): void {
+    this.#queries.clear()
+    this.#relational.clear()
+    this.#events.clear()
+    this.#timelineRealtime.clear()
+    this.#timelineConnection.clear()
+    this.#timelineStartedAt = now()
+    this.#timelineLaneOrder = []
+    this.#timelineLaneIds.clear()
+    this.#nextEventId = 1
+    this.#realtimeByService.clear()
+    this.#writes.clear()
     this.#scheduleNotify()
   }
 
@@ -459,6 +501,14 @@ class FigbirdCollector implements Collector {
           (this.#realtimeByService.get(event.serviceName) ?? 0) + 1,
         )
         break
+      case 'connection:connected':
+      case 'connection:disconnected':
+      case 'connection:reconnected':
+      case 'connection:error':
+      case 'connection:reconnect-failed':
+        this.#recordTimelineLane('connection')
+        this.#timelineConnection.push({ at, event: this.#captureConnectionEvent(event) })
+        break
       case 'reconcile:started':
         {
           const record = this.#queries.get(event.queryId)
@@ -493,7 +543,11 @@ class FigbirdCollector implements Collector {
       observedQueryIds.add(row.queryId)
       const serviceRealtime = this.#realtimeByService.get(row.serviceName) ?? 0
       const existing = this.#queries.get(row.queryId)
-      const capturedRow = { ...row, query: snapshotValue(row.query) }
+      const capturedRow = {
+        ...row,
+        query: snapshotValue(row.query),
+        ...(row.data === undefined ? {} : { data: snapshotValue(row.data) }),
+      }
       const capturedState = queryState(capturedRow)
       const record =
         existing ?? makeQueryRecord(capturedRow, serviceRealtime, observedAt, this.#spanLimit)
@@ -747,9 +801,12 @@ class FigbirdCollector implements Collector {
           ...event,
           ...(event.params === undefined ? {} : { params: snapshotValue(event.params) }),
         }
+      case 'realtime':
+        return { ...event, item: snapshotValue(event.item) }
       case 'fetch:error':
       case 'mutate:error':
       case 'action:error':
+      case 'connection:error':
         return { ...event, error: new Error(errorMessage(event.error)) }
       case 'mutate:start':
         return {
@@ -774,6 +831,14 @@ class FigbirdCollector implements Collector {
       default:
         return { ...event }
     }
+  }
+
+  #captureConnectionEvent(event: ConnectionFigbirdEvent): ConnectionFigbirdEvent {
+    if (event.kind === 'connection:error' || event.kind === 'connection:reconnect-failed') {
+      if (!event.error) return { ...event }
+      return { ...event, error: new Error(errorMessage(event.error)) }
+    }
+    return { ...event }
   }
 
   #trimWrites(): void {

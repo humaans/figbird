@@ -234,6 +234,27 @@ export function QueryDetails({
           ) : null}
         </QueryDetailSection>
       ) : null}
+      <QueryDetailSection
+        label='Query data'
+        meta={activeQuery.skipped ? 'skipped' : plural(activeQuery.itemCount, 'row', 'rows')}
+      >
+        <pre
+          style={{
+            ...styles.code,
+            maxHeight: 360,
+            overflow: 'auto',
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            margin: 0,
+            padding: 10,
+            color: activeQuery.data === undefined ? colors.faint : colors.text,
+            background: colors.panel2,
+            borderRadius: 4,
+          }}
+        >
+          {activeQuery.data === undefined ? 'No data available' : prettyJson(activeQuery.data)}
+        </pre>
+      </QueryDetailSection>
       <details
         key={activeQueryId ?? operation.key}
         style={{

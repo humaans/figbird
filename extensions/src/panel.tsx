@@ -27,6 +27,8 @@ function Panel() {
     }
   }, [session])
 
+  useEffect(() => session.subscribeReset(() => collector.reset()), [collector, session])
+
   return (
     <FigbirdDevtoolsPanel collector={collector} inspection={session.inspection} status={status} />
   )
