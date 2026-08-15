@@ -23,10 +23,12 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
   isQueryDefinition,
+  isQueryRequest,
   splitDefinitionRest,
   type ArgsAndOptions,
   type ArgsAndRequiredOptions,
   type QueryDefinition,
+  type QueryRequest,
   type RelationalPaginationState,
   type RelationalQueryState,
 } from '../core/figbird.js'
@@ -96,6 +98,9 @@ export interface QueryRefLike<T> {
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
   query<B extends AnyQueryBuilder>(builder: B): QueryRefLike<QueryBuilderResult<B>>
+  query<Args, B extends AnyQueryBuilder>(
+    request: QueryRequest<Args, B>,
+  ): QueryRefLike<QueryBuilderResult<B>>
   query<Args, B extends AnyQueryBuilder>(
     definition: QueryDefinition<Args, B>,
     args: Args,
@@ -193,6 +198,11 @@ export interface UseQueryHook<S extends Schema = any> {
     query: B,
     options: UseQueryOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
+  // Bound request, non-suspense
+  <Args, B extends AnyQueryBuilder<S>>(
+    request: QueryRequest<Args, B>,
+    options: UseQueryOptions & { suspense: false },
+  ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
   // Definition, non-suspense — args omittable when the definition takes none
   <Args, B extends AnyQueryBuilder<S>>(
     definition: QueryDefinition<Args, B>,
@@ -201,6 +211,11 @@ export interface UseQueryHook<S extends Schema = any> {
   // Builder
   <B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
     query: B,
+    options?: O,
+  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
+  // Bound request
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+    request: QueryRequest<Args, B>,
     options?: O,
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
   // Definition — args omittable when the definition takes none
@@ -258,7 +273,12 @@ export function useQueryImpl(
 ): unknown {
   let qRef: QueryRefLike<unknown> | null = null
   let options: UseQueryOptions
-  if (isQueryDefinition(queryOrDefinition)) {
+  if (isQueryRequest(queryOrDefinition)) {
+    options = (argsOrOptions as UseQueryOptions | undefined) ?? {}
+    if (!options.skip) {
+      qRef = figbird.query(queryOrDefinition as QueryRequest<unknown, AnyQueryBuilder>)
+    }
+  } else if (isQueryDefinition(queryOrDefinition)) {
     const definition = queryOrDefinition
     // `null` args skip the query — the definition's build function is never invoked
     // (it may dereference its args), so the condition lives in the args themselves:

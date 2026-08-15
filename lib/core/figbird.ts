@@ -27,10 +27,12 @@ import {
 } from './queryBuilder.js'
 import {
   isQueryDefinition,
+  isQueryRequest,
   splitDefinitionRest,
   type ArgsAndOptions,
   type PreparedQuery,
   type QueryDefinition,
+  type QueryRequest,
 } from './queryDefinition.js'
 import { explainQuery, type ExplainReport, type QueryNodeClass } from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
@@ -117,7 +119,9 @@ export type { InFlightMutation, MutationActivity } from './mutationTracker.js'
 export {
   defineQuery,
   isQueryDefinition,
+  isQueryRequest,
   QUERY_DEFINITION_BRAND,
+  QUERY_REQUEST_BRAND,
   QueryArgsError,
   splitDefinitionRest,
   validateQueryArgs,
@@ -128,6 +132,7 @@ export type {
   DefineQuery,
   PreparedQuery,
   QueryDefinition,
+  QueryRequest,
   StandardSchemaV1,
 } from './queryDefinition.js'
 export { RelationalQueryRef } from './relationalQuery.js'
@@ -310,7 +315,7 @@ export class Figbird<
 
   /**
    * Materialize a query and return its live reference — the non-React mirror of
-   * `useQuery`. Accepts a builder, or a definition plus args. The returned
+   * `useQuery`. Accepts a builder, a bound request, or a definition plus args. The returned
    * RelationalQueryRef manages sub-queries and assembles related data.
    *
    * @example
@@ -356,9 +361,18 @@ export class Figbird<
     AdapterFindMeta<A>,
     AdapterQuery<A>
   >
+  query<Args, B extends AnyQueryBuilder<S>>(
+    request: QueryRequest<Args, B>,
+  ): RelationalQueryRef<
+    QueryBuilderResult<B>,
+    S,
+    AdapterParams<A>,
+    AdapterFindMeta<A>,
+    AdapterQuery<A>
+  >
   query<B extends AnyQueryBuilder<S>>(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    queryOrBuilder: B | QueryDefinition<unknown, B>,
+    queryOrBuilder: B | QueryDefinition<unknown, B> | QueryRequest<unknown, B>,
     args?: unknown,
   ): RelationalQueryRef<
     QueryBuilderResult<B>,
@@ -374,10 +388,17 @@ export class Figbird<
           'Pass schema to Figbird constructor: new Figbird({ schema, adapter })',
       )
     }
-    const definition = isQueryDefinition(queryOrBuilder) ? queryOrBuilder : null
-    const builder: B = definition
-      ? definition.build(definition.validate(args))
-      : (queryOrBuilder as B)
+    const request = isQueryRequest(queryOrBuilder) ? queryOrBuilder : null
+    const definition = request
+      ? request.definition
+      : isQueryDefinition(queryOrBuilder)
+        ? queryOrBuilder
+        : null
+    const builder: B = request
+      ? request.definition.build(request.args)
+      : definition
+        ? definition.build(definition.validate(args))
+        : (queryOrBuilder as B)
     if (!queryBuilderUsesSchema(builder, this.schema)) {
       throw new Error('The query builder uses a different schema from this Figbird instance')
     }
@@ -436,11 +457,18 @@ export class Figbird<
     query: QueryDefinition<Args, B>,
     ...rest: ArgsAndOptions<Args, { staleTime?: number }>
   ): PreparedQuery
+  prepare<Args, B extends AnyQueryBuilder<S>>(
+    request: QueryRequest<Args, B>,
+    options?: { staleTime?: number },
+  ): PreparedQuery
   prepare(
-    query: QueryDefinition<unknown, AnyQueryBuilder<S>>,
+    query: QueryDefinition<unknown, AnyQueryBuilder<S>> | QueryRequest<unknown, AnyQueryBuilder<S>>,
     argsOrOptions?: unknown,
     maybeOptions?: { staleTime?: number },
   ): PreparedQuery {
+    if (isQueryRequest(query)) {
+      return this.#prepareRequest(query, argsOrOptions as { staleTime?: number } | undefined)
+    }
     const { args, options } = splitDefinitionRest<{ staleTime?: number }>(
       query,
       argsOrOptions,
@@ -448,7 +476,14 @@ export class Figbird<
     )
     // query() owns definition resolution (validate → build → intern), so the
     // "definition + args collapses to one cache entry" contract lives in one place.
-    const ref = this.query(query, args as never)
+    return this.#prepareRequest(query.withArgs(args), options)
+  }
+
+  #prepareRequest(
+    request: QueryRequest<unknown, AnyQueryBuilder<S>>,
+    options?: { staleTime?: number },
+  ): PreparedQuery {
+    const ref = this.query(request)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
@@ -489,18 +524,33 @@ export class Figbird<
     query: QueryDefinition<Args, B>,
     ...rest: ArgsAndOptions<Args, { staleTime?: number }>
   ): void
+  prefetch<Args, B extends AnyQueryBuilder<S>>(
+    request: QueryRequest<Args, B>,
+    options?: { staleTime?: number },
+  ): void
   prefetch(
-    query: QueryDefinition<unknown, AnyQueryBuilder<S>>,
+    query: QueryDefinition<unknown, AnyQueryBuilder<S>> | QueryRequest<unknown, AnyQueryBuilder<S>>,
     argsOrOptions?: unknown,
     maybeOptions?: { staleTime?: number },
   ): void {
+    if (isQueryRequest(query)) {
+      this.#prefetchRequest(query, argsOrOptions as { staleTime?: number } | undefined)
+      return
+    }
     const { args, options } = splitDefinitionRest<{ staleTime?: number }>(
       query,
       argsOrOptions,
       maybeOptions,
     )
+    this.#prefetchRequest(query.withArgs(args), options)
+  }
+
+  #prefetchRequest(
+    request: QueryRequest<unknown, AnyQueryBuilder<S>>,
+    options?: { staleTime?: number },
+  ): void {
     const staleTime = options?.staleTime ?? 30_000
-    const ref = this.query(query, args as never)
+    const ref = this.query(request)
     const hash = ref.hash()
 
     const now = Date.now()
@@ -857,19 +907,25 @@ export class Figbird<
    * assert a query's class in tests, or to power devtools.
    */
   explain<B extends AnyQueryBuilder<S>>(builder: B): ExplainReport
+  explain<Args, B extends AnyQueryBuilder<S>>(request: QueryRequest<Args, B>): ExplainReport
   explain<Args>(
     query: QueryDefinition<Args, AnyQueryBuilder<S>>,
     ...rest: ArgsAndOptions<Args, never>
   ): ExplainReport
   explain(
-    queryOrBuilder: AnyQueryBuilder<S> | QueryDefinition<unknown, AnyQueryBuilder<S>>,
+    queryOrBuilder:
+      | AnyQueryBuilder<S>
+      | QueryDefinition<unknown, AnyQueryBuilder<S>>
+      | QueryRequest<unknown, AnyQueryBuilder<S>>,
     args?: unknown,
   ): ExplainReport {
     // Resolved without interning — explain never materializes a query. The walk
     // itself lives in queryClassification.ts, next to the plans it reports on.
-    const builder = isQueryDefinition(queryOrBuilder)
-      ? queryOrBuilder.build(queryOrBuilder.validate(args))
-      : queryOrBuilder
+    const builder = isQueryRequest(queryOrBuilder)
+      ? queryOrBuilder.definition.build(queryOrBuilder.args)
+      : isQueryDefinition(queryOrBuilder)
+        ? queryOrBuilder.build(queryOrBuilder.validate(args))
+        : queryOrBuilder
     const nodes = explainQuery(
       builder.toAST(),
       this.schema?.relationships,

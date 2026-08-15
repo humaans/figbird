@@ -26,6 +26,10 @@ Writes can use `optimisticPatch` when the local projection differs from the serv
 Relational filters apply projected changes locally, then reconcile once after the record's
 writes settle.
 
+Query definitions can bind validated args into inert requests with
+`definition.withArgs(args)`. Core methods and React hooks consume those requests directly,
+so routers can forward route data without knowing Figbird's definition or argument shape.
+
 Realtime handling is safer across all APIs. Fetches and overlapping refetches no
 longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries
 remain fixed snapshots. When an item being viewed is removed, `useGet` and `useQuery`

@@ -10,17 +10,28 @@
  * without depending on the constructor surface.
  */
 export const QUERY_DEFINITION_BRAND: unique symbol = Symbol.for('figbird.queryDefinition')
+export const QUERY_REQUEST_BRAND: unique symbol = Symbol.for('figbird.queryRequest')
+
+/**
+ * A concrete query definition with validated, normalized arguments. Requests are
+ * inert and instance-independent, so routers can carry them as opaque route data.
+ */
+export interface QueryRequest<Args, B> {
+  readonly [QUERY_REQUEST_BRAND]: true
+  readonly definition: QueryDefinition<Args, B>
+  readonly args: Args
+}
 
 /**
  * An args-keyed query factory produced by `defineQuery`. Definitions are inert — they
  * hold no cache state and no instance dependency. The cache key is derived from the
- * underlying builder's AST hash, which means `prepare(def, args)` and `useQuery(def, args)`
- * collapse to the same `RelationalQueryRef`.
+ * underlying builder's AST hash, which means `prepare(def.withArgs(args))` and
+ * `useQuery(def, args)` collapse to the same `RelationalQueryRef`.
  *
- * `prepare` and `useQuery` run `validate` at the call site before invoking `build`.
- * Validation throws `QueryArgsError` on failure; on success the (possibly normalized)
- * value returned by `validate` is what feeds into `build`, so the cache key reflects
- * the normalized args rather than the raw input.
+ * `withArgs` validates at the binding site. Legacy definition-plus-args calls validate
+ * when consumed. Validation throws `QueryArgsError` on failure; on success the
+ * (possibly normalized) value feeds into `build`, so the cache key reflects normalized
+ * args rather than raw input.
  */
 export interface QueryDefinition<Args, B> {
   readonly [QUERY_DEFINITION_BRAND]: true
@@ -28,6 +39,8 @@ export interface QueryDefinition<Args, B> {
   readonly name: string
   build(args: Args): B
   validate(args: unknown): Args
+  /** Validate and bind args into an inert request accepted anywhere the definition is. */
+  withArgs(args: Args): QueryRequest<Args, B>
 }
 
 /**
@@ -75,6 +88,15 @@ export function isQueryDefinition(value: unknown): value is QueryDefinition<unkn
     typeof value === 'object' &&
     value !== null &&
     (value as { [QUERY_DEFINITION_BRAND]?: unknown })[QUERY_DEFINITION_BRAND] === true
+  )
+}
+
+/** Type guard for a concrete query produced by `definition.withArgs(args)`. */
+export function isQueryRequest(value: unknown): value is QueryRequest<unknown, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { [QUERY_REQUEST_BRAND]?: unknown })[QUERY_REQUEST_BRAND] === true
   )
 }
 
@@ -206,7 +228,8 @@ export interface DefineQuery<TBuilder = unknown> {
  *
  * Args are typed from the build function. Pass a Standard Schema validator before the
  * build function when args arrive from untrusted sources (URL params, storage) — it
- * runs at every `prepare()`/`useQuery()` call site and throws `QueryArgsError`.
+ * runs when `withArgs()` binds a request, or at legacy definition-plus-args call sites,
+ * and throws `QueryArgsError`.
  *
  * The name is optional metadata, never identity (identity is the AST hash): it labels
  * `QueryArgsError` messages and devtools. Skip it unless you want those labels.
@@ -223,14 +246,22 @@ export const defineQuery: DefineQuery = ((
   const [x, y] = typeof a === 'string' ? [b, c] : [a, b]
   const argsSchema = y ? (x as StandardSchemaV1) : null
   const build = (y ?? x) as (args: unknown) => unknown
-  return {
+  const definition: QueryDefinition<unknown, unknown> = {
     [QUERY_DEFINITION_BRAND]: true,
     name,
     build,
     validate: argsSchema
       ? (args: unknown) => validateQueryArgs(name || '(anonymous)', argsSchema, args)
       : (args: unknown) => args,
+    withArgs(args: unknown) {
+      return {
+        [QUERY_REQUEST_BRAND]: true,
+        definition,
+        args: definition.validate(args),
+      }
+    },
   }
+  return definition
 }) as DefineQuery
 
 /**

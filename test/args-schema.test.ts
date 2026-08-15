@@ -1,6 +1,12 @@
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
-import { defineQuery, Figbird, QueryArgsError, type StandardSchemaV1 } from '../lib/core/figbird'
+import {
+  defineQuery,
+  Figbird,
+  isQueryRequest,
+  QueryArgsError,
+  type StandardSchemaV1,
+} from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
 import { mockFeathers } from './helpers'
 
@@ -74,7 +80,7 @@ const positiveInt = (raw: unknown, key: string): number => {
   throw new Error(`${key} must be a positive integer`)
 }
 
-test('defineQuery attaches a validate function', t => {
+test('defineQuery creates validated, inert requests with normalized args', t => {
   const figbird = makeFigbird()
   const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
     figbird.q.issues.get(id),
@@ -82,29 +88,34 @@ test('defineQuery attaches a validate function', t => {
   t.is(issueDetail.name, 'issueDetail')
   t.is(typeof issueDetail.build, 'function')
   t.is(typeof issueDetail.validate, 'function')
-  t.deepEqual(issueDetail.validate({ id: 7 }), { id: 7 })
+  const request = issueDetail.withArgs({ id: '7' } as never)
+  t.true(isQueryRequest(request))
+  t.is(request.definition, issueDetail)
+  t.deepEqual(request.args, { id: 7 })
 })
 
-test('schema validation throws QueryArgsError on invalid args', t => {
+test('withArgs throws QueryArgsError on invalid args', t => {
   const figbird = makeFigbird()
   const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
     figbird.q.issues.get(id),
   )
-  const err = t.throws(() => issueDetail.validate({ id: 'abc' }), { instanceOf: QueryArgsError })
+  const err = t.throws(() => issueDetail.withArgs({ id: 'abc' } as never), {
+    instanceOf: QueryArgsError,
+  })
   t.is(err.queryName, 'issueDetail')
   t.true(err.message.includes('issueDetail'))
   t.true(err.message.includes('id'))
   t.is(err.issues.length, 1)
 })
 
-test('schema validation normalizes args before build', t => {
+test('withArgs normalizes args before build', t => {
   const figbird = makeFigbird()
   const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
     figbird.q.issues.get(id),
   )
   // Normalized: '7' string coerces to 7. Both produce the same builder hash.
-  const fromString = issueDetail.build(issueDetail.validate({ id: '7' }))
-  const fromNumber = issueDetail.build(issueDetail.validate({ id: 7 }))
+  const fromString = figbird.query(issueDetail.withArgs({ id: '7' } as never))
+  const fromNumber = figbird.query(issueDetail.withArgs({ id: 7 }))
   t.is(fromString.hash(), fromNumber.hash())
 })
 
@@ -124,10 +135,9 @@ test('figbird.prepare uses normalized args so prepared and direct calls share th
   const issueDetail = defineQuery('issueDetail', objectSchema({ id: positiveInt }), ({ id }) =>
     figbird.q.issues.get(id),
   )
-  const prepared = figbird.prepare(issueDetail, { id: '1' } as never)
+  const prepared = figbird.prepare(issueDetail.withArgs({ id: '1' } as never))
   // The same cache entry is hit when args normalize to the same value.
-  const directBuilder = issueDetail.build(issueDetail.validate({ id: 1 }))
-  const directRef = figbird.query(directBuilder)
+  const directRef = figbird.query(issueDetail.withArgs({ id: 1 }))
   t.is(prepared.key, directRef.hash())
   prepared.release()
 })

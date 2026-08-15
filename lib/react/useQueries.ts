@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
-import type { RelationalQueryState } from '../core/figbird.js'
+import { isQueryRequest, type QueryRequest, type RelationalQueryState } from '../core/figbird.js'
 import { suspensePromiseAll } from '../core/relationalQuery.js'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import type { Schema } from '../core/schema.js'
@@ -42,6 +42,11 @@ export interface UseQueriesOptions {
   staleTime?: number
 }
 
+type QueryInput<S extends Schema> = AnyQueryBuilder<S> | QueryRequest<unknown, AnyQueryBuilder<S>>
+
+type QueryInputBuilder<T> =
+  T extends QueryRequest<unknown, infer B> ? B : T extends AnyQueryBuilder ? T : never
+
 /**
  * The `useQueries` call surface — declared once and shared by the root export
  * (schema-agnostic) and the `createHooks` kit (bound to a schema), like `UseQueryHook`.
@@ -56,10 +61,15 @@ export interface UseQueriesOptions {
  */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueriesHook<S extends Schema = any> {
-  <Bs extends readonly AnyQueryBuilder<S>[]>(
-    queries: readonly [...Bs],
+  <Queries extends readonly QueryInput<S>[]>(
+    queries: readonly [...Queries],
     options?: UseQueriesOptions,
-  ): { [K in keyof Bs]: SuspenseQueryResult<QueryBuilderResult<Bs[K]>, QueryBuilderKind<Bs[K]>> }
+  ): {
+    [K in keyof Queries]: SuspenseQueryResult<
+      QueryBuilderResult<QueryInputBuilder<Queries[K]>>,
+      QueryBuilderKind<QueryInputBuilder<Queries[K]>>
+    >
+  }
 }
 
 /**
@@ -73,7 +83,7 @@ export interface UseQueriesHook<S extends Schema = any> {
  * data. See `UseQueriesHook` for the per-element contract.
  */
 export const useQueries: UseQueriesHook = ((
-  queries: readonly AnyQueryBuilder[],
+  queries: readonly QueryInput<Schema>[],
   options?: UseQueriesOptions,
 ): unknown => useQueriesImpl(useFigbird(), queries, options)) as UseQueriesHook
 
@@ -82,7 +92,7 @@ export const useQueries: UseQueriesHook = ((
  */
 export function useQueriesImpl(
   figbird: FigbirdLike,
-  queries: readonly AnyQueryBuilder[],
+  queries: readonly QueryInput<Schema>[],
   options: UseQueriesOptions = {},
 ): unknown {
   const { staleTime } = options
@@ -93,7 +103,9 @@ export function useQueriesImpl(
   // its identity element-wise: the subscription and snapshot cache key off actual
   // ref changes, and an evicted-then-re-interned ref is a new instance that
   // correctly busts the pin.
-  const refs = useStableArray(queries.map(query => figbird.query(query)))
+  const refs = useStableArray(
+    queries.map(query => (isQueryRequest(query) ? figbird.query(query) : figbird.query(query))),
+  )
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {

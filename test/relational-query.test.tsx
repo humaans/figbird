@@ -2859,8 +2859,9 @@ test('defineQuery + prepare: prepare and useQuery share the same cache entry', a
     figbird.q.issues.get(id).related('comments'),
   )
 
-  // Prepare the query before any component reads it.
-  const prepared = figbird.prepare(issueDetail, { id: 1 })
+  // Bind route params before handing the inert request to a router data adapter.
+  const request = issueDetail.withArgs({ id: 1 })
+  const prepared = figbird.prepare(request)
   t.truthy(prepared.key)
 
   await prepared.promise
@@ -2869,7 +2870,7 @@ test('defineQuery + prepare: prepare and useQuery share the same cache entry', a
   const beforeRender = feathers.service('issues').counts.find
 
   function IssueView() {
-    const { data } = useQuery(issueDetail, { id: 1 })
+    const { data } = useQuery(request)
     return (
       <div className='issue'>
         <span className='title'>{data?.title}</span>
@@ -2920,15 +2921,16 @@ test('defineQuery + prepare: prepare key is stable for identical args', t => {
 
 test('explain: classifies nodes with structured reasons', t => {
   const { figbird } = createApp()
-
-  const report = figbird.explain(
+  const issuesByTitle = defineQuery(({ title }: { title: string }) =>
     figbird.q.issues
-      .where({ title: { $regex: 'foo' } })
+      .where({ title: { $regex: title } })
       .orderBy('id', 'desc')
       .limit(30)
       .related('comments')
       .related('creator'),
   )
+
+  const report = figbird.explain(issuesByTitle.withArgs({ title: 'foo' }))
 
   const root = report.nodes.find(n => n.path === '(root)')!
   t.is(root.class, 'server-authoritative')

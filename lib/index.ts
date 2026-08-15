@@ -4,12 +4,14 @@ export {
   Figbird,
   defineQuery,
   QUERY_DEFINITION_BRAND,
+  QUERY_REQUEST_BRAND,
   QueryArgsError,
   isFetching,
   isIdle,
   isLoading,
   isPending,
   isQueryDefinition,
+  isQueryRequest,
 } from './core/figbird.js'
 
 export type {
@@ -37,6 +39,7 @@ export type {
   MutationsProxy,
   PreparedQuery,
   QueryDefinition,
+  QueryRequest,
   ReconnectJitter,
   RetryDelay,
   StandardSchemaV1,
