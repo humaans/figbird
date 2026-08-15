@@ -140,8 +140,10 @@ function findInsertIndex(
   return lo
 }
 
-export function groupQueuedEvents(events: QueuedEvent[]): Record<string, QueuedEvent[]> {
-  const eventsByService: Record<string, QueuedEvent[]> = {}
+export function groupEventsByService<TEvent extends { serviceName: string }>(
+  events: readonly TEvent[],
+): Record<string, TEvent[]> {
+  const eventsByService: Record<string, TEvent[]> = {}
   for (const event of events) {
     if (!eventsByService[event.serviceName]) {
       eventsByService[event.serviceName] = []

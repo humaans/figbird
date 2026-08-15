@@ -675,6 +675,71 @@ queries update immediately. Relations assemble from cached data and fetch missin
 When the server must decide query membership or ordering, Figbird waits for the record's
 writes to settle before reconciling the query.
 
+### Adapter-backed transactions
+
+Use `figbird.transaction()` when several CRUD writes must commit or roll back as one server
+operation. Transactions are a capability, not an emulation: Figbird throws if the adapter
+does not provide an atomic transport and never falls back to sequential requests.
+
+```ts
+await figbird.transaction(tx => {
+  tx.m.tasks.patch(taskId, { columnId: nextColumnId })
+  tx.m.columns.patch(previousColumnId, { count: previousCount - 1 })
+  tx.m.columns.patch(nextColumnId, { count: nextCount + 1 })
+})
+```
+
+The callback collects synchronously; its methods return no result, and the outer promise settles
+when the transaction commits. Payloads, patches, service names, and `confirmed` options retain
+the same schema inference as `m`. Optimistic operations project as one observer-visible cache
+update and roll back together. `tx.m.columns.confirmed.patch(...)` keeps that operation hidden
+until commit.
+
+Generate ids before collecting writes, using your application's id generator
+(for example, NanoID). Pass them directly as foreign keys:
+
+```ts
+import { nanoid } from 'nanoid'
+
+const documentTypeId = nanoid()
+const documentId = nanoid()
+
+await figbird.transaction(tx => {
+  tx.m.documentTypes.create({ id: documentTypeId, name: 'Contract' })
+  tx.m.documents.create({ id: documentId, documentTypeId, name: 'Employment contract' })
+})
+```
+
+The adapter executes operations in collection order within the server transaction.
+Create referenced records first: the document type exists before the document is created.
+Figbird does not infer dependencies from payloads. The backend must accept and preserve
+the client-generated ids. The outer promise returns no records; read server-computed
+fields from the cache after commit.
+
+Transaction operations wait behind earlier writes to every affected record, then reserve those
+record lanes until the adapter transaction settles. Each entity can appear only once in a
+transaction. Create payloads must be collected one at a time and carry a stable id, including
+confirmed creates. An explicit `optimisticItem` must preserve that id. Multi-record ordering
+needs an identity before dispatch. The transaction DSL is
+CRUD-only; custom methods have adapter-specific argument and cache semantics.
+
+For Feathers, opt into the `api/batch` tuple contract explicitly:
+
+```ts
+import { FeathersAdapter, feathersBatchTransactions } from 'figbird'
+
+const adapter = new FeathersAdapter(feathers, {
+  transactions: feathersBatchTransactions(), // defaults to api/batch
+})
+```
+
+The batch service must return one ordered `{ status: 'fulfilled', value }` or
+`{ status: 'rejected', reason }` entry per call and guarantee that any rejection rolls back the
+whole batch. `feathersBatchTransactions()` sends `serial: true` and rejects the Figbird
+transaction if any entry rejects. The service must honor serial execution inside its
+atomic transaction. Partial-success batches are outside this API.
+Use `serviceName` and `params` options when the batch endpoint differs.
+
 ### Ordered autosave with mutation queues
 
 `m` sends independent records in parallel. A feature such as a workflow editor may instead
@@ -1848,6 +1913,7 @@ const figbird = new Figbird({
 | `prefetch(request, opts?)`                        | Idempotent speculative warming. Argumentless definitions can be passed directly. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
+| `transaction(fn)`                                 | Adapter-backed atomic CRUD collector. Optimistic projection, commit, and rollback are grouped across services. See [Adapter-backed transactions](#adapter-backed-transactions). |
 | `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
 | `mutating`                                        | Synchronous active-mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                       |
 | `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
@@ -1876,6 +1942,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
   - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
+  - `transactions` — optional atomic transaction transport; use `feathersBatchTransactions()` for an `api/batch`-style service
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
 

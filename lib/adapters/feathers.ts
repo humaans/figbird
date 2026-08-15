@@ -1,6 +1,7 @@
 import type {
   Adapter,
   AdapterConnectionEvent,
+  AdapterTransactionOperation,
   EventHandlers,
   MatcherContext,
   PageCursor,
@@ -307,6 +308,79 @@ export type CustomOperatorRegistration =
       byService: Record<string, CustomOperator>
     }
 
+/** Feathers-specific transport for an adapter-backed atomic transaction. */
+export type FeathersTransaction = (
+  feathers: FeathersClient,
+  operations: readonly AdapterTransactionOperation[],
+) => Promise<readonly unknown[]>
+
+export interface FeathersBatchTransactionsOptions {
+  /** Feathers service implementing the batch contract. Defaults to `api/batch`. */
+  serviceName?: string
+  /** Params passed to the batch service's `create` call. */
+  params?: FeathersParams
+}
+
+interface FeathersBatchResult {
+  data: Array<{ status: 'fulfilled'; value?: unknown } | { status: 'rejected'; reason: unknown }>
+}
+
+/** Error returned when an atomic Feathers batch contains rejected operations. */
+export class FeathersTransactionError extends Error {
+  readonly result: FeathersBatchResult
+
+  constructor(result: FeathersBatchResult) {
+    const rejected = result.data.filter(entry => entry.status === 'rejected').length
+    super(`Feathers transaction rejected ${rejected} operation${rejected === 1 ? '' : 's'}`)
+    this.name = 'FeathersTransactionError'
+    this.result = result
+  }
+}
+
+/**
+ * Adapt a Feathers `api/batch`-style service to Figbird's atomic transaction
+ * capability. The service must return ordered `{ status, value/reason }`
+ * entries, honor serial execution, and roll the entire batch back when any
+ * entry rejects.
+ */
+export function feathersBatchTransactions({
+  serviceName = 'api/batch',
+  params,
+}: FeathersBatchTransactionsOptions = {}): FeathersTransaction {
+  return async (feathers, operations) => {
+    const result = await feathers.service(serviceName).create(
+      {
+        serial: true,
+        calls: operations.map(operation => [
+          operation.method,
+          operation.serviceName,
+          ...operation.args,
+        ]),
+      },
+      params,
+    )
+    if (!isFeathersBatchResult(result) || result.data.length !== operations.length) {
+      throw new Error(`Feathers transaction service "${serviceName}" returned an invalid result`)
+    }
+    if (result.data.some(entry => entry.status === 'rejected')) {
+      throw new FeathersTransactionError(result)
+    }
+    return result.data.map(entry => (entry.status === 'fulfilled' ? entry.value : undefined))
+  }
+}
+
+function isFeathersBatchResult(value: unknown): value is FeathersBatchResult {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as FeathersBatchResult).data)) {
+    return false
+  }
+  return (value as FeathersBatchResult).data.every(
+    entry =>
+      entry &&
+      typeof entry === 'object' &&
+      (entry.status === 'fulfilled' || entry.status === 'rejected'),
+  )
+}
+
 export interface FeathersAdapterOptions {
   idField?: IdFieldType
   updatedAtField?: UpdatedAtFieldType
@@ -335,6 +409,8 @@ export interface FeathersAdapterOptions {
   defaultPagination?: FeathersPagination
   /** Pagination overrides selected by Feathers service path. */
   pagination?: Record<string, FeathersPagination>
+  /** Opt-in atomic transaction transport. Omit when the backend has no such capability. */
+  transactions?: FeathersTransaction
 }
 
 /**
@@ -362,6 +438,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #operators: Record<string, CustomOperatorRegistration>
   #defaultPagination: FeathersPagination | undefined
   #pagination: Record<string, FeathersPagination>
+  transaction?: Adapter['transaction']
 
   /** Names of custom operators registered for every service. */
   get customOperators(): readonly string[] {
@@ -409,6 +486,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       operators = {},
       defaultPagination,
       pagination = {},
+      transactions,
     }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
@@ -419,6 +497,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#operators = operators
     this.#defaultPagination = defaultPagination
     this.#pagination = pagination
+    if (transactions) {
+      this.transaction = operations => transactions(this.feathers, operations)
+    }
   }
 
   #paginationFor(serviceName: string): FeathersPagination | undefined {
