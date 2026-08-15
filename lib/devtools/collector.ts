@@ -108,6 +108,7 @@ export interface WriteRecord {
   rolledBack?: boolean
   error?: string
   args?: readonly unknown[]
+  traceId?: number
 }
 
 export interface DevtoolsSnapshot {
@@ -790,6 +791,7 @@ class FigbirdCollector implements Collector {
         ...(event.id !== undefined ? { itemId: event.id } : {}),
         ...('optimistic' in event ? { optimistic: event.optimistic } : {}),
         ...('args' in event ? { args: this.#captureArgs(event.args) } : {}),
+        ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
       } satisfies WriteRecord)
 
     if (event.kind === 'mutate:update') {

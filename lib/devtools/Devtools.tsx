@@ -93,7 +93,8 @@ export function FigbirdDevtoolsPanel({
   const timelineEmpty =
     snapshot.timeline.realtime.length === 0 &&
     snapshot.timeline.connection.length === 0 &&
-    snapshot.queries.every(query => query.spans.length === 0)
+    snapshot.queries.every(query => query.spans.length === 0) &&
+    snapshot.writes.every(write => write.startedAt < snapshot.timeline.startedAt)
   const clearTimeline = useCallback(() => {
     collector.clearTimeline()
     setTimelineFollow(true)

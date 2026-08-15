@@ -1193,10 +1193,10 @@ test('panel shows root queries and nests relation fetches in details', async t =
   click(liveTimelineButton!)
   t.truthy($('[aria-label="Resume live timeline"]'))
 
-  const timelineLanes = $all('[data-timeline-lane]').map(lane =>
-    lane.getAttribute('data-timeline-lane'),
+  const timelineActivities = $all('[data-timeline-activity]').map(row =>
+    row.getAttribute('data-timeline-activity'),
   )
-  t.deepEqual(timelineLanes, ['issues.find', 'issueLabels.find', 'issues realtime', 'Connection'])
+  t.deepEqual(timelineActivities, ['fetch', 'fetch', 'realtime', 'connection', 'connection'])
   t.is($all('[data-timeline-outage="offline"]').length, 1)
   t.true(timelineText.includes('websocket'))
 
