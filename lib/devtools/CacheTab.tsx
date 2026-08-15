@@ -102,7 +102,7 @@ export function CacheTab({
                 cursor: 'pointer',
               }}
             >
-              <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <strong
                   style={{
                     minWidth: 0,
@@ -113,15 +113,38 @@ export function CacheTab({
                 >
                   {item.serviceName}
                 </strong>
-                <span style={{ color: colors.faint, marginLeft: 'auto' }}>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    color: colors.faint,
+                    marginLeft: 'auto',
+                  }}
+                >
                   {item.entities.length}
+                  {item.materialized ? (
+                    <svg
+                      aria-label='Complete cached set'
+                      role='img'
+                      viewBox='0 0 12 12'
+                      width='12'
+                      height='12'
+                      style={{ color: colors.green, flex: '0 0 auto' }}
+                    >
+                      <circle cx='6' cy='6' r='5' fill='currentColor' />
+                      <path
+                        d='m3.6 6 1.5 1.5 3.3-3.3'
+                        fill='none'
+                        stroke={colors.bg}
+                        strokeLinecap='round'
+                        strokeLinejoin='round'
+                        strokeWidth='1.3'
+                      />
+                    </svg>
+                  ) : null}
                 </span>
               </span>
-              {item.materialized ? (
-                <span style={{ display: 'block', color: colors.green, marginTop: 3 }}>
-                  complete set · {formatAge(Date.now() - item.materialized.fetchedAt)} ago
-                </span>
-              ) : null}
             </button>
           )
         })}
