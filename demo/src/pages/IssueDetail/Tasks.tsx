@@ -41,7 +41,7 @@ function nextClientTaskId(): number {
 }
 
 export function TasksPanel({ issueId, users }: { issueId: number; users: User[] }) {
-  const { data: tasks } = useQuery(issueTasksQuery, { id: issueId })
+  const { data: tasks } = useQuery(issueTasksQuery({ id: issueId }))
   const queue = useMutationQueue(issueTaskQueue, `issue:${issueId}:tasks`)
   const [focusTaskId, setFocusTaskId] = useState<number | null>(null)
 
