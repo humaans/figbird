@@ -1,13 +1,14 @@
-import type { PageCursor, PageInfo } from '../adapters/adapter.js'
 import { hashObject } from './hash.js'
 import type { QueryAST } from './queryBuilder.js'
-import {
-  RelationalQueryRef,
-  type RelationalPageRoot,
-  type RelationalQueryHost,
-} from './relationalQuery.js'
+import { RelationalQueryRef, type RelationalQueryHost } from './relationalQuery.js'
 import type { AnySchema, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import {
+  CursorWindowPager,
+  OffsetWindowPager,
+  type PagerPage,
+  type WindowPager,
+} from './windowQueryPager.js'
 
 export interface WindowRange {
   /** First requested row index. */
@@ -56,7 +57,6 @@ interface WindowPage<T, S extends Schema, TParams, TMeta extends Record<string, 
   ref: RelationalQueryRef<T[], S, TParams, TMeta, TQuery>
   unsubscribe: () => void
   lastUsed: number
-  rootRevision: unknown
 }
 
 interface SuspenseWaiter {
@@ -88,9 +88,9 @@ function rangeKey(range: WindowRange): string {
 }
 
 /**
- * A viewport-indexed relational query. Offset services address blocks directly;
- * native cursor services walk forward once and retain index -> cursor checkpoints.
- * The public hook supplies ranges, while this reference owns page lifetimes.
+ * Shared lifecycle for a viewport-indexed relational query. Pagination-specific
+ * addressing and readiness live behind WindowPager; this class owns readers,
+ * relational page refs, Suspense waiters, and bounded retention.
  */
 export class WindowQueryRef<
   T,
@@ -103,25 +103,22 @@ export class WindowQueryRef<
   #ast: QueryAST
   #schema: S
   #config: WindowQueryConfig
-  #strategy: 'offset' | 'cursor'
-  #serviceName: string
+  #pager: WindowPager
   #key: string
   #name: string | undefined
   #onEvict: (() => void) | null
 
   #pages = new Map<number, WindowPage<T, S, TParams, TMeta, TQuery>>()
-  #cursorAt = new Map<number, PageCursor | undefined>([[0, undefined]])
-  #terminalIndex: number | undefined
   #subscribers = new Map<(state: WindowQueryState<T>) => void, WindowSubscriber<T>>()
   #coldRanges = new Map<string, WindowRange>()
   #waiters = new Map<string, SuspenseWaiter>()
   #cleanupScheduled = false
   #syncScheduled = false
+  #notifyScheduled = false
   #clock = 0
   #version = 0
   #data: ReadonlyMap<number, T> = EMPTY_DATA
   #total: number | undefined
-  #hasSuccessfulWindow = false
   #snapshotCache = new Map<string, { version: number; state: WindowQueryState<T> }>()
 
   constructor(
@@ -150,10 +147,29 @@ export class WindowQueryRef<
     this.#ast = ast
     this.#schema = schema
     this.#config = config
-    this.#serviceName = resolveServicePath(schema, ast.service)
-    this.#strategy = host.adapter.pageSource?.(this.#serviceName) ? 'cursor' : 'offset'
     this.#key = `wq/${hashObject({ ast, config })}`
     this.#onEvict = onEvict ?? null
+
+    const serviceName = resolveServicePath(schema, ast.service)
+    const context = {
+      pageSize: config.pageSize,
+      serviceName,
+      ast,
+      access: {
+        page: (start: number) => this.#pagerPage(start),
+        pages: () => Array.from(this.#pages.keys(), start => this.#pagerPage(start)!),
+        ensure: (start: number) => this.#ensurePage(start),
+        drop: (start: number) => this.#dropPage(start),
+        touch: (start: number) => this.#touchPage(start),
+        total: () => this.#total,
+        setTotal: (total: number) => {
+          this.#total = total
+        },
+      },
+    }
+    this.#pager = host.adapter.pageSource?.(serviceName)
+      ? new CursorWindowPager(context)
+      : new OffsetWindowPager(context)
   }
 
   hash(): string {
@@ -190,38 +206,25 @@ export class WindowQueryRef<
     const cached = this.#snapshotCache.get(key)
     if (cached?.version === this.#version) return cached.state
 
-    const required =
-      this.#strategy === 'cursor'
-        ? this.#cursorPagesForRange(range)
-        : this.#pageStarts(range, 0).flatMap(start => {
-            const page = this.#pages.get(start)
-            return page ? [page] : []
-          })
-    let missing =
-      this.#strategy === 'cursor'
-        ? !this.#cursorRangeReady(range)
-        : required.length !== this.#pageStarts(range, 0).length
+    const required = this.#pager.requiredStarts(range).flatMap(start => {
+      const page = this.#pages.get(start)
+      return page ? [page] : []
+    })
+    const missing = !this.#pager.rangeReady(range)
     let isFetching = false
     let error: Error | null = null
     for (const page of required) {
       const state = page.ref.getSnapshot()
-      if (!state || state.status === 'loading') missing = true
-      if (state?.isFetching) isFetching = true
-      if (state?.status === 'error') error ??= state.error
-      if (state?.status === 'success' && state.error) error ??= state.error
+      if (state.isFetching) isFetching = true
+      if (state.status === 'error') error ??= state.error
+      if (state.status === 'success' && state.error) error ??= state.error
     }
-    if (this.#strategy === 'cursor') {
-      for (const page of this.#pages.values()) {
-        if (page.ref.getSnapshot().isFetching) isFetching = true
-      }
-    } else {
-      for (const start of this.#pageStarts(range, this.#config.preloadPages)) {
-        if (this.#pages.get(start)?.ref.getSnapshot().isFetching) isFetching = true
-      }
+    for (const start of this.#pager.fetchingStarts(range, this.#config.preloadPages)) {
+      if (this.#pages.get(start)?.ref.getSnapshot().isFetching) isFetching = true
     }
 
     let state: WindowQueryState<T>
-    if (error && !this.#hasSuccessfulWindow) {
+    if (error) {
       state = {
         status: 'error',
         data: this.#data,
@@ -229,7 +232,7 @@ export class WindowQueryRef<
         error,
         isFetching: false,
       }
-    } else if (missing && !this.#hasSuccessfulWindow) {
+    } else if (missing) {
       state = {
         status: 'loading',
         data: this.#data,
@@ -242,8 +245,8 @@ export class WindowQueryRef<
         status: 'success',
         data: this.#data,
         total: this.#total,
-        error,
-        isFetching: isFetching || missing,
+        error: null,
+        isFetching,
       }
     }
     this.#snapshotCache.set(key, { version: this.#version, state })
@@ -256,7 +259,6 @@ export class WindowQueryRef<
 
   suspensePromise(rangeInput: WindowRange): Promise<void> {
     const range = normalizeRange(rangeInput)
-    if (this.#hasSuccessfulWindow) return Promise.resolve()
     const state = this.getSnapshot(range)
     if (state.status === 'success') return Promise.resolve()
     if (state.status === 'error') return Promise.reject(state.error)
@@ -286,68 +288,30 @@ export class WindowQueryRef<
     if (this.#subscribers.size === 0 && this.#coldRanges.size === 0) this.#scheduleCleanup()
   }
 
-  #pageStarts(range: WindowRange, preloadPages: number): number[] {
-    const { pageSize } = this.#config
-    const firstVisible = Math.floor(range.start / pageSize) * pageSize
-    const lastVisible = Math.floor((Math.max(range.start + 1, range.end) - 1) / pageSize) * pageSize
-    const first = Math.max(0, firstVisible - preloadPages * pageSize)
-    const last = lastVisible + preloadPages * pageSize
-    const starts: number[] = []
-    for (let start = first; start <= last; start += pageSize) {
-      if (this.#total !== undefined && start >= this.#total) continue
-      starts.push(start)
-    }
-    return starts
-  }
-
   #desiredStarts(): Set<number> {
     const starts = new Set<number>()
     for (const subscriber of this.#subscribers.values()) {
-      for (const start of this.#pageStarts(subscriber.range, this.#config.preloadPages)) {
+      for (const start of this.#pager.targetStarts(subscriber.range, this.#config.preloadPages)) {
         starts.add(start)
       }
     }
     for (const range of this.#coldRanges.values()) {
-      for (const start of this.#pageStarts(range, this.#config.preloadPages)) starts.add(start)
+      for (const start of this.#pager.targetStarts(range, this.#config.preloadPages)) {
+        starts.add(start)
+      }
     }
     return starts
   }
 
   #syncPages(): void {
     const desired = this.#desiredStarts()
-    if (this.#strategy === 'offset') {
-      for (const start of desired) this.#ensurePage(start)
-    } else {
-      // Page zero is the cursor chain's total/reconnect sentinel. Other desired
-      // blocks start directly once their index checkpoint has been discovered.
-      this.#ensurePage(0)
-      for (const target of desired) {
-        const lastIndex = Math.min(
-          target + this.#config.pageSize - 1,
-          (this.#total ?? Infinity) - 1,
-        )
-        if (lastIndex >= target) this.#ensureCursorPath(lastIndex)
-      }
+    this.#pager.sync(desired)
+    if (this.#evictPages(this.#pager.protectedStarts(desired))) {
+      this.#rebuildData()
+      this.#version += 1
+      this.#snapshotCache.clear()
+      this.#scheduleNotify()
     }
-    this.#evictPages(this.#strategy === 'cursor' ? this.#cursorProtectedStarts(desired) : desired)
-  }
-
-  #ensureCursorPath(target: number): void {
-    if (this.#terminalIndex !== undefined && target >= this.#terminalIndex) return
-    const covering = this.#cursorPageCovering(target)
-    if (covering) {
-      covering.lastUsed = ++this.#clock
-      return
-    }
-    if (this.#cursorAt.has(target)) {
-      this.#ensurePage(target)
-      return
-    }
-    let nearest = 0
-    for (const index of this.#cursorAt.keys()) {
-      if (index <= target && index > nearest) nearest = index
-    }
-    this.#ensurePage(nearest)
   }
 
   #ensurePage(start: number): void {
@@ -356,38 +320,13 @@ export class WindowQueryRef<
       existing.lastUsed = ++this.#clock
       return
     }
-    if (this.#strategy === 'cursor' && !this.#cursorAt.has(start)) return
 
-    const pageRoot: RelationalPageRoot | undefined =
-      this.#strategy === 'cursor'
-        ? {
-            page: {
-              limit: this.#config.pageSize,
-              ...(this.#cursorAt.get(start) !== undefined
-                ? { after: this.#cursorAt.get(start)! }
-                : {}),
-              includeTotal: start === 0,
-            },
-            realtime: start === 0 && !this.#ast.snapshot ? 'refetch' : 'disabled',
-          }
-        : undefined
-    const pageAst: QueryAST =
-      this.#strategy === 'offset'
-        ? {
-            ...this.#ast,
-            query: {
-              ...this.#ast.query,
-              $limit: this.#config.pageSize,
-              $skip: start,
-            },
-          }
-        : this.#ast
     const ref = new RelationalQueryRef<T[], S, TParams, TMeta, TQuery>(
       this.#host,
-      pageAst,
+      this.#ast,
       this.#schema,
       undefined,
-      { ...(pageRoot ? { pageRoot } : {}), ephemeralRoot: true },
+      { root: this.#pager.rootOverride(start) },
     )
     ref.setDisplayName(this.#name ? `${this.#name} [${start}]` : undefined)
     const page: WindowPage<T, S, TParams, TMeta, TQuery> = {
@@ -395,7 +334,6 @@ export class WindowQueryRef<
       ref,
       unsubscribe: () => {},
       lastUsed: ++this.#clock,
-      rootRevision: undefined,
     }
     this.#pages.set(start, page)
     page.unsubscribe = ref.subscribe(() => this.#pageChanged(start), {
@@ -409,66 +347,21 @@ export class WindowQueryRef<
     if (!page) return
     const state = page.ref.getSnapshot()
     if (state.status === 'success') {
-      const total = page.ref.total()
-      if (total !== undefined) {
-        this.#total = total
-        if (this.#strategy === 'cursor') this.#terminalIndex = total
-      }
-
-      if (this.#strategy === 'cursor') {
-        const revision = page.ref.rootRevision()
-        if (start === 0 && page.rootRevision !== undefined && page.rootRevision !== revision) {
-          this.#resetCursorDescendants()
-        }
-        page.rootRevision = revision
-        this.#recordCursorContinuation(start, state.data.length, page.ref.pageInfo())
-      }
+      const metadata = page.ref.rootMetadata()
+      this.#pager.pageSucceeded({
+        start,
+        rowCount: state.data.length,
+        pageInfo: metadata.pageInfo,
+        total: metadata.total,
+        revision: metadata.revision,
+      })
     }
     this.#rebuildData()
-    this.#refreshSuccessfulWindow()
     this.#version += 1
     this.#snapshotCache.clear()
     this.#settleWaiters()
     this.#scheduleSync()
-    for (const subscriber of this.#subscribers.values()) {
-      subscriber.listener(this.getSnapshot(subscriber.range))
-    }
-  }
-
-  #recordCursorContinuation(start: number, rowCount: number, pageInfo: PageInfo | undefined): void {
-    if (!pageInfo) return
-    if (!pageInfo.hasMore) {
-      this.#terminalIndex = start + rowCount
-      this.#total ??= this.#terminalIndex
-      return
-    }
-    const next = start + rowCount
-    if (rowCount === 0) return
-    this.#cursorAt.set(next, pageInfo.endCursor)
-  }
-
-  #resetCursorDescendants(): void {
-    for (const start of Array.from(this.#pages.keys())) {
-      if (start > 0) this.#dropPage(start)
-    }
-    this.#cursorAt = new Map([[0, undefined]])
-    this.#terminalIndex = undefined
-  }
-
-  #refreshSuccessfulWindow(): void {
-    if (this.#hasSuccessfulWindow) return
-    const ranges = [
-      ...Array.from(this.#subscribers.values(), subscriber => subscriber.range),
-      ...this.#coldRanges.values(),
-    ]
-    this.#hasSuccessfulWindow = ranges.some(range =>
-      this.#strategy === 'cursor'
-        ? this.#cursorRangeReady(range)
-        : this.#pageStarts(range, 0).every(start => {
-            const state = this.#pages.get(start)?.ref.getSnapshot()
-            return state?.status === 'success'
-          }),
-    )
+    this.#scheduleNotify()
   }
 
   #rebuildData(): void {
@@ -484,28 +377,20 @@ export class WindowQueryRef<
 
   #settleWaiters(): void {
     for (const [key, waiter] of this.#waiters) {
-      const required =
-        this.#strategy === 'cursor'
-          ? this.#cursorPagesForRange(waiter.range)
-          : this.#pageStarts(waiter.range, 0).flatMap(start => {
-              const page = this.#pages.get(start)
-              return page ? [page] : []
-            })
+      const required = this.#pager.requiredStarts(waiter.range).flatMap(start => {
+        const page = this.#pages.get(start)
+        return page ? [page] : []
+      })
       let error: Error | null = null
-      let ready =
-        this.#strategy === 'cursor'
-          ? this.#cursorRangeReady(waiter.range)
-          : required.length === this.#pageStarts(waiter.range, 0).length
       for (const page of required) {
         const state = page.ref.getSnapshot()
-        if (state.status === 'loading') ready = false
-        if (state?.status === 'error') error ??= state.error
+        if (state.status === 'error') error ??= state.error
       }
       if (error) {
         this.#waiters.delete(key)
         this.#coldRanges.delete(key)
         waiter.reject(error)
-      } else if (ready) {
+      } else if (this.#pager.rangeReady(waiter.range)) {
         this.#waiters.delete(key)
         waiter.resolve()
       }
@@ -520,88 +405,24 @@ export class WindowQueryRef<
     return staleTime === Infinity ? 0 : staleTime
   }
 
-  /** A successful cursor page whose absolute interval contains this row. */
-  #cursorPageCovering(index: number): WindowPage<T, S, TParams, TMeta, TQuery> | undefined {
-    for (const page of this.#pages.values()) {
-      const state = page.ref.getSnapshot()
-      if (
-        state.status === 'success' &&
-        page.start <= index &&
-        index < page.start + state.data.length
-      ) {
-        return page
-      }
+  #pagerPage(start: number): PagerPage | undefined {
+    const page = this.#pages.get(start)
+    if (!page) return undefined
+    const state = page.ref.getSnapshot()
+    return {
+      start,
+      status: state.status,
+      rowCount: state.status === 'success' ? state.data.length : 0,
     }
-    return undefined
   }
 
-  /** Cursor pages currently responsible for making a visible range ready. */
-  #cursorPagesForRange(range: WindowRange): WindowPage<T, S, TParams, TMeta, TQuery>[] {
-    const pages = new Set<WindowPage<T, S, TParams, TMeta, TQuery>>()
-    const knownEnd = Math.min(range.end, this.#terminalIndex ?? this.#total ?? range.end)
-    let index = range.start
-    while (index < knownEnd) {
-      const covering = this.#cursorPageCovering(index)
-      if (covering) {
-        pages.add(covering)
-        const state = covering.ref.getSnapshot()
-        if (state.status !== 'success') break
-        index = covering.start + state.data.length
-        continue
-      }
-      let nearest = 0
-      for (const checkpoint of this.#cursorAt.keys()) {
-        if (checkpoint <= index && checkpoint > nearest) nearest = checkpoint
-      }
-      const page = this.#pages.get(nearest)
-      if (page) pages.add(page)
-      break
-    }
-    return Array.from(pages)
+  #touchPage(start: number): void {
+    const page = this.#pages.get(start)
+    if (page) page.lastUsed = ++this.#clock
   }
 
-  #cursorRangeReady(range: WindowRange): boolean {
-    const knownEnd = Math.min(range.end, this.#terminalIndex ?? this.#total ?? range.end)
-    let index = range.start
-    while (index < knownEnd) {
-      const page = this.#cursorPageCovering(index)
-      if (!page) return false
-      const state = page.ref.getSnapshot()
-      if (state.status !== 'success') return false
-      index = page.start + state.data.length
-    }
-    return true
-  }
-
-  #cursorProtectedStarts(targets: ReadonlySet<number>): Set<number> {
-    const starts = new Set<number>([0])
-    for (const target of targets) {
-      const targetEnd = target + this.#config.pageSize
-      for (const page of this.#pages.values()) {
-        const state = page.ref.getSnapshot()
-        if (
-          state.status === 'success' &&
-          page.start < targetEnd &&
-          page.start + state.data.length > target
-        ) {
-          starts.add(page.start)
-        }
-      }
-      const covering = this.#cursorPageCovering(target)
-      if (covering) {
-        starts.add(covering.start)
-      }
-      const lastIndex = Math.min(target + this.#config.pageSize - 1, (this.#total ?? Infinity) - 1)
-      let nearest = 0
-      for (const checkpoint of this.#cursorAt.keys()) {
-        if (checkpoint <= lastIndex && checkpoint > nearest) nearest = checkpoint
-      }
-      if (this.#pages.has(nearest)) starts.add(nearest)
-    }
-    return starts
-  }
-
-  #evictPages(protectedStarts: ReadonlySet<number>): void {
+  #evictPages(protectedStarts: ReadonlySet<number>): boolean {
+    let evicted = false
     while (this.#pages.size > this.#config.maxPages) {
       const candidates = Array.from(this.#pages.values())
         .filter(page => !protectedStarts.has(page.start))
@@ -609,7 +430,9 @@ export class WindowQueryRef<
       const oldest = candidates[0]
       if (!oldest) break
       this.#dropPage(oldest.start)
+      evicted = true
     }
+    return evicted
   }
 
   #dropPage(start: number): void {
@@ -628,6 +451,17 @@ export class WindowQueryRef<
     })
   }
 
+  #scheduleNotify(): void {
+    if (this.#notifyScheduled) return
+    this.#notifyScheduled = true
+    queueMicrotask(() => {
+      this.#notifyScheduled = false
+      for (const subscriber of this.#subscribers.values()) {
+        subscriber.listener(this.getSnapshot(subscriber.range))
+      }
+    })
+  }
+
   #scheduleCleanup(): void {
     if (this.#cleanupScheduled) return
     this.#cleanupScheduled = true
@@ -640,11 +474,9 @@ export class WindowQueryRef<
   #cleanup(): void {
     for (const page of this.#pages.values()) page.unsubscribe()
     this.#pages.clear()
-    this.#cursorAt = new Map([[0, undefined]])
-    this.#terminalIndex = undefined
+    this.#pager.reset()
     this.#data = EMPTY_DATA
     this.#total = undefined
-    this.#hasSuccessfulWindow = false
     this.#snapshotCache.clear()
     this.#waiters.clear()
     this.#onEvict?.()

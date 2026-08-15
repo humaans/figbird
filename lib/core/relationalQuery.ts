@@ -1,5 +1,5 @@
 import { hashObject } from './hash.js'
-import type { MatcherContext, PageInfo, PageRequest, PageSource } from '../adapters/adapter.js'
+import type { MatcherContext, PageSource } from '../adapters/adapter.js'
 import { cursorQueryCanKeepPrefix, cursorQueryInputsUnchanged } from './cursorMaintenance.js'
 import type { QueryAST } from './queryBuilder.js'
 import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
@@ -18,6 +18,7 @@ import {
   type PaginatedRootSource,
   type InspectedPagination,
   type RelationalPaginationState,
+  type RootMetadata,
   type RootSource,
 } from './queryRoots.js'
 import {
@@ -169,15 +170,14 @@ export interface InspectedRelationalQuery {
   }>
 }
 
-/** Internal root override used by window queries to materialize one native page. */
-export interface RelationalPageRoot {
-  page: PageRequest
-  realtime: 'disabled' | 'refetch'
+/** Internal escape hatch for consumers that need a custom root query boundary. */
+export interface RelationalRootOverride {
+  descriptor: QueryDescriptor
+  config?: QueryConfig<unknown, unknown>
 }
 
 interface RelationalQueryOptions {
-  pageRoot?: RelationalPageRoot
-  ephemeralRoot?: boolean
+  root?: RelationalRootOverride
 }
 
 /**
@@ -254,8 +254,7 @@ export class RelationalQueryRef<
 
   #onEvict: (() => void) | null = null
   #name: string | undefined
-  #pageRoot: RelationalPageRoot | null
-  #ephemeralRoot: boolean
+  #rootOverride: RelationalRootOverride | null
 
   constructor(
     host: RelationalQueryHost<TParams, TMeta, TQuery>,
@@ -267,10 +266,9 @@ export class RelationalQueryRef<
     this.#host = host
     this.#ast = ast
     this.#schema = schema
-    this.#queryId = `rq/${hashObject(options?.pageRoot ? { ast, page: options.pageRoot.page } : ast)}`
+    this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
     this.#onEvict = onEvict ?? null
-    this.#pageRoot = options?.pageRoot ?? null
-    this.#ephemeralRoot = options?.ephemeralRoot ?? false
+    this.#rootOverride = options?.root ?? null
   }
 
   /** Returns internal details of this query reference (for debugging/testing). */
@@ -338,19 +336,9 @@ export class RelationalQueryRef<
     return this.#ast.kind
   }
 
-  /** Native continuation metadata for an internally page-backed relational query. */
-  pageInfo(): PageInfo | undefined {
-    return this.#root?.pageInfo()
-  }
-
-  /** Server-reported result-set size for this root window, when available. */
-  total(): number | undefined {
-    return this.#root?.total()
-  }
-
-  /** Root row identity, excluding relation-only updates. */
-  rootRevision(): unknown {
-    return this.#root?.revision()
+  /** Adapter-neutral metadata for the root query, excluding relation-only updates. */
+  rootMetadata(): RootMetadata {
+    return this.#root?.metadata() ?? { pageInfo: undefined, total: undefined, revision: undefined }
   }
 
   /**
@@ -927,13 +915,8 @@ export class RelationalQueryRef<
       return
     }
 
-    const rootDesc: QueryDescriptor = this.#pageRoot
-      ? {
-          serviceName,
-          method: 'find',
-          params: { query: this.#ast.query },
-          page: this.#pageRoot.page,
-        }
+    const rootDesc: QueryDescriptor = this.#rootOverride
+      ? this.#rootOverride.descriptor
       : this.#ast.kind === 'get'
         ? {
             serviceName,
@@ -949,16 +932,14 @@ export class RelationalQueryRef<
 
     this.#root = new SingleQueryRoot({
       queryRef: this.#query(rootDesc, {
-        realtime: this.#pageRoot?.realtime ?? this.#realtimeMode,
-        // Window blocks are deliberately ephemeral: once a block leaves the retained
-        // viewport set, its QueryStore index is vacuumed with the last subscription.
-        // Normal relational queries keep their usual SWR cache lifetime.
-        fetchPolicy: this.#ephemeralRoot ? 'network-only' : 'swr',
+        realtime: this.#realtimeMode,
+        fetchPolicy: 'swr',
         // .all() fetches every page (rootAllPages — shared with explain()); when
         // unfiltered, success marks the service fully materialized.
         ...(rootAllPages(this.#ast.kind) ? { allPages: true } : {}),
         ...(this.#ast.kind !== 'get' ? matcherConfig : {}),
-        ...(this.#ast.server || this.#pageRoot ? { server: true } : {}),
+        ...(this.#ast.server ? { server: true } : {}),
+        ...this.#rootOverride?.config,
       }),
       isGet: this.#ast.kind === 'get',
       onRows,

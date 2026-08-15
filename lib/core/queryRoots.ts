@@ -12,15 +12,20 @@ export interface RootSnapshot {
   error: Error | null
 }
 
+/** Adapter-neutral metadata attached to the relational root query. */
+export interface RootMetadata {
+  /** Normalized native continuation metadata, when the root is page-backed. */
+  pageInfo: PageInfo | undefined
+  /** Server-reported result-set size, when the adapter supplied one. */
+  total: number | undefined
+  /** Root row identity, excluding relation-only changes. */
+  revision: unknown
+}
+
 /** Common lifecycle for a single-query root and an accumulating page root. */
 export interface RootSource {
   snapshot(): RootSnapshot
-  /** Normalized native continuation metadata for a page-backed root, when present. */
-  pageInfo(): PageInfo | undefined
-  /** Server-reported result-set size, when the adapter supplied one. */
-  total(): number | undefined
-  /** Root row identity, excluding relation-only changes. */
-  revision(): unknown
+  metadata(): RootMetadata
   setStaleTime(staleTime: number): void
   ensureFresh(staleTime?: number): void
   refetch(): void
@@ -150,21 +155,21 @@ export class SingleQueryRoot<
     }
   }
 
-  pageInfo(): PageInfo | undefined {
-    return this.#queryRef.getSnapshot()?.pageInfo
-  }
-
-  total(): number | undefined {
+  metadata(): RootMetadata {
     const state = this.#queryRef.getSnapshot()
     const pageTotal = state?.pageInfo?.total
-    if (typeof pageTotal === 'number' && pageTotal >= 0) return pageTotal
     const meta = state?.meta as { total?: unknown } | undefined
-    return typeof meta?.total === 'number' && meta.total >= 0 ? meta.total : undefined
-  }
-
-  revision(): unknown {
-    const state = this.#queryRef.getSnapshot()
-    return state?.status === 'success' ? state.data : undefined
+    const total =
+      typeof pageTotal === 'number' && pageTotal >= 0
+        ? pageTotal
+        : typeof meta?.total === 'number' && meta.total >= 0
+          ? meta.total
+          : undefined
+    return {
+      pageInfo: state?.pageInfo,
+      total,
+      revision: state?.status === 'success' ? state.data : undefined,
+    }
   }
 
   ensureFresh(staleTime?: number): void {
@@ -413,17 +418,13 @@ export class PagedQueryRoot<
     }
   }
 
-  pageInfo(): PageInfo | undefined {
+  metadata(): RootMetadata {
     const state = this.#pageRefs.at(-1)?.getSnapshot()
-    return state?.pageInfo
-  }
-
-  total(): number | undefined {
-    return this.#computeTotal()
-  }
-
-  revision(): unknown {
-    return this.#lastAllPagesData
+    return {
+      pageInfo: state?.pageInfo,
+      total: this.#computeTotal(),
+      revision: this.#lastAllPagesData,
+    }
   }
 
   ensureFresh(staleTime?: number): void {
