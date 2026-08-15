@@ -249,18 +249,6 @@ export function QueriesTab({
                         minWidth: 0,
                       }}
                     >
-                      <span
-                        aria-hidden='true'
-                        style={{
-                          width: 8,
-                          color: isSelected ? colors.blue : colors.faint,
-                          flexShrink: 0,
-                          fontSize: 14,
-                          lineHeight: 1,
-                        }}
-                      >
-                        {isSelected ? '⌄' : '›'}
-                      </span>
                       <QueryStatusDot query={query} />
                       <span
                         style={{
