@@ -152,8 +152,8 @@ test('window query: retention never evicts pages required by active readers', as
   deep.unsubscribe()
 })
 
-test('window query: a settled cold read expires when no React reader commits', async t => {
-  const { figbird } = createTestApp(schema, {
+test('window query: settled cold reads survive delayed retries and remain bounded', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
     items: { data: keyed(makeRows(20)) },
     owners: { data: {} },
   })
@@ -163,6 +163,21 @@ test('window query: a settled cold read expires when no React reader commits', a
 
   await abandoned.suspensePromise({ start: 0, end: 5 })
   await new Promise(resolve => setTimeout(resolve, 10))
+  const retry = figbird.window(query, config)
+
+  t.is(retry, abandoned)
+  t.is(retry.getSnapshot({ start: 0, end: 5 }).status, 'success')
+  t.is(feathers.service('items').counts.find, 1)
+
+  const pressure = Array.from({ length: 20 }, (_, index) => {
+    const ref = figbird.window(query, {
+      pageSize: 100 + index,
+      preloadPages: 0,
+      maxPages: 2,
+    })
+    return ref.suspensePromise({ start: 0, end: 1 })
+  })
+  await Promise.all(pressure)
 
   t.not(figbird.window(query, config), abandoned)
 })

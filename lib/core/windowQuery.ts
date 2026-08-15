@@ -60,12 +60,25 @@ interface WindowPage<T, S extends Schema, TParams, TMeta extends Record<string, 
   lastUsed: number
 }
 
-interface ColdRead {
+interface PendingColdRead {
+  status: 'pending'
   range: WindowRange
   promise: Promise<void>
   resolve: () => void
   reject: (error: Error) => void
-  releaseTimer: ReturnType<typeof setTimeout> | null
+}
+
+interface SettledColdRead {
+  status: 'settled'
+  range: WindowRange
+  promise: Promise<void>
+}
+
+type ColdRead = PendingColdRead | SettledColdRead
+
+interface WindowQueryLifecycle {
+  onEvict?: () => void
+  onIdle?: () => void
 }
 
 const EMPTY_DATA: ReadonlyMap<number, never> = new Map<number, never>()
@@ -109,6 +122,7 @@ export class WindowQueryRef<
   #key: string
   #name: string | undefined
   #onEvict: (() => void) | null
+  #onIdle: (() => void) | null
 
   #pages = new Map<number, WindowPage<T, S, TParams, TMeta, TQuery>>()
   #subscribers = new Map<(state: WindowQueryState<T>) => void, WindowSubscriber<T>>()
@@ -127,7 +141,7 @@ export class WindowQueryRef<
     ast: QueryAST,
     schema: S,
     config: WindowQueryConfig,
-    onEvict?: () => void,
+    lifecycle?: WindowQueryLifecycle,
   ) {
     if (!Number.isInteger(config.pageSize) || config.pageSize <= 0) {
       throw new Error(
@@ -149,7 +163,8 @@ export class WindowQueryRef<
     this.#schema = schema
     this.#config = config
     this.#key = `wq/${hashObject({ ast, config })}`
-    this.#onEvict = onEvict ?? null
+    this.#onEvict = lifecycle?.onEvict ?? null
+    this.#onIdle = lifecycle?.onIdle ?? null
 
     const serviceName = resolveServicePath(schema, ast.service)
     const context = {
@@ -192,7 +207,7 @@ export class WindowQueryRef<
       staleTime: options.staleTime ?? 0,
     })
     const coldRead = this.#coldReads.get(rangeKey(range))
-    if (coldRead && coldRead.releaseTimer !== null) {
+    if (coldRead?.status === 'settled') {
       this.#releaseColdRead(rangeKey(range), coldRead)
     }
     this.#syncPages()
@@ -278,11 +293,11 @@ export class WindowQueryRef<
       reject = rejectPromise
     })
     this.#coldReads.set(key, {
+      status: 'pending',
       range,
       promise,
       resolve,
       reject,
-      releaseTimer: null,
     })
     this.#syncPages()
     this.#settleColdReads()
@@ -293,6 +308,16 @@ export class WindowQueryRef<
     const range = normalizeRange(rangeInput)
     const key = rangeKey(range)
     this.#releaseColdRead(key)
+  }
+
+  /** @internal Evicts an abandoned render-phase read under Figbird cache pressure. */
+  evictAbandonedRead(): boolean {
+    if (this.#subscribers.size > 0 || this.#coldReads.size === 0) return false
+    for (const read of this.#coldReads.values()) {
+      if (read.status === 'pending') return false
+    }
+    this.#cleanup()
+    return true
   }
 
   #desiredStarts(): Set<number> {
@@ -387,7 +412,7 @@ export class WindowQueryRef<
 
   #settleColdReads(): void {
     for (const [key, read] of this.#coldReads) {
-      if (read.releaseTimer !== null) continue
+      if (read.status === 'settled') continue
       const required = this.#pager.requiredStarts(read.range).flatMap(start => {
         const page = this.#pages.get(start)
         return page ? [page] : []
@@ -398,15 +423,25 @@ export class WindowQueryRef<
         if (state.status === 'error') error ??= state.error
       }
       if (error) {
+        this.#coldReads.set(key, {
+          status: 'settled',
+          range: read.range,
+          promise: read.promise,
+        })
         read.reject(error)
       } else if (this.#pager.rangeReady(read.range)) {
+        this.#coldReads.set(key, {
+          status: 'settled',
+          range: read.range,
+          promise: read.promise,
+        })
         read.resolve()
       } else {
         continue
       }
-      // React retries a suspended render asynchronously. Keep this range pinned
-      // through that retry, but expire it on the next task if no subscription commits.
-      read.releaseTimer = setTimeout(() => this.#releaseColdRead(key, read), 0)
+      // A settled render-phase read stays warm until React commits its subscriber.
+      // Genuinely abandoned reads are bounded by Figbird's idle window-ref LRU.
+      this.#onIdle?.()
     }
   }
 
@@ -499,7 +534,6 @@ export class WindowQueryRef<
   #releaseColdRead(key: string, expected?: ColdRead): void {
     const read = this.#coldReads.get(key)
     if (!read || (expected && read !== expected)) return
-    if (read.releaseTimer !== null) clearTimeout(read.releaseTimer)
     this.#coldReads.delete(key)
     if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#scheduleCleanup()
   }
@@ -511,9 +545,6 @@ export class WindowQueryRef<
     this.#data = EMPTY_DATA
     this.#total = undefined
     this.#snapshotCache.clear()
-    for (const read of this.#coldReads.values()) {
-      if (read.releaseTimer !== null) clearTimeout(read.releaseTimer)
-    }
     this.#coldReads.clear()
     this.#onEvict?.()
   }

@@ -64,6 +64,8 @@ import type {
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
 
+const MAX_WINDOW_QUERY_CACHE_SIZE = 20
+
 type DescriptorWriteProjection<TItem> =
   | {
       optimistic?: true
@@ -199,7 +201,9 @@ export class Figbird<
 
   // Window refs are interned independently from ordinary relational refs because their
   // range is subscriber state rather than query identity. Multiple readers of the same
-  // list share retained blocks while contributing their own visible ranges.
+  // list share retained blocks while contributing their own visible ranges. Recently
+  // settled render-phase reads stay warm for React's retry; an LRU bound prevents
+  // abandoned reads for old query shapes from accumulating indefinitely.
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   #windowQueryCache: Map<string, WindowQueryRef<any, S, any, any, any>> = new Map()
 
@@ -432,21 +436,44 @@ export class Figbird<
     const cached = this.#windowQueryCache.get(hash)
     let ref = cached as
       WindowQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>> | undefined
-    if (!ref) {
+    if (ref) {
+      // Map insertion order is the LRU order. A Suspense retry therefore protects
+      // the ref it is actively trying to commit.
+      this.#windowQueryCache.delete(hash)
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+      this.#windowQueryCache.set(hash, ref as WindowQueryRef<any, S, any, any, any>)
+      this.#trimWindowQueryCache(ref)
+    } else {
       ref = new WindowQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
         this,
         ast,
         this.schema,
         config,
-        () => {
-          if (this.#windowQueryCache.get(hash) === ref) this.#windowQueryCache.delete(hash)
+        {
+          onEvict: () => {
+            if (this.#windowQueryCache.get(hash) === ref) this.#windowQueryCache.delete(hash)
+          },
+          onIdle: () => this.#trimWindowQueryCache(ref),
         },
       )
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#windowQueryCache.set(hash, ref as WindowQueryRef<any, S, any, any, any>)
+      this.#trimWindowQueryCache(ref)
     }
     ref.setDisplayName(name)
     return ref
+  }
+
+  #trimWindowQueryCache(
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+    protectedRef: WindowQueryRef<any, S, any, any, any> | undefined,
+  ): void {
+    if (this.#windowQueryCache.size <= MAX_WINDOW_QUERY_CACHE_SIZE) return
+    for (const candidate of this.#windowQueryCache.values()) {
+      if (this.#windowQueryCache.size <= MAX_WINDOW_QUERY_CACHE_SIZE) return
+      if (candidate === protectedRef) continue
+      candidate.evictAbandonedRead()
+    }
   }
 
   /**
