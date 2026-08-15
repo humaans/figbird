@@ -1769,6 +1769,326 @@ button.primary:hover:not(:disabled) {
   font-variant-numeric: tabular-nums;
 }
 
+/* ----- Archive: virtualized relational ledger ----- */
+
+.full .archive-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.archive-head {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 36px;
+  padding: 28px 40px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.archive-kicker {
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.archive-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.archive-deck {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.archive-head-note {
+  max-width: 245px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+  background: var(--hover);
+}
+
+.archive-ledger {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.archive-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 18px;
+  min-height: 42px;
+  padding: 7px 40px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  background: var(--surface);
+}
+
+.archive-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.archive-stat-value {
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.archive-stat-wide {
+  padding-right: 18px;
+  border-right: 1px solid var(--border);
+}
+
+.archive-prefetch-state {
+  white-space: nowrap;
+}
+
+.archive-top-button {
+  margin-left: auto;
+}
+
+.archive-toolbar .explain {
+  margin-left: 0;
+}
+
+.archive-columns,
+.archive-row {
+  display: grid;
+  grid-template-columns: 60px minmax(320px, 1.7fr) minmax(120px, 0.6fr) minmax(190px, 1fr) 116px;
+  align-items: center;
+}
+
+.archive-columns {
+  flex: none;
+  height: 29px;
+  padding: 0 40px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--hover);
+}
+
+.archive-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--border) transparent;
+}
+
+.archive-virtual-space {
+  position: relative;
+  width: 100%;
+}
+
+.archive-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.archive-row {
+  height: 100%;
+  padding: 0 40px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  transition: background 100ms ease;
+}
+
+.archive-row:hover {
+  background: var(--hover);
+}
+
+.archive-row-number,
+.archive-date {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.archive-row-main {
+  min-width: 0;
+  padding-right: 24px;
+}
+
+.archive-row-title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-row-reason {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-assignee {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.archive-avatar {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.archive-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding-right: 14px;
+}
+
+.archive-labels .label.mini {
+  margin-left: 0;
+}
+
+.archive-date {
+  text-align: right;
+}
+
+.archive-loader {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  background: var(--surface);
+}
+
+.archive-spinner {
+  width: 14px;
+  height: 14px;
+  border-color: var(--border);
+  border-top-color: var(--text);
+}
+
+.archive-restore {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(2px);
+}
+
+.archive-error {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  padding: 8px 12px;
+  border: 1px solid #e2b7ae;
+  border-radius: 6px;
+  color: #8c2f22;
+  font-size: 11px;
+  background: #fff4f1;
+  box-shadow: 0 8px 24px rgba(80, 30, 20, 0.1);
+}
+
+.archive-skeleton {
+  padding-top: 0;
+}
+
+.archive-skeleton-row {
+  height: 72px;
+  margin: 0 40px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--hover) 25%, var(--surface) 45%, var(--hover) 65%);
+  background-size: 300% 100%;
+  animation: archive-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes archive-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .archive-head,
+  .archive-toolbar,
+  .archive-columns,
+  .archive-row {
+    padding-right: 20px;
+    padding-left: 32px;
+  }
+
+  .archive-columns,
+  .archive-row {
+    grid-template-columns: 48px minmax(240px, 1fr) 120px 160px;
+  }
+
+  .archive-columns > :last-child,
+  .archive-date {
+    display: none;
+  }
+
+  .archive-stat-wide,
+  .archive-prefetch-state {
+    display: none;
+  }
+}
+
 /* ----- Explain code snippets + chaos button ----- */
 
 .explain-code {

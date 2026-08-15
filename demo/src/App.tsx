@@ -13,6 +13,7 @@ import { NewIssueModal } from './components/NewIssueModal'
 import { figbird } from './figbird'
 import { issueDetailRouteQueries } from './pages/IssueDetail/queries'
 import { TeamsPage } from './pages/Teams/screen'
+import { ArchivePage } from './pages/Archive/screen'
 import { DetailSkeleton, SkeletonRows } from './components/ui'
 
 function EmptyDetail() {
@@ -89,7 +90,7 @@ function NavTab({ href, label }: { href: string; label: string }) {
 function Workspace({ children }: { children?: ReactNode }) {
   const route = useRoute()
   const path = route?.pathname ?? '/'
-  const isFull = path.startsWith('/teams')
+  const isFull = path.startsWith('/teams') || path.startsWith('/archive')
   // Keyed Suspense boundary for issue detail: each id starts cold so the destination
   // shows its own skeleton instead of leaking the previous issue's data while the
   // new one loads.
@@ -102,6 +103,7 @@ function Workspace({ children }: { children?: ReactNode }) {
         <span className='brand'>figbird</span>
         <NavTab href='/' label='Issues' />
         <NavTab href='/teams' label='Teams' />
+        <NavTab href='/archive' label='Archive' />
         <button className='link new-issue-btn' onClick={() => setShowNewIssue(true)}>
           + New issue
         </button>
@@ -141,6 +143,7 @@ const routes = [
       // Eager route, on purpose — a small screen with no route-critical data doesn't
       // earn a chunk split. The demo shows both styles.
       { path: '/teams', component: TeamsPage },
+      { path: '/archive', component: ArchivePage },
     ],
   },
 ]

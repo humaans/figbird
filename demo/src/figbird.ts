@@ -43,6 +43,14 @@ export interface Issue {
    */
   commentIds: number[]
 }
+export interface ArchivedIssue {
+  id: number
+  title: string
+  assigneeId: number
+  teamId: number
+  deletedAt: string
+  deletionReason: string
+}
 export interface Comment {
   id: number
   issueId: number
@@ -83,6 +91,7 @@ export const schema = createSchema({
     users: service<{ item: User }>(),
     teams: service<{ item: Team }>(),
     issues: service<{ item: Issue }>(),
+    archivedIssues: service<{ item: ArchivedIssue }>(),
     comments: service<{ item: Comment }>(),
     labels: service<{ item: Label }>(),
     issueLabels: service<{ item: IssueLabel }>(),
@@ -102,6 +111,14 @@ export const schema = createSchema({
       // Label[] directly — figbird fetches the issueLabels junction, then the
       // labels, and hides the join. Realtime events on either service (e.g. a new
       // issueLabels row) flow into the assembled result.
+      labels: many(
+        { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
+        { sourceField: 'labelId', destService: 'labels' },
+      ),
+    }),
+    archivedIssues: ({ one, many }) => ({
+      assignee: one({ sourceField: 'assigneeId', destService: 'users' }),
+      team: one({ sourceField: 'teamId', destService: 'teams' }),
       labels: many(
         { sourceField: 'id', destService: 'issueLabels', destField: 'issueId' },
         { sourceField: 'labelId', destService: 'labels' },
