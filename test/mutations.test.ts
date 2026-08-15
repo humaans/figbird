@@ -1,5 +1,5 @@
 import test from 'ava'
-import type { QueryState } from '../lib'
+import { feathersBatchTransactions, type QueryState } from '../lib'
 import { createTestApp } from './helpers'
 import {
   collectEvents,
@@ -14,7 +14,10 @@ import {
 // ----- the m proxy -----
 
 test('m: writes are optimistic by default; confirmed opts out per handle or inline', async t => {
-  const { figbird } = createTestApp(schema, services())
+  const { figbird, adapter, feathers } = createTestApp(schema, {
+    ...services(),
+    'api/batch': { data: {} },
+  })
   const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
 
@@ -26,12 +29,150 @@ test('m: writes are optimistic by default; confirmed opts out per handle or inli
   const policies = m.notes.confirmed // named surface handle
   await policies.patch(1, { content: 'third' })
 
+  let transactionOperations: readonly unknown[] = []
+  let transactionCalls = 0
+  let batchCalls: readonly unknown[] = []
+  feathers.service('api/batch').create = ((data: { calls: readonly unknown[] }) => {
+    batchCalls = data.calls
+    return Promise.resolve({
+      id: 'batch_1',
+      data: [
+        { status: 'fulfilled', value: { id: 1, content: 'transactional' } },
+        { status: 'fulfilled', value: { id: 1, name: 'Grace' } },
+      ],
+    })
+  }) as never
+  const transact = feathersBatchTransactions()
+  adapter.transaction = operations => {
+    transactionCalls += 1
+    transactionOperations = operations
+    return transact(feathers, operations)
+  }
+  await figbird.transaction(tx => {
+    tx.m.notes.patch(1, { content: 'transactional' })
+    tx.m.people.confirmed.patch(1, { name: 'Grace' })
+  })
+  t.deepEqual(transactionOperations, [
+    { serviceName: 'notes', method: 'patch', args: [1, { content: 'transactional' }] },
+    { serviceName: 'api/people', method: 'patch', args: [1, { name: 'Grace' }] },
+  ])
+  t.deepEqual(batchCalls, [
+    ['patch', 'notes', 1, { content: 'transactional' }],
+    ['patch', 'api/people', 1, { name: 'Grace' }],
+  ])
+
   await Promise.resolve()
   const starts = events.filter(e => e.kind === 'mutate:start')
   t.deepEqual(
     starts.map(e => e.optimistic),
-    [true, false, false],
+    [true, false, false, true, false],
   )
+
+  // If one lane invalidates a transaction before another lane reaches the
+  // barrier, an aborted create must still cancel mutations queued behind it.
+  const notePredecessorGate = deferred<MockItem>()
+  const failingPersonCreateGate = deferred<{ id: number; name: string }>()
+  feathers.service('notes').patch = (() => notePredecessorGate.promise) as never
+  feathers.service('api/people').create = (() => failingPersonCreateGate.promise) as never
+
+  const notePredecessor = m.notes.confirmed.patch(99, { content: 'predecessor' })
+  const failingPersonCreate = m.people.create({ id: 77, name: 'draft' })
+  const abortedTransaction = figbird.transaction(tx => {
+    tx.m.notes.create({ id: 99, content: 'transaction create' })
+    tx.m.people.patch(77, { name: 'transaction patch' })
+  })
+  const dependentNotePatch = m.notes.patch(99, { content: 'dependent' })
+
+  const createError = t.throwsAsync(failingPersonCreate, { message: 'create failed' })
+  const transactionError = t.throwsAsync(abortedTransaction, { message: /cancelled transaction/ })
+  const dependentError = t.throwsAsync(dependentNotePatch, {
+    message: /cancelled queued mutations/,
+  })
+  failingPersonCreateGate.reject(new Error('create failed'))
+  await Promise.all([createError, transactionError, dependentError])
+  t.is(transactionCalls, 1, 'the invalidated transaction never reaches the adapter')
+
+  notePredecessorGate.resolve({ id: 99, content: 'predecessor' })
+  await notePredecessor
+})
+
+test('transactions: canonical entity ids cannot reserve the same lane twice', t => {
+  const { figbird, adapter } = createTestApp(schema, services())
+  let transactionCalls = 0
+  adapter.transaction = () => {
+    transactionCalls += 1
+    return Promise.resolve([])
+  }
+
+  const error = t.throws(() =>
+    figbird.transaction(tx => {
+      tx.m.notes.patch(1, { content: 'numeric id' })
+      tx.m.notes.patch('1', { content: 'string id' })
+    }),
+  )
+
+  t.regex(error!.message, /can mutate "notes"\/1 only once/)
+  t.is(transactionCalls, 0)
+})
+
+test('transactions: cascading cancellation publishes one final settlement', async t => {
+  const { figbird, adapter } = createTestApp(schema, services())
+  const notesRef = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const peopleRef = figbird.queryDesc({ serviceName: 'api/people', method: 'find' })
+  const unsubscribeNotes = notesRef.subscribe(() => {})
+  const unsubscribePeople = peopleRef.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  const transactionGate = deferred<readonly unknown[]>()
+  let transactionCalls = 0
+  adapter.transaction = () => {
+    transactionCalls += 1
+    return transactionGate.promise
+  }
+
+  const committing = figbird.transaction(tx => {
+    tx.m.notes.remove(1)
+    tx.m.people.patch(1, { name: 'optimistic name' })
+  })
+  const cancelled = figbird.transaction(tx => {
+    tx.m.notes.patch(1, { content: 'old lifetime' })
+    tx.m.notes.patch(2, { content: 'doomed sibling' })
+  })
+
+  const snapshots: Array<{
+    hasRemovedNote: boolean
+    siblingContent: string | undefined
+    personName: string | undefined
+  }> = []
+  const unsubscribeState = figbird.subscribeToStateChanges(state => {
+    const notes = state.get('notes')?.entities
+    const people = state.get('api/people')?.entities
+    snapshots.push({
+      hasRemovedNote: notes?.has('1') ?? false,
+      siblingContent: (notes?.get('2') as Note | undefined)?.content,
+      personName: (people?.get('1') as { name: string } | undefined)?.name,
+    })
+  })
+
+  const cancelledError = t.throwsAsync(cancelled, { message: /cancelled transaction/ })
+  transactionGate.resolve([
+    { id: 1, content: 'hello' },
+    { id: 1, name: 'server name' },
+  ])
+  await Promise.all([committing, cancelledError])
+
+  t.is(transactionCalls, 1, 'the cancelled transaction never reaches the adapter')
+  t.deepEqual(snapshots, [
+    {
+      hasRemovedNote: false,
+      siblingContent: 'world',
+      personName: 'server name',
+    },
+  ])
+
+  unsubscribeState()
+  unsubscribePeople()
+  unsubscribeNotes()
 })
 
 test('m: handles are interned and the confirmed variant is stable', t => {

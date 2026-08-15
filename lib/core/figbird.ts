@@ -59,6 +59,7 @@ import type {
   ServiceUpdate,
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { createTransactionContext, type TransactionContext } from './transactions.js'
 
 type DescriptorWriteProjection<TItem> =
   | {
@@ -91,6 +92,11 @@ export type {
   MutationsProxy,
   WriteMutationOptions,
 } from './mutations.js'
+export type {
+  TransactionContext,
+  TransactionMutationsHandle,
+  TransactionMutationsProxy,
+} from './transactions.js'
 export {
   defineMutationQueue,
   MutationQueueDiscardedError,
@@ -662,6 +668,44 @@ export class Figbird<
       this.#mutationsProxy = createMutationsProxy(host) as MutationsProxy<S>
     }
     return this.#mutationsProxy
+  }
+
+  /**
+   * Atomically commit several typed CRUD mutations through the configured
+   * adapter. The callback is a synchronous collector: its calls project as one
+   * cache update, wait for affected record lanes, and are dispatched together.
+   * No sequential-request fallback is provided.
+   */
+  transaction(collect: (transaction: TransactionContext<S>) => undefined): Promise<void> {
+    if (!this.queryStore.supportsTransactions) {
+      throw new Error('figbird: the configured adapter does not support transactions')
+    }
+    const transaction = createTransactionContext<S>()
+    let returned: unknown
+    try {
+      returned = collect(transaction.context)
+    } catch (error) {
+      // Close on failure too, so a leaked handle cannot append work later.
+      transaction.close()
+      throw error
+    }
+    if (
+      returned !== null &&
+      (typeof returned === 'object' || typeof returned === 'function') &&
+      'then' in returned &&
+      typeof (returned as { then?: unknown }).then === 'function'
+    ) {
+      transaction.close()
+      // The callback may continue after its first await and hit the closed
+      // collector. Observe that misuse promise so it cannot become unhandled.
+      void Promise.resolve(returned).catch(() => {})
+      throw new Error('figbird: transaction callbacks must be synchronous')
+    }
+    const descs = transaction.close().map(desc => ({
+      ...desc,
+      serviceName: resolveServicePath(this.schema, desc.serviceName),
+    }))
+    return this.queryStore.transaction(descs)
   }
 
   /**
