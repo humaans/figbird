@@ -503,9 +503,20 @@ export function ColumnResizeHandle({
         width: 8,
         cursor: 'col-resize',
         zIndex: 2,
-        borderRight: `1px solid ${colors.border}`,
       }}
-    />
+    >
+      <span
+        aria-hidden='true'
+        style={{
+          position: 'absolute',
+          top: '50%',
+          right: 0,
+          height: 14,
+          transform: 'translateY(-50%)',
+          borderRight: `1px solid ${colors.border}`,
+        }}
+      />
+    </span>
   )
 }
 
