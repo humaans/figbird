@@ -332,70 +332,80 @@ function PaginationDetails({
   pages: QueryRecord[]
 }) {
   const { colors, styles } = useDevtoolsTheme()
-  const state = [
-    pagination.realtime === 'manual'
-      ? 'manual realtime'
-      : pagination.realtime === 'reconcile'
-        ? 'reconciles on events'
-        : 'merges stable updates',
-    pagination.hasMore ? 'has more' : 'complete',
-    pagination.isLoadingMore ? 'loading next page' : '',
-    pagination.total !== undefined ? `${pagination.total} total` : '',
+  const loadedRows = pages.reduce((total, page) => total + page.itemCount, 0)
+  const summary = [
+    pagination.total === undefined
+      ? `${loadedRows} rows loaded`
+      : `${loadedRows} of ${pagination.total} rows loaded`,
+    pagination.loadedPages > 1 ? plural(pagination.loadedPages, 'page', 'pages') : undefined,
+    pagination.isLoadingMore ? 'loading more' : pagination.hasMore ? 'more available' : 'complete',
   ]
     .filter(Boolean)
     .join(' · ')
 
   return (
-    <QueryDetailSection
-      label={pagination.strategy === 'cursor' ? 'Cursor page chain' : 'Pages'}
-      meta={`${pagination.loadedPages} loaded · size ${pagination.pageSize} · ${state}`}
-      separated
-    >
-      <div style={{ borderTop: `1px solid ${colors.rowBorder}` }}>
-        {pages.map((page, index) => {
-          const request = page.page?.request
-          const info = page.page?.info
-          const position =
-            pagination.strategy === 'cursor'
-              ? `after ${request?.after === undefined ? 'start' : compactJson(request.after)}`
-              : `offset ${String(page.query?.$skip ?? index * pagination.pageSize)}`
-          const continuation =
-            pagination.strategy === 'cursor' && info
-              ? info.hasMore
-                ? `next ${compactJson(info.endCursor)}`
-                : 'end'
-              : ''
-          return (
-            <div
-              key={page.queryId}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '55px minmax(0, 1fr) auto',
-                gap: 8,
-                alignItems: 'baseline',
-                padding: '7px 0',
-                borderBottom: `1px solid ${colors.rowBorder}`,
-              }}
-            >
-              <strong style={{ fontWeight: 600 }}>Page {index + 1}</strong>
-              <code
-                title={[position, continuation].filter(Boolean).join(' · ')}
-                style={{
-                  ...styles.code,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  color: colors.muted,
-                }}
-              >
-                {[position, continuation].filter(Boolean).join(' · ')}
-              </code>
-              <span style={{ color: colors.muted }}>{plural(page.itemCount, 'row', 'rows')}</span>
-            </div>
-          )
-        })}
-      </div>
+    <QueryDetailSection label='Pagination' separated>
+      <div style={{ color: colors.muted }}>{summary}</div>
+      {pages.length > 1 ? (
+        <details style={{ marginTop: 8 }}>
+          <summary
+            style={{
+              color: colors.text,
+              cursor: 'pointer',
+              fontWeight: 600,
+              userSelect: 'none',
+            }}
+          >
+            Page chain
+          </summary>
+          <div style={{ marginTop: 5 }}>
+            {pages.map((page, index) => {
+              const request = page.page?.request
+              const info = page.page?.info
+              const position =
+                pagination.strategy === 'cursor'
+                  ? `after ${request?.after === undefined ? 'start' : compactJson(request.after)}`
+                  : `offset ${String(page.query?.$skip ?? index * pagination.pageSize)}`
+              const continuation =
+                pagination.strategy === 'cursor' && info
+                  ? info.hasMore
+                    ? `next ${compactJson(info.endCursor)}`
+                    : 'end'
+                  : ''
+              return (
+                <div
+                  key={page.queryId}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '55px minmax(0, 1fr) auto',
+                    gap: 8,
+                    alignItems: 'baseline',
+                    padding: '4px 0 4px 14px',
+                  }}
+                >
+                  <strong style={{ fontWeight: 600 }}>Page {index + 1}</strong>
+                  <code
+                    title={[position, continuation].filter(Boolean).join(' · ')}
+                    style={{
+                      ...styles.code,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      color: colors.muted,
+                    }}
+                  >
+                    {[position, continuation].filter(Boolean).join(' · ')}
+                  </code>
+                  <span style={{ color: colors.muted }}>
+                    {plural(page.itemCount, 'row', 'rows')}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </details>
+      ) : null}
     </QueryDetailSection>
   )
 }

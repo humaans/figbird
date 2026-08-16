@@ -760,11 +760,12 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   click(row!)
 
   const details = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
-  t.true(details.includes('Cursor page chain'))
-  t.true(details.includes('merges stable updates'))
+  t.true(details.includes('Pagination'))
+  t.true(details.includes('35 of 35 rows loaded · 2 pages · complete'))
+  t.true(details.includes('Page chain'))
   t.true(details.includes('after start · next "cursor:25"'))
   t.true(details.includes('after "cursor:25" · end'))
-  t.true(details.includes('35 total'))
+  t.false(details.includes('merges stable updates'))
   unmount()
 })
 
