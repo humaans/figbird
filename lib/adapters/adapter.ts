@@ -66,6 +66,13 @@ export interface MatcherContext {
   serviceName: string
 }
 
+/** One mutation inside an adapter-backed atomic transaction. */
+export interface AdapterTransactionOperation {
+  serviceName: string
+  method: 'create' | 'update' | 'patch' | 'remove'
+  args: readonly unknown[]
+}
+
 /**
  * Unified adapter interface
  * The adapter is service-agnostic and works with unknown items
@@ -91,6 +98,16 @@ export interface Adapter<
   findAll(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
 
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
+
+  /**
+   * Atomically commit several mutations, returning one result per operation in
+   * the same order. Omit this capability when the backend cannot guarantee
+   * all-or-nothing commit semantics; Figbird never falls back to sequential
+   * requests.
+   */
+  transaction?:
+    | ((operations: readonly AdapterTransactionOperation[]) => Promise<readonly unknown[]>)
+    | undefined
 
   /** Return false when retrying a failed query cannot help. Errors retry by default. */
   isRetryableError?(error: Error): boolean

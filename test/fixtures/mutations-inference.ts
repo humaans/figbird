@@ -25,6 +25,7 @@ interface SendDocumentResult {
 
 interface EsignInstanceService {
   item: EsignInstance
+  patch: Partial<EsignInstance>
   methods: {
     requestSendDocument: (id: string, options?: SendDocumentOptions) => Promise<SendDocumentResult>
     voidDocument: (id: string, reason: string) => Promise<{ id: string; voided: true }>
@@ -64,6 +65,21 @@ export type ConfirmedResult = Awaited<typeof confirmedPromise>
 // CRUD stays typed from the service definition.
 const patchPromise = m['api/esign-instances'].patch('esign_1', { status: 'sent' })
 export type PatchResult = Awaited<typeof patchPromise>
+
+// Transactions reuse the schema-typed CRUD surface but collect synchronously.
+export const transactionPromise = figbird.transaction(tx => {
+  tx.m['api/esign-instances'].patch('esign_1', { status: 'sent' })
+  tx.m['api/messages'].confirmed.create({ id: 'message_1', body: 'Ready' })
+  // @ts-expect-error - transaction patches retain the service patch type
+  tx.m['api/esign-instances'].patch('esign_1', { status: 'void' })
+  // @ts-expect-error - the transaction DSL does not imply custom methods are atomic
+  tx.m['api/esign-instances'].requestSendDocument('esign_1')
+})
+
+// @ts-expect-error - transaction callbacks must collect synchronously
+figbird.transaction(async tx => {
+  tx.m['api/esign-instances'].patch('esign_1', { status: 'sent' })
+})
 
 // Projection options are available only where the runtime applies them.
 m['api/esign-instances'].create(

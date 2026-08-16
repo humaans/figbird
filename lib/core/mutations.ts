@@ -96,11 +96,11 @@ type CustomMethods<S extends Schema, N extends ServiceNames<S>> = {
   ) => Promise<MethodData<ServiceMethods<S, N>[M]>>
 }
 
-type CreateOptionsFor<TItem, TOptimistic extends boolean> = TOptimistic extends true
+export type CreateOptionsFor<TItem, TOptimistic extends boolean> = TOptimistic extends true
   ? CreateMutationOptions<TItem>
   : MutationParamsOptions
 
-type WriteOptionsFor<TItem, TOptimistic extends boolean> = TOptimistic extends true
+export type WriteOptionsFor<TItem, TOptimistic extends boolean> = TOptimistic extends true
   ? WriteMutationOptions<TItem>
   : MutationParamsOptions
 
@@ -164,7 +164,7 @@ export interface MutationsHost {
   call(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 }
 
-interface HandleConfig {
+export interface CrudHandleConfig {
   /** false → confirmed variant: the cache updates only after the server acks. */
   optimistic: boolean
 }
@@ -174,7 +174,19 @@ type RuntimeMutationOptions = MutationParamsOptions & {
   optimisticPatch?: unknown
 }
 
-function createHandle(host: MutationsHost, serviceName: string, config: HandleConfig): object {
+type CrudHandleDecorator = (base: Record<string, unknown>) => object
+
+/**
+ * Build the canonical CRUD descriptor surface shared by ordinary mutations and
+ * transaction collectors. A decorator may add custom-method behavior without
+ * duplicating descriptor construction or confirmed-handle policy. @internal
+ */
+export function createCrudHandle(
+  dispatch: (desc: MutationDescriptor) => unknown,
+  serviceName: string,
+  config: CrudHandleConfig,
+  decorate: CrudHandleDecorator = base => base,
+): object {
   const { optimistic } = config
 
   const resolveOptimistic = (options?: RuntimeMutationOptions) =>
@@ -182,7 +194,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
 
   const base: Record<string, unknown> = {
     create: (data: unknown, options?: RuntimeMutationOptions) =>
-      host.mutate({
+      dispatch({
         serviceName,
         method: 'create',
         data,
@@ -190,7 +202,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         optimistic: resolveOptimistic(options),
       }),
     update: (id: string | number, data: unknown, options?: RuntimeMutationOptions) =>
-      host.mutate({
+      dispatch({
         serviceName,
         method: 'update',
         id,
@@ -202,7 +214,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
           : {}),
       }),
     patch: (id: string | number, data: unknown, options?: RuntimeMutationOptions) =>
-      host.mutate({
+      dispatch({
         serviceName,
         method: 'patch',
         id,
@@ -214,7 +226,7 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
           : {}),
       }),
     remove: (id: string | number, options?: RuntimeMutationOptions) =>
-      host.mutate({
+      dispatch({
         serviceName,
         method: 'remove',
         id,
@@ -222,7 +234,6 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
         // remove has no payload to synthesize — optimistic is boolean-only here
         optimistic,
       }),
-    call: (method: string, ...args: unknown[]) => host.call(serviceName, method, args),
   }
 
   if (optimistic) {
@@ -230,24 +241,66 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
     let confirmedVariant: object | null = null
     Object.defineProperty(base, 'confirmed', {
       enumerable: false,
-      get: () => (confirmedVariant ??= createHandle(host, serviceName, { optimistic: false })),
+      get: () =>
+        (confirmedVariant ??= createCrudHandle(
+          dispatch,
+          serviceName,
+          { optimistic: false },
+          decorate,
+        )),
     })
   }
 
-  return new Proxy(base, {
-    get(target, prop, receiver) {
-      // `in` includes the prototype chain, so Object.prototype members resolve
-      // normally instead of becoming calls.
-      if (typeof prop === 'symbol' || prop in target) {
-        return Reflect.get(target, prop, receiver)
-      }
-      // A callable `then` makes the handle thenable: returning one from an async
-      // function would make the `await` invoke it and hang forever, unsettled.
-      if (prop === 'then') return undefined
-      // A callable `toJSON` would turn JSON.stringify(handle) — logging, error
-      // reporting — into a phantom network write.
-      if (prop === 'toJSON') return undefined
-      return (...args: unknown[]) => host.call(serviceName, prop, args)
+  return decorate(base)
+}
+
+function createHandle(host: MutationsHost, serviceName: string, config: CrudHandleConfig): object {
+  return createCrudHandle(
+    desc => host.mutate(desc),
+    serviceName,
+    config,
+    base => {
+      base.call = (method: string, ...args: unknown[]) => host.call(serviceName, method, args)
+      return new Proxy(base, {
+        get(target, prop, receiver) {
+          // `in` includes the prototype chain, so Object.prototype members resolve
+          // normally instead of becoming calls.
+          if (typeof prop === 'symbol' || prop in target) {
+            return Reflect.get(target, prop, receiver)
+          }
+          // A callable `then` makes the handle thenable: returning one from an async
+          // function would make the `await` invoke it and hang forever, unsettled.
+          if (prop === 'then') return undefined
+          // A callable `toJSON` would turn JSON.stringify(handle) — logging, error
+          // reporting — into a phantom network write.
+          if (prop === 'toJSON') return undefined
+          return (...args: unknown[]) => host.call(serviceName, prop, args)
+        },
+      })
+    },
+  )
+}
+
+/** Build a callable, property-addressable proxy with interned service handles. @internal */
+export function createServiceHandleProxy(createHandle: (serviceName: string) => object): object {
+  const handles = new Map<string, object>()
+  const handleFor = (serviceName: string): object => {
+    let handle = handles.get(serviceName)
+    if (!handle) {
+      handle = createHandle(serviceName)
+      handles.set(serviceName, handle)
+    }
+    return handle
+  }
+
+  const callable = (serviceName: string) => handleFor(serviceName)
+  return new Proxy(callable as object, {
+    apply(_target, _thisArg, [serviceName]: [string]) {
+      return handleFor(serviceName)
+    },
+    get(_target, prop) {
+      if (typeof prop === 'symbol') return undefined
+      return handleFor(prop)
     },
   })
 }
@@ -259,28 +312,11 @@ function createHandle(host: MutationsHost, serviceName: string, config: HandleCo
  * known protocol prop becomes a call to that custom method. @internal
  */
 export function createMutationsProxy(host: MutationsHost): object {
-  const handles = new Map<string, object>()
-  const handleFor = (serviceName: string): object => {
-    let handle = handles.get(serviceName)
-    if (!handle) {
-      handle = createHandle(host, serviceName, { optimistic: true })
-      handles.set(serviceName, handle)
-    }
-    return handle
-  }
-
   // No protocol guards needed at this level: every string property resolves to a
   // handle OBJECT (not a function) — including function-target props like `call`
   // or `name` — so probes like `then` or `toJSON` are never callable here and
   // `await m` / JSON.stringify(m) behave inertly.
-  const callable = (serviceName: string) => handleFor(serviceName)
-  return new Proxy(callable as object, {
-    apply(_target, _thisArg, [serviceName]: [string]) {
-      return handleFor(serviceName)
-    },
-    get(_target, prop) {
-      if (typeof prop === 'symbol') return undefined
-      return handleFor(prop)
-    },
-  })
+  return createServiceHandleProxy(serviceName =>
+    createHandle(host, serviceName, { optimistic: true }),
+  )
 }

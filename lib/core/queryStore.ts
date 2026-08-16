@@ -1,6 +1,7 @@
 import {
   locallySupportedOperators,
   type Adapter,
+  type AdapterTransactionOperation,
   type PageResponse,
   type QueryResponse,
 } from '../adapters/adapter.js'
@@ -26,7 +27,9 @@ import {
   ABSENT,
   MUTATION_EVENT_TYPE,
   MutationLanes,
+  type LaneSettlement,
   type MutationLane,
+  type MutationOutcome,
   type ProjectionChange,
 } from './mutationLanes.js'
 import {
@@ -35,7 +38,7 @@ import {
   applyVisibleEventToQuery,
   createServiceState,
   diffCompleteSet,
-  groupQueuedEvents,
+  groupEventsByService,
   isUnfilteredFindQuery,
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
@@ -124,6 +127,13 @@ interface QueuedMutation {
   args: unknown[]
   optimistic: boolean
   attempt: GatedMutationAttempt
+  transaction?: QueuedTransaction
+}
+
+interface QueuedTransaction {
+  entries: Array<{ lane: MutationLane; entry: QueuedMutation }>
+  readyLaneKeys: Set<string>
+  status: 'waiting' | 'running' | 'settled' | 'aborted'
 }
 
 interface AppliedEventEffect {
@@ -204,6 +214,8 @@ export class QueryStore<
   #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
+  // Lane bases already contain these acknowledgements; only query publication remains.
+  #appliedEventQueue: ProcessedRealtimeEvent[] = []
   #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
   #eventBatchInterval: number | undefined = 100
   #processingEventQueue = false
@@ -509,6 +521,104 @@ export class QueryStore<
     return this.registerMutation(desc).promise as Promise<InferMutationData<S, D>>
   }
 
+  /** Whether the configured adapter promises atomic multi-mutation commits. */
+  get supportsTransactions(): boolean {
+    return this.#adapter.transaction !== undefined
+  }
+
+  /** Commit several keyed CRUD mutations through the adapter's atomic capability. */
+  transaction(descs: readonly MutationDescriptor[]): Promise<void> {
+    if (!this.#adapter.transaction) {
+      throw new Error('figbird: the configured adapter does not support transactions')
+    }
+    if (descs.length === 0) return Promise.resolve()
+
+    const keys = new Set<string>()
+    const planned = descs.map(desc => {
+      if (desc.method === 'create' && Array.isArray(desc.data)) {
+        throw new Error(
+          'figbird: transaction create calls accept one item; collect multiple create calls instead',
+        )
+      }
+      const optimisticItem =
+        desc.method === 'create' ? resolveCreateOptimisticItem(desc) : undefined
+      const id = desc.method === 'create' ? this.#peekId(optimisticItem) : desc.id
+      if (id === undefined || id === null) {
+        throw new Error(
+          `figbird: transaction ${desc.method} on "${desc.serviceName}" requires a stable entity id`,
+        )
+      }
+      const key = JSON.stringify([desc.serviceName, entityKey(id)])
+      if (keys.has(key)) {
+        throw new Error(
+          `figbird: a transaction can mutate "${desc.serviceName}"/${String(id)} only once`,
+        )
+      }
+      keys.add(key)
+      return {
+        desc,
+        id,
+        args: this.#buildMutationArgs(desc),
+        optimistic: desc.optimistic != null && desc.optimistic !== false,
+        lane: this.#mutationLanes.ensure(
+          desc.serviceName,
+          id,
+          this.#getEntity(desc.serviceName, id),
+        ),
+      }
+    })
+
+    const transaction: QueuedTransaction = {
+      entries: [],
+      readyLaneKeys: new Set(),
+      status: 'waiting',
+    }
+    const projections: ProjectionChange[] = []
+    const promises: Promise<unknown>[] = []
+
+    for (const operation of planned) {
+      const entry: QueuedMutation = {
+        desc: operation.desc,
+        args: operation.args,
+        optimistic: operation.optimistic,
+        attempt: new GatedMutationAttempt(),
+        transaction,
+      }
+      transaction.entries.push({ lane: operation.lane, entry })
+      const tracked = this.#trackMutation(
+        {
+          serviceName: operation.desc.serviceName,
+          method: operation.desc.method,
+          id: operation.id,
+          optimistic: operation.optimistic,
+          args: operation.args,
+        },
+        () => entry.attempt.promise,
+        {
+          onError: (_error, mutationId) => {
+            if (!operation.optimistic) return
+            this.#events.emit({
+              kind: 'mutate:rollback',
+              mutationId,
+              serviceName: operation.desc.serviceName,
+              method: operation.desc.method,
+              id: operation.id,
+            })
+          },
+        },
+      )
+      promises.push(tracked.promise)
+      projections.push(this.#mutationLanes.enqueue(operation.lane, entry))
+    }
+
+    // All affected services are projected before observers are notified.
+    for (const projection of projections) this.#applyProjection(projection, false)
+    this.#processQueuedEvents()
+    for (const { lane } of transaction.entries) this.#drainMutationLane(lane)
+
+    return Promise.all(promises).then(() => undefined)
+  }
+
   /**
    * Run one confirmed mutation without record-lane scheduling. This preserves the
    * transport behavior of deprecated `useMutation`: a caller may time out a hung
@@ -732,11 +842,95 @@ export class QueryStore<
       this.#releaseMutationLane(lane)
       return
     }
+    if (entry.transaction) {
+      entry.transaction.readyLaneKeys.add(lane.key)
+      if (entry.transaction.readyLaneKeys.size === entry.transaction.entries.length) {
+        this.#startTransaction(entry.transaction)
+      }
+      return
+    }
     entry.attempt.start(() =>
       this.#runControlledAttempt(entry.attempt.control, () =>
         this.#adapter.mutate(lane.serviceName, entry.desc.method, [...entry.args]),
       ),
     )
+  }
+
+  #startTransaction(transaction: QueuedTransaction): void {
+    if (transaction.status !== 'waiting') return
+    transaction.status = 'running'
+
+    const operations: AdapterTransactionOperation[] = transaction.entries.map(
+      ({ lane, entry }) => ({
+        serviceName: lane.serviceName,
+        method: entry.desc.method,
+        args: [...entry.args],
+      }),
+    )
+    let transport: Promise<readonly unknown[]>
+    try {
+      transport = Promise.resolve(this.#adapter.transaction!(operations))
+    } catch (error) {
+      transport = Promise.reject(error)
+    }
+
+    const checked = transport.then(results => {
+      if (!Array.isArray(results) || results.length !== transaction.entries.length) {
+        throw new Error(
+          `figbird: adapter transaction returned ${Array.isArray(results) ? results.length : 'an invalid number of'} results for ${transaction.entries.length} operations`,
+        )
+      }
+      return results
+    })
+    const settled = checked.then(
+      results => {
+        this.#settleTransaction(transaction, { ok: true, results })
+        return results
+      },
+      (err: unknown) => {
+        const error = err instanceof Error ? err : new Error(String(err))
+        this.#settleTransaction(transaction, { ok: false, error })
+        throw error
+      },
+    )
+
+    transaction.entries.forEach(({ entry }, index) => {
+      entry.attempt.start(() => settled.then(results => results[index]))
+    })
+  }
+
+  #abortTransaction(transaction: QueuedTransaction, error: Error, lanes: Set<MutationLane>): void {
+    if (transaction.status !== 'waiting') return
+    transaction.status = 'aborted'
+
+    for (const { lane, entry } of transaction.entries) {
+      const outcome = { ok: false, error } as const
+      const settlement = this.#mutationLanes.abort(lane, entry, error)
+      if (settlement) {
+        this.#applyLaneSettlement(lane, entry, outcome, settlement, lanes)
+      }
+      entry.attempt.cancel(error)
+    }
+  }
+
+  #settleTransaction(
+    transaction: QueuedTransaction,
+    outcome: { ok: true; results: readonly unknown[] } | { ok: false; error: Error },
+  ): void {
+    if (transaction.status !== 'running') return
+    transaction.status = 'settled'
+    const lanes = new Set<MutationLane>()
+    transaction.entries.forEach(({ lane, entry }, index) => {
+      const entryOutcome = outcome.ok
+        ? ({ ok: true, item: outcome.results[index] } as const)
+        : ({ ok: false, error: outcome.error } as const)
+      const settlement = this.#mutationLanes.settle(lane, entry, entryOutcome)
+      if (!settlement) return
+      this.#applyLaneSettlement(lane, entry, entryOutcome, settlement, lanes)
+    })
+
+    // Success and rollback are each one observer-visible cache transition across services.
+    this.#finishLaneSettlements(lanes)
   }
 
   #expediteMutationPredecessors(lane: MutationLane, entry: QueuedMutation): void {
@@ -780,6 +974,20 @@ export class QueryStore<
     const settlement = this.#mutationLanes.settle(lane, entry, outcome)
     if (!settlement) return
 
+    const lanes = new Set<MutationLane>()
+    this.#applyLaneSettlement(lane, entry, outcome, settlement, lanes)
+    this.#finishLaneSettlements(lanes)
+  }
+
+  #applyLaneSettlement(
+    lane: MutationLane,
+    entry: QueuedMutation,
+    outcome: MutationOutcome,
+    settlement: LaneSettlement<QueuedMutation>,
+    lanes: Set<MutationLane>,
+  ): void {
+    lanes.add(lane)
+
     // A mutation acknowledgement is authoritative even when remaining overlays
     // keep the visible projection unchanged. Recording it protects fetches that
     // began before the acknowledgement from replacing the newer server state.
@@ -787,27 +995,49 @@ export class QueryStore<
       this.#fetchEventJournal.record([settlement.authoritativeEvent])
     }
 
-    const projected = this.#applyProjection(settlement.projection, true)
+    const projected = this.#applyProjection(settlement.projection, false)
     if (!projected && settlement.authoritativeEvent && !this.#mutationLanes.peekNext(lane)) {
-      this.#publishAppliedEvent(settlement.authoritativeEvent)
+      this.#appliedEventQueue.push(settlement.authoritativeEvent)
     }
 
-    if (settlement.cancelled.length > 0) {
-      const reason = outcome.ok
-        ? 'because the record was removed'
-        : entry.desc.method === 'create'
-          ? 'because its create mutation failed'
-          : 'because the preceding remove mutation failed'
-      for (const queued of settlement.cancelled) {
-        queued.attempt.cancel(
+    this.#cancelSettledDependants(lane, entry, outcome, settlement.cancelled, lanes)
+  }
+
+  #finishLaneSettlements(lanes: ReadonlySet<MutationLane>): void {
+    this.#processQueuedEvents()
+    for (const lane of lanes) this.#drainMutationLane(lane)
+  }
+
+  #cancelSettledDependants(
+    lane: MutationLane,
+    entry: QueuedMutation,
+    outcome: { ok: true; item: unknown } | { ok: false; error: Error },
+    cancelled: readonly QueuedMutation[],
+    lanes: Set<MutationLane>,
+  ): void {
+    if (cancelled.length === 0) return
+    const reason = outcome.ok
+      ? 'because the record was removed'
+      : entry.desc.method === 'create'
+        ? 'because its create mutation failed'
+        : 'because the preceding remove mutation failed'
+    for (const queued of cancelled) {
+      if (queued.transaction) {
+        this.#abortTransaction(
+          queued.transaction,
           new MutationSupersededError(
-            `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ${reason}`,
+            `figbird: cancelled transaction for "${lane.serviceName}"/${String(lane.id)} ${reason}`,
           ),
+          lanes,
         )
+        continue
       }
+      queued.attempt.cancel(
+        new MutationSupersededError(
+          `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ${reason}`,
+        ),
+      )
     }
-
-    this.#drainMutationLane(lane)
   }
 
   #applyProjection(change: ProjectionChange, immediate: boolean): boolean {
@@ -1774,33 +2004,21 @@ export class QueryStore<
     return { reconcileQueryIds: immediateReconciles, refetchService }
   }
 
-  /** Publish an authoritative transition whose entity-cache effect already happened. */
-  #publishAppliedEvent(event: ProcessedRealtimeEvent): void {
-    let effects: AppliedEventEffect[] = []
-    const touched = this.#transactOverServiceByName(event.serviceName, (service, touch) => {
-      effects = this.#updateQueriesForEvents({
-        service,
-        serviceName: event.serviceName,
-        processedEvents: [event],
-        touch,
-      })
-    })
-    this.#notify(touched)
-    const published = this.#publishServiceEventEffects(event.serviceName, effects, 'realtime')
-    for (const queryId of published.reconcileQueryIds) this.#requestReconcile(queryId)
-    if (published.refetchService) this.#refetchRefetchableQueries(event.serviceName)
-  }
-
   #processQueuedEvents(): void {
-    if (this.#processingEventQueue || this.#eventQueue.length === 0) {
+    if (
+      this.#processingEventQueue ||
+      (this.#eventQueue.length === 0 && this.#appliedEventQueue.length === 0)
+    ) {
       return
     }
 
     this.#processingEventQueue = true
     try {
-      while (this.#eventQueue.length > 0) {
-        const eventsByService = groupQueuedEvents(this.#eventQueue)
+      while (this.#eventQueue.length > 0 || this.#appliedEventQueue.length > 0) {
+        const eventsByService = groupEventsByService(this.#eventQueue)
+        const appliedEventsByService = groupEventsByService(this.#appliedEventQueue)
         this.#eventQueue = []
+        this.#appliedEventQueue = []
 
         const touchedQueryIds = new Set<string>()
         const followups: Array<{
@@ -1813,16 +2031,33 @@ export class QueryStore<
         // query spanning services A and B compute a wasted intermediate snapshot
         // after A's events but before B's, and non-React subscribers would observe
         // the intermediate state.
-        for (const [serviceName, events] of Object.entries(eventsByService)) {
+        const serviceNames = new Set([
+          ...Object.keys(eventsByService),
+          ...Object.keys(appliedEventsByService),
+        ])
+        for (const serviceName of serviceNames) {
+          const events = eventsByService[serviceName] ?? []
+          const appliedEvents = appliedEventsByService[serviceName] ?? []
           let effects: AppliedEventEffect[] = []
+          let appliedEffects: AppliedEventEffect[] = []
 
           const modifiedQueries = this.#transactOverServiceByName(serviceName, (service, touch) => {
-            effects = this.#applyServiceEvents({
-              service,
-              serviceName,
-              events,
-              touch,
-            })
+            if (events.length > 0) {
+              effects = this.#applyServiceEvents({
+                service,
+                serviceName,
+                events,
+                touch,
+              })
+            }
+            if (appliedEvents.length > 0) {
+              appliedEffects = this.#updateQueriesForEvents({
+                service,
+                serviceName,
+                processedEvents: appliedEvents,
+                touch,
+              })
+            }
           })
 
           // Record only events that actually changed the entity cache. The fetch
@@ -1832,7 +2067,7 @@ export class QueryStore<
           for (const queryId of modifiedQueries) {
             touchedQueryIds.add(queryId)
           }
-          followups.push({ serviceName, effects })
+          followups.push({ serviceName, effects: [...effects, ...appliedEffects] })
         }
 
         // Notify once per batch, after all services have applied.
