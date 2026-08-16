@@ -254,7 +254,8 @@ export function QueriesTab({
                         color: operation.composition ? colors.text : colors.faint,
                       }}
                     >
-                      {operation.composition?.detail ?? compactJson(query.query)}
+                      {operation.composition?.detail ??
+                        (query.query === undefined ? '—' : compactJson(query.query))}
                       {operation.rootFetches.length > 1
                         ? ` · ${operation.rootFetches.length} root fetches`
                         : ''}
