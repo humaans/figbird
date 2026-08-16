@@ -498,7 +498,7 @@ export function ColumnResizeHandle({
       style={{
         position: 'absolute',
         top: 0,
-        right: -4,
+        right: 0,
         bottom: 0,
         width: 8,
         cursor: 'col-resize',

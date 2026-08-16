@@ -3,6 +3,7 @@ import { CacheTab, type DevtoolsCacheEditor } from './CacheTab.js'
 import { EventsTab } from './EventsTab.js'
 import { QueriesTab, operationIsInactive } from './QueriesTab.js'
 import { TimelineFollowControl, TimelineTab } from './TimelineTab.js'
+import type { TimelineVisibility } from './TimelineActivityTable.js'
 import type { Collector } from './collector.js'
 import { buildDevtoolsModel } from './model.js'
 import {
@@ -68,6 +69,8 @@ export function FigbirdDevtoolsPanel({
   const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
   const [eventVisibility, setEventVisibility] = useState<EventVisibility>('activity')
+  const [timelineFilter, setTimelineFilter] = useState('')
+  const [timelineVisibility, setTimelineVisibility] = useState<TimelineVisibility>('all')
   const [cacheFilter, setCacheFilter] = useState('')
   const [selectedTraceId, setSelectedTraceId] = useState<number | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
@@ -198,6 +201,38 @@ export function FigbirdDevtoolsPanel({
               ) : null}
             </>
           ) : null}
+          {tab === 'timeline' ? (
+            <>
+              <input
+                aria-label='Filter timeline activity'
+                style={styles.input}
+                value={timelineFilter}
+                onChange={event => setTimelineFilter(event.currentTarget.value)}
+                placeholder='Filter activity'
+              />
+              <select
+                aria-label='Timeline visibility'
+                title='Choose which activity types appear in the timeline and overview'
+                value={timelineVisibility}
+                onChange={event =>
+                  setTimelineVisibility(event.currentTarget.value as TimelineVisibility)
+                }
+                style={{
+                  ...styles.input,
+                  width: 'auto',
+                  maxWidth: 'none',
+                  paddingRight: 24,
+                }}
+              >
+                <option value='all'>All activity</option>
+                <option value='fetch'>Fetches</option>
+                <option value='realtime'>Realtime</option>
+                <option value='write'>Writes</option>
+                <option value='connection'>Connection</option>
+                <option value='errors'>Errors</option>
+              </select>
+            </>
+          ) : null}
           {tab === 'events' ? (
             <>
               <input
@@ -263,6 +298,8 @@ export function FigbirdDevtoolsPanel({
             <TimelineTab
               snapshot={snapshot}
               model={model}
+              filter={timelineFilter}
+              visibility={timelineVisibility}
               follow={timelineFollow}
               onFollowChange={setTimelineFollow}
               onTraceSelect={traceId => {

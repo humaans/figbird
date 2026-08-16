@@ -1163,7 +1163,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const nestedText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
   t.true(nestedText.includes('issues.find›labels'))
   t.true(nestedText.includes('issueLabels.find · labels'))
-  t.true(nestedText.includes('2rows'))
+  t.true(nestedText.includes('2 rows'))
   t.false(nestedText.includes('issues root'))
 
   const rootBreadcrumb = $('[aria-label="Back to root query"]')

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { DevtoolsSnapshot } from './collector.js'
 import { now } from './format.js'
 import type { DevtoolsModel } from './model.js'
-import { TimelineActivityTable } from './TimelineActivityTable.js'
+import { TimelineActivityTable, type TimelineVisibility } from './TimelineActivityTable.js'
 import { buildTimelineActivities, timelineExtent } from './timelineModel.js'
 import { buttonStyle, useDevtoolsTheme } from './ui.js'
 
@@ -49,12 +49,16 @@ export function TimelineFollowControl({
 export function TimelineTab({
   snapshot,
   model,
+  filter,
+  visibility,
   follow,
   onFollowChange,
   onTraceSelect,
 }: {
   snapshot: DevtoolsSnapshot
   model: DevtoolsModel
+  filter: string
+  visibility: TimelineVisibility
   follow: boolean
   onFollowChange: (value: boolean) => void
   onTraceSelect?: (traceId: number) => void
@@ -77,6 +81,8 @@ export function TimelineTab({
         extent={extent}
         nowPoint={nowPoint}
         wallClockOffset={wallClockOffset}
+        filter={filter}
+        visibility={visibility}
         follow={follow}
         onFollowChange={onFollowChange}
         {...(onTraceSelect ? { onTraceSelect } : {})}

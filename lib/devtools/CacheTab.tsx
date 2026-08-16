@@ -23,8 +23,8 @@ import {
 
 const CACHE_COLUMNS = [
   { label: 'entity', width: 150, minWidth: 90 },
-  { label: 'est. size', width: 90, minWidth: 72 },
   { label: 'value', width: 310, minWidth: 160 },
+  { label: 'est. size', width: 90, minWidth: 72 },
   { label: 'queries', width: 110, minWidth: 76 },
   { label: 'provenance', width: 150, minWidth: 110 },
 ] as const
@@ -120,7 +120,7 @@ export function CacheTab({
         >
           <span>Normalized cache</span>
           <code style={{ ...styles.code, color: colors.faint, marginLeft: 'auto' }}>
-            ≈ {formatBytes(totalSize)}
+            {formatBytes(totalSize)}
           </code>
         </div>
         {orderedServices.map(item => {
@@ -169,7 +169,7 @@ export function CacheTab({
                   {item.entities.length}
                   <span aria-hidden='true'>·</span>
                   <span title={CACHE_SIZE_DESCRIPTION}>
-                    ≈ {formatBytes(serviceSizes.get(item.serviceName) ?? 0)}
+                    {formatBytes(serviceSizes.get(item.serviceName) ?? 0)}
                   </span>
                   {item.materialized ? (
                     <svg
@@ -259,18 +259,6 @@ export function CacheTab({
                     </td>
                     <td style={styles.td}>
                       <code
-                        title={
-                          estimatedSize === null
-                            ? 'This value could not be JSON-serialized.'
-                            : `${estimatedSize.toLocaleString()} estimated UTF-8 JSON bytes`
-                        }
-                        style={{ ...styles.code, color: colors.muted, whiteSpace: 'nowrap' }}
-                      >
-                        {estimatedSize === null ? '—' : `≈ ${formatBytes(estimatedSize)}`}
-                      </code>
-                    </td>
-                    <td style={styles.td}>
-                      <code
                         title={prettyJson(entity.value)}
                         style={{
                           ...styles.code,
@@ -282,6 +270,18 @@ export function CacheTab({
                         }}
                       >
                         {compactJson(entity.value)}
+                      </code>
+                    </td>
+                    <td style={styles.td}>
+                      <code
+                        title={
+                          estimatedSize === null
+                            ? 'This value could not be JSON-serialized.'
+                            : `${estimatedSize.toLocaleString()} estimated UTF-8 JSON bytes`
+                        }
+                        style={{ ...styles.code, color: colors.muted, whiteSpace: 'nowrap' }}
+                      >
+                        {estimatedSize === null ? '—' : formatBytes(estimatedSize)}
                       </code>
                     </td>
                     <td style={styles.td}>
@@ -562,5 +562,5 @@ function queryLabel(model: DevtoolsModel, queryId: string): string {
 
 function formatEstimatedSize(value: unknown): string {
   const bytes = estimateSerializedBytes(value)
-  return bytes === null ? '—' : `≈ ${formatBytes(bytes)}`
+  return bytes === null ? '—' : formatBytes(bytes)
 }

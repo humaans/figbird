@@ -59,6 +59,7 @@ export function QueryDetails({
             return !item.path.slice(prefix.length).includes('.')
           })
         : underlying
+  const showQueryPlan = directChildren.length > 0
   const breadcrumb = selectedUnderlying ? (
     <>
       <button
@@ -151,36 +152,7 @@ export function QueryDetails({
               {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
             </span>
           </div>
-          <QueryDetailSection label='Realtime handling'>
-            <div
-              style={{
-                padding: '8px 10px',
-                background: colors.panel2,
-                borderLeft: `3px solid ${
-                  activeQuery.realtimeStrategy === 'merge'
-                    ? colors.green
-                    : activeQuery.realtimeStrategy === 'manual'
-                      ? colors.faint
-                      : colors.amber
-                }`,
-              }}
-            >
-              <strong style={{ fontWeight: 650 }}>
-                {activeQuery.realtimeStrategy === 'merge'
-                  ? 'Merges events locally'
-                  : activeQuery.realtimeStrategy === 'manual'
-                    ? 'Manual realtime'
-                    : 'Reconciles uncertain events'}
-              </strong>
-              <div style={{ color: colors.muted, marginTop: 3 }}>
-                {activeQuery.classificationReasons?.length
-                  ? activeQuery.classificationReasons.map(classificationReasonLabel).join(' · ')
-                  : activeQuery.classification === 'get'
-                    ? 'Direct entity lookup'
-                    : 'Membership and ordering are locally provable'}
-              </div>
-            </div>
-          </QueryDetailSection>
+          <QueryMaintenance query={activeQuery} />
           {activeQuery.lastError ? (
             <div
               title={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
@@ -196,99 +168,52 @@ export function QueryDetails({
               {activeQuery.lastError.message}
             </div>
           ) : null}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-              borderTop: `1px solid ${colors.rowBorder}`,
-              borderBottom: `1px solid ${colors.rowBorder}`,
-              marginBottom: 14,
-            }}
-          >
-            <QueryMetric value={String(activeQuery.itemCount)} label='rows' />
-            <QueryMetric value={String(activeQuery.fetchCount)} label='fetches' borderLeft />
-            <QueryMetric
-              value={
-                activeQuery.lastDurationMs === undefined
-                  ? '-'
-                  : formatMs(activeQuery.lastDurationMs)
-              }
-              label='last fetch'
-              borderTop
-            />
-            <QueryMetric
-              value={activeQuery.fetchCount === 0 ? '-' : formatMs(average)}
-              label='average'
-              borderLeft
-              borderTop
-            />
-          </div>
-          {activeQuery.spans.length > 0 ? (
-            <QueryDetailSection
-              label='Recent fetches'
-              meta={`${formatMs(activeQuery.totalDurationMs)} total`}
-            >
-              <Sparkline spans={activeQuery.spans} />
-            </QueryDetailSection>
-          ) : null}
+          {!splitDetails ? <QueryData query={activeQuery} separated /> : null}
+          <QueryDetailSection label='Parameters' separated>
+            <JsonViewer value={activeQuery.query ?? {}} />
+          </QueryDetailSection>
           {!selectedUnderlying && operation.pagination ? (
             <PaginationDetails pagination={operation.pagination} pages={rootFetches} />
           ) : null}
-          {!selectedUnderlying || directChildren.length > 0 ? (
+          {showQueryPlan ? (
             <QueryDetailSection
               label={selectedUnderlying ? 'Related queries' : 'Query plan'}
-              {...(directChildren.length > 0
-                ? { meta: plural(directChildren.length, 'relation', 'relations') }
-                : {})}
+              meta={plural(directChildren.length, 'relation', 'relations')}
+              separated
             >
               {!selectedUnderlying ? (
-                <QueryPlanRow
-                  path='root'
-                  operation={rootOperation}
-                  detail={
-                    composition?.planDetail ??
-                    (summary.method === 'get'
-                      ? `id ${summary.resourceId ?? '?'}`
-                      : compactJson(summary.query ?? {}))
-                  }
-                />
+                <QueryPlanRow path='root' operation={rootOperation} detail='' />
               ) : null}
-              {directChildren.length > 0 ? (
-                <div
-                  style={{
-                    marginLeft: selectedUnderlying ? 0 : 7,
-                    paddingLeft: selectedUnderlying ? 0 : 13,
-                    borderLeft: selectedUnderlying ? undefined : `1px solid ${colors.border}`,
-                  }}
-                >
-                  {directChildren.map(item => (
-                    <QueryPlanRow
-                      key={underlyingFetchKey(item)}
-                      path={
-                        selectedUnderlying ? (item.path.split('.').pop() ?? item.path) : item.path
-                      }
-                      operation={`${item.query.serviceName}.${item.query.method}`}
-                      {...(item.role ? { role: item.role } : {})}
-                      detail={[
-                        plural(item.query.itemCount, 'row', 'rows'),
-                        item.query.lastDurationMs === undefined
-                          ? undefined
-                          : formatMs(item.query.lastDurationMs),
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                      classification={item.query.classification}
-                      onSelect={() => setSelectedUnderlyingKey(underlyingFetchKey(item))}
-                    />
-                  ))}
-                </div>
-              ) : null}
+              <div
+                style={{
+                  marginLeft: selectedUnderlying ? 0 : 7,
+                  paddingLeft: selectedUnderlying ? 0 : 13,
+                  borderLeft: selectedUnderlying ? undefined : `1px solid ${colors.border}`,
+                }}
+              >
+                {directChildren.map(item => (
+                  <QueryPlanRow
+                    key={underlyingFetchKey(item)}
+                    path={
+                      selectedUnderlying ? (item.path.split('.').pop() ?? item.path) : item.path
+                    }
+                    operation={`${item.query.serviceName}.${item.query.method}`}
+                    {...(item.role ? { role: item.role } : {})}
+                    detail={[
+                      plural(item.query.itemCount, 'row', 'rows'),
+                      item.query.lastDurationMs === undefined
+                        ? undefined
+                        : formatMs(item.query.lastDurationMs),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    onSelect={() => setSelectedUnderlyingKey(underlyingFetchKey(item))}
+                  />
+                ))}
+              </div>
             </QueryDetailSection>
           ) : null}
-          {!splitDetails ? <QueryData query={activeQuery} /> : null}
-          <QueryDetailSection label='Parameters'>
-            <JsonViewer value={activeQuery.query ?? {}} />
-          </QueryDetailSection>
+          <QueryPerformance query={activeQuery} average={average} />
         </div>
         {splitDetails ? (
           <div
@@ -309,15 +234,77 @@ export function QueryDetails({
   )
 }
 
-function QueryData({ query, fill = false }: { query: QuerySummary; fill?: boolean }) {
+function QueryData({
+  query,
+  fill = false,
+  separated = false,
+}: {
+  query: QuerySummary
+  fill?: boolean
+  separated?: boolean
+}) {
   return (
     <QueryDetailSection
       label='Query data'
       meta={query.skipped ? 'skipped' : plural(query.itemCount, 'row', 'rows')}
+      separated={separated}
     >
       <JsonViewer value={query.data} maxHeight={fill ? 'none' : 360} />
     </QueryDetailSection>
   )
+}
+
+function QueryMaintenance({ query }: { query: QuerySummary }) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <dl
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '82px minmax(0, 1fr)',
+        gap: '4px 10px',
+        margin: '0 0 14px',
+      }}
+    >
+      <dt style={{ color: colors.faint }}>Maintenance</dt>
+      <dd style={{ margin: 0, color: colors.text }}>{maintenanceLabel(query)}</dd>
+      <dt style={{ color: colors.faint }}>Reason</dt>
+      <dd style={{ margin: 0, color: colors.muted }}>{maintenanceReason(query)}</dd>
+    </dl>
+  )
+}
+
+function maintenanceLabel(query: QuerySummary): string {
+  switch (query.realtimeStrategy) {
+    case 'merge':
+      return 'Merge matching events locally'
+    case 'manual':
+      return 'Ignore realtime automatically'
+    default:
+      return 'Refetch on uncertain events'
+  }
+}
+
+function maintenanceReason(query: QuerySummary): string {
+  const reasons = query.classificationReasons ?? []
+  const windowReasons = reasons.filter(reason => reason.code === 'window-filter')
+  if (windowReasons.length > 0 && windowReasons.length === reasons.length) {
+    const fields = [
+      ...new Set(windowReasons.map(reason => reason.detail).filter(Boolean)),
+    ] as string[]
+    if (fields.length > 0) {
+      return `${formatList(fields)} ${fields.length === 1 ? 'creates' : 'create'} a server window boundary`
+    }
+  }
+  if (reasons.length > 0) return reasons.map(classificationReasonLabel).join(' · ')
+  return query.classification === 'get'
+    ? 'Direct entity lookup'
+    : 'Membership and ordering are provable locally'
+}
+
+function formatList(values: string[]): string {
+  if (values.length < 2) return values[0] ?? ''
+  if (values.length === 2) return `${values[0]} and ${values[1]}`
+  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`
 }
 
 function classificationReasonLabel(reason: { code: string; detail?: string }): string {
@@ -364,6 +351,7 @@ function PaginationDetails({
     <QueryDetailSection
       label={pagination.strategy === 'cursor' ? 'Cursor page chain' : 'Pages'}
       meta={`${pagination.loadedPages} loaded · size ${pagination.pageSize} · ${state}`}
+      separated
     >
       <div style={{ borderTop: `1px solid ${colors.rowBorder}` }}>
         {pages.map((page, index) => {
@@ -430,49 +418,74 @@ function breadcrumbButtonStyle(colors: DevtoolsColors): CSSProperties {
   }
 }
 
-function QueryMetric({
-  value,
-  label,
-  borderLeft,
-  borderTop,
-}: {
-  value: string
-  label: string
-  borderLeft?: boolean
-  borderTop?: boolean
-}) {
+function QueryPerformance({ query, average }: { query: QuerySummary; average: number }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'baseline',
-        gap: 5,
-        minWidth: 0,
-        padding: '9px 0',
-        paddingLeft: borderLeft ? 12 : 0,
-        borderLeft: borderLeft ? `1px solid ${colors.rowBorder}` : undefined,
-        borderTop: borderTop ? `1px solid ${colors.rowBorder}` : undefined,
-      }}
-    >
-      <strong style={{ color: colors.text, fontSize: 14 }}>{value}</strong>
-      <span style={{ color: colors.muted, whiteSpace: 'nowrap' }}>{label}</span>
-    </div>
+    <QueryDetailSection label='Performance' separated>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '5px 8px',
+          color: colors.muted,
+        }}
+      >
+        {query.lastDurationMs !== undefined ? (
+          <span style={{ whiteSpace: 'nowrap' }}>
+            <strong style={{ color: colors.text, fontWeight: 650 }}>
+              {formatMs(query.lastDurationMs)}
+            </strong>{' '}
+            last
+          </span>
+        ) : null}
+        {query.fetchCount > 1 ? (
+          <>
+            <span aria-hidden='true' style={{ color: colors.faint }}>
+              ·
+            </span>
+            <span style={{ whiteSpace: 'nowrap' }}>
+              <strong style={{ color: colors.text, fontWeight: 650 }}>{formatMs(average)}</strong>{' '}
+              average
+            </span>
+          </>
+        ) : null}
+        {query.lastDurationMs !== undefined ? (
+          <span aria-hidden='true' style={{ color: colors.faint }}>
+            ·
+          </span>
+        ) : null}
+        <span style={{ whiteSpace: 'nowrap' }}>{plural(query.fetchCount, 'fetch', 'fetches')}</span>
+        {query.spans.length > 1 ? (
+          <span style={{ marginLeft: 'auto' }}>
+            <Sparkline spans={query.spans} />
+          </span>
+        ) : null}
+      </div>
+    </QueryDetailSection>
   )
 }
 
 function QueryDetailSection({
   label,
   meta,
+  separated = false,
   children,
 }: {
   label: string
   meta?: string
+  separated?: boolean
   children: ReactNode
 }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <section style={{ marginBottom: 14 }}>
+    <section
+      style={{
+        marginBottom: 14,
+        paddingTop: separated ? 12 : 0,
+        borderTop: separated ? `1px solid ${colors.rowBorder}` : undefined,
+      }}
+    >
       <div
         style={{
           display: 'flex',
@@ -493,14 +506,12 @@ function QueryPlanRow({
   path,
   operation,
   detail,
-  classification,
   role,
   onSelect,
 }: {
   path: string
   operation: string
   detail: string
-  classification?: string
   role?: 'junction'
   onSelect?: () => void
 }) {
@@ -523,12 +534,7 @@ function QueryPlanRow({
           }
         : {})}
       style={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) auto',
-        alignItems: 'start',
-        gap: 8,
-        padding: '7px 0',
-        borderTop: `1px solid ${colors.rowBorder}`,
+        padding: '4px 0',
         cursor: onSelect ? 'pointer' : undefined,
       }}
     >
@@ -548,39 +554,29 @@ function QueryPlanRow({
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
               fontWeight: 600,
+              color: onSelect ? colors.blue : colors.text,
             }}
           >
             {operation}
           </strong>
           {role === 'junction' ? <Badge tone='neutral'>junction</Badge> : null}
         </div>
-        <div
-          title={detail}
-          style={{
-            ...styles.code,
-            color: colors.muted,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            marginTop: 3,
-          }}
-        >
-          {detail || 'all'}
-        </div>
+        {detail ? (
+          <div
+            title={detail}
+            style={{
+              ...styles.code,
+              color: colors.muted,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              marginTop: 2,
+            }}
+          >
+            {detail}
+          </div>
+        ) : null}
       </div>
-      {classification || onSelect ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          {classification ? <ClassBadge value={classification} /> : null}
-          {onSelect ? (
-            <span
-              aria-hidden='true'
-              style={{ color: colors.blue, fontSize: 16, lineHeight: '18px' }}
-            >
-              ›
-            </span>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   )
 }
@@ -590,7 +586,7 @@ function Sparkline({ spans }: { spans: QueryRecord['spans'] }) {
   if (spans.length === 0) return null
   const max = Math.max(1, ...spans.map(span => (span.endAt ?? span.startAt) - span.startAt))
   return (
-    <div style={{ display: 'flex', alignItems: 'end', gap: 2, height: 28, marginTop: 8 }}>
+    <span style={{ display: 'flex', alignItems: 'end', gap: 2, height: 22 }}>
       {spans.slice(-30).map((span, index) => {
         const duration = (span.endAt ?? span.startAt) - span.startAt
         return (
@@ -599,13 +595,13 @@ function Sparkline({ spans }: { spans: QueryRecord['spans'] }) {
             title={formatMs(duration)}
             style={{
               width: 4,
-              height: Math.max(3, (duration / max) * 24),
+              height: Math.max(3, (duration / max) * 20),
               background: span.ok === false ? colors.red : colors.green,
               borderRadius: 2,
             }}
           />
         )
       })}
-    </div>
+    </span>
   )
 }

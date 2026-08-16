@@ -25,7 +25,7 @@ import {
 
 const FOLLOW_THRESHOLD = 24
 
-type TimelineVisibility = 'all' | 'fetch' | 'realtime' | 'write' | 'connection' | 'errors'
+export type TimelineVisibility = 'all' | 'fetch' | 'realtime' | 'write' | 'connection' | 'errors'
 
 const COLUMNS = [
   { label: 'Time', width: 96, minWidth: 78 },
@@ -40,20 +40,13 @@ const COLUMNS = [
   { label: 'Waterfall', width: 200, minWidth: 130 },
 ] as const
 
-const VISIBILITY_OPTIONS: Array<{ value: TimelineVisibility; label: string }> = [
-  { value: 'all', label: 'All' },
-  { value: 'fetch', label: 'Fetches' },
-  { value: 'realtime', label: 'Realtime' },
-  { value: 'write', label: 'Writes' },
-  { value: 'connection', label: 'Connection' },
-  { value: 'errors', label: 'Errors' },
-]
-
 export function TimelineActivityTable({
   activities,
   extent,
   nowPoint,
   wallClockOffset,
+  filter,
+  visibility,
   follow,
   onFollowChange,
   onTraceSelect,
@@ -62,6 +55,8 @@ export function TimelineActivityTable({
   extent: TimelineExtent | null
   nowPoint: number
   wallClockOffset: number
+  filter: string
+  visibility: TimelineVisibility
   follow: boolean
   onFollowChange: (value: boolean) => void
   onTraceSelect?: (traceId: number) => void
@@ -69,8 +64,6 @@ export function TimelineActivityTable({
   const { colors, styles } = useDevtoolsTheme()
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollPausedFollowRef = useRef(false)
-  const [visibility, setVisibility] = useState<TimelineVisibility>('all')
-  const [filter, setFilter] = useState('')
   const [range, setRange] = useState<TimelineRange | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [availableTableWidth, setAvailableTableWidth] = useState(0)
@@ -79,7 +72,7 @@ export function TimelineActivityTable({
   const hasExtent = extent !== null
   const selected = activities.find(activity => activity.id === selectedId)
   const normalizedFilter = filter.trim().toLowerCase()
-  const rows = activities.filter(activity => {
+  const filteredActivities = activities.filter(activity => {
     if (
       visibility === 'errors'
         ? !activity.error
@@ -87,9 +80,11 @@ export function TimelineActivityTable({
     ) {
       return false
     }
-    if (range && !intersects(activity, range, nowPoint)) return false
     return normalizedFilter ? activity.searchText.includes(normalizedFilter) : true
   })
+  const rows = range
+    ? filteredActivities.filter(activity => intersects(activity, range, nowPoint))
+    : filteredActivities
   const inFlightWriteCount = activities.filter(
     activity => activity.kind === 'write' && activity.status === 'in-flight',
   ).length
@@ -118,6 +113,8 @@ export function TimelineActivityTable({
   useEffect(() => {
     if (selectedId && !activities.some(activity => activity.id === selectedId)) setSelectedId(null)
   }, [activities, selectedId])
+
+  useEffect(() => setSelectedId(null), [filter, visibility])
 
   useLayoutEffect(() => {
     const scroll = scrollRef.current
@@ -161,7 +158,7 @@ export function TimelineActivityTable({
   return (
     <>
       <TimelineOverview
-        activities={activities}
+        activities={filteredActivities}
         extent={extent}
         range={range}
         nowPoint={nowPoint}
@@ -174,83 +171,6 @@ export function TimelineActivityTable({
           }
         }}
       />
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          minHeight: 38,
-          padding: '0 8px',
-          flexShrink: 0,
-          overflowX: 'auto',
-          borderBottom: `1px solid ${colors.border}`,
-          background: colors.toolbar,
-        }}
-      >
-        <input
-          aria-label='Filter timeline activity'
-          placeholder='Filter activity'
-          value={filter}
-          onChange={event => {
-            setFilter(event.target.value)
-            setSelectedId(null)
-          }}
-          style={{ ...styles.input, width: 190, paddingBlock: 4 }}
-        />
-        {VISIBILITY_OPTIONS.map(option => (
-          <button
-            key={option.value}
-            type='button'
-            aria-pressed={visibility === option.value}
-            title={
-              option.value === 'write' && inFlightWriteCount > 0
-                ? [
-                    `${inFlightWriteCount} in flight`,
-                    projectedWriteCount > 0 ? `${projectedWriteCount} projected` : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')
-                : undefined
-            }
-            onClick={() => {
-              setVisibility(option.value)
-              setSelectedId(null)
-            }}
-            style={buttonStyle(colors, visibility === option.value)}
-          >
-            {option.label}
-            {option.value === 'write' && inFlightWriteCount > 0 ? (
-              <span style={{ color: colors.blue, marginLeft: 6 }}>
-                {inFlightWriteCount} in flight
-              </span>
-            ) : null}
-            {option.value === 'write' && projectedWriteCount > 0 ? (
-              <span style={{ color: colors.amber, marginLeft: 6 }}>
-                {projectedWriteCount} projected
-              </span>
-            ) : null}
-          </button>
-        ))}
-        <span style={{ flex: 1 }} />
-        {range ? (
-          <button
-            type='button'
-            aria-label='Clear timeline range'
-            title='Show the full recording'
-            onClick={() => {
-              setRange(null)
-              setSelectedId(null)
-            }}
-            style={buttonStyle(colors, true)}
-          >
-            {formatOffset(range.start - extent.start)}–{formatOffset(range.end - extent.start)} ×
-          </button>
-        ) : (
-          <span style={{ color: colors.faint, whiteSpace: 'nowrap' }}>
-            Drag overview to filter time
-          </span>
-        )}
-      </div>
       <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex' }}>
         <div
           ref={scrollRef}
@@ -343,7 +263,29 @@ export function TimelineActivityTable({
         </span>
         <span>{rows.filter(activity => activity.kind === 'fetch').length} fetches</span>
         <span>{rows.filter(activity => activity.error).length} errors</span>
+        {inFlightWriteCount > 0 ? <span>{inFlightWriteCount} writes in flight</span> : null}
+        {projectedWriteCount > 0 ? <span>{projectedWriteCount} projected</span> : null}
         <span>{formatMs(displayExtent.end - displayExtent.start)} window</span>
+        <span style={{ marginLeft: 'auto' }}>
+          {range ? (
+            <button
+              type='button'
+              aria-label='Clear timeline range'
+              title='Show the full recording'
+              onClick={() => {
+                setRange(null)
+                setSelectedId(null)
+              }}
+              style={buttonStyle(colors, true)}
+            >
+              {formatOffset(range.start - extent.start)}–{formatOffset(range.end - extent.start)} ×
+            </button>
+          ) : (
+            <span style={{ color: colors.faint, whiteSpace: 'nowrap' }}>
+              Drag overview to filter time
+            </span>
+          )}
+        </span>
       </div>
     </>
   )
