@@ -13,15 +13,30 @@ export class CappedBuffer<T> {
     return this.#length
   }
 
-  push(item: T): void {
-    if (this.#capacity === 0) return
+  push(item: T): T | undefined {
+    if (this.#capacity === 0) return item
     const index = (this.#start + this.#length) % this.#capacity
+    const evicted = this.#length === this.#capacity ? this.#items[index] : undefined
     this.#items[index] = item
     if (this.#length < this.#capacity) {
       this.#length++
     } else {
       this.#start = (this.#start + 1) % this.#capacity
     }
+    return evicted
+  }
+
+  first(): T | undefined {
+    return this.#length === 0 ? undefined : this.#items[this.#start]
+  }
+
+  shift(): T | undefined {
+    if (this.#length === 0) return undefined
+    const item = this.#items[this.#start]
+    this.#items[this.#start] = undefined
+    this.#start = (this.#start + 1) % this.#capacity
+    this.#length--
+    return item
   }
 
   clear(): void {

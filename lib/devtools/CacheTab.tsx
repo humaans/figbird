@@ -80,18 +80,28 @@ export function CacheTab({
   const [columnWidths, onColumnResizeStart] = useResizableColumns(CACHE_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0)
-  const serviceSizes = useMemo(
+  const cacheRows = useMemo(
     () =>
-      new Map(
-        orderedServices.map(item => [
-          item.serviceName,
-          item.entities.reduce(
-            (total, entity) => total + (estimateSerializedBytes(entity.value) ?? 0),
-            0,
-          ),
-        ]),
+      orderedServices.flatMap(service =>
+        service.entities.map(entity => ({
+          service,
+          entity,
+          preview: compactJson(entity.value),
+          estimatedSize: estimateSerializedBytes(entity.value),
+        })),
       ),
     [orderedServices],
+  )
+  const serviceSizes = useMemo(
+    () =>
+      cacheRows.reduce((sizes, row) => {
+        sizes.set(
+          row.service.serviceName,
+          (sizes.get(row.service.serviceName) ?? 0) + (row.estimatedSize ?? 0),
+        )
+        return sizes
+      }, new Map<string, number>()),
+    [cacheRows],
   )
   const totalSize = [...serviceSizes.values()].reduce((total, size) => total + size, 0)
 
@@ -115,15 +125,14 @@ export function CacheTab({
   }, [onRequestedEntityHandled, orderedServices, requestedEntity])
 
   const normalizedFilter = filter.trim().toLowerCase()
-  const entries = orderedServices
-    .filter(service => serviceName === null || service.serviceName === serviceName)
-    .flatMap(service => service.entities.map(entity => ({ service, entity })))
-    .filter(({ service, entity }) => {
+  const entries = cacheRows
+    .filter(row => serviceName === null || row.service.serviceName === serviceName)
+    .filter(({ service, entity, preview }) => {
       if (!normalizedFilter) return true
       return [
         service.serviceName,
         entity.id,
-        compactJson(entity.value),
+        preview,
         entity.queryIds.join(' '),
         entity.lastChange?.source ?? 'initial snapshot',
         entity.lastChange?.type ?? '',
@@ -281,10 +290,9 @@ export function CacheTab({
                   </td>
                 </tr>
               ) : null}
-              {entries.map(({ service, entity }) => {
+              {entries.map(({ service, entity, preview, estimatedSize }) => {
                 const key = cacheEntityKey(service.serviceName, entity.id)
                 const isSelected = key === selectedKey
-                const estimatedSize = estimateSerializedBytes(entity.value)
                 return (
                   <tr
                     key={key}
@@ -300,6 +308,8 @@ export function CacheTab({
                     style={{
                       cursor: 'pointer',
                       outline: 'none',
+                      contentVisibility: 'auto',
+                      containIntrinsicSize: '0 33px',
                       background: isSelected ? colors.activeButtonBg : undefined,
                       boxShadow: isSelected ? `inset 3px 0 ${colors.blue}` : undefined,
                     }}
@@ -312,7 +322,7 @@ export function CacheTab({
                     </td>
                     <td style={styles.td}>
                       <code
-                        title={prettyJson(entity.value)}
+                        title={preview}
                         style={{
                           ...styles.code,
                           display: 'block',
@@ -322,7 +332,7 @@ export function CacheTab({
                           color: colors.muted,
                         }}
                       >
-                        {compactJson(entity.value)}
+                        {preview}
                       </code>
                     </td>
                     <td style={styles.td}>

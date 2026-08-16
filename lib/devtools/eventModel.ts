@@ -119,6 +119,7 @@ export function buildActivities(
   events: readonly DevtoolsEvent[],
   index: TraceIndex,
   scopes?: ReadonlyMap<string, readonly EventQueryScope[]>,
+  includePayloadSearch = true,
 ): ActivityRow[] {
   const grouped = new Map<string, { traceId?: number; events: DevtoolsEvent[] }>()
   for (const item of events) {
@@ -161,7 +162,11 @@ export function buildActivities(
           lifecycle.status,
           details,
           ...group.events.map(item =>
-            eventSearchText(item, scopes?.get(eventQueryId(item.event) ?? '')),
+            eventSearchText(
+              item,
+              scopes?.get(eventQueryId(item.event) ?? ''),
+              includePayloadSearch,
+            ),
           ),
         ]
           .join(' ')
@@ -412,8 +417,11 @@ function traceIdsFromCauses(
   return causes?.flatMap(cause => (cause.traceId === undefined ? [] : [cause.traceId])) ?? []
 }
 
-export function eventSearchText(item: DevtoolsEvent, scopes?: readonly EventQueryScope[]): string {
-  const payload = eventPayload(item.event)
+export function eventSearchText(
+  item: DevtoolsEvent,
+  scopes?: readonly EventQueryScope[],
+  includePayload = true,
+): string {
   const status = eventStatus(item.event).status
   return [
     formatClock(item.wallAt, { milliseconds: true }),
@@ -424,8 +432,7 @@ export function eventSearchText(item: DevtoolsEvent, scopes?: readonly EventQuer
     eventQueryId(item.event) ?? '',
     ...(scopes?.map(scope => scope.label) ?? []),
     eventDetails(item),
-    payload === undefined ? '' : compactJson(payload),
-    compactJson(displayEvent(item.event)),
+    includePayload ? compactJson(displayEvent(item.event)) : '',
   ].join(' ')
 }
 

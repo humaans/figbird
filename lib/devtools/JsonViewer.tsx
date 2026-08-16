@@ -10,6 +10,13 @@ interface SpecialValue {
   text: string
 }
 
+interface NormalizationBudget {
+  remaining: number
+}
+
+const MAX_JSON_CHILDREN = 500
+const MAX_JSON_NODES = 5_000
+
 export function JsonViewer({
   value,
   emptyLabel = 'No data available',
@@ -326,7 +333,9 @@ function normalizeJson(
   value: unknown,
   ancestors = new WeakSet<object>(),
   depth = 0,
+  budget: NormalizationBudget = { remaining: MAX_JSON_NODES },
 ): JsonTreeValue {
+  if (budget.remaining-- <= 0) return special('[Additional values omitted]')
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : special(String(value))
@@ -340,27 +349,58 @@ function normalizeJson(
   if (ancestors.has(value)) return special('[Circular]')
   if (value instanceof Date) return value.toISOString()
   if (value instanceof Error) {
-    return normalizeJson({ name: value.name, message: value.message }, ancestors, depth + 1)
+    return normalizeJson({ name: value.name, message: value.message }, ancestors, depth + 1, budget)
   }
 
   ancestors.add(value)
   let normalized: JsonTreeValue
   if (Array.isArray(value)) {
-    normalized = value.map(item => normalizeJson(item, ancestors, depth + 1))
+    const visible = value
+      .slice(0, MAX_JSON_CHILDREN)
+      .map(item => normalizeJson(item, ancestors, depth + 1, budget))
+    normalized =
+      value.length > visible.length
+        ? [...visible, special(`[${value.length - visible.length} more items omitted]`)]
+        : visible
   } else if (value instanceof Map) {
-    normalized = Object.fromEntries(
-      [...value].map(([key, item]) => [String(key), normalizeJson(item, ancestors, depth + 1)]),
-    )
+    const entries: Array<[string, JsonTreeValue]> = []
+    for (const [key, item] of value) {
+      if (entries.length >= MAX_JSON_CHILDREN) break
+      entries.push([String(key), normalizeJson(item, ancestors, depth + 1, budget)])
+    }
+    if (value.size > entries.length) {
+      entries.push(['…', special(`[${value.size - entries.length} more entries omitted]`)])
+    }
+    normalized = Object.fromEntries(entries)
   } else if (value instanceof Set) {
-    normalized = [...value].map(item => normalizeJson(item, ancestors, depth + 1))
+    const entries: JsonTreeValue[] = []
+    for (const item of value) {
+      if (entries.length >= MAX_JSON_CHILDREN) break
+      entries.push(normalizeJson(item, ancestors, depth + 1, budget))
+    }
+    if (value.size > entries.length) {
+      entries.push(special(`[${value.size - entries.length} more items omitted]`))
+    }
+    normalized = entries
   } else {
     try {
-      normalized = Object.fromEntries(
-        Object.entries(value).map(([key, item]) => [
+      const entries: Array<[string, JsonTreeValue]> = []
+      let omitted = false
+      for (const key in value) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) continue
+        if (entries.length >= MAX_JSON_CHILDREN) {
+          omitted = true
+          break
+        }
+        entries.push([
           key,
-          normalizeJson(item, ancestors, depth + 1),
-        ]),
-      )
+          normalizeJson((value as Record<string, unknown>)[key], ancestors, depth + 1, budget),
+        ])
+      }
+      if (omitted) {
+        entries.push(['…', special('[More properties omitted]')])
+      }
+      normalized = Object.fromEntries(entries)
     } catch {
       normalized = special('[Uninspectable object]')
     }

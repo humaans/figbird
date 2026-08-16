@@ -159,8 +159,7 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.true(snapshot.events.every(event => event.wallAt !== undefined))
   t.true(snapshot.timeline.startedAt > 0)
   t.true(snapshot.timeline.realtime.length > 0)
-  t.true(snapshot.timeline.laneOrder.includes(`query:${row?.queryId}`))
-  t.true(snapshot.timeline.laneOrder.includes('realtime:notes'))
+  t.deepEqual(snapshot.timeline.laneOrder, [])
   t.is(collector.getSnapshot(), snapshot)
 
   collector.clearEvents()
@@ -841,7 +840,7 @@ test('extension bridge starts debug collection only while connected', t => {
   const read = bridgeState.readJson(connection!.sessionId, null)
   t.truthy(read)
   const envelope = JSON.parse(read!)
-  t.is(envelope.protocol, 2)
+  t.is(envelope.protocol, 3)
   t.true(Array.isArray(envelope.read.queries))
   t.is(inspectCalls, 1)
   const unchanged = JSON.parse(bridgeState.readJson(connection!.sessionId, envelope.version)!)
@@ -1237,7 +1236,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.true(selectedFetch?.textContent?.includes('success'))
   t.true(
     ($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes(
-      'Current query data — not captured at fetch time',
+      'Response data at fetch time',
     ),
   )
   t.truthy($all('button').find(button => button.textContent?.includes('Open query root')))

@@ -1,5 +1,11 @@
 import type { FigbirdEvent } from '../core/events.js'
-import type { DevtoolsEvent, DevtoolsSnapshot, QueryRecord, WriteRecord } from './collector.js'
+import type {
+  DevtoolsEvent,
+  DevtoolsSnapshot,
+  PayloadRetentionState,
+  QueryRecord,
+  WriteRecord,
+} from './collector.js'
 import { buildTraceIndex, displayEvent, traceIdsForEvent } from './eventModel.js'
 import { compactJson, formatMs } from './format.js'
 import type { DevtoolsModel } from './model.js'
@@ -29,13 +35,18 @@ export interface TimelineActivity {
   entity?: { serviceName: string; itemId: string | number }
   durationMs?: number
   payload?: unknown
+  payloadState?: PayloadRetentionState
+  livePayload?: unknown
   data?: unknown
+  dataState?: PayloadRetentionState
+  liveData?: unknown
   write?: {
     id: string
     type: WriteRecord['type']
     optimistic: boolean
     payload: unknown
     args: readonly unknown[]
+    argsState?: PayloadRetentionState
     initiatingAction?: {
       id: string
       name: string
@@ -65,6 +76,7 @@ export function buildTimelineActivities(
     ),
     ...buildWriteActivities(
       snapshot.writes.filter(write => write.startedAt >= snapshot.timeline.startedAt),
+      snapshot,
     ),
   ]
   return activities.sort((a, b) => a.startAt - b.startAt || a.id.localeCompare(b.id))
@@ -85,7 +97,6 @@ export function timelineExtent(
 interface EventContext {
   fetchStarts: ReadonlyMap<number, DevtoolsEvent>
   fetchTerminals: ReadonlyMap<number, DevtoolsEvent>
-  realtime: ReadonlyMap<string, DevtoolsEvent>
   traceEvents: ReadonlyMap<number, readonly DevtoolsEvent[]>
 }
 
@@ -93,7 +104,6 @@ function buildEventContext(events: readonly DevtoolsEvent[]): EventContext {
   const traceIndex = buildTraceIndex(events)
   const fetchStarts = new Map<number, DevtoolsEvent>()
   const fetchTerminals = new Map<number, DevtoolsEvent>()
-  const realtime = new Map<string, DevtoolsEvent>()
   const traceEvents = new Map<number, DevtoolsEvent[]>()
   for (const item of events) {
     const event = item.event
@@ -106,14 +116,13 @@ function buildEventContext(events: readonly DevtoolsEvent[]): EventContext {
     ) {
       fetchTerminals.set(event.fetchId, item)
     }
-    if (event.kind === 'realtime') realtime.set(realtimeKey(item.at, event.serviceName), item)
     for (const traceId of traceIdsForEvent(event, traceIndex)) {
       const related = traceEvents.get(traceId) ?? []
       related.push(item)
       traceEvents.set(traceId, related)
     }
   }
-  return { fetchStarts, fetchTerminals, realtime, traceEvents }
+  return { fetchStarts, fetchTerminals, traceEvents }
 }
 
 function buildFetchActivities(
@@ -164,11 +173,18 @@ function buildFetchActivities(
           ? 'pending'
           : `${itemCount ?? 0} ${itemCount === 1 ? 'row' : 'rows'}`
       const payload =
-        start?.event.kind === 'fetch:start'
-          ? start.event.params
-          : query.method === 'get'
-            ? query.resourceId
-            : query.query
+        span.paramsState === 'retained'
+          ? span.params
+          : start?.event.kind === 'fetch:start' && start.payloadState !== 'evicted'
+            ? start.event.params
+            : undefined
+      const payloadState: PayloadRetentionState | undefined =
+        payload !== undefined
+          ? 'retained'
+          : span.paramsState === 'evicted' || start?.payloadState === 'evicted'
+            ? 'evicted'
+            : undefined
+      const livePayload = query.method === 'get' ? query.resourceId : query.query
       return searchable({
         id: `fetch:${span.fetchId ?? `${query.queryId}:${span.startAt}:${index}`}`,
         kind: 'fetch',
@@ -189,7 +205,11 @@ function buildFetchActivities(
         ...(traceId === undefined ? {} : { traceId }),
         durationMs,
         ...(payload === undefined ? {} : { payload }),
-        ...(query.data === undefined ? {} : { data: query.data }),
+        ...(payloadState ? { payloadState } : {}),
+        ...(query.present && livePayload !== undefined ? { livePayload } : {}),
+        ...(span.result === undefined ? {} : { data: span.result }),
+        ...(span.resultState ? { dataState: span.resultState } : {}),
+        ...(query.present && query.data !== undefined ? { liveData: query.data } : {}),
         error: failed,
       })
     }),
@@ -201,8 +221,6 @@ function buildRealtimeActivities(
   context: EventContext,
 ): TimelineActivity[] {
   return snapshot.timeline.realtime.map((item, index) => {
-    const raw = context.realtime.get(realtimeKey(item.at, item.serviceName))
-    const event = raw?.event.kind === 'realtime' ? raw.event : undefined
     const traceEvents =
       item.traceId === undefined ? [] : (context.traceEvents.get(item.traceId) ?? [])
     const queryIds = affectedQueryIds(traceEvents)
@@ -215,8 +233,8 @@ function buildRealtimeActivities(
       startAt: item.at,
       endAt: item.at,
       label: item.serviceName,
-      operation: normalizeRealtimeOperation(event?.type),
-      detail: event?.itemId === undefined ? '' : `#${event.itemId}`,
+      operation: normalizeRealtimeOperation(item.type),
+      detail: item.itemId === undefined ? '' : `#${item.itemId}`,
       status: 'received',
       tone: 'blue',
       trigger: 'realtime event',
@@ -225,11 +243,17 @@ function buildRealtimeActivities(
       serviceName: item.serviceName,
       ...(queryIds.length > 0 ? { queryIds } : {}),
       ...(item.traceId === undefined ? {} : { traceId: item.traceId }),
-      ...(event?.itemId === undefined
+      ...(item.itemId === undefined
         ? {}
-        : { entity: { serviceName: item.serviceName, itemId: event.itemId } }),
+        : { entity: { serviceName: item.serviceName, itemId: item.itemId } }),
       durationMs: 0,
-      ...(event?.item === undefined ? {} : { payload: event.item }),
+      ...(item.payload === undefined ? {} : { payload: item.payload }),
+      ...(item.payloadState ? { payloadState: item.payloadState } : {}),
+      ...(item.itemId === undefined
+        ? {}
+        : {
+            livePayload: cachedEntityValue(snapshot, item.serviceName, item.itemId),
+          }),
       error: false,
     })
   })
@@ -292,7 +316,10 @@ function connectionActivity(
   })
 }
 
-function buildWriteActivities(writes: readonly WriteRecord[]): TimelineActivity[] {
+function buildWriteActivities(
+  writes: readonly WriteRecord[],
+  snapshot: DevtoolsSnapshot,
+): TimelineActivity[] {
   const mutations = writes.filter(write => write.type === 'mutation')
   const collapsedActionIds = new Set<string>()
   const actionByMutationId = new Map<string, WriteRecord>()
@@ -314,7 +341,7 @@ function buildWriteActivities(writes: readonly WriteRecord[]): TimelineActivity[
 
   return writes
     .filter(write => !collapsedActionIds.has(write.id))
-    .map(write => writeActivity(write, actionByMutationId.get(write.id)))
+    .map(write => writeActivity(write, snapshot, actionByMutationId.get(write.id)))
 }
 
 function actionContainsMutation(action: WriteRecord, mutation: WriteRecord): boolean {
@@ -324,7 +351,11 @@ function actionContainsMutation(action: WriteRecord, mutation: WriteRecord): boo
   return (mutation.endedAt ?? Infinity) <= action.endedAt
 }
 
-function writeActivity(write: WriteRecord, initiatingAction?: WriteRecord): TimelineActivity {
+function writeActivity(
+  write: WriteRecord,
+  snapshot: DevtoolsSnapshot,
+  initiatingAction?: WriteRecord,
+): TimelineActivity {
   const failed = write.status === 'error' || write.status === 'rollback'
   const status =
     write.status === 'in-flight'
@@ -371,12 +402,18 @@ function writeActivity(write: WriteRecord, initiatingAction?: WriteRecord): Time
       : { entity: { serviceName: write.serviceName, itemId: write.itemId } }),
     ...(write.traceId === undefined ? {} : { traceId: write.traceId }),
     ...(write.durationMs === undefined ? {} : { durationMs: write.durationMs }),
+    ...(write.serviceName === undefined || write.itemId === undefined
+      ? {}
+      : {
+          livePayload: cachedEntityValue(snapshot, write.serviceName, write.itemId),
+        }),
     write: {
       id: write.id,
       type: write.type,
       optimistic: write.optimistic ?? false,
       payload: writePayload(write),
       args: write.args ?? [],
+      ...(write.argsState ? { argsState: write.argsState } : {}),
       ...(initiatingAction && actionName
         ? {
             initiatingAction: {
@@ -492,10 +529,6 @@ function connectionDetail(event: Extract<FigbirdEvent, { kind: `connection:${str
   }
 }
 
-function realtimeKey(at: number, serviceName: string): string {
-  return `${at}:${serviceName}`
-}
-
 function searchable(activity: Omit<TimelineActivity, 'searchText'>): TimelineActivity {
   return {
     ...activity,
@@ -513,13 +546,37 @@ function searchable(activity: Omit<TimelineActivity, 'searchText'>): TimelineAct
       ...(activity.queryIds ?? []),
       activity.traceId === undefined ? '' : String(activity.traceId),
       activity.entity ? String(activity.entity.itemId) : '',
-      activity.payload === undefined ? '' : compactJson(activity.payload),
-      activity.data === undefined ? '' : compactJson(activity.data),
-      activity.write ? compactJson(activity.write.args) : '',
       activity.write?.id ?? '',
       activity.durationMs === undefined ? '' : formatMs(activity.durationMs),
     ]
       .join(' ')
       .toLowerCase(),
   }
+}
+
+export function timelineActivityMatchesFilter(
+  activity: TimelineActivity,
+  normalizedFilter: string,
+): boolean {
+  if (!normalizedFilter) return true
+  if (activity.searchText.includes(normalizedFilter)) return true
+  return [
+    activity.payload,
+    activity.data,
+    activity.livePayload,
+    activity.liveData,
+    activity.write?.args,
+  ].some(
+    value => value !== undefined && compactJson(value).toLowerCase().includes(normalizedFilter),
+  )
+}
+
+function cachedEntityValue(
+  snapshot: DevtoolsSnapshot,
+  serviceName: string,
+  itemId: string | number,
+): unknown {
+  return snapshot.cache
+    ?.find(service => service.serviceName === serviceName)
+    ?.entities.find(entity => entity.id === String(itemId))?.value
 }

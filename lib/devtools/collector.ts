@@ -8,6 +8,7 @@ import type {
 } from '../core/figbird.js'
 import { CappedBuffer } from '../core/cappedBuffer.js'
 import { now } from './format.js'
+import { PayloadRetention, type PayloadHandle } from './payloadRetention.js'
 
 export interface FigbirdLikeForDevtools {
   events: FigbirdEvents
@@ -21,10 +22,16 @@ export interface FigbirdLikeForDevtools {
 interface CollectorOptions {
   eventLimit?: number
   heartbeatMs?: number
+  payloadLimit?: number
+  payloadNodeLimit?: number
   queryHistoryLimit?: number
+  snapshotValues?: boolean
   spanLimit?: number
+  timelineLimit?: number
   writeLimit?: number
 }
+
+export type PayloadRetentionState = 'retained' | 'evicted'
 
 export interface QuerySpan {
   startAt: number
@@ -33,6 +40,10 @@ export interface QuerySpan {
   fetchId?: number
   reason?: string
   traceIds?: number[]
+  params?: unknown
+  paramsState?: PayloadRetentionState
+  result?: unknown
+  resultState?: PayloadRetentionState
 }
 
 export interface QueryRecord extends Omit<
@@ -60,12 +71,17 @@ export interface DevtoolsEvent {
   at: number
   wallAt: number
   event: FigbirdEvent
+  payloadState?: PayloadRetentionState
 }
 
 export interface TimelineRealtimeEvent {
   at: number
   serviceName: string
   traceId?: number
+  type?: Extract<FigbirdEvent, { kind: 'realtime' }>['type']
+  itemId?: string | number
+  payload?: unknown
+  payloadState?: PayloadRetentionState
 }
 
 type ConnectionFigbirdEvent = Extract<
@@ -87,9 +103,12 @@ export interface TimelineConnectionEvent {
 
 export interface DevtoolsTimeline {
   startedAt: number
+  /** Kept for protocol compatibility; the current table no longer needs lane state. */
   laneOrder: string[]
   realtime: TimelineRealtimeEvent[]
   connection: TimelineConnectionEvent[]
+  evictedCount?: number
+  payloadsEvicted?: number
 }
 
 export interface WriteRecord {
@@ -108,6 +127,7 @@ export interface WriteRecord {
   rolledBack?: boolean
   error?: string
   args?: readonly unknown[]
+  argsState?: PayloadRetentionState
   traceId?: number
 }
 
@@ -195,6 +215,50 @@ function errorMessage(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+function payloadForRetention(event: FigbirdEvent): unknown {
+  switch (event.kind) {
+    case 'fetch:start':
+      return event.params
+    case 'realtime':
+      return event.item
+    case 'cache:updated':
+      return { item: event.item, previousItem: event.previousItem }
+    case 'mutate:start':
+    case 'mutate:update':
+    case 'action:start':
+      return event.args
+    default:
+      return undefined
+  }
+}
+
+function eventWithoutPayload(event: FigbirdEvent): FigbirdEvent {
+  switch (event.kind) {
+    case 'fetch:start': {
+      const { params: _params, ...metadata } = event
+      void _params
+      return metadata
+    }
+    case 'realtime': {
+      const { item: _item, ...metadata } = event
+      void _item
+      return metadata
+    }
+    case 'cache:updated':
+      return { ...event, item: undefined, previousItem: null }
+    case 'mutate:start':
+    case 'action:start': {
+      const { args: _args, ...metadata } = event
+      void _args
+      return metadata
+    }
+    case 'mutate:update':
+      return { ...event, args: [] }
+    default:
+      return event
+  }
 }
 
 function snapshotValue<T>(value: T): T {
@@ -304,9 +368,9 @@ function toPublicQueryRecord(record: InternalQueryRecord): QueryRecord {
     errorCount: metrics.errorCount,
     ...(metrics.lastDurationMs !== undefined ? { lastDurationMs: metrics.lastDurationMs } : {}),
     totalDurationMs: metrics.totalDurationMs,
-    spans: [...metrics.spans.toArray(), ...metrics.activeSpans.values()].sort(
-      (a, b) => a.startAt - b.startAt,
-    ),
+    spans: [...metrics.spans.toArray(), ...metrics.activeSpans.values()]
+      .map(span => ({ ...span }))
+      .sort((a, b) => a.startAt - b.startAt),
     realtimeSeen: metrics.realtimeSeen,
     reconciles: metrics.reconciles,
     ...(metrics.lastError ? { lastError: metrics.lastError } : {}),
@@ -320,8 +384,12 @@ export function createCollector(
   return new FigbirdCollector(figbird, {
     eventLimit: options.eventLimit ?? 500,
     heartbeatMs: options.heartbeatMs ?? 5_000,
+    payloadLimit: options.payloadLimit ?? 200,
+    payloadNodeLimit: options.payloadNodeLimit ?? 20_000,
     queryHistoryLimit: options.queryHistoryLimit ?? 250,
+    snapshotValues: options.snapshotValues ?? true,
     spanLimit: options.spanLimit ?? 50,
+    timelineLimit: options.timelineLimit ?? 2_000,
     writeLimit: options.writeLimit ?? 250,
   })
 }
@@ -329,8 +397,12 @@ export function createCollector(
 interface ResolvedCollectorOptions {
   eventLimit: number
   heartbeatMs: number
+  payloadLimit: number
+  payloadNodeLimit: number
   queryHistoryLimit: number
+  snapshotValues: boolean
   spanLimit: number
+  timelineLimit: number
   writeLimit: number
 }
 
@@ -338,14 +410,25 @@ type FetchEvent = Extract<FigbirdEvent, { kind: 'fetch:start' | 'fetch:end' | 'f
 
 type FetchTerminalEvent = Extract<FetchEvent, { kind: 'fetch:end' | 'fetch:error' }>
 
+const MAX_ACTIVE_FETCH_MS = 10 * 60_000
+
+type TimelineEvictionCandidate =
+  | { at: number; kind: 'span'; record: InternalQueryRecord }
+  | { at: number; kind: 'realtime' }
+  | { at: number; kind: 'connection' }
+  | { at: number; kind: 'write'; id: string }
+
 class FigbirdCollector implements Collector {
   #figbird: FigbirdLikeForDevtools
   #heartbeatMs: number
   #queryHistoryLimit: number
+  #snapshotValues: boolean
   #spanLimit: number
+  #timelineLimit: number
   #writeLimit: number
   #started = false
   #dirty = true
+  #sourceStateDirty = true
   #notificationScheduled = false
   #eventUnsub: (() => void) | null = null
   #heartbeat: ReturnType<typeof setInterval> | null = null
@@ -356,17 +439,23 @@ class FigbirdCollector implements Collector {
 
   #queries: Map<string, InternalQueryRecord> = new Map()
   #relational: Map<string, InternalRelationalQuery> = new Map()
+  #cache: DevtoolsCacheService[] = []
   #events: CappedBuffer<DevtoolsEvent>
   #timelineRealtime: CappedBuffer<TimelineRealtimeEvent>
   #timelineConnection: CappedBuffer<TimelineConnectionEvent>
   #timelineStartedAt = now()
-  #timelineLaneOrder: string[] = []
-  #timelineLaneIds = new Set<string>()
+  #timelineEvictedCount = 0
+  #timelinePayloadsEvicted = 0
   #nextEventId = 1
   #realtimeByService: Map<string, number> = new Map()
   #writes: Map<string, WriteRecord> = new Map()
   #cacheProvenance = new Map<string, NonNullable<DevtoolsCacheEntity['lastChange']>>()
-  #fetchTraces = new Map<number, { reason?: string; traceIds: number[] }>()
+  #fetchTraces = new Map<number, { reason?: string; traceIds: number[]; startedAt: number }>()
+  #payloads: PayloadRetention
+  #eventPayloadHandles = new WeakMap<DevtoolsEvent, PayloadHandle>()
+  #realtimePayloadHandles = new WeakMap<TimelineRealtimeEvent, PayloadHandle>()
+  #spanPayloadHandles = new WeakMap<QuerySpan, PayloadHandle[]>()
+  #writePayloadHandles = new Map<string, PayloadHandle>()
 
   readonly eventLimit: number
 
@@ -374,24 +463,31 @@ class FigbirdCollector implements Collector {
     this.#figbird = figbird
     this.#heartbeatMs = options.heartbeatMs
     this.#queryHistoryLimit = options.queryHistoryLimit
+    this.#snapshotValues = options.snapshotValues
     this.#spanLimit = options.spanLimit
+    this.#timelineLimit = options.timelineLimit
     this.#writeLimit = options.writeLimit
     this.eventLimit = options.eventLimit
     this.#events = new CappedBuffer(options.eventLimit)
     this.#timelineRealtime = new CappedBuffer(options.eventLimit)
     this.#timelineConnection = new CappedBuffer(options.eventLimit)
+    this.#payloads = new PayloadRetention(options.payloadLimit, options.payloadNodeLimit)
   }
 
   start(): void {
     if (this.#started) return
     this.#started = true
     this.#refreshQueries()
+    this.#refreshRelational()
+    this.#refreshCache()
+    this.#sourceStateDirty = false
     this.#eventUnsub = this.#figbird.events.subscribe(event => {
       this.#recordEvent(event)
       this.#scheduleNotify()
     })
     this.#stateUnsub =
       this.#figbird.subscribeToStateChanges?.(() => {
+        this.#sourceStateDirty = true
         this.#scheduleNotify()
       }) ?? null
     this.#mutationUnsub =
@@ -399,7 +495,10 @@ class FigbirdCollector implements Collector {
         this.#scheduleNotify()
       }) ?? null
     if (this.#heartbeatMs > 0) {
-      this.#heartbeat = setInterval(() => this.#scheduleNotify(), this.#heartbeatMs)
+      this.#heartbeat = setInterval(() => {
+        if (!this.#stateUnsub) this.#sourceStateDirty = true
+        this.#scheduleNotify()
+      }, this.#heartbeatMs)
     }
     this.#scheduleNotify()
   }
@@ -425,8 +524,13 @@ class FigbirdCollector implements Collector {
 
   getSnapshot(): DevtoolsSnapshot {
     if (!this.#dirty) return this.#snapshot
-    this.#refreshQueries()
-    this.#refreshRelational()
+    this.#trimTimeline()
+    if (this.#sourceStateDirty) {
+      this.#refreshQueries()
+      this.#refreshRelational()
+      this.#refreshCache()
+      this.#sourceStateDirty = false
+    }
     const queries = Array.from(this.#queries.values())
       .map(record => toPublicQueryRecord(record))
       .sort((a, b) => {
@@ -437,26 +541,18 @@ class FigbirdCollector implements Collector {
         return `${a.serviceName}:${a.queryId}`.localeCompare(`${b.serviceName}:${b.queryId}`)
       })
     const writes = Array.from(this.#writes.values()).sort((a, b) => a.startedAt - b.startedAt)
-    const cache = (this.#figbird.inspectCache?.() ?? []).map(service => ({
-      ...service,
-      entities: service.entities.map(entity => ({
-        ...entity,
-        value: snapshotValue(entity.value),
-        ...(this.#cacheProvenance.has(`${service.serviceName}:${entity.id}`)
-          ? { lastChange: this.#cacheProvenance.get(`${service.serviceName}:${entity.id}`)! }
-          : {}),
-      })),
-    }))
     this.#snapshot = {
-      cache,
+      cache: this.#cache,
       queries,
       relational: [...this.#relational.values()].map(record => record.inspected),
-      events: this.#events.toArray(),
+      events: this.#events.toArray().map(item => ({ ...item })),
       timeline: {
         startedAt: this.#timelineStartedAt,
-        laneOrder: [...this.#timelineLaneOrder],
-        realtime: this.#timelineRealtime.toArray(),
+        laneOrder: [],
+        realtime: this.#timelineRealtime.toArray().map(item => ({ ...item })),
         connection: this.#timelineConnection.toArray(),
+        evictedCount: this.#timelineEvictedCount,
+        payloadsEvicted: this.#timelinePayloadsEvicted,
       },
       writes,
     }
@@ -465,17 +561,26 @@ class FigbirdCollector implements Collector {
   }
 
   clearEvents(): void {
+    for (const item of this.#events.toArray()) {
+      this.#payloads.release(this.#eventPayloadHandles.get(item))
+    }
     this.#events.clear()
     this.#scheduleNotify()
   }
 
   clearTimeline(): void {
+    for (const item of this.#timelineRealtime.toArray()) {
+      this.#payloads.release(this.#realtimePayloadHandles.get(item))
+    }
     this.#timelineRealtime.clear()
     this.#timelineConnection.clear()
     this.#clearSettledWrites()
     this.#timelineStartedAt = now()
-    this.#timelineLaneOrder = []
-    this.#timelineLaneIds.clear()
+    this.#timelineEvictedCount = 0
+    this.#timelinePayloadsEvicted = 0
+    for (const record of this.#queries.values()) {
+      for (const span of record.metrics.spans.toArray()) this.#releaseSpanPayloads(span)
+    }
     for (const record of this.#queries.values()) {
       record.metrics.spans.clear()
       for (const span of record.metrics.activeSpans.values()) {
@@ -488,18 +593,26 @@ class FigbirdCollector implements Collector {
   reset(): void {
     this.#queries.clear()
     this.#relational.clear()
+    this.#cache = []
     this.#events.clear()
     this.#timelineRealtime.clear()
     this.#timelineConnection.clear()
     this.#timelineStartedAt = now()
-    this.#timelineLaneOrder = []
-    this.#timelineLaneIds.clear()
+    this.#timelineEvictedCount = 0
+    this.#timelinePayloadsEvicted = 0
     this.#nextEventId = 1
     this.#realtimeByService.clear()
     this.#writes.clear()
     this.#cacheProvenance.clear()
     this.#fetchTraces.clear()
+    this.#sourceStateDirty = true
+    this.#payloads.clear()
+    this.#writePayloadHandles.clear()
     this.#scheduleNotify()
+  }
+
+  #captureValue<T>(value: T): T {
+    return this.#snapshotValues ? snapshotValue(value) : value
   }
 
   #scheduleNotify(): void {
@@ -517,39 +630,57 @@ class FigbirdCollector implements Collector {
 
   #clearSettledWrites(): void {
     for (const [id, write] of this.#writes) {
-      if (write.status !== 'in-flight') this.#writes.delete(id)
+      if (write.status === 'in-flight') continue
+      this.#payloads.release(this.#writePayloadHandles.get(id))
+      this.#writePayloadHandles.delete(id)
+      this.#writes.delete(id)
     }
   }
 
   #recordEvent(event: FigbirdEvent): void {
     const at = now()
-    this.#events.push({
+    const capturedEvent = this.#captureEvent(event)
+    const captured: DevtoolsEvent = {
       id: this.#nextEventId++,
       at,
       wallAt: Date.now(),
-      event: this.#captureEvent(event),
-    })
+      event: capturedEvent,
+    }
+    const evictedEvent = this.#events.push(captured)
+    if (evictedEvent) {
+      this.#payloads.release(this.#eventPayloadHandles.get(evictedEvent))
+    }
 
-    switch (event.kind) {
+    switch (capturedEvent.kind) {
       case 'fetch:start':
-        this.#recordTimelineLane(`query:${event.queryId}`)
-        this.#recordFetchStart(event, at)
+        this.#recordFetchStart(capturedEvent, at)
         break
       case 'fetch:end':
       case 'fetch:error':
-        this.#recordTimelineLane(`query:${event.queryId}`)
-        this.#finishFetch(event, at)
+        this.#finishFetch(capturedEvent, at)
         break
       case 'realtime':
-        this.#recordTimelineLane(`realtime:${event.serviceName}`)
-        this.#timelineRealtime.push({
-          at,
-          serviceName: event.serviceName,
-          ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
-        })
+        {
+          const timelineItem: TimelineRealtimeEvent = {
+            at,
+            serviceName: capturedEvent.serviceName,
+            type: capturedEvent.type,
+            ...(capturedEvent.itemId === undefined ? {} : { itemId: capturedEvent.itemId }),
+            ...(capturedEvent.traceId === undefined ? {} : { traceId: capturedEvent.traceId }),
+            ...(capturedEvent.item === undefined
+              ? {}
+              : { payload: capturedEvent.item, payloadState: 'retained' as const }),
+          }
+          this.#retainRealtimePayload(timelineItem)
+          const evictedRealtime = this.#timelineRealtime.push(timelineItem)
+          if (evictedRealtime) {
+            this.#payloads.release(this.#realtimePayloadHandles.get(evictedRealtime))
+            this.#timelineEvictedCount++
+          }
+        }
         this.#realtimeByService.set(
-          event.serviceName,
-          (this.#realtimeByService.get(event.serviceName) ?? 0) + 1,
+          capturedEvent.serviceName,
+          (this.#realtimeByService.get(capturedEvent.serviceName) ?? 0) + 1,
         )
         break
       case 'connection:connected':
@@ -557,23 +688,33 @@ class FigbirdCollector implements Collector {
       case 'connection:reconnected':
       case 'connection:error':
       case 'connection:reconnect-failed':
-        this.#recordTimelineLane('connection')
-        this.#timelineConnection.push({ at, event: this.#captureConnectionEvent(event) })
+        if (
+          this.#timelineConnection.push({
+            at,
+            event: this.#captureConnectionEvent(capturedEvent),
+          })
+        ) {
+          this.#timelineEvictedCount++
+        }
         break
       case 'cache:updated':
-        if (event.traceId !== undefined) {
-          this.#cacheProvenance.set(`${event.serviceName}:${String(event.itemId)}`, {
-            at,
-            wallAt: Date.now(),
-            source: event.source,
-            traceId: event.traceId,
-            type: event.type,
-          })
+        this.#sourceStateDirty = true
+        if (capturedEvent.traceId !== undefined) {
+          this.#cacheProvenance.set(
+            `${capturedEvent.serviceName}:${String(capturedEvent.itemId)}`,
+            {
+              at,
+              wallAt: Date.now(),
+              source: capturedEvent.source,
+              traceId: capturedEvent.traceId,
+              type: capturedEvent.type,
+            },
+          )
         }
         break
       case 'reconcile:started':
         {
-          const record = this.#queries.get(event.queryId)
+          const record = this.#queries.get(capturedEvent.queryId)
           if (record) record.metrics.reconciles++
         }
         break
@@ -582,20 +723,37 @@ class FigbirdCollector implements Collector {
       case 'mutate:end':
       case 'mutate:error':
       case 'mutate:rollback':
-        this.#recordMutation(event, at)
+        this.#recordMutation(
+          event as Extract<
+            FigbirdEvent,
+            {
+              kind:
+                'mutate:start' | 'mutate:update' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+            }
+          >,
+          at,
+        )
+        if (
+          (event.kind === 'mutate:start' || event.kind === 'mutate:update') &&
+          event.args !== undefined
+        ) {
+          this.#retainWriteArgs(`mutation:${event.mutationId}`)
+        }
         break
       case 'action:start':
       case 'action:end':
       case 'action:error':
-        this.#recordAction(event, at)
+        this.#recordAction(
+          event as Extract<FigbirdEvent, { kind: 'action:start' | 'action:end' | 'action:error' }>,
+          at,
+        )
+        if (event.kind === 'action:start' && event.args !== undefined) {
+          this.#retainWriteArgs(`action:${event.actionId}`)
+        }
         break
     }
-  }
-
-  #recordTimelineLane(id: string): void {
-    if (this.#timelineLaneIds.has(id)) return
-    this.#timelineLaneIds.add(id)
-    this.#timelineLaneOrder.push(id)
+    this.#retainEventPayload(captured)
+    this.#trimTimeline()
   }
 
   #refreshQueries(): void {
@@ -607,8 +765,8 @@ class FigbirdCollector implements Collector {
       const existing = this.#queries.get(row.queryId)
       const capturedRow = {
         ...row,
-        query: snapshotValue(row.query),
-        ...(row.data === undefined ? {} : { data: snapshotValue(row.data) }),
+        query: this.#captureValue(row.query),
+        ...(row.data === undefined ? {} : { data: this.#captureValue(row.data) }),
       }
       const capturedState = queryState(capturedRow)
       const record =
@@ -626,6 +784,11 @@ class FigbirdCollector implements Collector {
     for (const record of this.#queries.values()) {
       if (observedQueryIds.has(record.lastKnown.queryId)) continue
       record.current = null
+      if (record.lastKnown.data !== undefined) {
+        const { data: _data, ...metadata } = record.lastKnown
+        void _data
+        record.lastKnown = metadata
+      }
       record.serviceRealtimeBaseline =
         this.#realtimeByService.get(record.lastKnown.serviceName) ?? 0
     }
@@ -639,6 +802,8 @@ class FigbirdCollector implements Collector {
       .sort((a, b) => a.lastObservedAt - b.lastObservedAt)
     for (const record of removable) {
       if (this.#queries.size <= this.#queryHistoryLimit) break
+      for (const span of record.metrics.spans.toArray()) this.#releaseSpanPayloads(span)
+      for (const span of record.metrics.activeSpans.values()) this.#releaseSpanPayloads(span)
       this.#queries.delete(record.lastKnown.queryId)
     }
   }
@@ -650,9 +815,15 @@ class FigbirdCollector implements Collector {
     for (const inspected of current) {
       observedKeys.add(inspected.key)
       this.#relational.set(inspected.key, {
-        inspected: snapshotValue(inspected),
+        inspected: this.#captureValue(inspected),
         lastObservedAt: observedAt,
       })
+    }
+    for (const record of this.#relational.values()) {
+      if (observedKeys.has(record.inspected.key) || record.inspected.data === undefined) continue
+      const { data: _data, ...metadata } = record.inspected
+      void _data
+      record.inspected = metadata
     }
     if (this.#relational.size <= this.#queryHistoryLimit) return
     const removable = [...this.#relational.values()]
@@ -664,6 +835,28 @@ class FigbirdCollector implements Collector {
     }
   }
 
+  #refreshCache(): void {
+    const inspectedCache = this.#figbird.inspectCache?.() ?? []
+    const liveCacheKeys = new Set<string>()
+    this.#cache = inspectedCache.map(service => ({
+      ...service,
+      entities: service.entities.map(entity => {
+        const key = `${service.serviceName}:${entity.id}`
+        liveCacheKeys.add(key)
+        return {
+          ...entity,
+          value: this.#captureValue(entity.value),
+          ...(this.#cacheProvenance.has(key)
+            ? { lastChange: this.#cacheProvenance.get(key)! }
+            : {}),
+        }
+      }),
+    }))
+    for (const key of this.#cacheProvenance.keys()) {
+      if (!liveCacheKeys.has(key)) this.#cacheProvenance.delete(key)
+    }
+  }
+
   #recordFetchStart(event: Extract<FetchEvent, { kind: 'fetch:start' }>, at: number): void {
     const record = this.#ensureFetchRecord(event, at, true)
     if (record.current?.generation !== event.generation) return
@@ -672,13 +865,26 @@ class FigbirdCollector implements Collector {
       this.#fetchTraces.set(event.fetchId, {
         ...(event.reason ? { reason: event.reason } : {}),
         traceIds,
+        startedAt: at,
       })
-      record.metrics.activeSpans.set(event.fetchId, {
+      const span: QuerySpan = {
         startAt: Math.max(at, this.#timelineStartedAt),
         fetchId: event.fetchId,
         ...(event.reason ? { reason: event.reason } : {}),
         ...(traceIds.length > 0 ? { traceIds } : {}),
-      })
+        ...(event.params === undefined
+          ? {}
+          : { params: event.params, paramsState: 'retained' as const }),
+      }
+      if (event.params !== undefined) {
+        this.#retainSpanPayload(span, event.params, () => {
+          span.params = undefined
+          span.paramsState = 'evicted'
+        })
+      }
+      const replaced = record.metrics.activeSpans.get(event.fetchId)
+      if (replaced) this.#releaseSpanPayloads(replaced)
+      record.metrics.activeSpans.set(event.fetchId, span)
     }
     const current = {
       ...record.current,
@@ -753,15 +959,37 @@ class FigbirdCollector implements Collector {
     const observedStartAt = at - event.durationMs
     const startAt = Math.max(observedStartAt, this.#timelineStartedAt)
     const trace = event.fetchId === undefined ? undefined : this.#fetchTraces.get(event.fetchId)
+    const activeSpan =
+      event.fetchId === undefined ? undefined : metrics.activeSpans.get(event.fetchId)
     if (event.fetchId !== undefined) metrics.activeSpans.delete(event.fetchId)
-    metrics.spans.push({
+    const span: QuerySpan = {
+      ...activeSpan,
       startAt,
       endAt: at,
       ok,
       ...(event.fetchId === undefined ? {} : { fetchId: event.fetchId }),
       ...(trace?.reason ? { reason: trace.reason } : {}),
       ...(trace && trace.traceIds.length > 0 ? { traceIds: trace.traceIds } : {}),
-    })
+    }
+    const inspectedResult = ok
+      ? this.#figbird
+          .inspect()
+          .find(query => query.queryId === event.queryId && query.generation === event.generation)
+          ?.data
+      : undefined
+    if (inspectedResult !== undefined) {
+      span.result = this.#captureValue(inspectedResult)
+      span.resultState = 'retained'
+      this.#retainSpanPayload(span, span.result, () => {
+        span.result = undefined
+        span.resultState = 'evicted'
+      })
+    }
+    const evictedSpan = metrics.spans.push(span)
+    if (evictedSpan) {
+      this.#releaseSpanPayloads(evictedSpan)
+      this.#timelineEvictedCount++
+    }
     if (event.fetchId !== undefined) this.#fetchTraces.delete(event.fetchId)
 
     const currentMatches = record.current?.generation === event.generation
@@ -877,7 +1105,7 @@ class FigbirdCollector implements Collector {
   }
 
   #captureArgs(args: readonly unknown[]): readonly unknown[] {
-    return snapshotValue(args)
+    return this.#captureValue(args)
   }
 
   #captureEvent(event: FigbirdEvent): FigbirdEvent {
@@ -885,10 +1113,16 @@ class FigbirdCollector implements Collector {
       case 'fetch:start':
         return {
           ...event,
-          ...(event.params === undefined ? {} : { params: snapshotValue(event.params) }),
+          ...(event.params === undefined ? {} : { params: this.#captureValue(event.params) }),
         }
       case 'realtime':
-        return { ...event, item: snapshotValue(event.item) }
+        return { ...event, item: this.#captureValue(event.item) }
+      case 'cache:updated':
+        return {
+          ...event,
+          item: this.#captureValue(event.item),
+          previousItem: this.#captureValue(event.previousItem),
+        }
       case 'fetch:error':
       case 'mutate:error':
       case 'action:error':
@@ -928,6 +1162,129 @@ class FigbirdCollector implements Collector {
     return { ...event }
   }
 
+  #retainEventPayload(item: DevtoolsEvent): void {
+    const payload = payloadForRetention(item.event)
+    if (payload === undefined) return
+    item.payloadState = 'retained'
+    const handle = this.#payloads.retain(payload, () => {
+      item.event = eventWithoutPayload(item.event)
+      item.payloadState = 'evicted'
+      this.#scheduleNotify()
+    })
+    this.#eventPayloadHandles.set(item, handle)
+  }
+
+  #retainRealtimePayload(item: TimelineRealtimeEvent): void {
+    if (item.payload === undefined) return
+    const handle = this.#payloads.retain(item.payload, () => {
+      item.payload = undefined
+      item.payloadState = 'evicted'
+      this.#timelinePayloadsEvicted++
+      this.#scheduleNotify()
+    })
+    this.#realtimePayloadHandles.set(item, handle)
+  }
+
+  #retainSpanPayload(span: QuerySpan, value: unknown, evict: () => void): void {
+    const handle = this.#payloads.retain(value, () => {
+      evict()
+      this.#timelinePayloadsEvicted++
+      this.#scheduleNotify()
+    })
+    const handles = this.#spanPayloadHandles.get(span) ?? []
+    handles.push(handle)
+    this.#spanPayloadHandles.set(span, handles)
+  }
+
+  #releaseSpanPayloads(span: QuerySpan): void {
+    for (const handle of this.#spanPayloadHandles.get(span) ?? []) {
+      this.#payloads.release(handle)
+    }
+    this.#spanPayloadHandles.delete(span)
+  }
+
+  #retainWriteArgs(id: string): void {
+    const write = this.#writes.get(id)
+    if (!write?.args) return
+    this.#payloads.release(this.#writePayloadHandles.get(id))
+    write.argsState = 'retained'
+    const handle = this.#payloads.retain(write.args, () => {
+      const current = this.#writes.get(id)
+      if (!current) return
+      const { args: _args, ...metadata } = current
+      void _args
+      this.#writes.set(id, { ...metadata, argsState: 'evicted' })
+      this.#timelinePayloadsEvicted++
+      this.#scheduleNotify()
+    })
+    this.#writePayloadHandles.set(id, handle)
+  }
+
+  #trimTimeline(): void {
+    const candidates = (): TimelineEvictionCandidate[] => {
+      const result: TimelineEvictionCandidate[] = []
+      for (const record of this.#queries.values()) {
+        const span = record.metrics.spans.first()
+        if (span) result.push({ at: span.startAt, kind: 'span', record })
+      }
+      const realtime = this.#timelineRealtime.first()
+      if (realtime) result.push({ at: realtime.at, kind: 'realtime' })
+      const connection = this.#timelineConnection.first()
+      if (connection) result.push({ at: connection.at, kind: 'connection' })
+      for (const write of this.#writes.values()) {
+        if (write.status !== 'in-flight' && write.startedAt >= this.#timelineStartedAt) {
+          result.push({ at: write.startedAt, kind: 'write', id: write.id })
+        }
+      }
+      return result
+    }
+
+    let retained =
+      [...this.#queries.values()].reduce(
+        (total, record) => total + record.metrics.spans.length,
+        0,
+      ) +
+      this.#timelineRealtime.length +
+      this.#timelineConnection.length +
+      [...this.#writes.values()].filter(
+        write => write.status !== 'in-flight' && write.startedAt >= this.#timelineStartedAt,
+      ).length
+
+    while (retained > this.#timelineLimit) {
+      const oldest = candidates().sort((a, b) => a.at - b.at)[0]
+      if (!oldest) break
+      if (oldest.kind === 'span') {
+        const span = oldest.record.metrics.spans.shift()
+        if (span) this.#releaseSpanPayloads(span)
+      } else if (oldest.kind === 'realtime') {
+        const item = this.#timelineRealtime.shift()
+        if (item) this.#payloads.release(this.#realtimePayloadHandles.get(item))
+      } else if (oldest.kind === 'connection') {
+        this.#timelineConnection.shift()
+      } else {
+        this.#payloads.release(this.#writePayloadHandles.get(oldest.id))
+        this.#writePayloadHandles.delete(oldest.id)
+        this.#writes.delete(oldest.id)
+      }
+      retained--
+      this.#timelineEvictedCount++
+    }
+
+    const cutoff = now() - MAX_ACTIVE_FETCH_MS
+    for (const record of this.#queries.values()) {
+      for (const [fetchId, span] of record.metrics.activeSpans) {
+        if (span.startAt >= cutoff) continue
+        this.#releaseSpanPayloads(span)
+        record.metrics.activeSpans.delete(fetchId)
+        this.#fetchTraces.delete(fetchId)
+        this.#timelineEvictedCount++
+      }
+    }
+    for (const [fetchId, trace] of this.#fetchTraces) {
+      if (trace.startedAt < cutoff) this.#fetchTraces.delete(fetchId)
+    }
+  }
+
   #trimWrites(): void {
     if (this.#writes.size <= this.#writeLimit) return
     const settled = [...this.#writes.values()]
@@ -935,7 +1292,10 @@ class FigbirdCollector implements Collector {
       .sort((a, b) => a.startedAt - b.startedAt)
     for (const write of settled) {
       if (this.#writes.size <= this.#writeLimit) break
+      this.#payloads.release(this.#writePayloadHandles.get(write.id))
+      this.#writePayloadHandles.delete(write.id)
       this.#writes.delete(write.id)
+      this.#timelineEvictedCount++
     }
   }
 }

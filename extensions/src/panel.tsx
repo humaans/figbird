@@ -7,26 +7,48 @@ import { ExtensionSession } from './remote.js'
 
 function Panel() {
   const session = useMemo(() => new ExtensionSession(), [])
-  const collector = useMemo(() => createCollector(session.figbird, { heartbeatMs: 0 }), [session])
+  const collector = useMemo(
+    () => createCollector(session.figbird, { heartbeatMs: 0, snapshotValues: false }),
+    [session],
+  )
   const cacheEditor = useMemo(() => ({ update: session.editCacheEntity }), [session])
   const status = useSyncExternalStore(session.subscribeStatus, session.getStatus, session.getStatus)
 
   useEffect(() => {
     const panelWindow = window as DevtoolsPanelWindow
-    const setVisible = (visible: boolean) => {
-      if (visible) session.start()
-      else session.stop()
+    let documentVisible = document.visibilityState !== 'hidden'
+    let hostVisible = true
+    let running = false
+    const applyVisibility = () => {
+      const visible = documentVisible && hostVisible
+      if (visible === running) return
+      running = visible
+      if (visible) {
+        session.start()
+      } else {
+        session.stop()
+        session.figbird.reset()
+        collector.reset()
+      }
     }
-    const updateFromDocument = () => setVisible(document.visibilityState !== 'hidden')
-    panelWindow[PANEL_VISIBILITY_CALLBACK] = setVisible
-    updateFromDocument()
+    const updateFromDocument = () => {
+      documentVisible = document.visibilityState !== 'hidden'
+      applyVisibility()
+    }
+    panelWindow[PANEL_VISIBILITY_CALLBACK] = visible => {
+      hostVisible = visible
+      applyVisibility()
+    }
+    applyVisibility()
     document.addEventListener('visibilitychange', updateFromDocument)
     return () => {
       document.removeEventListener('visibilitychange', updateFromDocument)
       delete panelWindow[PANEL_VISIBILITY_CALLBACK]
       session.stop()
+      session.figbird.reset()
+      collector.reset()
     }
-  }, [session])
+  }, [collector, session])
 
   useEffect(() => session.subscribeReset(() => collector.reset()), [collector, session])
 

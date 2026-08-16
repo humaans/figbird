@@ -10,7 +10,11 @@ import { formatClock, formatMs } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
 import type { TimelineRange } from './TimelineOverview.js'
 import { TimelineOverview } from './TimelineOverview.js'
-import type { TimelineActivity, TimelineExtent } from './timelineModel.js'
+import {
+  timelineActivityMatchesFilter,
+  type TimelineActivity,
+  type TimelineExtent,
+} from './timelineModel.js'
 import {
   Badge,
   ColumnResizeHandle,
@@ -57,6 +61,8 @@ export function TimelineActivityTable({
   onQuerySelect,
   onCacheEntitySelect,
   onTraceSelect,
+  evictedCount = 0,
+  payloadsEvicted = 0,
 }: {
   activities: readonly TimelineActivity[]
   extent: TimelineExtent | null
@@ -71,6 +77,8 @@ export function TimelineActivityTable({
   onQuerySelect?: (queryId: string) => void
   onCacheEntitySelect?: (serviceName: string, itemId: string | number) => void
   onTraceSelect?: (traceId: number) => void
+  evictedCount?: number
+  payloadsEvicted?: number
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -92,7 +100,7 @@ export function TimelineActivityTable({
     ) {
       return false
     }
-    return normalizedFilter ? activity.searchText.includes(normalizedFilter) : true
+    return timelineActivityMatchesFilter(activity, normalizedFilter)
   })
   const rows = range
     ? filteredActivities.filter(activity => intersects(activity, range, nowPoint))
@@ -298,6 +306,8 @@ export function TimelineActivityTable({
         <span>{rows.filter(activity => activity.error).length} errors</span>
         {inFlightWriteCount > 0 ? <span>{inFlightWriteCount} pending writes</span> : null}
         {projectedWriteCount > 0 ? <span>{projectedWriteCount} projected</span> : null}
+        {evictedCount > 0 ? <span>{evictedCount} older activities evicted</span> : null}
+        {payloadsEvicted > 0 ? <span>{payloadsEvicted} payloads vacuumed</span> : null}
         <span>{formatMs(displayExtent.end - displayExtent.start)} window</span>
         <span style={{ marginLeft: 'auto' }}>
           {range ? (
@@ -363,6 +373,8 @@ function ActivityRow({
       style={{
         cursor: 'pointer',
         outline: 'none',
+        contentVisibility: 'auto',
+        containIntrinsicSize: '0 33px',
         background: selected ? colors.activeButtonBg : undefined,
         boxShadow: selected ? `inset 3px 0 ${colors.blue}` : undefined,
       }}
@@ -579,35 +591,104 @@ function ActivityDetails({
       {activity.write ? (
         <>
           <DetailBlock>
-            <JsonViewer value={activity.write.payload} label='Payload' emptyLabel='No payload' />
+            <JsonViewer
+              value={activity.write.argsState === 'evicted' ? undefined : activity.write.payload}
+              label='Payload'
+              emptyLabel={
+                activity.write.argsState === 'evicted'
+                  ? 'Original payload vacuumed to keep the recording bounded'
+                  : 'No payload'
+              }
+            />
           </DetailBlock>
           <DetailBlock>
-            <JsonViewer value={activity.write.args} label='Arguments' />
+            <JsonViewer
+              value={activity.write.argsState === 'evicted' ? undefined : activity.write.args}
+              label='Arguments'
+              emptyLabel={
+                activity.write.argsState === 'evicted'
+                  ? 'Original arguments vacuumed to keep the recording bounded'
+                  : 'No arguments'
+              }
+            />
           </DetailBlock>
+          {activity.write.argsState === 'evicted' && activity.livePayload !== undefined ? (
+            <DetailBlock>
+              <JsonViewer
+                value={activity.livePayload}
+                label='Current cached entity — original write payload vacuumed'
+              />
+            </DetailBlock>
+          ) : null}
         </>
       ) : activity.kind === 'fetch' ? (
         <>
-          {activity.payload !== undefined ? (
+          {activity.payload !== undefined || activity.payloadState === 'evicted' ? (
             <DetailBlock>
-              <JsonViewer value={activity.payload} label='Parameters' />
+              <JsonViewer
+                value={activity.payload}
+                label='Parameters at fetch time'
+                emptyLabel='Original parameters vacuumed to keep the recording bounded'
+              />
+            </DetailBlock>
+          ) : null}
+          {activity.payloadState === 'evicted' && activity.livePayload !== undefined ? (
+            <DetailBlock>
+              <JsonViewer value={activity.livePayload} label='Current query parameters' />
             </DetailBlock>
           ) : null}
           <DetailBlock>
             <JsonViewer
-              value={activity.data}
-              label='Current query data — not captured at fetch time'
-              emptyLabel='No query data captured'
+              value={
+                activity.dataState === undefined
+                  ? activity.liveData
+                  : activity.dataState === 'evicted'
+                    ? undefined
+                    : activity.data
+              }
+              label={activity.dataState ? 'Response data at fetch time' : 'Current query data'}
+              emptyLabel={
+                activity.dataState === 'evicted'
+                  ? 'Original response vacuumed to keep the recording bounded'
+                  : 'No query data available'
+              }
             />
           </DetailBlock>
+          {activity.dataState === 'evicted' && activity.liveData !== undefined ? (
+            <DetailBlock>
+              <JsonViewer
+                value={activity.liveData}
+                label={
+                  activity.dataState === 'evicted'
+                    ? 'Current query data — original response vacuumed'
+                    : 'Current query data'
+                }
+              />
+            </DetailBlock>
+          ) : null}
         </>
       ) : activity.kind === 'realtime' ? (
-        <DetailBlock>
-          <JsonViewer
-            value={activity.payload}
-            label='Realtime payload'
-            emptyLabel='No realtime payload captured'
-          />
-        </DetailBlock>
+        <>
+          <DetailBlock>
+            <JsonViewer
+              value={activity.payloadState === 'evicted' ? undefined : activity.payload}
+              label='Realtime payload'
+              emptyLabel={
+                activity.payloadState === 'evicted'
+                  ? 'Original payload vacuumed to keep the recording bounded'
+                  : 'No realtime payload captured'
+              }
+            />
+          </DetailBlock>
+          {activity.payloadState === 'evicted' && activity.livePayload !== undefined ? (
+            <DetailBlock>
+              <JsonViewer
+                value={activity.livePayload}
+                label='Current cached entity — original payload vacuumed'
+              />
+            </DetailBlock>
+          ) : null}
+        </>
       ) : activity.kind === 'connection' ? (
         <DetailBlock>
           <JsonViewer

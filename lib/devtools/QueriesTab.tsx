@@ -107,6 +107,7 @@ export function QueriesTab({
   const { colors, styles } = useDevtoolsTheme()
   const [columnWidths, onColumnResizeStart] = useResizableColumns(QUERY_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth({ defaultWidth: 680 })
+  const normalizedFilter = filter.trim().toLowerCase()
   const rows: QueryRow[] = model.operations
     .flatMap(operation => {
       const query = operation.summary
@@ -123,31 +124,33 @@ export function QueriesTab({
       ) {
         return []
       }
-      const haystack = [
-        query.serviceName,
-        query.method,
-        query.resourceId ?? '',
-        query.classification,
-        queryStatus(query).kind,
-        compactJson(query.data),
-        ...operation.rootFetches.map(root => root.queryId),
-        operation.composition?.detail ?? '',
-        JSON.stringify(query.query ?? {}),
-        ...operation.underlying.map(item =>
-          [
-            item.path,
-            item.query.serviceName,
-            item.query.method,
-            item.query.queryId,
-            item.query.resourceId ?? '',
-            item.query.classification,
-            queryStatus(item.query).kind,
-            JSON.stringify(item.query.query ?? {}),
-            compactJson(item.query.data),
-          ].join(' '),
-        ),
-      ].join(' ')
-      if (!haystack.toLowerCase().includes(filter.toLowerCase())) return []
+      if (normalizedFilter) {
+        const haystack = [
+          query.serviceName,
+          query.method,
+          query.resourceId ?? '',
+          query.classification,
+          queryStatus(query).kind,
+          compactJson(query.data),
+          ...operation.rootFetches.map(root => root.queryId),
+          operation.composition?.detail ?? '',
+          JSON.stringify(query.query ?? {}),
+          ...operation.underlying.map(item =>
+            [
+              item.path,
+              item.query.serviceName,
+              item.query.method,
+              item.query.queryId,
+              item.query.resourceId ?? '',
+              item.query.classification,
+              queryStatus(item.query).kind,
+              JSON.stringify(item.query.query ?? {}),
+              compactJson(item.query.data),
+            ].join(' '),
+          ),
+        ].join(' ')
+        if (!haystack.toLowerCase().includes(normalizedFilter)) return []
+      }
       return [{ operation, localSubscriberCount }]
     })
     .sort((a, b) => {
@@ -228,6 +231,8 @@ export function QueriesTab({
                   }}
                   style={{
                     cursor: 'pointer',
+                    contentVisibility: 'auto',
+                    containIntrinsicSize: '0 33px',
                     background: isSelected ? colors.activeButtonBg : colors.bg,
                     boxShadow: isSelected ? `inset 3px 0 ${colors.blue}` : undefined,
                     outline: 'none',

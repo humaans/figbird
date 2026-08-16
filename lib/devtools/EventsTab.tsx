@@ -67,12 +67,12 @@ export function EventsTab({
   const gridTemplateColumns = resizableGridTemplate(columnWidths, 6)
   const gridMinWidth =
     columnWidths.reduce((sum, width) => sum + width, 0) + (EVENT_COLUMNS.length - 1) * 10
+  const normalizedFilter = filter.trim().toLowerCase()
   const traceIndex = useMemo(() => buildTraceIndex(events), [events])
   const activities = useMemo(
-    () => buildActivities(events, traceIndex, scopes),
-    [events, scopes, traceIndex],
+    () => buildActivities(events, traceIndex, scopes, normalizedFilter.length > 0),
+    [events, normalizedFilter, scopes, traceIndex],
   )
-  const normalizedFilter = filter.toLowerCase()
   const rows: EventListRow[] =
     visibility === 'groups'
       ? activities.filter(activity =>
@@ -179,6 +179,8 @@ export function EventsTab({
                 ...styles.eventRow,
                 gridTemplateColumns,
                 minWidth: gridMinWidth,
+                contentVisibility: 'auto',
+                containIntrinsicSize: '0 33px',
                 cursor: 'pointer',
                 outline: 'none',
                 background: item.id === selectedEventId ? colors.activeButtonBg : undefined,
@@ -266,7 +268,7 @@ function EventDetails({
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const queryId = group?.queryId ?? eventQueryId(item.event)
-  const payload = eventPayload(item.event)
+  const payload = item.payloadState === 'evicted' ? undefined : eventPayload(item.event)
   return (
     <DetailsPane
       title={group?.kind ?? item.event.kind}
@@ -325,7 +327,15 @@ function EventDetails({
         ) : null}
       </DetailStats>
       <DetailBlock>
-        <JsonViewer value={payload} label={eventPayloadLabel(item.event)} emptyLabel='No payload' />
+        <JsonViewer
+          value={payload}
+          label={eventPayloadLabel(item.event)}
+          emptyLabel={
+            item.payloadState === 'evicted'
+              ? 'Payload vacuumed to keep the recording bounded'
+              : 'No payload'
+          }
+        />
       </DetailBlock>
       {relatedEvents && relatedEvents.length > 1 ? (
         <DetailSection label={relatedLabel ?? 'Related raw events'}>

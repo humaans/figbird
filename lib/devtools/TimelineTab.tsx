@@ -93,6 +93,8 @@ export function TimelineTab({
         visibility={visibility}
         follow={follow}
         onFollowChange={onFollowChange}
+        evictedCount={snapshot.timeline.evictedCount ?? 0}
+        payloadsEvicted={snapshot.timeline.payloadsEvicted ?? 0}
         {...(requestedActivityId ? { requestedActivityId } : {})}
         {...(onRequestedActivityHandled ? { onRequestedActivityHandled } : {})}
         {...(onQuerySelect ? { onQuerySelect } : {})}

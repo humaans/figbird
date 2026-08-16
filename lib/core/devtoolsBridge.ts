@@ -6,7 +6,7 @@ import { CappedBuffer } from './cappedBuffer.js'
 
 const BRIDGE_KEY = '__FIGBIRD_DEVTOOLS__'
 const SESSION_TIMEOUT_MS = 5_000
-const EVENT_LIMIT = 1_000
+const EVENT_LIMIT = 250
 
 interface DevtoolsSource {
   events: FigbirdEvents
@@ -44,34 +44,38 @@ export type DevtoolsWireQuery = Omit<InspectedQuery, 'fetchedAt' | 'query'> & {
 export interface DevtoolsBridgeConnection {
   instanceCount: number
   instanceId: number
-  protocol: 2
+  protocol: 2 | 3
   sessionId: string
 }
 
 export interface DevtoolsWireRead {
-  cache: InspectedCacheService[]
+  cache?: InspectedCacheService[]
   events: DevtoolsWireEvent[]
-  inFlightMutations: readonly InFlightMutation[]
-  queries: DevtoolsWireQuery[]
-  relational: InspectedRelationalQuery[]
+  inFlightMutations?: readonly InFlightMutation[]
+  queries?: DevtoolsWireQuery[]
+  relational?: InspectedRelationalQuery[]
 }
 
 export interface DevtoolsWireEnvelope {
-  protocol: 2
+  protocol: 3
   version: number
   read: DevtoolsWireRead | null
 }
 
 interface DevtoolsBridgeSession {
+  cacheDirty: boolean
   events: CappedBuffer<FigbirdEvent>
   expires: ReturnType<typeof setTimeout> | null
+  mutationsDirty: boolean
+  queriesDirty: boolean
+  relationalDirty: boolean
   source: DevtoolsSource
   unsubscribe: () => void
   version: number
 }
 
 interface DevtoolsPageBridge {
-  protocol: 2
+  protocol: 2 | 3
   connect(instanceId?: number): DevtoolsBridgeConnection | null
   disconnect(sessionId: string): void
   editCacheEntityJson(
@@ -116,7 +120,7 @@ function isPageBridge(value: unknown): value is DevtoolsPageBridge {
     typeof value === 'object' &&
     value !== null &&
     'protocol' in value &&
-    value.protocol === 2 &&
+    (value.protocol === 2 || value.protocol === 3) &&
     'register' in value &&
     typeof value.register === 'function' &&
     'connect' in value &&
@@ -148,7 +152,7 @@ function createPageBridge(): DevtoolsPageBridge {
   }
 
   return {
-    protocol: 2,
+    protocol: 3,
 
     register(source) {
       instances.set(nextInstanceId++, new WeakRef(source))
@@ -161,8 +165,12 @@ function createPageBridge(): DevtoolsPageBridge {
       const [resolvedId, source] = instance
       const sessionId = `${Date.now().toString(36)}-${nextSessionId++}`
       const session: DevtoolsBridgeSession = {
+        cacheDirty: true,
         events: new CappedBuffer(EVENT_LIMIT),
         expires: null,
+        mutationsDirty: true,
+        queriesDirty: true,
+        relationalDirty: true,
         source,
         unsubscribe: () => {},
         version: 1,
@@ -170,10 +178,18 @@ function createPageBridge(): DevtoolsPageBridge {
       const unsubscribers = [
         source.events.subscribe(event => {
           session.events.push(event)
+          if (event.kind === 'cache:updated') session.cacheDirty = true
           session.version++
         }),
-        source.mutating.subscribe(() => session.version++),
-        source.subscribeToStateChanges(() => session.version++),
+        source.mutating.subscribe(() => {
+          session.mutationsDirty = true
+          session.version++
+        }),
+        source.subscribeToStateChanges(() => {
+          session.queriesDirty = true
+          session.relationalDirty = true
+          session.version++
+        }),
       ]
       session.unsubscribe = () => {
         for (const unsubscribe of unsubscribers) unsubscribe()
@@ -183,7 +199,7 @@ function createPageBridge(): DevtoolsPageBridge {
       return {
         instanceCount: instances.size,
         instanceId: resolvedId,
-        protocol: 2,
+        protocol: 3,
         sessionId,
       }
     },
@@ -202,6 +218,9 @@ function createPageBridge(): DevtoolsPageBridge {
           return '{"ok":false,"error":"Entity ID must be a string or number"}'
         }
         const result = session.source.editCacheEntity(serviceName, itemId, JSON.parse(itemJson))
+        session.cacheDirty = true
+        session.queriesDirty = true
+        session.relationalDirty = true
         session.version++
         return JSON.stringify(result)
       } catch (error) {
@@ -219,17 +238,24 @@ function createPageBridge(): DevtoolsPageBridge {
       if (version === session.version) {
         return `{"protocol":2,"version":${session.version},"read":null}`
       }
-      return serializeWireEnvelope({
-        protocol: 2,
+      const serialized = serializeWireEnvelope({
+        protocol: 3,
         version: session.version,
         read: {
-          cache: session.source.inspectCache(),
+          ...(session.cacheDirty ? { cache: session.source.inspectCache() } : {}),
           events: session.events.drain().map(toWireEvent),
-          inFlightMutations: session.source.mutating.getSnapshot(),
-          queries: session.source.inspect(),
-          relational: session.source.inspectRelational(),
+          ...(session.mutationsDirty
+            ? { inFlightMutations: session.source.mutating.getSnapshot() }
+            : {}),
+          ...(session.queriesDirty ? { queries: session.source.inspect() } : {}),
+          ...(session.relationalDirty ? { relational: session.source.inspectRelational() } : {}),
         },
       })
+      session.cacheDirty = false
+      session.mutationsDirty = false
+      session.queriesDirty = false
+      session.relationalDirty = false
+      return serialized
     },
   }
 }

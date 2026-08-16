@@ -7,7 +7,8 @@ import type { FigbirdLikeForDevtools } from '../../lib/devtools/collector.js'
 import { ExtensionInspectionSession } from './inspection.js'
 import { decodeEvent, parseConnection, parseWireRead } from './protocol.js'
 
-const POLL_INTERVAL_MS = 250
+const ACTIVE_POLL_INTERVAL_MS = 250
+const IDLE_POLL_INTERVAL_MS = 1_000
 const BRIDGE_EXPRESSION = 'globalThis["__FIGBIRD_DEVTOOLS__"]'
 
 type Evaluate = (expression: string) => Promise<unknown>
@@ -68,6 +69,7 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
   update(read: DevtoolsWireRead): void {
     this.#pending = this.#pending
       ? {
+          ...this.#pending,
           ...read,
           events: [...this.#pending.events, ...read.events],
         }
@@ -109,20 +111,28 @@ class RemoteFigbird implements FigbirdLikeForDevtools {
     const read = this.#pending
     this.#pending = null
     if (!read) return
-    this.#queries = read.queries.map(query => ({
-      ...query,
-      fetchedAt: query.fetchedAt,
-      query: query.query,
-    }))
-    this.#cache = read.cache
-    this.#relational = read.relational
-    this.#mutations = read.inFlightMutations
+    const stateChanged = Boolean(read.queries || read.cache || read.relational)
+    const mutationsChanged = read.inFlightMutations !== undefined
+    if (read.queries) {
+      this.#queries = read.queries.map(query => ({
+        ...query,
+        fetchedAt: query.fetchedAt,
+        query: query.query,
+      }))
+    }
+    if (read.cache) this.#cache = read.cache
+    if (read.relational) this.#relational = read.relational
+    if (read.inFlightMutations) this.#mutations = read.inFlightMutations
     for (const event of read.events) {
       const decoded = decodeEvent(event)
       for (const listener of this.#eventListeners) listener(decoded)
     }
-    for (const listener of this.#stateListeners) listener(undefined)
-    for (const listener of this.#mutatingListeners) listener()
+    if (stateChanged) {
+      for (const listener of this.#stateListeners) listener(undefined)
+    }
+    if (mutationsChanged) {
+      for (const listener of this.#mutatingListeners) listener()
+    }
   }
 }
 
@@ -179,13 +189,16 @@ export class ExtensionSession {
   start(): void {
     if (this.#timer) return
     const generation = ++this.#generation
+    if (this.#polling) {
+      this.#schedulePoll(generation, ACTIVE_POLL_INTERVAL_MS)
+      return
+    }
     void this.#poll(generation)
-    this.#timer = setInterval(() => void this.#poll(generation), POLL_INTERVAL_MS)
   }
 
   stop(): void {
     this.#generation++
-    if (this.#timer) clearInterval(this.#timer)
+    if (this.#timer) clearTimeout(this.#timer)
     this.#timer = null
     this.#version = null
     this.figbird.cancelPending()
@@ -196,8 +209,12 @@ export class ExtensionSession {
   }
 
   async #poll(generation: number): Promise<void> {
-    if (this.#polling) return
+    if (this.#polling) {
+      if (generation === this.#generation) this.#schedulePoll(generation, ACTIVE_POLL_INTERVAL_MS)
+      return
+    }
     this.#polling = true
+    let nextDelay = IDLE_POLL_INTERVAL_MS
     try {
       if (!this.#connection) {
         const connection = parseConnection(await this.#evaluate(`${BRIDGE_EXPRESSION}?.connect()`))
@@ -229,7 +246,10 @@ export class ExtensionSession {
         return
       }
       this.#version = poll.version
-      if (poll.read) this.figbird.update(poll.read)
+      if (poll.read) {
+        nextDelay = ACTIVE_POLL_INTERVAL_MS
+        this.figbird.update(poll.read)
+      }
       await this.inspection.refresh()
     } catch {
       if (generation !== this.#generation) return
@@ -238,7 +258,15 @@ export class ExtensionSession {
       this.#setStatus('Cannot inspect this page')
     } finally {
       this.#polling = false
+      if (generation === this.#generation) this.#schedulePoll(generation, nextDelay)
     }
+  }
+
+  #schedulePoll(generation: number, delay: number): void {
+    this.#timer = setTimeout(() => {
+      this.#timer = null
+      void this.#poll(generation)
+    }, delay)
   }
 
   #resetConnection(): void {
