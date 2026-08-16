@@ -152,6 +152,7 @@ export function QueryDetails({
               {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
             </span>
           </div>
+          <QueryPerformance query={activeQuery} average={average} />
           <QueryMaintenance query={activeQuery} />
           {activeQuery.lastError ? (
             <div
@@ -213,7 +214,6 @@ export function QueryDetails({
               </div>
             </QueryDetailSection>
           ) : null}
-          <QueryPerformance query={activeQuery} average={average} />
         </div>
         {splitDetails ? (
           <div
@@ -257,19 +257,17 @@ function QueryData({
 function QueryMaintenance({ query }: { query: QuerySummary }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <dl
+    <div
+      title={`${maintenanceLabel(query)} · ${maintenanceReason(query)}`}
       style={{
-        display: 'grid',
-        gridTemplateColumns: '82px minmax(0, 1fr)',
-        gap: '4px 10px',
-        margin: '0 0 14px',
+        margin: '-3px 0 14px',
+        color: colors.faint,
+        fontSize: 11,
+        lineHeight: 1.4,
       }}
     >
-      <dt style={{ color: colors.faint }}>Maintenance</dt>
-      <dd style={{ margin: 0, color: colors.text }}>{maintenanceLabel(query)}</dd>
-      <dt style={{ color: colors.faint }}>Reason</dt>
-      <dd style={{ margin: 0, color: colors.muted }}>{maintenanceReason(query)}</dd>
-    </dl>
+      {maintenanceLabel(query)} · {maintenanceReason(query)}
+    </div>
   )
 }
 
@@ -421,7 +419,7 @@ function breadcrumbButtonStyle(colors: DevtoolsColors): CSSProperties {
 function QueryPerformance({ query, average }: { query: QuerySummary; average: number }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <QueryDetailSection label='Performance' separated>
+    <QueryDetailSection label='Performance'>
       <div
         style={{
           display: 'flex',
@@ -456,12 +454,21 @@ function QueryPerformance({ query, average }: { query: QuerySummary; average: nu
           </span>
         ) : null}
         <span style={{ whiteSpace: 'nowrap' }}>{plural(query.fetchCount, 'fetch', 'fetches')}</span>
-        {query.spans.length > 1 ? (
-          <span style={{ marginLeft: 'auto' }}>
-            <Sparkline spans={query.spans} />
-          </span>
-        ) : null}
       </div>
+      {query.spans.length > 0 ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '84px minmax(0, 1fr)',
+            alignItems: 'end',
+            gap: 8,
+            marginTop: 8,
+          }}
+        >
+          <span style={{ color: colors.faint, fontSize: 11 }}>Recent latency</span>
+          <Sparkline spans={query.spans} />
+        </div>
+      ) : null}
     </QueryDetailSection>
   )
 }
