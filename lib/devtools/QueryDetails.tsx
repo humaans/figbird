@@ -22,18 +22,28 @@ const SPLIT_DETAILS_WIDTH = 600
 
 export function QueryDetails({
   operation,
+  selectedQueryId,
   width,
   onResizeStart,
   onClose,
 }: {
   operation: DevtoolsOperation
+  selectedQueryId: string | null
   width: number
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
+  const requestedUnderlying = operation.underlying.find(
+    item => item.query.queryId === selectedQueryId,
+  )
+  const requestedUnderlyingKey = requestedUnderlying
+    ? underlyingFetchKey(requestedUnderlying)
+    : null
   const [selectedUnderlyingKey, setSelectedUnderlyingKey] = useState<string | null>(null)
-  useEffect(() => setSelectedUnderlyingKey(null), [operation.key])
+  useEffect(() => {
+    setSelectedUnderlyingKey(requestedUnderlyingKey)
+  }, [operation.key, requestedUnderlyingKey])
 
   const { summary, rootFetches, underlying, composition } = operation
   const selectedUnderlying =

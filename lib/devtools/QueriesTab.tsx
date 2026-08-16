@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import type { CSSProperties } from 'react'
 import type { QueryVisibility } from './Devtools.js'
 import { compactJson, formatAge, formatMs } from './format.js'
 import type { DevtoolsModel, DevtoolsOperation, QuerySummary } from './model.js'
@@ -80,14 +80,17 @@ export function QueriesTab({
   filter,
   visibility,
   inspectedQueryCounts,
+  selectedQueryId,
+  onSelectedQueryIdChange,
 }: {
   model: DevtoolsModel
   filter: string
   visibility: QueryVisibility
   inspectedQueryCounts: ReadonlyMap<string, number> | null
+  selectedQueryId: string | null
+  onSelectedQueryIdChange: (queryId: string | null) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
-  const [selectedOperationKey, setSelectedOperationKey] = useState<string | null>(null)
   const [columnWidths, onColumnResizeStart] = useResizableColumns(QUERY_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth({ defaultWidth: 680 })
   const rows: QueryRow[] = model.operations
@@ -139,7 +142,10 @@ export function QueriesTab({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   }
-  const selectedOperation = rows.find(row => row.operation.key === selectedOperationKey)?.operation
+  const selectedOperation = rows.find(row =>
+    operationContainsQuery(row.operation, selectedQueryId),
+  )?.operation
+  const selectedOperationKey = selectedOperation?.key ?? null
 
   return (
     <section style={{ height: '100%', display: 'flex', minWidth: 0 }}>
@@ -186,11 +192,11 @@ export function QueriesTab({
                   tabIndex={0}
                   aria-selected={isSelected}
                   title='Select query details'
-                  onClick={() => setSelectedOperationKey(operation.key)}
+                  onClick={() => onSelectedQueryIdChange(operationRootQueryId(operation))}
                   onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
-                      setSelectedOperationKey(operation.key)
+                      onSelectedQueryIdChange(operationRootQueryId(operation))
                     }
                   }}
                   style={{
@@ -281,13 +287,26 @@ export function QueriesTab({
       {selectedOperation ? (
         <QueryDetails
           operation={selectedOperation}
+          selectedQueryId={selectedQueryId}
           width={detailsWidth}
           onResizeStart={onDetailsResizeStart}
-          onClose={() => setSelectedOperationKey(null)}
+          onClose={() => onSelectedQueryIdChange(null)}
         />
       ) : null}
     </section>
   )
+}
+
+function operationContainsQuery(operation: DevtoolsOperation, queryId: string | null): boolean {
+  if (!queryId) return false
+  return (
+    operation.rootFetches.some(query => query.queryId === queryId) ||
+    operation.underlying.some(item => item.query.queryId === queryId)
+  )
+}
+
+function operationRootQueryId(operation: DevtoolsOperation): string {
+  return operation.rootFetches[0]?.queryId ?? operation.key
 }
 
 function QueryRows({ query }: { query: QuerySummary }) {

@@ -72,6 +72,7 @@ export function FigbirdDevtoolsPanel({
   const [timelineFilter, setTimelineFilter] = useState('')
   const [timelineVisibility, setTimelineVisibility] = useState<TimelineVisibility>('all')
   const [cacheFilter, setCacheFilter] = useState('')
+  const [selectedQueryId, setSelectedQueryId] = useState<string | null>(null)
   const [selectedTraceId, setSelectedTraceId] = useState<number | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
 
@@ -292,6 +293,8 @@ export function FigbirdDevtoolsPanel({
               filter={queryFilter}
               visibility={queryVisibility}
               inspectedQueryCounts={inspected?.queryCounts ?? null}
+              selectedQueryId={selectedQueryId}
+              onSelectedQueryIdChange={setSelectedQueryId}
             />
           ) : null}
           {tab === 'timeline' ? (
@@ -327,6 +330,13 @@ export function FigbirdDevtoolsPanel({
               onViewTrace={traceId => {
                 setSelectedTraceId(traceId)
                 setTab('events')
+              }}
+              onViewQuery={queryId => {
+                inspection?.stop()
+                setQueryFilter('')
+                setQueryVisibility('all')
+                setSelectedQueryId(queryId)
+                setTab('queries')
               }}
             />
           ) : null}

@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import {
   compactJson,
   estimateSerializedBytes,
@@ -47,12 +53,14 @@ export function CacheTab({
   filter,
   editor,
   onViewTrace,
+  onViewQuery,
 }: {
   services: DevtoolsCacheService[]
   model: DevtoolsModel
   filter: string
   editor?: DevtoolsCacheEditor
   onViewTrace?: (traceId: number) => void
+  onViewQuery?: (queryId: string) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const orderedServices = useMemo(
@@ -326,6 +334,7 @@ export function CacheTab({
           onClose={() => setSelectedId(null)}
           {...(editor ? { editor } : {})}
           {...(onViewTrace ? { onViewTrace } : {})}
+          {...(onViewQuery ? { onViewQuery } : {})}
         />
       ) : null}
     </section>
@@ -341,6 +350,7 @@ function CacheEntityDetails({
   onClose,
   editor,
   onViewTrace,
+  onViewQuery,
 }: {
   service: DevtoolsCacheService
   entity: DevtoolsCacheEntity
@@ -350,6 +360,7 @@ function CacheEntityDetails({
   onClose: () => void
   editor?: DevtoolsCacheEditor
   onViewTrace?: (traceId: number) => void
+  onViewQuery?: (queryId: string) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const [editing, setEditing] = useState(false)
@@ -359,7 +370,7 @@ function CacheEntityDetails({
   const [undoValue, setUndoValue] = useState<unknown | null>(null)
   const queryLabels = entity.queryIds.map(queryId => ({
     queryId,
-    label: queryLabel(model, queryId),
+    ...queryMembership(model, queryId),
   }))
 
   const update = async (value: unknown, rememberUndo: boolean) => {
@@ -528,37 +539,79 @@ function CacheEntityDetails({
             No retained query currently references this entity.
           </span>
         ) : (
-          queryLabels.map(item => (
-            <div
-              key={item.queryId}
-              title={item.queryId}
-              style={{
-                padding: '7px 0',
-                borderTop: `1px solid ${colors.rowBorder}`,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {item.label}
-            </div>
-          ))
+          queryLabels.map(item => {
+            const content = (
+              <>
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {item.label}
+                </span>
+                {item.available && onViewQuery ? (
+                  <span aria-hidden='true' style={{ marginLeft: 'auto', color: colors.faint }}>
+                    →
+                  </span>
+                ) : null}
+              </>
+            )
+            const style: CSSProperties = {
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '7px 0',
+              border: 0,
+              borderTop: `1px solid ${colors.rowBorder}`,
+              background: 'transparent',
+              color: item.available && onViewQuery ? colors.blue : colors.text,
+              font: 'inherit',
+              textAlign: 'left',
+            }
+            return item.available && onViewQuery ? (
+              <button
+                key={item.queryId}
+                type='button'
+                title={`Open ${item.label} in Queries`}
+                onClick={() => onViewQuery(item.queryId)}
+                style={{ ...style, cursor: 'pointer' }}
+              >
+                {content}
+              </button>
+            ) : (
+              <div key={item.queryId} title={item.queryId} style={style}>
+                {content}
+              </div>
+            )
+          })
         )}
       </DetailSection>
     </DetailsPane>
   )
 }
 
-function queryLabel(model: DevtoolsModel, queryId: string): string {
+function queryMembership(
+  model: DevtoolsModel,
+  queryId: string,
+): { label: string; available: boolean } {
   for (const operation of model.operations) {
     if (operation.rootFetches.some(query => query.queryId === queryId)) {
-      return `${operation.summary.serviceName}.${operation.summary.method} · root`
+      return {
+        label: `${operation.summary.serviceName}.${operation.summary.method} · root`,
+        available: true,
+      }
     }
     const nested = operation.underlying.find(item => item.query.queryId === queryId)
     if (nested)
-      return `${operation.summary.serviceName}.${operation.summary.method} › ${nested.path}`
+      return {
+        label: `${operation.summary.serviceName}.${operation.summary.method} › ${nested.path}`,
+        available: true,
+      }
   }
-  return queryId
+  return { label: queryId, available: false }
 }
 
 function formatEstimatedSize(value: unknown): string {
