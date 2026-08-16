@@ -13,6 +13,7 @@ import type { DevtoolsModel } from './model.js'
 import {
   Badge,
   ColumnResizeHandle,
+  DetailBlock,
   DetailSection,
   DetailsPane,
   buttonStyle,
@@ -494,9 +495,9 @@ function CacheEntityDetails({
           </div>
         </DetailSection>
       ) : (
-        <DetailSection label='Current value'>
-          <JsonViewer value={entity.value} />
-        </DetailSection>
+        <DetailBlock>
+          <JsonViewer value={entity.value} label='Current value' />
+        </DetailBlock>
       )}
 
       {entity.lastChange ? (

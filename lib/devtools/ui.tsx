@@ -417,7 +417,7 @@ export function DetailsPane({
 export function DetailSection({ label, children }: { label: string; children: ReactNode }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <section style={{ marginBottom: 12 }}>
+    <DetailBlock>
       <div
         style={{
           color: colors.muted,
@@ -430,8 +430,12 @@ export function DetailSection({ label, children }: { label: string; children: Re
         {label}
       </div>
       {children}
-    </section>
+    </DetailBlock>
   )
+}
+
+export function DetailBlock({ children }: { children: ReactNode }) {
+  return <section style={{ marginBottom: 12 }}>{children}</section>
 }
 
 export function DetailStat({ label, value }: { label: string; value: string }) {

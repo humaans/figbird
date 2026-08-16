@@ -13,6 +13,7 @@ import type { TimelineActivity, TimelineExtent } from './timelineModel.js'
 import {
   Badge,
   ColumnResizeHandle,
+  DetailBlock,
   DetailSection,
   DetailStat,
   DetailsPane,
@@ -527,32 +528,44 @@ function ActivityDetails({
       </div>
       {activity.write ? (
         <>
-          <DetailSection label='Payload'>
-            <JsonViewer value={activity.write.payload} emptyLabel='No payload' />
-          </DetailSection>
-          <DetailSection label='Arguments'>
-            <JsonViewer value={activity.write.args} />
-          </DetailSection>
+          <DetailBlock>
+            <JsonViewer value={activity.write.payload} label='Payload' emptyLabel='No payload' />
+          </DetailBlock>
+          <DetailBlock>
+            <JsonViewer value={activity.write.args} label='Arguments' />
+          </DetailBlock>
         </>
       ) : activity.kind === 'fetch' ? (
         <>
           {activity.payload !== undefined ? (
-            <DetailSection label='Parameters'>
-              <JsonViewer value={activity.payload} />
-            </DetailSection>
+            <DetailBlock>
+              <JsonViewer value={activity.payload} label='Parameters' />
+            </DetailBlock>
           ) : null}
-          <DetailSection label='Current query data'>
-            <JsonViewer value={activity.data} emptyLabel='No query data captured' />
-          </DetailSection>
+          <DetailBlock>
+            <JsonViewer
+              value={activity.data}
+              label='Current query data'
+              emptyLabel='No query data captured'
+            />
+          </DetailBlock>
         </>
       ) : activity.kind === 'realtime' ? (
-        <DetailSection label='Event payload'>
-          <JsonViewer value={activity.payload} emptyLabel='No event payload captured' />
-        </DetailSection>
+        <DetailBlock>
+          <JsonViewer
+            value={activity.payload}
+            label='Event payload'
+            emptyLabel='No event payload captured'
+          />
+        </DetailBlock>
       ) : activity.kind === 'connection' ? (
-        <DetailSection label='Connection event'>
-          <JsonViewer value={activity.payload} emptyLabel='No connection event captured' />
-        </DetailSection>
+        <DetailBlock>
+          <JsonViewer
+            value={activity.payload}
+            label='Connection event'
+            emptyLabel='No connection event captured'
+          />
+        </DetailBlock>
       ) : null}
       {activity.traceId !== undefined && onTraceSelect ? (
         <DetailSection label='Causal trace'>

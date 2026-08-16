@@ -20,6 +20,7 @@ import type { EventQueryScope } from './model.js'
 import {
   Badge,
   ColumnResizeHandle,
+  DetailBlock,
   DetailSection,
   DetailStat,
   DetailsPane,
@@ -261,9 +262,13 @@ function EventDetails({
         {'method' in item.event ? <DetailStat label='Method' value={item.event.method} /> : null}
         {queryId ? <DetailStat label='Query ID' value={queryId} /> : null}
       </div>
-      <DetailSection label={item.event.kind === 'realtime' ? 'Realtime payload' : 'Event payload'}>
-        <JsonViewer value={payload} emptyLabel='No payload' />
-      </DetailSection>
+      <DetailBlock>
+        <JsonViewer
+          value={payload}
+          label={item.event.kind === 'realtime' ? 'Realtime payload' : 'Event payload'}
+          emptyLabel='No payload'
+        />
+      </DetailBlock>
       {relatedEvents && relatedEvents.length > 1 ? (
         <DetailSection label={relatedLabel ?? 'Related activity'}>
           <div style={{ borderTop: `1px solid ${colors.rowBorder}` }}>
@@ -295,9 +300,9 @@ function EventDetails({
           </div>
         </DetailSection>
       ) : null}
-      <DetailSection label='Full event'>
-        <JsonViewer value={displayEvent(item.event)} />
-      </DetailSection>
+      <DetailBlock>
+        <JsonViewer value={displayEvent(item.event)} label='Full event' />
+      </DetailBlock>
     </DetailsPane>
   )
 }
