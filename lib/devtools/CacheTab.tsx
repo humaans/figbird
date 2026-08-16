@@ -29,11 +29,11 @@ import {
 } from './ui.js'
 
 const CACHE_COLUMNS = [
-  { label: 'entity', width: 150, minWidth: 90 },
-  { label: 'value', width: 310, minWidth: 160 },
-  { label: 'estSize', width: 90, minWidth: 72 },
-  { label: 'queries', width: 110, minWidth: 76 },
-  { label: 'provenance', width: 150, minWidth: 110 },
+  { label: 'Entity', width: 150, minWidth: 90 },
+  { label: 'Value', width: 310, minWidth: 160 },
+  { label: 'Est. Size', width: 90, minWidth: 72 },
+  { label: 'Queries', width: 110, minWidth: 76 },
+  { label: 'Provenance', width: 150, minWidth: 110 },
 ] as const
 
 const CACHE_SIZE_DESCRIPTION =
@@ -222,7 +222,7 @@ export function CacheTab({
                   <th
                     key={column.label}
                     style={{ ...styles.th, position: 'sticky' }}
-                    {...(column.label === 'estSize' ? { title: CACHE_SIZE_DESCRIPTION } : {})}
+                    {...(column.label === 'Est. Size' ? { title: CACHE_SIZE_DESCRIPTION } : {})}
                   >
                     {column.label}
                     <ColumnResizeHandle

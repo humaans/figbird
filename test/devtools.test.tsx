@@ -1135,7 +1135,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.true(rowText[0]!.includes('find · with labels'))
   t.false(rowText[0]!.includes('issueLabels'))
 
-  const classHeader = $all('th').find(header => header.textContent === 'class')
+  const classHeader = $all('th').find(header => header.textContent === 'Class')
   t.true(classHeader?.getAttribute('title')?.includes('local-exact'))
   const classBadge = $all('span').find(element => element.textContent === 'local-exact')
   t.true(classBadge?.getAttribute('title')?.includes('merge directly'))

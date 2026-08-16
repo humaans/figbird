@@ -27,48 +27,48 @@ export function operationIsInactive(operation: DevtoolsOperation): boolean {
 
 const QUERY_COLUMNS = [
   {
-    label: 'query',
+    label: 'Query',
     width: 250,
     minWidth: 150,
     description:
       'Root query operation. The dot shows its state: green active, amber cached, blue fetching, red error, or gray skipped/retained history.',
   },
   {
-    label: 'shape',
+    label: 'Shape',
     width: 420,
     minWidth: 180,
     description:
       'Query method, parameters, related data, and the number of underlying relation fetches.',
   },
   {
-    label: 'class',
+    label: 'Class',
     width: 160,
     minWidth: 105,
     description:
       'How Figbird maintains the result.\nlocal-exact: membership and ordering are provable locally.\nserver-window: a limited or sorted server result; uncertain changes trigger a refetch.\nserver-authoritative: the server decides membership; cursor queries may still merge updates proven not to move page boundaries.\nget: a direct lookup by ID.',
   },
   {
-    label: 'rows',
+    label: 'Rows',
     width: 75,
     minWidth: 55,
     description: 'Number of items currently in the query result.',
   },
   {
-    label: 'fetches',
+    label: 'Fetches',
     width: 175,
     minWidth: 100,
     description:
       'Completed fetch attempts · realtime service events observed while the query was active · event-driven refetches · failed fetches. Extra counts appear only when non-zero.',
   },
   {
-    label: 'last',
+    label: 'Last',
     width: 90,
     minWidth: 65,
     description:
       'Duration of the most recently completed fetch. "cached" or "warm" means data was available without a measured fetch in this devtools session.',
   },
   {
-    label: 'age',
+    label: 'Age',
     width: 80,
     minWidth: 60,
     description: "Time since this query's data was last fetched.",

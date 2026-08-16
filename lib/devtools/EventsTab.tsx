@@ -33,10 +33,10 @@ import {
 } from './ui.js'
 
 const EVENT_COLUMNS = [
-  { label: 'time', width: 108, minWidth: 84 },
-  { label: 'activity', width: 132, minWidth: 96 },
-  { label: 'scope', width: 140, minWidth: 96 },
-  { label: 'details', width: 360, minWidth: 180 },
+  { label: 'Time', width: 108, minWidth: 84 },
+  { label: 'Activity', width: 132, minWidth: 96 },
+  { label: 'Scope', width: 140, minWidth: 96 },
+  { label: 'Details', width: 360, minWidth: 180 },
 ] as const
 
 export function EventsTab({
