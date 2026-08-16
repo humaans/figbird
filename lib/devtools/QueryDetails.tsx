@@ -152,7 +152,6 @@ export function QueryDetails({
               {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
             </span>
           </div>
-          <QueryPerformance query={activeQuery} average={average} />
           <QueryMaintenance query={activeQuery} />
           {activeQuery.lastError ? (
             <div
@@ -169,6 +168,7 @@ export function QueryDetails({
               {activeQuery.lastError.message}
             </div>
           ) : null}
+          <QueryPerformance query={activeQuery} average={average} />
           {!splitDetails ? <QueryData query={activeQuery} separated /> : null}
           <QueryDetailSection label='Parameters' separated>
             <JsonViewer value={activeQuery.query ?? {}} />
@@ -419,7 +419,7 @@ function breadcrumbButtonStyle(colors: DevtoolsColors): CSSProperties {
 function QueryPerformance({ query, average }: { query: QuerySummary; average: number }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <QueryDetailSection label='Performance'>
+    <QueryDetailSection label='Performance' separated>
       <div
         style={{
           display: 'flex',
