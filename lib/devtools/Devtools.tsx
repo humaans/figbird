@@ -142,12 +142,7 @@ export function FigbirdDevtoolsPanel({
                 title='Choose live, inactive cached, skipped, or historical queries'
                 value={queryVisibility}
                 onChange={event => setQueryVisibility(event.currentTarget.value as QueryVisibility)}
-                style={{
-                  ...styles.input,
-                  width: 'auto',
-                  maxWidth: 'none',
-                  paddingRight: 24,
-                }}
+                style={styles.select}
               >
                 <option value='active'>Live queries</option>
                 <option value='inactive'>
@@ -218,12 +213,7 @@ export function FigbirdDevtoolsPanel({
                 onChange={event =>
                   setTimelineVisibility(event.currentTarget.value as TimelineVisibility)
                 }
-                style={{
-                  ...styles.input,
-                  width: 'auto',
-                  maxWidth: 'none',
-                  paddingRight: 24,
-                }}
+                style={styles.select}
               >
                 <option value='all'>All activity</option>
                 <option value='fetch'>Fetches</option>
@@ -247,12 +237,7 @@ export function FigbirdDevtoolsPanel({
                 title='Activity groups causal work; All events shows the raw instrumentation stream'
                 value={eventVisibility}
                 onChange={event => setEventVisibility(event.currentTarget.value as EventVisibility)}
-                style={{
-                  ...styles.input,
-                  width: 'auto',
-                  maxWidth: 'none',
-                  paddingRight: 24,
-                }}
+                style={styles.select}
               >
                 <option value='activity'>Activity</option>
                 <option value='all'>All events</option>

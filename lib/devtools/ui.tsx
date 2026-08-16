@@ -86,6 +86,19 @@ const defaultTheme: DevtoolsTheme = {
 export const ThemeContext = createContext<DevtoolsTheme>(defaultTheme)
 
 export function makeStyles(colors: DevtoolsColors) {
+  const input: CSSProperties = {
+    width: 210,
+    maxWidth: '44vw',
+    height: 26,
+    boxSizing: 'border-box',
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    background: colors.panel,
+    color: colors.text,
+    padding: '4px 8px',
+    font: 'inherit',
+  }
+  const chevronColor = colors.muted.replace('#', '%23')
   return {
     drawer: {
       position: 'fixed',
@@ -130,15 +143,17 @@ export function makeStyles(colors: DevtoolsColors) {
       flex: 1,
       minHeight: 0,
     },
-    input: {
-      width: 210,
-      maxWidth: '44vw',
-      border: `1px solid ${colors.border}`,
-      borderRadius: 4,
-      background: colors.panel,
-      color: colors.text,
-      padding: '5px 8px',
-      font: 'inherit',
+    input,
+    select: {
+      ...input,
+      width: 'auto',
+      maxWidth: 'none',
+      appearance: 'none',
+      paddingRight: 30,
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='${chevronColor}' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
+      backgroundRepeat: 'no-repeat',
+      backgroundPosition: 'right 10px center',
+      backgroundSize: '10px 6px',
     },
     scroll: {
       height: '100%',
