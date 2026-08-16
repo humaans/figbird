@@ -438,13 +438,36 @@ export function DetailBlock({ children }: { children: ReactNode }) {
   return <section style={{ marginBottom: 12 }}>{children}</section>
 }
 
+export function DetailStats({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+        gap: '8px 16px',
+        marginBottom: 16,
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
 export function DetailStat({ label, value }: { label: string; value: string }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <span>
-      <span style={{ color: colors.muted }}>{label}</span>{' '}
-      <strong style={{ color: colors.text }}>{value}</strong>
-    </span>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '82px minmax(0, 1fr)',
+        gap: 6,
+        alignItems: 'baseline',
+        minWidth: 0,
+      }}
+    >
+      <span style={{ color: colors.muted }}>{label}</span>
+      <strong style={{ color: colors.text, minWidth: 0, overflowWrap: 'anywhere' }}>{value}</strong>
+    </div>
   )
 }
 

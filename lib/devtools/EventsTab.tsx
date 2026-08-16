@@ -23,6 +23,7 @@ import {
   DetailBlock,
   DetailSection,
   DetailStat,
+  DetailStats,
   DetailsPane,
   resizableGridTemplate,
   toneColor,
@@ -247,21 +248,14 @@ function EventDetails({
       onResizeStart={onResizeStart}
       onClose={onClose}
     >
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: '8px 16px',
-          marginBottom: 16,
-        }}
-      >
+      <DetailStats>
         {'serviceName' in item.event ? (
           <DetailStat label='Service' value={item.event.serviceName} />
         ) : null}
         {'type' in item.event ? <DetailStat label='Type' value={item.event.type} /> : null}
         {'method' in item.event ? <DetailStat label='Method' value={item.event.method} /> : null}
         {queryId ? <DetailStat label='Query ID' value={queryId} /> : null}
-      </div>
+      </DetailStats>
       <DetailBlock>
         <JsonViewer
           value={payload}

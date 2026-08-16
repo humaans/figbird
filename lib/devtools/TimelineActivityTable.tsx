@@ -16,6 +16,7 @@ import {
   DetailBlock,
   DetailSection,
   DetailStat,
+  DetailStats,
   DetailsPane,
   buttonStyle,
   toneColor,
@@ -485,14 +486,7 @@ function ActivityDetails({
       onResizeStart={onResizeStart}
       onClose={onClose}
     >
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: '8px 16px',
-          marginBottom: 16,
-        }}
-      >
+      <DetailStats>
         <DetailStat label='Operation' value={activity.operation} />
         {activity.detail ? <DetailStat label='Context' value={activity.detail} /> : null}
         <DetailStat label='Status' value={activity.status} />
@@ -525,7 +519,7 @@ function ActivityDetails({
             value={formatMs(activity.write.initiatingAction.durationMs)}
           />
         ) : null}
-      </div>
+      </DetailStats>
       {activity.write ? (
         <>
           <DetailBlock>
