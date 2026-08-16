@@ -160,14 +160,7 @@ export function QueriesTab({
                   style={{ ...styles.th, position: 'sticky' }}
                   title={column.description}
                 >
-                  <span
-                    style={{
-                      borderBottom: `1px dotted ${colors.faint}`,
-                      cursor: 'help',
-                    }}
-                  >
-                    {column.label}
-                  </span>
+                  {column.label}
                   <ColumnResizeHandle
                     label={column.label}
                     onMouseDown={event => onColumnResizeStart(index, event)}
