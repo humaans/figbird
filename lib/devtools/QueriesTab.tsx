@@ -22,6 +22,8 @@ export function operationIsInactive(operation: DevtoolsOperation): boolean {
   return (
     operation.summary.skipped !== true &&
     queries.some(query => query.present) &&
+    (operation.summary.prefetchCount ?? 0) === 0 &&
+    (operation.summary.prepareCount ?? 0) === 0 &&
     queries.every(query => query.subscriberCount === 0)
   )
 }
@@ -120,6 +122,8 @@ export function QueriesTab({
       if (
         visibility === 'active' &&
         query.subscriberCount === 0 &&
+        (query.prefetchCount ?? 0) === 0 &&
+        (query.prepareCount ?? 0) === 0 &&
         operation.underlying.every(item => item.query.subscriberCount === 0)
       ) {
         return []
@@ -192,7 +196,7 @@ export function QueriesTab({
                 <th
                   key={column.label}
                   style={{ ...styles.th, position: 'sticky' }}
-                  title={column.description}
+                  data-tooltip={column.description}
                 >
                   {column.label}
                   <ColumnResizeHandle
@@ -221,7 +225,6 @@ export function QueriesTab({
                   key={operation.key}
                   tabIndex={0}
                   aria-selected={isSelected}
-                  title='Select query details'
                   onClick={() => onSelectedQueryIdChange(operationRootQueryId(operation))}
                   onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
@@ -261,7 +264,7 @@ export function QueriesTab({
                       </span>
                       {inspectedQueryCounts ? (
                         <span
-                          title={`${localSubscriberCount} of ${query.subscriberCount} subscribers in the selected area`}
+                          data-tooltip={`${localSubscriberCount} of ${query.subscriberCount} subscribers in the selected area`}
                           style={{ color: colors.blue, whiteSpace: 'nowrap', flexShrink: 0 }}
                         >
                           {localSubscriberCount} here
@@ -271,23 +274,14 @@ export function QueriesTab({
                   </td>
                   <td style={styles.td}>
                     <code
-                      title={queryOperationTitle(operation)}
-                      style={{ ...styles.code, color: colors.text, fontWeight: 600 }}
+                      data-tooltip={queryOperationTooltip(operation)}
+                      style={{ ...styles.code, color: colors.text }}
                     >
                       {queryOperationName(operation)}
                     </code>
                   </td>
                   <td style={{ ...styles.td, maxWidth: 420 }}>
                     <span
-                      title={[
-                        plan,
-                        operation.composition?.title,
-                        query.query === undefined
-                          ? undefined
-                          : `Parameters\n${JSON.stringify(query.query, null, 2)}`,
-                      ]
-                        .filter(Boolean)
-                        .join('\n\n')}
                       style={{
                         ...ellipsizedCode,
                         color: definition === '—' ? colors.faint : colors.text,
@@ -370,10 +364,10 @@ function queryOperationName(operation: DevtoolsOperation): string {
   return operationCall.split('(')[0] ?? operation.summary.method
 }
 
-function queryOperationTitle(operation: DevtoolsOperation): string {
+function queryOperationTooltip(operation: DevtoolsOperation): string | undefined {
   const logical = queryOperationName(operation)
   return logical === operation.summary.method
-    ? `Query operation and request method: ${logical}`
+    ? undefined
     : `Query operation: ${logical}\nRequest method: ${operation.summary.method}`
 }
 
@@ -401,7 +395,8 @@ function QueryFetchStats({ query }: { query: QuerySummary }) {
         whiteSpace: 'nowrap',
         color: query.errorCount > 0 ? colors.red : colors.muted,
       }}
-      title={parts.join('\n')}
+      data-tooltip={parts.join('\n')}
+      data-tooltip-overflow=''
     >
       {parts.join(' · ')}
     </span>
@@ -425,7 +420,6 @@ function QueryLastTiming({ query }: { query: QuerySummary }) {
 
   return (
     <span
-      title={`total ${formatMs(query.totalDurationMs)}`}
       style={{
         display: 'block',
         overflow: 'hidden',
@@ -443,7 +437,6 @@ function QueryAge({ query }: { query: QuerySummary }) {
   const { colors } = useDevtoolsTheme()
   return (
     <span
-      title='age since last fetch'
       style={{
         display: 'block',
         overflow: 'hidden',

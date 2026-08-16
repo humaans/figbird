@@ -1,4 +1,5 @@
 import type { QueryAST } from '../core/queryBuilder.js'
+import { QUERY_FETCH_HISTORY_LIMIT } from '../core/queryStore.js'
 import type { InspectedRelationalQuery } from '../core/relationalQuery.js'
 import type { DevtoolsSnapshot, QueryRecord } from './collector.js'
 import { compactJson } from './format.js'
@@ -9,7 +10,10 @@ export interface UnderlyingFetch {
   query: QueryRecord
 }
 
-export type QuerySummary = Omit<QueryRecord, 'generation' | 'page' | 'queryId'>
+export type QuerySummary = Omit<QueryRecord, 'generation' | 'page' | 'queryId'> & {
+  prefetchCount?: number
+  prepareCount?: number
+}
 
 export type OperationPagination = NonNullable<InspectedRelationalQuery['pagination']>
 
@@ -88,7 +92,12 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
       })
     }
 
-    const summary = summarizeRootFetches(rootFetches)
+    const summary = {
+      ...summarizeRootFetches(rootFetches),
+      subscriberCount: group.subscriberCount ?? summarySubscriberCount(rootFetches),
+      prefetchCount: group.prefetchCount ?? 0,
+      prepareCount: group.prepareCount ?? 0,
+    }
     operations.push({
       key: group.key,
       summary:
@@ -170,12 +179,20 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
     fetchCount: roots.reduce((count, query) => count + query.fetchCount, 0),
     errorCount: roots.reduce((count, query) => count + query.errorCount, 0),
     totalDurationMs: roots.reduce((duration, query) => duration + query.totalDurationMs, 0),
+    fetchHistory: roots
+      .flatMap(query => query.fetchHistory ?? [])
+      .sort((a, b) => a.startedAt - b.startedAt)
+      .slice(-QUERY_FETCH_HISTORY_LIMIT),
     spans: roots.flatMap(query => query.spans).sort((a, b) => a.startAt - b.startAt),
     realtimeSeen: Math.max(...roots.map(query => query.realtimeSeen)),
     reconciles: roots.reduce((count, query) => count + query.reconciles, 0),
     ...(latest.lastDurationMs !== undefined ? { lastDurationMs: latest.lastDurationMs } : {}),
     ...(lastError ? { lastError } : {}),
   }
+}
+
+function summarySubscriberCount(roots: QueryRecord[]): number {
+  return Math.max(...roots.map(query => query.subscriberCount))
 }
 
 function querySummary({

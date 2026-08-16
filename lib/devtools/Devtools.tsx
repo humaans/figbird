@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { CacheTab, type DevtoolsCacheEditor } from './CacheTab.js'
 import { EventsTab } from './EventsTab.js'
 import { QueriesTab, operationIsInactive, operationIsRetained } from './QueriesTab.js'
@@ -8,6 +8,7 @@ import type { Collector, QuerySpan } from './collector.js'
 import { buildDevtoolsModel } from './model.js'
 import {
   ThemeContext,
+  TooltipLayer,
   buttonStyle,
   darkColors,
   lightColors,
@@ -82,6 +83,7 @@ export function FigbirdDevtoolsPanel({
     itemId: string | number
   } | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
+  const panelRef = useRef<HTMLElement>(null)
 
   const inspectFetch = useCallback((span: QuerySpan) => {
     if (span.fetchId !== undefined) {
@@ -159,6 +161,7 @@ export function FigbirdDevtoolsPanel({
   return (
     <ThemeContext.Provider value={themeValue}>
       <section
+        ref={panelRef}
         data-figbird-devtools='panel'
         aria-label='Figbird devtools'
         style={{
@@ -170,6 +173,7 @@ export function FigbirdDevtoolsPanel({
           boxShadow: 'none',
         }}
       >
+        <TooltipLayer rootRef={panelRef} />
         <header style={styles.header}>
           <span style={styles.brand}>figbird</span>
           {(['queries', 'timeline', 'events', 'cache'] as const).map(item => (
@@ -185,7 +189,6 @@ export function FigbirdDevtoolsPanel({
               />
               <select
                 aria-label='Query visibility'
-                title='Choose live, inactive cached, retained history, skipped, or all queries'
                 value={queryVisibility}
                 onChange={event => setQueryVisibility(event.currentTarget.value as QueryVisibility)}
                 style={styles.select}
@@ -209,7 +212,7 @@ export function FigbirdDevtoolsPanel({
                   onClick={
                     inspectionSnapshot.kind === 'picking' ? inspection.stop : inspection.start
                   }
-                  title='Pick an area of the inspected page and show its mounted queries'
+                  data-tooltip='Pick an area of the inspected page and show its mounted queries'
                 >
                   {inspectionSnapshot.kind === 'picking' ? 'Cancel' : 'Inspect'}
                 </button>
@@ -218,7 +221,7 @@ export function FigbirdDevtoolsPanel({
                 <button
                   type='button'
                   onClick={inspection!.stop}
-                  title={inspectionTitle(inspected)}
+                  data-tooltip={inspectionTitle(inspected)}
                   style={{
                     ...buttonStyle(colors, true),
                     color: !inspected.supported
@@ -257,7 +260,6 @@ export function FigbirdDevtoolsPanel({
               />
               <select
                 aria-label='Timeline visibility'
-                title='Choose which activity types appear in the timeline and overview'
                 value={timelineVisibility}
                 onChange={event =>
                   setTimelineVisibility(event.currentTarget.value as TimelineVisibility)
@@ -285,7 +287,7 @@ export function FigbirdDevtoolsPanel({
               />
               <select
                 aria-label='Event visibility'
-                title='Causal groups connect related work; Raw events shows the instrumentation stream'
+                data-tooltip='Causal groups connect related work; Raw events shows the instrumentation stream'
                 value={eventVisibility}
                 onChange={event => setEventVisibility(event.currentTarget.value as EventVisibility)}
                 style={styles.select}
@@ -305,7 +307,7 @@ export function FigbirdDevtoolsPanel({
           ) : null}
           {tab === 'events' ? (
             <span
-              title='The oldest event is discarded when the bounded buffer is full'
+              data-tooltip='The oldest event is discarded when the bounded buffer is full'
               style={{ color: colors.muted, whiteSpace: 'nowrap' }}
             >
               {snapshot.events.length} / {collector.eventLimit} retained
@@ -450,7 +452,7 @@ function TabButton({
         background: 'transparent',
         color: active ? colors.text : colors.muted,
         font: 'inherit',
-        fontWeight: active ? 650 : 500,
+        fontWeight: 500,
         cursor: 'pointer',
       }}
       onClick={onClick}

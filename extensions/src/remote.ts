@@ -143,7 +143,9 @@ export class ExtensionSession {
   #connection: DevtoolsBridgeConnection | null = null
   #evaluate: Evaluate
   #generation = 0
+  #instanceId: number | null = null
   #polling = false
+  #running = false
   #status = 'Waiting for Figbird'
   #statusListeners = new Set<() => void>()
   #timer: ReturnType<typeof setInterval> | null = null
@@ -187,7 +189,8 @@ export class ExtensionSession {
   }
 
   start(): void {
-    if (this.#timer) return
+    if (this.#running) return
+    this.#running = true
     const generation = ++this.#generation
     if (this.#polling) {
       this.#schedulePoll(generation, ACTIVE_POLL_INTERVAL_MS)
@@ -197,6 +200,7 @@ export class ExtensionSession {
   }
 
   stop(): void {
+    this.#running = false
     this.#generation++
     if (this.#timer) clearTimeout(this.#timer)
     this.#timer = null
@@ -206,6 +210,16 @@ export class ExtensionSession {
     const sessionId = this.#connection?.sessionId
     this.#connection = null
     if (sessionId) void this.#disconnect(sessionId)
+  }
+
+  resetForNavigation(): void {
+    const restart = this.#running
+    this.stop()
+    this.#instanceId = null
+    this.figbird.reset()
+    this.inspection.reset()
+    for (const listener of this.#resetListeners) listener()
+    if (restart) this.start()
   }
 
   async #poll(generation: number): Promise<void> {
@@ -226,12 +240,14 @@ export class ExtensionSession {
           this.#setStatus('Waiting for Figbird')
           return
         }
+        if (this.#instanceId !== null && connection.instanceId !== this.#instanceId) {
+          this.figbird.reset()
+          this.inspection.reset()
+          for (const listener of this.#resetListeners) listener()
+        }
+        this.#instanceId = connection.instanceId
         this.#connection = connection
-        this.#setStatus(
-          connection.instanceCount > 1
-            ? `Connected · instance ${connection.instanceId} of ${connection.instanceCount}`
-            : 'Connected',
-        )
+        this.#setConnectedStatus(connection)
       }
 
       const sessionId = JSON.stringify(this.#connection.sessionId)
@@ -240,12 +256,13 @@ export class ExtensionSession {
       )
       if (generation !== this.#generation) return
       if (!poll) {
-        this.#resetConnection()
+        this.#dropConnection()
         this.inspection.reset()
         this.#setStatus('Reconnecting')
         return
       }
       this.#version = poll.version
+      this.#setConnectedStatus(this.#connection)
       if (poll.read) {
         nextDelay = ACTIVE_POLL_INTERVAL_MS
         this.figbird.update(poll.read)
@@ -253,7 +270,6 @@ export class ExtensionSession {
       await this.inspection.refresh()
     } catch {
       if (generation !== this.#generation) return
-      this.#resetConnection()
       this.inspection.reset()
       this.#setStatus('Cannot inspect this page')
     } finally {
@@ -269,13 +285,17 @@ export class ExtensionSession {
     }, delay)
   }
 
-  #resetConnection(): void {
-    const hadConnection = this.#connection !== null || this.#version !== null
+  #dropConnection(): void {
     this.#connection = null
     this.#version = null
-    if (!hadConnection) return
-    this.figbird.reset()
-    for (const listener of this.#resetListeners) listener()
+  }
+
+  #setConnectedStatus(connection: DevtoolsBridgeConnection): void {
+    this.#setStatus(
+      connection.instanceCount > 1
+        ? `Connected · instance ${connection.instanceId} of ${connection.instanceCount}`
+        : 'Connected',
+    )
   }
 
   async #disconnect(sessionId: string): Promise<void> {

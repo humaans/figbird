@@ -1,4 +1,5 @@
 import type { FigbirdEvent } from '../../lib/core/events.js'
+import { errorFromDetails } from '../../lib/core/errors.js'
 import type {
   DevtoolsBridgeConnection,
   DevtoolsWireEvent,
@@ -62,14 +63,12 @@ export function decodeEvent(event: DevtoolsWireEvent): FigbirdEvent {
     case 'mutate:error':
     case 'action:error':
     case 'connection:error': {
-      const error = new Error(event.error.message)
-      error.name = event.error.name
+      const error = errorFromDetails(event.error.details, event.error)
       return { ...event, error }
     }
     case 'connection:reconnect-failed': {
       if (!event.error) return event
-      const error = new Error(event.error.message)
-      error.name = event.error.name
+      const error = errorFromDetails(event.error.details, event.error)
       return { ...event, error }
     }
     default:

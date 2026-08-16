@@ -1,5 +1,5 @@
-import type { EventType, TraceCause } from './queryTypes.js'
-export type { TraceCause } from './queryTypes.js'
+import type { EventType, QueryGraphRef, TraceCause } from './queryTypes.js'
+export type { QueryGraphRef, TraceCause } from './queryTypes.js'
 
 /**
  * Mutation method names (subset usable in observability events).
@@ -30,7 +30,7 @@ export interface CacheQueryEffect {
  * happened. Cache transitions may include before/after values for attached devtools,
  * and emit() drops everything when nothing is listening.
  */
-export type FigbirdEvent =
+export type FigbirdEvent = (
   | {
       kind: 'fetch:start'
       serviceName: string
@@ -41,6 +41,7 @@ export type FigbirdEvent =
       reason?: FetchReason
       attempt?: number
       causes?: readonly TraceCause[]
+      graph?: readonly QueryGraphRef[]
       resourceId?: string | number
       params?: unknown
     }
@@ -53,6 +54,7 @@ export type FigbirdEvent =
       fetchId?: number
       durationMs: number
       itemCount: number
+      graph?: readonly QueryGraphRef[]
     }
   | {
       kind: 'fetch:error'
@@ -63,6 +65,7 @@ export type FigbirdEvent =
       fetchId?: number
       durationMs: number
       error: Error
+      graph?: readonly QueryGraphRef[]
     }
   | {
       kind: 'reconcile:started'
@@ -202,6 +205,10 @@ export type FigbirdEvent =
       /** The captured failure — also available on the hook's `error` slot. */
       error: Error
     }
+) & {
+  /** Epoch timestamp captured at the event source, before deferred or bridged delivery. */
+  timestamp?: number
+}
 
 /**
  * Public surface for subscribing to Figbird's observability events.
@@ -229,7 +236,8 @@ export class FigbirdEventEmitter implements FigbirdEvents {
    */
   emit(event: FigbirdEvent): void {
     if (this.#listeners.size === 0) return
-    this.#queue.push({ event, recipients: [...this.#listeners] })
+    const timedEvent = event.timestamp === undefined ? { ...event, timestamp: Date.now() } : event
+    this.#queue.push({ event: timedEvent, recipients: [...this.#listeners] })
     if (this.#flushScheduled) return
     this.#flushScheduled = true
     queueMicrotask(() => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { buttonStyle, useDevtoolsTheme } from './ui.js'
+import { buttonStyle, copyText, useDevtoolsTheme } from './ui.js'
 
 type JsonPrimitive = null | boolean | number | string
 type JsonTreeValue =
@@ -33,7 +33,18 @@ export function JsonViewer({
   const { colors, styles } = useDevtoolsTheme()
   const [raw, setRaw] = useState(false)
   const [expandAll, setExpandAll] = useState(false)
+  const [copied, setCopied] = useState(false)
   const normalized = useMemo(() => normalizeJson(value), [value])
+  const copyValue = useMemo(
+    () => (value === undefined ? null : prettyNormalizedJson(normalized)),
+    [normalized, value],
+  )
+
+  useEffect(() => {
+    if (!copied) return
+    const timeout = setTimeout(() => setCopied(false), 1_200)
+    return () => clearTimeout(timeout)
+  }, [copied])
 
   if (value === undefined && !label) {
     return (
@@ -88,6 +99,20 @@ export function JsonViewer({
             onClick={() => setExpandAll(current => !current)}
           >
             {expandAll ? 'Collapse nested' : 'Expand all'}
+          </button>
+        ) : null}
+        {copyValue !== null ? (
+          <button
+            type='button'
+            aria-label={`Copy ${label ?? 'JSON'}`}
+            style={jsonButtonStyle(colors, copied)}
+            onClick={() => {
+              void copyText(copyValue).then(success => {
+                if (success) setCopied(true)
+              })
+            }}
+          >
+            {copied ? 'Copied' : 'Copy'}
           </button>
         ) : null}
         {value !== undefined ? (

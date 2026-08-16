@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import type { TimelineActivity, TimelineActivityKind, TimelineExtent } from './timelineModel.js'
+import type { TimelineActivity, TimelineExtent } from './timelineModel.js'
 import { useDevtoolsTheme } from './ui.js'
 
 const OVERVIEW_HEIGHT = 54
 const DRAG_THRESHOLD = 3
+const OVERVIEW_PADDING = 4
+const MARK_HEIGHT = 3
+const LANE_GAP = 1
+const MIN_MARK_WIDTH = 2
 
 export interface TimelineRange {
   start: number
@@ -67,7 +71,7 @@ export function TimelineOverview({
     <button
       type='button'
       aria-label='Timeline overview'
-      title='Drag to filter the activity table by time. Click to clear the range.'
+      data-tooltip='Drag to filter the activity table by time. Click to clear the range.'
       onMouseDown={onMouseDown}
       onKeyDown={event => {
         if (event.key === 'Escape') onRangeChange(null)
@@ -131,12 +135,13 @@ function drawOverview(
     context.stroke()
   }
 
-  const bands: TimelineActivityKind[] = ['fetch', 'realtime', 'write', 'connection']
-  const bandHeight = height / bands.length
-  for (const activity of activities) {
-    const band = bands.indexOf(activity.kind)
-    const top = band * bandHeight + 4
-    const markHeight = Math.max(2, bandHeight - 7)
+  const laneCount = Math.max(
+    1,
+    Math.floor((height - OVERVIEW_PADDING * 2 + LANE_GAP) / (MARK_HEIGHT + LANE_GAP)),
+  )
+  const marks = packOverviewMarks(activities, extent, nowPoint, width, laneCount)
+  for (const { activity, lane } of marks) {
+    const top = OVERVIEW_PADDING + lane * (MARK_HEIGHT + LANE_GAP)
     const left = timelineRatio(activity.startAt, extent) * width
     const right = timelineRatio(activity.endAt ?? nowPoint, extent) * width
     context.fillStyle = toneColor(activity.tone, colors)
@@ -145,9 +150,9 @@ function drawOverview(
       activity.kind === 'realtime' ||
       activity.kind === 'connection'
     ) {
-      context.fillRect(left - 1, top, 2, markHeight)
+      context.fillRect(left - MIN_MARK_WIDTH / 2, top, MIN_MARK_WIDTH, MARK_HEIGHT)
     } else {
-      context.fillRect(left, top, Math.max(2, right - left), markHeight)
+      context.fillRect(left, top, Math.max(MIN_MARK_WIDTH, right - left), MARK_HEIGHT)
     }
   }
 
@@ -157,8 +162,6 @@ function drawOverview(
     context.fillStyle = 'rgba(0,0,0,.2)'
     context.fillRect(0, 0, left, height)
     context.fillRect(right, 0, width - right, height)
-    context.fillStyle = colors.activeButtonBg
-    context.fillRect(left, 0, Math.max(2, right - left), height)
     context.strokeStyle = colors.blue
     context.lineWidth = 1
     context.strokeRect(left + 0.5, 0.5, Math.max(1, right - left - 1), height - 1)
@@ -166,6 +169,42 @@ function drawOverview(
     context.fillRect(left, 0, 2, height)
     context.fillRect(right - 2, 0, 2, height)
   }
+}
+
+function packOverviewMarks(
+  activities: readonly TimelineActivity[],
+  extent: TimelineExtent,
+  nowPoint: number,
+  width: number,
+  laneCount: number,
+): Array<{ activity: TimelineActivity; lane: number }> {
+  const minimumDuration = ((extent.end - extent.start) * MIN_MARK_WIDTH) / Math.max(1, width)
+  const laneEnds = Array.from({ length: laneCount }, () => Number.NEGATIVE_INFINITY)
+  const sorted = [...activities].sort(
+    (first, second) =>
+      first.startAt - second.startAt ||
+      activityEnd(first, nowPoint) - activityEnd(second, nowPoint),
+  )
+
+  return sorted.map(activity => {
+    const start = activity.startAt
+    const end = Math.max(activityEnd(activity, nowPoint), start + minimumDuration)
+    let lane = laneEnds.findIndex(laneEnd => laneEnd <= start)
+
+    if (lane === -1) {
+      lane = 0
+      for (let index = 1; index < laneEnds.length; index++) {
+        if (laneEnds[index]! < laneEnds[lane]!) lane = index
+      }
+    }
+
+    laneEnds[lane] = end
+    return { activity, lane }
+  })
+}
+
+function activityEnd(activity: TimelineActivity, nowPoint: number): number {
+  return activity.endAt ?? nowPoint
 }
 
 function toneColor(

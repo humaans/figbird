@@ -16,7 +16,7 @@ import { ExtensionInspectionSession } from '../extensions/src/inspection.js'
 import { inspectQueryArea } from '../extensions/src/inspectionPage.js'
 import { ExtensionSession } from '../extensions/src/remote.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
-import { buildActivities, buildTraceIndex } from '../lib/devtools/eventModel.js'
+import { buildActivities, buildTraceIndex, eventPayload } from '../lib/devtools/eventModel.js'
 import { buildTimelineActivities } from '../lib/devtools/timelineModel.js'
 import { createTestApp, dom } from './helpers.js'
 
@@ -154,9 +154,11 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.truthy(row)
   t.is(row?.fetchCount, 1)
   t.is(row?.spans.length, 1)
+  t.is(row?.fetchHistory?.length, 1)
   t.true(row?.lastDurationMs !== undefined)
   t.true(snapshot.events.length > 0)
   t.true(snapshot.events.every(event => event.wallAt !== undefined))
+  t.true(snapshot.events.every(event => event.wallAt === event.event.timestamp))
   t.true(snapshot.timeline.startedAt > 0)
   t.true(snapshot.timeline.realtime.length > 0)
   t.deepEqual(snapshot.timeline.laneOrder, [])
@@ -183,6 +185,7 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.deepEqual(clearedTimeline.timeline.laneOrder, [])
   t.is(clearedTimeline.timeline.realtime.length, 0)
   t.is(clearedRow?.spans.length, 0)
+  t.is(clearedRow?.fetchHistory?.length, beforeTimelineClearRow?.fetchHistory?.length)
   t.is(clearedRow?.realtimeSeen, beforeTimelineClearRow?.realtimeSeen)
   t.is(clearedRow?.reconciles, beforeTimelineClearRow?.reconciles)
 
@@ -310,7 +313,12 @@ test('collector marks optimistic mutation failures as rolled back writes', async
   const collector = createCollector(figbird)
   collector.start()
 
-  feathers.service('notes').patch = () => Promise.reject(new Error('nope'))
+  const validationError = Object.assign(new Error('Validation Error'), {
+    name: 'ValidationError',
+    code: 422,
+    issues: [{ name: 'content', reason: 'required' }],
+  })
+  feathers.service('notes').patch = () => Promise.reject(validationError)
 
   await t.throwsAsync(figbird.m.notes.patch(1, { content: 'bad' }))
   await sleep(70)
@@ -320,7 +328,13 @@ test('collector marks optimistic mutation failures as rolled back writes', async
   t.truthy(mutation)
   t.is(mutation?.status, 'error')
   t.true(mutation?.rolledBack)
-  t.is(mutation?.error, 'nope')
+  t.is(mutation?.error, 'Validation Error')
+  t.deepEqual(mutation?.errorDetails, {
+    name: 'ValidationError',
+    message: 'Validation Error',
+    code: 422,
+    issues: [{ name: 'content', reason: 'required' }],
+  })
   t.deepEqual(mutation?.args, [1, { content: 'bad' }])
 
   const writeActivity = buildTimelineActivities(
@@ -330,6 +344,10 @@ test('collector marks optimistic mutation failures as rolled back writes', async
   ).find(activity => activity.kind === 'write')
   t.is(writeActivity?.status, 'error')
   t.is(writeActivity?.effect, 'rolled back')
+  t.deepEqual(writeActivity?.errorDetails, mutation?.errorDetails)
+
+  const mutationError = snapshot.events.find(item => item.event.kind === 'mutate:error')
+  t.deepEqual(mutationError ? eventPayload(mutationError.event) : undefined, mutation?.errorDetails)
 
   const mutationGroup = buildActivities(snapshot.events, buildTraceIndex(snapshot.events)).find(
     activity => activity.kind === 'mutation',
@@ -457,6 +475,11 @@ test('collector bounds inactive query and settled write history', t => {
   t.false(retainedGeneration?.present ?? true)
   t.is(retainedGeneration?.subscriberCount, 0)
 
+  const staleValidationError = Object.assign(new Error('old generation failed'), {
+    name: 'ValidationError',
+    code: 422,
+    issues: [{ name: 'title', reason: 'required' }],
+  })
   listeners.event?.({
     kind: 'realtime',
     serviceName: 'notes',
@@ -505,12 +528,19 @@ test('collector bounds inactive query and settled write history', t => {
     serviceName: 'notes',
     method: 'find',
     durationMs: 11,
-    error: new Error('old generation failed'),
+    error: staleValidationError,
   })
   const afterStaleError = collector.getSnapshot().queries.find(query => query.queryId === 'live-3')
   t.is(afterStaleError?.generation, 2)
   t.is(afterStaleError?.status, 'success')
   t.is(afterStaleError?.lastError?.generation, 1)
+  t.deepEqual(afterStaleError?.lastError?.details, {
+    name: 'ValidationError',
+    message: 'old generation failed',
+    code: 422,
+    issues: [{ name: 'title', reason: 'required' }],
+  })
+  t.deepEqual(afterStaleError?.spans.at(-1)?.errorDetails, afterStaleError?.lastError?.details)
 
   for (let mutationId = 1; mutationId <= 3; mutationId++) {
     listeners.event?.({
@@ -633,12 +663,83 @@ test('collector bounds inactive query and settled write history', t => {
   t.true((postClearSpan?.startAt ?? 0) >= timelineClearStartedAt)
   t.is(postClearSpan?.ok, true)
 
+  const sourceTime = Date.now() + 1_000
+  listeners.event?.({
+    kind: 'fetch:start',
+    queryId: 'timing-root',
+    generation: 1,
+    serviceName: 'teams',
+    method: 'find',
+    fetchId: 100,
+    timestamp: sourceTime,
+  })
+  listeners.event?.({
+    kind: 'fetch:start',
+    queryId: 'timing-child',
+    generation: 1,
+    serviceName: 'users',
+    method: 'find',
+    fetchId: 101,
+    timestamp: sourceTime + 25,
+  })
+  listeners.event?.({
+    kind: 'fetch:end',
+    queryId: 'timing-child',
+    generation: 1,
+    serviceName: 'users',
+    method: 'find',
+    fetchId: 101,
+    durationMs: 50,
+    itemCount: 1,
+    timestamp: sourceTime + 75,
+  })
+  listeners.event?.({
+    kind: 'fetch:end',
+    queryId: 'timing-root',
+    generation: 1,
+    serviceName: 'teams',
+    method: 'find',
+    fetchId: 100,
+    durationMs: 100,
+    itemCount: 1,
+    timestamp: sourceTime + 100,
+  })
+  const timedActivities = buildTimelineActivities(
+    collector.getSnapshot(),
+    buildDevtoolsModel(collector.getSnapshot()),
+    performance.now(),
+  )
+  const timedRoot = timedActivities.find(activity => activity.queryId === 'timing-root')
+  const timedChild = timedActivities.find(activity => activity.queryId === 'timing-child')
+  t.true(Math.abs((timedChild?.startAt ?? 0) - (timedRoot?.startAt ?? 0) - 25) < 1)
+  t.true(Math.abs((timedRoot?.endAt ?? 0) - (timedRoot?.startAt ?? 0) - 100) < 1)
+
   collector.stop()
 })
 
 test('devtools model keeps operation identity separate from shared fetch identity', t => {
-  const root = queryRecord('root', 'issues')
-  const team = queryRecord('team', 'teams')
+  const root = queryRecord('root', 'issues', {
+    spans: [
+      {
+        fetchId: 20,
+        startAt: 10.4,
+        endAt: 15,
+        ok: true,
+        graph: [{ operationId: 'rq/team', runId: 'rq/team:1', path: '(root)' }],
+      },
+    ],
+  })
+  const team = queryRecord('team', 'teams', {
+    spans: [
+      {
+        fetchId: 10,
+        startAt: 10.2,
+        endAt: 14,
+        ok: true,
+        graph: [{ operationId: 'rq/team', runId: 'rq/team:1', path: 'team' }],
+      },
+    ],
+  })
   const labels = queryRecord('labels', 'labels')
   const page1 = queryRecord('page-1', 'issues', {
     itemCount: 25,
@@ -714,6 +815,17 @@ test('devtools model keeps operation identity separate from shared fetch identit
   t.is(pages?.rootFetches[1]?.page?.request.after, 'cursor:25')
   t.false(pages ? 'queryId' in pages.summary : true)
   t.is(model.scopesByQueryId.get(root.queryId)?.length, 2)
+  const rootActivity = buildTimelineActivities(snapshot, model, 20).find(
+    activity => activity.queryId === root.queryId,
+  )
+  t.is(rootActivity?.detail, 'root')
+  t.true(rootActivity?.detailTooltip?.includes('Shared by 2 query operations') ?? false)
+  t.deepEqual(
+    buildTimelineActivities(snapshot, model, 20)
+      .filter(activity => activity.kind === 'fetch')
+      .map(activity => activity.queryId),
+    [root.queryId, team.queryId],
+  )
 })
 
 test('query details show a cursor operation as one inspectable page chain', t => {
@@ -802,7 +914,7 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   unmount()
 })
 
-test('extension bridge starts debug collection only while connected', t => {
+test('extension bridge starts debug collection only while connected', async t => {
   dom()
   const { figbird } = app()
   const inspect = figbird.inspect.bind(figbird)
@@ -847,12 +959,78 @@ test('extension bridge starts debug collection only while connected', t => {
   t.is(unchanged.version, envelope.version)
   t.is(unchanged.read, null)
   t.is(inspectCalls, 1)
+  const queryUnsubscribe = figbird
+    .queryDesc({ serviceName: 'notes', method: 'find' })
+    .subscribe(() => {})
+  await sleep(10)
+  const changed = JSON.parse(bridgeState.readJson(connection!.sessionId, envelope.version)!)
+  t.is(typeof changed.read.events[0].timestamp, 'number')
+
+  const syntheticEvent: Record<string, unknown> = {
+    type: 'click',
+    nativeEvent: new window.MouseEvent('click'),
+    target: window.document.createElement('button'),
+  }
+  syntheticEvent.self = syntheticEvent
+  const unsafePayload: Record<string, unknown> = {
+    circular: null,
+    items: Array.from({ length: 50_000 }, (_, index) => index),
+  }
+  unsafePayload.circular = unsafePayload
+  Object.defineProperty(unsafePayload, 'throwing', {
+    enumerable: true,
+    get: () => {
+      throw new Error('getter failed')
+    },
+  })
+  ;(figbird.events as FigbirdEventEmitter).emit({
+    kind: 'action:start',
+    actionId: 1,
+    name: 'unsafe click',
+    args: [syntheticEvent, unsafePayload],
+  })
+  await sleep(10)
+  const safeReadJson = bridgeState.readJson(connection!.sessionId, changed.version)
+  t.truthy(safeReadJson)
+  t.true(safeReadJson!.length < 10_000)
+  const safeRead = JSON.parse(safeReadJson!)
+  const action = safeRead.read.events.find(
+    (event: { kind: string }) => event.kind === 'action:start',
+  )
+  t.is(action.args[0], '[SyntheticEvent click]')
+  t.is(action.args[1].circular, '[Circular]')
+  t.is(action.args[1].items.length, 201)
+  t.is(action.args[1].items.at(-1), '[49800 more items]')
+  t.is(action.args[1].throwing, '[Property threw: getter failed]')
+  ;(figbird.events as FigbirdEventEmitter).emit({
+    kind: 'action:error',
+    actionId: 2,
+    name: 'validate',
+    durationMs: 12,
+    error: Object.assign(new Error('Validation Error'), {
+      name: 'ValidationError',
+      code: 422,
+      issues: [{ name: 'email', reason: 'required' }],
+    }),
+  })
+  await sleep(10)
+  const errorRead = JSON.parse(bridgeState.readJson(connection!.sessionId, safeRead.version)!)
+  const actionError = errorRead.read.events.find(
+    (event: { kind: string }) => event.kind === 'action:error',
+  )
+  t.deepEqual(actionError.error.details, {
+    name: 'ValidationError',
+    message: 'Validation Error',
+    code: 422,
+    issues: [{ name: 'email', reason: 'required' }],
+  })
+  queryUnsubscribe()
   bridgeState.disconnect(connection!.sessionId)
   t.is(eventSubscriptions, 0)
   t.is(bridgeState.readJson(connection!.sessionId, envelope.version), null)
 })
 
-test('extension session disconnects when connection finishes after stop', async t => {
+test('extension session disconnects after stop and preserves state across transient reads', async t => {
   let resolveConnect!: (connection: unknown) => void
   const connect = new Promise<unknown>(resolve => {
     resolveConnect = resolve
@@ -879,6 +1057,34 @@ test('extension session disconnects when connection finishes after stop', async 
 
   t.true(expressions.some(expression => expression.includes('?.disconnect("late")')))
   t.false(expressions.some(expression => expression.includes('?.readJson(')))
+
+  let connects = 0
+  let reads = 0
+  let resets = 0
+  const transientSession = new ExtensionSession(async expression => {
+    if (expression.endsWith('?.connect()')) {
+      connects++
+      return { instanceCount: 1, instanceId: 1, protocol: 3, sessionId: 'stable' }
+    }
+    if (expression.includes('?.readJson(')) {
+      reads++
+      if (reads === 1) throw new Error('temporary evaluation failure')
+      return '{"protocol":3,"version":1,"read":{"events":[]}}'
+    }
+    if (expression.includes('?.disconnect(')) return undefined
+    if (expression.endsWith('?.protocol')) return null
+    throw new Error(`Unexpected expression: ${expression}`)
+  })
+  transientSession.subscribeReset(() => resets++)
+  transientSession.start()
+  await sleep(1_100)
+  transientSession.stop()
+
+  t.is(connects, 1)
+  t.true(reads >= 2)
+  t.is(resets, 0)
+  transientSession.resetForNavigation()
+  t.is(resets, 1)
 })
 
 test('extension inspection waits for picker startup before refreshing', async t => {
@@ -1080,6 +1286,10 @@ test('panel shows root queries and nests relation fetches in details', async t =
 
   render(<FigbirdDevtoolsPanel collector={collector} inspection={inspection} />)
   await act(async () => {
+    const graph = {
+      operationId: inspectedRef.hash(),
+      runId: `${inspectedRef.hash()}:1`,
+    }
     events.emit({
       kind: 'fetch:start',
       queryId: 'root',
@@ -1088,6 +1298,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       method: 'find',
       fetchId: 10,
       reason: 'subscription',
+      graph: [{ ...graph, path: '(root)' }],
     })
     events.emit({
       kind: 'fetch:end',
@@ -1098,6 +1309,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       fetchId: 10,
       durationMs: 8,
       itemCount: 1,
+      graph: [{ ...graph, path: '(root)' }],
     })
     events.emit({
       kind: 'fetch:start',
@@ -1107,6 +1319,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       method: 'find',
       fetchId: 11,
       reason: 'subscription',
+      graph: [{ ...graph, path: 'labels' }],
     })
     events.emit({
       kind: 'fetch:end',
@@ -1117,6 +1330,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       fetchId: 11,
       durationMs: 5,
       itemCount: 2,
+      graph: [{ ...graph, path: 'labels' }],
     })
     events.emit({
       kind: 'realtime',
@@ -1187,9 +1401,9 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.false(rowText[0]!.includes('issueLabels'))
 
   const classHeader = $all('th').find(header => header.textContent === 'maintenance')
-  t.true(classHeader?.getAttribute('title')?.includes('local-exact'))
+  t.true(classHeader?.getAttribute('data-tooltip')?.includes('local-exact'))
   const classBadge = $all('span').find(element => element.textContent === 'local-exact')
-  t.true(classBadge?.getAttribute('title')?.includes('merge directly'))
+  t.true(classBadge?.getAttribute('data-tooltip')?.includes('merge directly'))
 
   const issuesRow = $all('tbody tr')[0]
   t.truthy(issuesRow)
@@ -1198,17 +1412,18 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const devtoolsText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
   t.true(devtoolsText.includes('Query plan'))
   t.true(devtoolsText.includes('Query data'))
+  t.truthy($('[aria-label="Copy Query data"]'))
   t.true(devtoolsText.includes('Visible issue'))
   t.true(devtoolsText.includes('Parameters'))
-  t.true(devtoolsText.includes('Realtime Updates'))
-  t.true(devtoolsText.includes('Merges matching events locally'))
+  t.false(devtoolsText.includes('Realtime Updates'))
+  t.false(devtoolsText.includes('Merges matching events locally'))
   t.true(devtoolsText.includes('issueLabels'))
   t.false(devtoolsText.includes('Composition'))
   t.false(devtoolsText.includes('Underlying fetches'))
   t.truthy($('[role="separator"][aria-label="Resize details pane"]'))
 
   const rootQueryId = $all('code').find(element => element.textContent?.includes('root'))
-  t.true(rootQueryId?.getAttribute('title')?.includes('Cache identity'))
+  t.true(rootQueryId?.getAttribute('data-tooltip')?.includes('Cache identity'))
 
   const nestedQuery = $('[aria-label="Inspect nested query labels"]')
   t.truthy(nestedQuery)
@@ -1227,7 +1442,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
 
   const fetchHistoryBar = $('[aria-label="8ms, success, subscription"]')
   t.truthy(fetchHistoryBar)
-  t.true(fetchHistoryBar?.getAttribute('title')?.includes('Trigger: subscription'))
+  t.true(fetchHistoryBar?.getAttribute('data-tooltip')?.includes('Trigger: subscription'))
   click(fetchHistoryBar!)
   const selectedFetch = $all('[data-timeline-activity="fetch"]').find(
     row => row.getAttribute('aria-selected') === 'true',
@@ -1240,6 +1455,28 @@ test('panel shows root queries and nests relation fetches in details', async t =
     ),
   )
   t.truthy($all('button').find(button => button.textContent?.includes('Open query root')))
+  t.true(($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes('Query graph'))
+  t.true(($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes('2 fetches'))
+  const nestedGraphRow = $all('button').find(
+    button =>
+      button.textContent?.includes('nested: labels') && button.textContent.includes('issueLabels'),
+  )
+  t.truthy(nestedGraphRow)
+  click(nestedGraphRow!)
+  t.true(
+    $all('[data-timeline-activity="fetch"]')
+      .find(row => row.getAttribute('aria-selected') === 'true')
+      ?.textContent?.includes('issueLabels'),
+  )
+  const showOnlyRelated = $all('button').find(button =>
+    button.textContent?.includes('Show only related'),
+  )
+  t.truthy(showOnlyRelated)
+  click(showOnlyRelated!)
+  t.is($all('[data-timeline-activity]').length, 2)
+  const showAll = $all('button').find(button => button.textContent?.includes('Show all'))
+  t.truthy(showAll)
+  click(showAll!)
   const resumeAfterFetchNavigation = $('[aria-label="Resume live timeline"]')
   t.truthy(resumeAfterFetchNavigation)
   click(resumeAfterFetchNavigation!)
@@ -1288,7 +1525,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
     -1,
   )?.textContent
   t.true(eventHeaders?.includes('groupserviceoperationscopestatusdetails'))
-  const realtimeEventRow = $all('[title="Select event details"]').find(row =>
+  const realtimeEventRow = $all('[data-event-row]').find(row =>
     row.textContent?.includes('realtime'),
   )
   t.truthy(realtimeEventRow)

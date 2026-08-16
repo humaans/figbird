@@ -160,10 +160,10 @@ export function EventsTab({
           return (
             <div
               key={row.key}
+              data-event-row=''
               role='button'
               tabIndex={0}
               aria-pressed={item.id === selectedEventId}
-              title='Select event details'
               onClick={() => {
                 setSelectedEventId(item.id)
                 onSelectedTraceIdChange?.(row.traceId ?? null)
@@ -206,7 +206,8 @@ export function EventsTab({
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}
-                title={row.details}
+                data-tooltip={row.details}
+                data-tooltip-overflow=''
               >
                 {row.details}
               </span>
@@ -237,7 +238,10 @@ export function EventsTab({
           }
           width={detailsWidth}
           onResizeStart={onDetailsResizeStart}
-          onClose={() => setSelectedEventId(null)}
+          onClose={() => {
+            setSelectedEventId(null)
+            onSelectedTraceIdChange?.(null)
+          }}
           onSelectEvent={eventId => setSelectedEventId(eventId)}
         />
       ) : null}
@@ -365,7 +369,8 @@ function EventDetails({
                 </code>
                 <strong style={{ fontWeight: 600 }}>{traceEvent.event.kind}</strong>
                 <span
-                  title={eventDetails(traceEvent)}
+                  data-tooltip={eventDetails(traceEvent)}
+                  data-tooltip-overflow=''
                   style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
                   {eventDetails(traceEvent)}
@@ -410,7 +415,7 @@ function EventScopeBadge({
   const badge = (
     <Badge
       tone={tone}
-      title={[...scopes.map(item => item.title), queryId ? `query id: ${queryId}` : '']
+      tooltip={[...scopes.map(item => item.title), queryId ? `query id: ${queryId}` : '']
         .filter(Boolean)
         .join('\n')}
     >
@@ -420,7 +425,7 @@ function EventScopeBadge({
   return queryId && onViewQuery ? (
     <button
       type='button'
-      title={`Open query ${queryId}`}
+      data-tooltip={`Open query ${queryId}`}
       onClick={event => {
         event.stopPropagation()
         onViewQuery(queryId)
@@ -444,7 +449,8 @@ function EllipsisValue({ value, code = false }: { value: string; code?: boolean 
   const { colors, styles } = useDevtoolsTheme()
   return (
     <span
-      title={value}
+      data-tooltip={value}
+      data-tooltip-overflow=''
       style={{
         ...(code ? styles.code : {}),
         color: colors.muted,
@@ -467,7 +473,16 @@ function EventStatus({
 }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: toneColor(colors, tone) }}>
+    <span
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        color: toneColor(colors, tone),
+        fontSize: 11,
+        lineHeight: '14px',
+      }}
+    >
       <span
         aria-hidden='true'
         style={{ width: 6, height: 6, borderRadius: 999, background: 'currentColor' }}
@@ -490,7 +505,6 @@ function EventKind({ kind }: { kind: string }) {
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
       }}
-      title={kind}
     >
       {kind}
     </span>

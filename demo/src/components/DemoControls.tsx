@@ -25,6 +25,28 @@ export function DemoControls() {
     }
   }, [open])
 
+  useEffect(() => {
+    if (!demoState?.chaosArmed) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const refresh = async () => {
+      try {
+        const state = await demoControl.getState()
+        if (cancelled) return
+        setDemoState(state)
+        if (!state.chaosArmed) return
+      } catch {
+        if (cancelled) return
+      }
+      timer = setTimeout(() => void refresh(), 500)
+    }
+    timer = setTimeout(() => void refresh(), 500)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [demoState?.chaosArmed])
+
   const applyDemoPatch = async (patch: Partial<DemoState>) => {
     if (!demoState) return
     const previous = demoState

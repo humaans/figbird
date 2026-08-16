@@ -1,9 +1,12 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type RefObject,
 } from 'react'
 import {
   compactJson,
@@ -42,6 +45,11 @@ const CACHE_COLUMNS = [
 
 const CACHE_SIZE_DESCRIPTION =
   'Estimated UTF-8 size of the JSON-serialized cache value. This is not JavaScript heap usage.'
+const CACHE_ROW_HEIGHT = 29
+const CACHE_HEADER_HEIGHT = 30
+const CACHE_ROW_OVERSCAN = 16
+const CACHE_SERVICE_SIDEBAR_WIDTH = 280
+const CACHE_SERVICE_GRID = 'minmax(0, 1fr) 32px 50px 14px'
 
 export interface DevtoolsCacheEditor {
   update(
@@ -77,6 +85,7 @@ export function CacheTab({
   )
   const [serviceName, setServiceName] = useState<string | null>(null)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const cacheScrollRef = useRef<HTMLDivElement>(null)
   const [columnWidths, onColumnResizeStart] = useResizableColumns(CACHE_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0)
@@ -104,6 +113,7 @@ export function CacheTab({
     [cacheRows],
   )
   const totalSize = [...serviceSizes.values()].reduce((total, size) => total + size, 0)
+  const totalEntities = orderedServices.reduce((count, item) => count + item.entities.length, 0)
 
   useEffect(() => {
     if (!serviceName || orderedServices.some(service => service.serviceName === serviceName)) return
@@ -125,59 +135,96 @@ export function CacheTab({
   }, [onRequestedEntityHandled, orderedServices, requestedEntity])
 
   const normalizedFilter = filter.trim().toLowerCase()
-  const entries = cacheRows
-    .filter(row => serviceName === null || row.service.serviceName === serviceName)
-    .filter(({ service, entity, preview }) => {
-      if (!normalizedFilter) return true
-      return [
-        service.serviceName,
-        entity.id,
-        preview,
-        entity.queryIds.join(' '),
-        entity.lastChange?.source ?? 'initial snapshot',
-        entity.lastChange?.type ?? '',
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedFilter)
-    })
-    .sort(
-      (a, b) =>
-        a.service.serviceName.localeCompare(b.service.serviceName) ||
-        a.entity.id.localeCompare(b.entity.id, undefined, { numeric: true }),
-    )
+  const entries = useMemo(
+    () =>
+      cacheRows
+        .filter(row => serviceName === null || row.service.serviceName === serviceName)
+        .filter(({ service, entity, preview }) => {
+          if (!normalizedFilter) return true
+          return [
+            service.serviceName,
+            entity.id,
+            preview,
+            entity.queryIds.join(' '),
+            entity.lastChange?.source ?? 'initial snapshot',
+            entity.lastChange?.type ?? '',
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedFilter)
+        })
+        .sort(
+          (a, b) =>
+            a.service.serviceName.localeCompare(b.service.serviceName) ||
+            a.entity.id.localeCompare(b.entity.id, undefined, { numeric: true }),
+        ),
+    [cacheRows, normalizedFilter, serviceName],
+  )
+  const virtualRows = useVirtualCacheRows(
+    entries.length,
+    cacheScrollRef,
+    `${serviceName ?? '*'}\u0000${normalizedFilter}`,
+  )
+  const visibleEntries = entries.slice(virtualRows.start, virtualRows.end)
   const selected = entries.find(
     ({ service, entity }) => cacheEntityKey(service.serviceName, entity.id) === selectedKey,
   )
+
+  useEffect(() => {
+    if (!selectedKey) return
+    const index = entries.findIndex(
+      ({ service, entity }) => cacheEntityKey(service.serviceName, entity.id) === selectedKey,
+    )
+    const scroll = cacheScrollRef.current
+    if (index < 0 || !scroll || scroll.clientHeight === 0) return
+    const top = CACHE_HEADER_HEIGHT + index * CACHE_ROW_HEIGHT
+    const bottom = top + CACHE_ROW_HEIGHT
+    if (top < scroll.scrollTop + CACHE_HEADER_HEIGHT) {
+      scroll.scrollTop = Math.max(0, top - CACHE_HEADER_HEIGHT)
+    } else if (bottom > scroll.scrollTop + scroll.clientHeight) {
+      scroll.scrollTop = bottom - scroll.clientHeight
+    }
+  }, [entries, selectedKey])
 
   return (
     <section style={{ height: '100%', display: 'flex', minWidth: 0 }}>
       <nav
         aria-label='Cached services'
         style={{
-          width: 190,
-          flex: '0 0 190px',
+          width: CACHE_SERVICE_SIDEBAR_WIDTH,
+          flex: `0 0 ${CACHE_SERVICE_SIDEBAR_WIDTH}px`,
           overflow: 'auto',
           borderRight: `1px solid ${colors.border}`,
           background: colors.toolbar,
         }}
       >
         <div
-          title={CACHE_SIZE_DESCRIPTION}
+          data-tooltip={CACHE_SIZE_DESCRIPTION}
           style={{
             padding: '8px 10px',
             color: colors.muted,
             fontWeight: 650,
             borderBottom: `1px solid ${colors.border}`,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
           }}
         >
-          <span>Normalized cache</span>
-          <code style={{ ...styles.code, color: colors.faint, marginLeft: 'auto' }}>
-            {formatBytes(totalSize)}
-          </code>
+          Normalized cache
+        </div>
+        <div
+          aria-hidden='true'
+          style={{
+            display: 'grid',
+            gridTemplateColumns: CACHE_SERVICE_GRID,
+            gap: 4,
+            padding: '5px 9px',
+            borderBottom: `1px solid ${colors.rowBorder}`,
+            color: colors.faint,
+            fontSize: 11,
+          }}
+        >
+          <span>service</span>
+          <span style={{ textAlign: 'right' }}>items</span>
+          <span style={{ textAlign: 'right' }}>size</span>
+          <span />
         </div>
         <button
           type='button'
@@ -188,9 +235,14 @@ export function CacheTab({
           style={cacheServiceButtonStyle(colors, serviceName === null)}
         >
           <span>All services</span>
-          <span style={{ color: colors.faint, marginLeft: 'auto' }}>
-            {orderedServices.reduce((count, item) => count + item.entities.length, 0)}
+          <span style={{ color: colors.faint, textAlign: 'right' }}>{totalEntities}</span>
+          <span
+            data-tooltip={CACHE_SIZE_DESCRIPTION}
+            style={{ color: colors.faint, textAlign: 'right', whiteSpace: 'nowrap' }}
+          >
+            {formatBytes(totalSize)}
           </span>
+          <span />
         </button>
         {orderedServices.map(item => {
           const selectedService = item.serviceName === serviceName
@@ -204,58 +256,52 @@ export function CacheTab({
               }}
               style={cacheServiceButtonStyle(colors, selectedService)}
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-                <strong
-                  style={{
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {item.serviceName}
-                </strong>
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    color: colors.faint,
-                    marginLeft: 'auto',
-                  }}
-                >
-                  {item.entities.length}
-                  <span aria-hidden='true'>·</span>
-                  <span title={CACHE_SIZE_DESCRIPTION}>
-                    {formatBytes(serviceSizes.get(item.serviceName) ?? 0)}
-                  </span>
-                  {item.materialized ? (
-                    <svg
-                      aria-label='Complete cached set'
-                      role='img'
-                      viewBox='0 0 12 12'
-                      width='12'
-                      height='12'
-                      style={{ color: colors.green, flex: '0 0 auto' }}
-                    >
-                      <circle cx='6' cy='6' r='5' fill='currentColor' />
-                      <path
-                        d='m3.6 6 1.5 1.5 3.3-3.3'
-                        fill='none'
-                        stroke={colors.bg}
-                        strokeLinecap='round'
-                        strokeLinejoin='round'
-                        strokeWidth='1.3'
-                      />
-                    </svg>
-                  ) : null}
-                </span>
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {item.serviceName}
+              </span>
+              <span style={{ color: colors.faint, textAlign: 'right' }}>
+                {item.entities.length}
+              </span>
+              <span
+                data-tooltip={CACHE_SIZE_DESCRIPTION}
+                style={{ color: colors.faint, textAlign: 'right', whiteSpace: 'nowrap' }}
+              >
+                {formatBytes(serviceSizes.get(item.serviceName) ?? 0)}
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {item.materialized ? (
+                  <svg
+                    aria-label='Complete cached set'
+                    role='img'
+                    viewBox='0 0 12 12'
+                    width='12'
+                    height='12'
+                    style={{ color: colors.green, flex: '0 0 auto' }}
+                  >
+                    <circle cx='6' cy='6' r='5' fill='currentColor' />
+                    <path
+                      d='m3.6 6 1.5 1.5 3.3-3.3'
+                      fill='none'
+                      stroke={colors.bg}
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth='1.3'
+                    />
+                  </svg>
+                ) : null}
               </span>
             </button>
           )
         })}
       </nav>
-      <div style={{ ...styles.scroll, flex: 1, minWidth: 0 }}>
+      <div ref={cacheScrollRef} style={{ ...styles.scroll, flex: 1, minWidth: 0 }}>
         {orderedServices.length === 0 ? (
           <div style={{ padding: 16, color: colors.muted }}>No entities cached yet.</div>
         ) : (
@@ -271,7 +317,9 @@ export function CacheTab({
                   <th
                     key={column.label}
                     style={{ ...styles.th, position: 'sticky' }}
-                    {...(column.label === 'est. size' ? { title: CACHE_SIZE_DESCRIPTION } : {})}
+                    {...(column.label === 'est. size'
+                      ? { 'data-tooltip': CACHE_SIZE_DESCRIPTION }
+                      : {})}
                   >
                     {column.label}
                     <ColumnResizeHandle
@@ -290,7 +338,10 @@ export function CacheTab({
                   </td>
                 </tr>
               ) : null}
-              {entries.map(({ service, entity, preview, estimatedSize }) => {
+              {virtualRows.paddingTop > 0 ? (
+                <CacheTableSpacer height={virtualRows.paddingTop} />
+              ) : null}
+              {visibleEntries.map(({ service, entity, preview, estimatedSize }) => {
                 const key = cacheEntityKey(service.serviceName, entity.id)
                 const isSelected = key === selectedKey
                 return (
@@ -308,8 +359,7 @@ export function CacheTab({
                     style={{
                       cursor: 'pointer',
                       outline: 'none',
-                      contentVisibility: 'auto',
-                      containIntrinsicSize: '0 33px',
+                      height: CACHE_ROW_HEIGHT,
                       background: isSelected ? colors.activeButtonBg : undefined,
                       boxShadow: isSelected ? `inset 3px 0 ${colors.blue}` : undefined,
                     }}
@@ -318,11 +368,12 @@ export function CacheTab({
                       <span style={{ fontWeight: 600 }}>{service.serviceName}</span>
                     </td>
                     <td style={styles.td}>
-                      <code style={{ ...styles.code, fontWeight: 650 }}>#{entity.id}</code>
+                      <code style={styles.code}>#{entity.id}</code>
                     </td>
                     <td style={styles.td}>
                       <code
-                        title={preview}
+                        data-tooltip={preview}
+                        data-tooltip-overflow=''
                         style={{
                           ...styles.code,
                           display: 'block',
@@ -337,7 +388,7 @@ export function CacheTab({
                     </td>
                     <td style={styles.td}>
                       <code
-                        title={
+                        data-tooltip={
                           estimatedSize === null
                             ? 'This value could not be JSON-serialized.'
                             : `${estimatedSize.toLocaleString()} estimated UTF-8 JSON bytes`
@@ -357,7 +408,9 @@ export function CacheTab({
                     <td style={styles.td}>
                       {entity.lastChange ? (
                         <span
-                          title={formatClock(entity.lastChange.wallAt, { milliseconds: true })}
+                          data-tooltip={formatClock(entity.lastChange.wallAt, {
+                            milliseconds: true,
+                          })}
                           style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
                         >
                           <Badge
@@ -376,6 +429,9 @@ export function CacheTab({
                   </tr>
                 )
               })}
+              {virtualRows.paddingBottom > 0 ? (
+                <CacheTableSpacer height={virtualRows.paddingBottom} />
+              ) : null}
             </tbody>
           </table>
         )}
@@ -395,6 +451,75 @@ export function CacheTab({
         />
       ) : null}
     </section>
+  )
+}
+
+function useVirtualCacheRows(
+  count: number,
+  scrollRef: RefObject<HTMLDivElement | null>,
+  resetKey: string,
+): { start: number; end: number; paddingTop: number; paddingBottom: number } {
+  const [range, setRange] = useState({ start: 0, end: Math.min(count, 64) })
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current
+    if (scroll) scroll.scrollTop = 0
+  }, [resetKey, scrollRef])
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll) {
+      setRange({ start: 0, end: Math.min(count, 64) })
+      return
+    }
+    const ownerWindow = scroll.ownerDocument.defaultView
+    let frame: number | null = null
+    const measure = () => {
+      frame = null
+      const viewportHeight = scroll.clientHeight || CACHE_ROW_HEIGHT * 48
+      const bodyScrollTop = Math.max(0, scroll.scrollTop - CACHE_HEADER_HEIGHT)
+      const start = Math.max(0, Math.floor(bodyScrollTop / CACHE_ROW_HEIGHT) - CACHE_ROW_OVERSCAN)
+      const end = Math.min(
+        count,
+        Math.ceil((bodyScrollTop + viewportHeight) / CACHE_ROW_HEIGHT) + CACHE_ROW_OVERSCAN,
+      )
+      setRange(current =>
+        current.start === start && current.end === end ? current : { start, end },
+      )
+    }
+    const scheduleMeasure = () => {
+      if (frame !== null) return
+      if (ownerWindow?.requestAnimationFrame) {
+        frame = ownerWindow.requestAnimationFrame(measure)
+      } else {
+        measure()
+      }
+    }
+
+    measure()
+    scroll.addEventListener('scroll', scheduleMeasure, { passive: true })
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleMeasure)
+    observer?.observe(scroll)
+    return () => {
+      scroll.removeEventListener('scroll', scheduleMeasure)
+      observer?.disconnect()
+      if (frame !== null) ownerWindow?.cancelAnimationFrame(frame)
+    }
+  }, [count, resetKey, scrollRef])
+
+  return {
+    ...range,
+    paddingTop: range.start * CACHE_ROW_HEIGHT,
+    paddingBottom: Math.max(0, count - range.end) * CACHE_ROW_HEIGHT,
+  }
+}
+
+function CacheTableSpacer({ height }: { height: number }) {
+  return (
+    <tr aria-hidden='true' style={{ height }}>
+      <td colSpan={CACHE_COLUMNS.length} style={{ height, padding: 0, border: 0 }} />
+    </tr>
   )
 }
 
@@ -472,7 +597,7 @@ function CacheEntityDetails({
           {entity.queryIds.length} query{' '}
           {entity.queryIds.length === 1 ? 'membership' : 'memberships'}
         </span>
-        <code title={CACHE_SIZE_DESCRIPTION} style={{ ...styles.code, color: colors.muted }}>
+        <code data-tooltip={CACHE_SIZE_DESCRIPTION} style={{ ...styles.code, color: colors.muted }}>
           {formatEstimatedSize(entity.value)}
         </code>
         <span style={styles.spacer} />
@@ -636,14 +761,19 @@ function CacheEntityDetails({
               <button
                 key={item.queryId}
                 type='button'
-                title={`Open ${item.label} in Queries`}
+                data-tooltip={`Open ${item.label} in Queries`}
                 onClick={() => onViewQuery(item.queryId)}
                 style={{ ...style, cursor: 'pointer' }}
               >
                 {content}
               </button>
             ) : (
-              <div key={item.queryId} title={item.queryId} style={style}>
+              <div
+                key={item.queryId}
+                data-tooltip={item.queryId}
+                data-tooltip-overflow=''
+                style={style}
+              >
                 {content}
               </div>
             )
@@ -687,8 +817,10 @@ function cacheEntityKey(serviceName: string, entityId: string): string {
 function cacheServiceButtonStyle(colors: DevtoolsColors, selected: boolean): CSSProperties {
   return {
     width: '100%',
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: CACHE_SERVICE_GRID,
     alignItems: 'center',
+    gap: 4,
     border: 0,
     borderBottom: `1px solid ${colors.rowBorder}`,
     borderLeft: `3px solid ${selected ? colors.blue : 'transparent'}`,

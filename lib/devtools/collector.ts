@@ -7,6 +7,7 @@ import type {
   MutationActivity,
 } from '../core/figbird.js'
 import { CappedBuffer } from '../core/cappedBuffer.js'
+import { errorDetails, errorFromDetails } from '../core/errors.js'
 import { now } from './format.js'
 import { PayloadRetention, type PayloadHandle } from './payloadRetention.js'
 
@@ -40,10 +41,13 @@ export interface QuerySpan {
   fetchId?: number
   reason?: string
   traceIds?: number[]
+  graph?: Extract<FigbirdEvent, { kind: 'fetch:start' }>['graph']
   params?: unknown
   paramsState?: PayloadRetentionState
   result?: unknown
   resultState?: PayloadRetentionState
+  errorDetails?: unknown
+  errorDetailsState?: PayloadRetentionState
 }
 
 export interface QueryRecord extends Omit<
@@ -63,7 +67,13 @@ export interface QueryRecord extends Omit<
   spans: QuerySpan[]
   realtimeSeen: number
   reconciles: number
-  lastError?: { message: string; at: number; generation: number }
+  lastError?: {
+    message: string
+    at: number
+    generation: number
+    details?: unknown
+    detailsState?: PayloadRetentionState
+  }
 }
 
 export interface DevtoolsEvent {
@@ -126,6 +136,8 @@ export interface WriteRecord {
   optimistic?: boolean
   rolledBack?: boolean
   error?: string
+  errorDetails?: unknown
+  errorDetailsState?: PayloadRetentionState
   args?: readonly unknown[]
   argsState?: PayloadRetentionState
   traceId?: number
@@ -229,6 +241,13 @@ function payloadForRetention(event: FigbirdEvent): unknown {
     case 'mutate:update':
     case 'action:start':
       return event.args
+    case 'fetch:error':
+    case 'mutate:error':
+    case 'action:error':
+    case 'connection:error':
+      return errorDetails(event.error)
+    case 'connection:reconnect-failed':
+      return event.error ? errorDetails(event.error) : undefined
     default:
       return undefined
   }
@@ -256,6 +275,27 @@ function eventWithoutPayload(event: FigbirdEvent): FigbirdEvent {
     }
     case 'mutate:update':
       return { ...event, args: [] }
+    case 'fetch:error':
+    case 'mutate:error':
+    case 'action:error':
+    case 'connection:error':
+      return {
+        ...event,
+        error: errorFromDetails(undefined, {
+          name: event.error.name,
+          message: event.error.message,
+        }),
+      }
+    case 'connection:reconnect-failed':
+      return event.error
+        ? {
+            ...event,
+            error: errorFromDetails(undefined, {
+              name: event.error.name,
+              message: event.error.message,
+            }),
+          }
+        : event
     default:
       return event
   }
@@ -382,7 +422,7 @@ export function createCollector(
   options: CollectorOptions = {},
 ): Collector {
   return new FigbirdCollector(figbird, {
-    eventLimit: options.eventLimit ?? 500,
+    eventLimit: options.eventLimit ?? 5_000,
     heartbeatMs: options.heartbeatMs ?? 5_000,
     payloadLimit: options.payloadLimit ?? 200,
     payloadNodeLimit: options.payloadNodeLimit ?? 20_000,
@@ -455,7 +495,8 @@ class FigbirdCollector implements Collector {
   #eventPayloadHandles = new WeakMap<DevtoolsEvent, PayloadHandle>()
   #realtimePayloadHandles = new WeakMap<TimelineRealtimeEvent, PayloadHandle>()
   #spanPayloadHandles = new WeakMap<QuerySpan, PayloadHandle[]>()
-  #writePayloadHandles = new Map<string, PayloadHandle>()
+  #queryErrorPayloadHandles = new Map<string, PayloadHandle>()
+  #writePayloadHandles = new Map<string, PayloadHandle[]>()
 
   readonly eventLimit: number
 
@@ -607,6 +648,7 @@ class FigbirdCollector implements Collector {
     this.#fetchTraces.clear()
     this.#sourceStateDirty = true
     this.#payloads.clear()
+    this.#queryErrorPayloadHandles.clear()
     this.#writePayloadHandles.clear()
     this.#scheduleNotify()
   }
@@ -631,19 +673,21 @@ class FigbirdCollector implements Collector {
   #clearSettledWrites(): void {
     for (const [id, write] of this.#writes) {
       if (write.status === 'in-flight') continue
-      this.#payloads.release(this.#writePayloadHandles.get(id))
-      this.#writePayloadHandles.delete(id)
+      this.#releaseWritePayloads(id)
       this.#writes.delete(id)
     }
   }
 
   #recordEvent(event: FigbirdEvent): void {
-    const at = now()
+    const receivedAt = now()
+    const receivedWallAt = Date.now()
+    const wallAt = event.timestamp ?? receivedWallAt
+    const at = receivedAt + (wallAt - receivedWallAt)
     const capturedEvent = this.#captureEvent(event)
     const captured: DevtoolsEvent = {
       id: this.#nextEventId++,
       at,
-      wallAt: Date.now(),
+      wallAt,
       event: capturedEvent,
     }
     const evictedEvent = this.#events.push(captured)
@@ -704,7 +748,7 @@ class FigbirdCollector implements Collector {
             `${capturedEvent.serviceName}:${String(capturedEvent.itemId)}`,
             {
               at,
-              wallAt: Date.now(),
+              wallAt,
               source: capturedEvent.source,
               traceId: capturedEvent.traceId,
               type: capturedEvent.type,
@@ -804,7 +848,10 @@ class FigbirdCollector implements Collector {
       if (this.#queries.size <= this.#queryHistoryLimit) break
       for (const span of record.metrics.spans.toArray()) this.#releaseSpanPayloads(span)
       for (const span of record.metrics.activeSpans.values()) this.#releaseSpanPayloads(span)
-      this.#queries.delete(record.lastKnown.queryId)
+      const queryId = record.lastKnown.queryId
+      this.#payloads.release(this.#queryErrorPayloadHandles.get(queryId))
+      this.#queryErrorPayloadHandles.delete(queryId)
+      this.#queries.delete(queryId)
     }
   }
 
@@ -872,6 +919,7 @@ class FigbirdCollector implements Collector {
         fetchId: event.fetchId,
         ...(event.reason ? { reason: event.reason } : {}),
         ...(traceIds.length > 0 ? { traceIds } : {}),
+        ...(event.graph && event.graph.length > 0 ? { graph: event.graph } : {}),
         ...(event.params === undefined
           ? {}
           : { params: event.params, paramsState: 'retained' as const }),
@@ -947,17 +995,34 @@ class FigbirdCollector implements Collector {
     metrics.fetchCount++
     metrics.totalDurationMs += event.durationMs
     metrics.lastDurationMs = event.durationMs
+    const capturedErrorDetails = ok ? undefined : this.#captureValue(errorDetails(event.error))
     if (!ok) {
       metrics.errorCount++
       metrics.lastError = {
         message: errorMessage(event.error),
         at,
         generation: event.generation,
+        ...(capturedErrorDetails === undefined
+          ? {}
+          : { details: capturedErrorDetails, detailsState: 'retained' as const }),
+      }
+      if (capturedErrorDetails !== undefined) {
+        this.#retainQueryError(event.queryId, metrics, capturedErrorDetails, at)
       }
     }
 
-    const observedStartAt = at - event.durationMs
+    const inspectedQuery = this.#figbird
+      .inspect()
+      .find(query => query.queryId === event.queryId && query.generation === event.generation)
+    const historyEntry =
+      event.fetchId === undefined
+        ? undefined
+        : inspectedQuery?.fetchHistory?.find(entry => entry.fetchId === event.fetchId)
+    const observedStartAt = historyEntry
+      ? at + (historyEntry.startedAt - (event.timestamp ?? Date.now()))
+      : at - event.durationMs
     const startAt = Math.max(observedStartAt, this.#timelineStartedAt)
+    const endAt = Math.max(startAt, at)
     const trace = event.fetchId === undefined ? undefined : this.#fetchTraces.get(event.fetchId)
     const activeSpan =
       event.fetchId === undefined ? undefined : metrics.activeSpans.get(event.fetchId)
@@ -965,18 +1030,23 @@ class FigbirdCollector implements Collector {
     const span: QuerySpan = {
       ...activeSpan,
       startAt,
-      endAt: at,
+      endAt,
       ok,
       ...(event.fetchId === undefined ? {} : { fetchId: event.fetchId }),
       ...(trace?.reason ? { reason: trace.reason } : {}),
       ...(trace && trace.traceIds.length > 0 ? { traceIds: trace.traceIds } : {}),
+      ...(event.graph && event.graph.length > 0 ? { graph: event.graph } : {}),
+      ...(capturedErrorDetails === undefined
+        ? {}
+        : { errorDetails: capturedErrorDetails, errorDetailsState: 'retained' as const }),
     }
-    const inspectedResult = ok
-      ? this.#figbird
-          .inspect()
-          .find(query => query.queryId === event.queryId && query.generation === event.generation)
-          ?.data
-      : undefined
+    if (capturedErrorDetails !== undefined) {
+      this.#retainSpanPayload(span, capturedErrorDetails, () => {
+        span.errorDetails = undefined
+        span.errorDetailsState = 'evicted'
+      })
+    }
+    const inspectedResult = ok ? inspectedQuery?.data : undefined
     if (inspectedResult !== undefined) {
       span.result = this.#captureValue(inspectedResult)
       span.resultState = 'retained'
@@ -1002,6 +1072,7 @@ class FigbirdCollector implements Collector {
       status: ok ? 'success' : 'error',
       isFetching: false,
       ...(event.kind === 'fetch:end' ? { itemCount: event.itemCount } : {}),
+      ...(inspectedQuery?.fetchHistory ? { fetchHistory: inspectedQuery.fetchHistory } : {}),
     }
     record.lastKnown = settled
     if (currentMatches) record.current = settled
@@ -1053,14 +1124,18 @@ class FigbirdCollector implements Collector {
       return
     }
     if (event.kind === 'mutate:error') {
+      const details = this.#captureValue(errorDetails(event.error))
       this.#writes.set(id, {
         ...base,
         status: 'error',
         endedAt: at,
         durationMs: event.durationMs,
         error: errorMessage(event.error),
+        errorDetails: details,
+        errorDetailsState: 'retained',
         ...(base.optimistic || base.rolledBack ? { rolledBack: true } : {}),
       })
+      this.#retainWriteError(id, details)
       this.#trimWrites()
       return
     }
@@ -1091,13 +1166,22 @@ class FigbirdCollector implements Collector {
       } satisfies WriteRecord)
 
     if (event.kind === 'action:end' || event.kind === 'action:error') {
+      const details =
+        event.kind === 'action:error' ? this.#captureValue(errorDetails(event.error)) : undefined
       this.#writes.set(id, {
         ...base,
         status: event.kind === 'action:end' ? 'success' : 'error',
         endedAt: at,
         durationMs: event.durationMs,
-        ...(event.kind === 'action:error' ? { error: errorMessage(event.error) } : {}),
+        ...(event.kind === 'action:error'
+          ? {
+              error: errorMessage(event.error),
+              errorDetails: details,
+              errorDetailsState: 'retained' as const,
+            }
+          : {}),
       })
+      if (details !== undefined) this.#retainWriteError(id, details)
       this.#trimWrites()
       return
     }
@@ -1127,10 +1211,17 @@ class FigbirdCollector implements Collector {
       case 'mutate:error':
       case 'action:error':
       case 'connection:error':
-        return { ...event, error: new Error(errorMessage(event.error)) }
+        return {
+          ...event,
+          error: errorFromDetails(this.#captureValue(errorDetails(event.error)), {
+            name: event.error.name,
+            message: event.error.message,
+          }),
+        }
       case 'mutate:start':
         return {
           kind: event.kind,
+          ...(event.timestamp === undefined ? {} : { timestamp: event.timestamp }),
           mutationId: event.mutationId,
           ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
           serviceName: event.serviceName,
@@ -1146,6 +1237,7 @@ class FigbirdCollector implements Collector {
       case 'action:start':
         return {
           kind: event.kind,
+          ...(event.timestamp === undefined ? {} : { timestamp: event.timestamp }),
           actionId: event.actionId,
           ...(event.name ? { name: event.name } : {}),
         }
@@ -1157,7 +1249,13 @@ class FigbirdCollector implements Collector {
   #captureConnectionEvent(event: ConnectionFigbirdEvent): ConnectionFigbirdEvent {
     if (event.kind === 'connection:error' || event.kind === 'connection:reconnect-failed') {
       if (!event.error) return { ...event }
-      return { ...event, error: new Error(errorMessage(event.error)) }
+      return {
+        ...event,
+        error: errorFromDetails(this.#captureValue(errorDetails(event.error)), {
+          name: event.error.name,
+          message: event.error.message,
+        }),
+      }
     }
     return { ...event }
   }
@@ -1203,10 +1301,22 @@ class FigbirdCollector implements Collector {
     this.#spanPayloadHandles.delete(span)
   }
 
+  #retainQueryError(queryId: string, metrics: QueryMetrics, details: unknown, at: number): void {
+    this.#payloads.release(this.#queryErrorPayloadHandles.get(queryId))
+    const handle = this.#payloads.retain(details, () => {
+      if (metrics.lastError?.at !== at) return
+      const { details: _details, ...metadata } = metrics.lastError
+      void _details
+      metrics.lastError = { ...metadata, detailsState: 'evicted' }
+      this.#scheduleNotify()
+    })
+    this.#queryErrorPayloadHandles.set(queryId, handle)
+  }
+
   #retainWriteArgs(id: string): void {
     const write = this.#writes.get(id)
     if (!write?.args) return
-    this.#payloads.release(this.#writePayloadHandles.get(id))
+    this.#releaseWritePayloads(id)
     write.argsState = 'retained'
     const handle = this.#payloads.retain(write.args, () => {
       const current = this.#writes.get(id)
@@ -1217,7 +1327,29 @@ class FigbirdCollector implements Collector {
       this.#timelinePayloadsEvicted++
       this.#scheduleNotify()
     })
-    this.#writePayloadHandles.set(id, handle)
+    this.#writePayloadHandles.set(id, [handle])
+  }
+
+  #retainWriteError(id: string, details: unknown): void {
+    const handle = this.#payloads.retain(details, () => {
+      const current = this.#writes.get(id)
+      if (!current) return
+      const { errorDetails: _details, ...metadata } = current
+      void _details
+      this.#writes.set(id, { ...metadata, errorDetailsState: 'evicted' })
+      this.#timelinePayloadsEvicted++
+      this.#scheduleNotify()
+    })
+    const handles = this.#writePayloadHandles.get(id) ?? []
+    handles.push(handle)
+    this.#writePayloadHandles.set(id, handles)
+  }
+
+  #releaseWritePayloads(id: string): void {
+    for (const handle of this.#writePayloadHandles.get(id) ?? []) {
+      this.#payloads.release(handle)
+    }
+    this.#writePayloadHandles.delete(id)
   }
 
   #trimTimeline(): void {
@@ -1262,8 +1394,7 @@ class FigbirdCollector implements Collector {
       } else if (oldest.kind === 'connection') {
         this.#timelineConnection.shift()
       } else {
-        this.#payloads.release(this.#writePayloadHandles.get(oldest.id))
-        this.#writePayloadHandles.delete(oldest.id)
+        this.#releaseWritePayloads(oldest.id)
         this.#writes.delete(oldest.id)
       }
       retained--
@@ -1292,8 +1423,7 @@ class FigbirdCollector implements Collector {
       .sort((a, b) => a.startedAt - b.startedAt)
     for (const write of settled) {
       if (this.#writes.size <= this.#writeLimit) break
-      this.#payloads.release(this.#writePayloadHandles.get(write.id))
-      this.#writePayloadHandles.delete(write.id)
+      this.#releaseWritePayloads(write.id)
       this.#writes.delete(write.id)
       this.#timelineEvictedCount++
     }

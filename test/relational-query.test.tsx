@@ -11,6 +11,7 @@ import {
   service,
   useFind,
   useQuery,
+  type FigbirdEvent,
   type QueryBuilder,
   type StandardSchemaV1,
 } from '../lib'
@@ -2003,7 +2004,7 @@ class ErrorBoundary extends React.Component<
 
 test('suspense: first-mount cold shows fallback, then data', async t => {
   const { render, unmount, flush, $ } = dom()
-  const { App, figbird } = createApp()
+  const { App, figbird, feathers } = createApp()
 
   function IssueDetail() {
     const { data } = useQuery(figbird.q.issues.get(1).related('creator'))
@@ -2036,6 +2037,8 @@ test('suspense: first-mount cold shows fallback, then data', async t => {
   t.truthy($('.issue-detail'))
   t.is($('.title')!.innerHTML, 'First issue')
   t.is($('.creator')!.innerHTML, 'Alice')
+  t.is(feathers.service('issues').counts.get, 1, 'commit must reuse the cold Suspense fetch')
+  t.is(feathers.service('users').counts.find, 1, 'relations must not revalidate on commit')
 
   unmount()
 })
@@ -2955,9 +2958,15 @@ test('explain: classifies nodes with structured reasons', t => {
 
 test('inspect: stable read-only projection of live queries', async t => {
   const { figbird } = createApp()
+  const fetches: Array<Extract<FigbirdEvent, { kind: 'fetch:end' }>> = []
+  const unsubEvents = figbird.events.subscribe(event => {
+    if (event.kind === 'fetch:end') fetches.push(event)
+  })
 
   const ref = figbird.query(figbird.q.issues.related('comments'))
+  const sharedRootRef = figbird.query(figbird.q.issues.related('creator'))
   const unsub = ref.subscribe(() => {})
+  const unsubSharedRoot = sharedRootRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
 
   const rows = figbird.inspect()
@@ -2969,6 +2978,24 @@ test('inspect: stable read-only projection of live queries', async t => {
   t.true(typeof issuesRow.fetchedAt === 'number')
   t.true(issuesRow.subscriberCount > 0)
 
+  const rootFetch = fetches.find(event =>
+    event.graph?.some(graph => graph.operationId === ref.hash() && graph.path === '(root)'),
+  )
+  const commentsFetch = fetches.find(event =>
+    event.graph?.some(graph => graph.operationId === ref.hash() && graph.path === 'comments'),
+  )
+  t.truthy(rootFetch)
+  t.truthy(commentsFetch)
+  t.is(rootFetch!.graph![0]!.runId, commentsFetch!.graph![0]!.runId)
+  t.true(
+    rootFetch!.graph!.some(
+      graph => graph.operationId === sharedRootRef.hash() && graph.path === '(root)',
+    ),
+    'one backing root fetch records every relational operation it served',
+  )
+
+  unsubEvents()
+  unsubSharedRoot()
   unsub()
 })
 

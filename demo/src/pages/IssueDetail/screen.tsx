@@ -190,23 +190,23 @@ queries: ({ params }) => [
       <TasksPanel key={issue.id} issueId={issue.id} users={users} />
 
       <div className='action-toolbar'>
-        <button className='link' onClick={reassign.run} disabled={busy}>
+        <button className='link' onClick={() => void reassign.run()} disabled={busy}>
           {reassign.pending ? 'Reassigning…' : 'Reassign'}
         </button>
         <Sep />
-        <button className='link' onClick={moveTeam.run} disabled={busy}>
+        <button className='link' onClick={() => void moveTeam.run()} disabled={busy}>
           {moveTeam.pending ? 'Moving…' : 'Move team'}
         </button>
         <Sep />
-        <button className='link' onClick={boost.run} disabled={busy}>
+        <button className='link' onClick={() => void boost.run()} disabled={busy}>
           {boost.pending ? 'Boosting…' : 'Boost'}
         </button>
         <Sep />
-        <button className='link' onClick={toggleStatus.run} disabled={busy}>
+        <button className='link' onClick={() => void toggleStatus.run()} disabled={busy}>
           {toggleStatus.pending ? 'Updating…' : issue.status === 'open' ? 'Close' : 'Reopen'}
         </button>
         <Sep />
-        <button className='link' onClick={addLabel.run} disabled={busy}>
+        <button className='link' onClick={() => void addLabel.run()} disabled={busy}>
           {addLabel.pending ? 'Adding…' : 'Add label'}
         </button>
         <Sep />

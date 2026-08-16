@@ -86,11 +86,19 @@ export function TimelineActivityTable({
   const scrollPausedFollowRef = useRef(false)
   const [range, setRange] = useState<TimelineRange | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [relatedOnly, setRelatedOnly] = useState<string | null>(null)
   const [availableTableWidth, setAvailableTableWidth] = useState(0)
   const [columnWidths, onColumnResizeStart] = useResizableColumns(COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const hasExtent = extent !== null
   const selected = activities.find(activity => activity.id === selectedId)
+  const selectedGraphKeys = new Set(
+    selected?.kind === 'fetch'
+      ? (selected.graph ?? [])
+          .filter(ref => ref.path === '(root)')
+          .map(ref => timelineGraphKey(ref.operationId, ref.runId))
+      : [],
+  )
   const normalizedFilter = filter.trim().toLowerCase()
   const filteredActivities = activities.filter(activity => {
     if (
@@ -100,7 +108,8 @@ export function TimelineActivityTable({
     ) {
       return false
     }
-    return timelineActivityMatchesFilter(activity, normalizedFilter)
+    if (!timelineActivityMatchesFilter(activity, normalizedFilter)) return false
+    return !relatedOnly || activityHasGraph(activity, relatedOnly)
   })
   const rows = range
     ? filteredActivities.filter(activity => intersects(activity, range, nowPoint))
@@ -135,6 +144,12 @@ export function TimelineActivityTable({
   }, [activities, selectedId])
 
   useEffect(() => setSelectedId(null), [filter, visibility])
+
+  useEffect(() => {
+    if (relatedOnly && !activities.some(activity => activityHasGraph(activity, relatedOnly))) {
+      setRelatedOnly(null)
+    }
+  }, [activities, relatedOnly])
 
   useEffect(() => {
     if (!requestedActivityId) return
@@ -257,6 +272,10 @@ export function TimelineActivityTable({
                   key={activity.id}
                   activity={activity}
                   selected={activity.id === selectedId}
+                  related={
+                    selectedGraphKeys.size > 0 &&
+                    activityMatchesAnyGraph(activity, selectedGraphKeys)
+                  }
                   {...(activity.id === selectedId ? { rowRef: selectedRowRef } : {})}
                   extent={displayExtent}
                   nowPoint={nowPoint}
@@ -273,10 +292,18 @@ export function TimelineActivityTable({
         {visibleSelection ? (
           <ActivityDetails
             activity={visibleSelection}
+            activities={activities}
             wallClockOffset={wallClockOffset}
             width={detailsWidth}
             onResizeStart={onDetailsResizeStart}
             onClose={() => setSelectedId(null)}
+            onActivitySelect={activityId => {
+              setRange(null)
+              setSelectedId(activityId)
+              onFollowChange(false)
+            }}
+            relatedOnly={relatedOnly}
+            onRelatedOnlyChange={setRelatedOnly}
             {...(onQuerySelect ? { onQuerySelect } : {})}
             {...(onCacheEntitySelect ? { onCacheEntitySelect } : {})}
             {...(onTraceSelect ? { onTraceSelect } : {})}
@@ -308,27 +335,30 @@ export function TimelineActivityTable({
         {projectedWriteCount > 0 ? <span>{projectedWriteCount} projected</span> : null}
         {evictedCount > 0 ? <span>{evictedCount} older activities evicted</span> : null}
         {payloadsEvicted > 0 ? <span>{payloadsEvicted} payloads vacuumed</span> : null}
+        {relatedOnly ? (
+          <button
+            type='button'
+            onClick={() => setRelatedOnly(null)}
+            style={buttonStyle(colors, true)}
+          >
+            Showing query graph ×
+          </button>
+        ) : null}
         <span>{formatMs(displayExtent.end - displayExtent.start)} window</span>
-        <span style={{ marginLeft: 'auto' }}>
-          {range ? (
-            <button
-              type='button'
-              aria-label='Clear timeline range'
-              title='Show the full recording'
-              onClick={() => {
-                setRange(null)
-                setSelectedId(null)
-              }}
-              style={buttonStyle(colors, true)}
-            >
-              {formatOffset(range.start - extent.start)}–{formatOffset(range.end - extent.start)} ×
-            </button>
-          ) : (
-            <span style={{ color: colors.faint, whiteSpace: 'nowrap' }}>
-              Drag overview to filter time
-            </span>
-          )}
-        </span>
+        {range ? (
+          <button
+            type='button'
+            aria-label='Clear timeline range'
+            data-tooltip='Show the full recording'
+            onClick={() => {
+              setRange(null)
+              setSelectedId(null)
+            }}
+            style={{ ...buttonStyle(colors, true), marginLeft: 'auto' }}
+          >
+            {formatOffset(range.start - extent.start)}–{formatOffset(range.end - extent.start)} ×
+          </button>
+        ) : null}
       </div>
     </>
   )
@@ -341,6 +371,7 @@ function activityCount(activities: readonly TimelineActivity[], kind: TimelineAc
 function ActivityRow({
   activity,
   selected,
+  related,
   rowRef,
   extent,
   nowPoint,
@@ -349,6 +380,7 @@ function ActivityRow({
 }: {
   activity: TimelineActivity
   selected: boolean
+  related: boolean
   rowRef?: RefObject<HTMLTableRowElement | null>
   extent: TimelineExtent
   nowPoint: number
@@ -362,7 +394,6 @@ function ActivityRow({
       data-timeline-activity={activity.kind}
       aria-selected={selected}
       tabIndex={0}
-      title='Select activity details'
       onClick={onSelect}
       onKeyDown={event => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -375,8 +406,9 @@ function ActivityRow({
         outline: 'none',
         contentVisibility: 'auto',
         containIntrinsicSize: '0 33px',
-        background: selected ? colors.activeButtonBg : undefined,
+        background: selected ? colors.activeButtonBg : related ? colors.relatedRowBg : undefined,
         boxShadow: selected ? `inset 3px 0 ${colors.blue}` : undefined,
+        transition: 'background 80ms ease',
       }}
     >
       <td style={{ ...styles.td, ...styles.code, color: colors.faint, whiteSpace: 'nowrap' }}>
@@ -386,7 +418,8 @@ function ActivityRow({
         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
           <ActivityIcon activity={activity} />
           <strong
-            title={activity.label}
+            data-tooltip={activity.label}
+            data-tooltip-overflow=''
             style={{
               minWidth: 0,
               overflow: 'hidden',
@@ -400,7 +433,7 @@ function ActivityRow({
         </span>
       </td>
       <EllipsisCell value={activity.operation} />
-      <EllipsisCell value={activity.detail || '—'} />
+      <EllipsisCell value={activity.detail || '—'} tooltip={activity.detailTooltip} />
       <td style={styles.td}>
         <Badge tone={activity.tone}>{activity.status}</Badge>
       </td>
@@ -417,11 +450,20 @@ function ActivityRow({
   )
 }
 
-function EllipsisCell({ value, error = false }: { value: string; error?: boolean }) {
+function EllipsisCell({
+  value,
+  error = false,
+  tooltip,
+}: {
+  value: string
+  error?: boolean
+  tooltip?: string | undefined
+}) {
   const { colors, styles } = useDevtoolsTheme()
   return (
     <td
-      title={value}
+      data-tooltip={tooltip ?? value}
+      {...(tooltip ? {} : { 'data-tooltip-overflow': '' })}
       style={{
         ...styles.td,
         color: error ? colors.red : value === '—' ? colors.faint : colors.muted,
@@ -512,19 +554,27 @@ function Waterfall({
 
 function ActivityDetails({
   activity,
+  activities,
   wallClockOffset,
   width,
   onResizeStart,
   onClose,
+  onActivitySelect,
+  relatedOnly,
+  onRelatedOnlyChange,
   onQuerySelect,
   onCacheEntitySelect,
   onTraceSelect,
 }: {
   activity: TimelineActivity
+  activities: readonly TimelineActivity[]
   wallClockOffset: number
   width: number
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
+  onActivitySelect: (activityId: string) => void
+  relatedOnly: string | null
+  onRelatedOnlyChange: (key: string | null) => void
   onQuerySelect?: (queryId: string) => void
   onCacheEntitySelect?: (serviceName: string, itemId: string | number) => void
   onTraceSelect?: (traceId: number) => void
@@ -541,24 +591,24 @@ function ActivityDetails({
       onClose={onClose}
     >
       <DetailStats>
+        {activity.serviceName ? <DetailStat label='Service' value={activity.serviceName} /> : null}
         <DetailStat
-          label={activity.kind === 'fetch' ? 'Request method' : 'Operation'}
+          label={activity.kind === 'fetch' ? 'Method' : 'Operation'}
           value={activity.operation}
         />
         {activity.detail ? <DetailStat label='Context' value={activity.detail} /> : null}
         <DetailStat label='Status' value={activity.status} />
+        <DetailStat label='Trigger' value={activity.trigger} />
+        <DetailStat label='Result' value={activity.result} />
+        <DetailStat label='Cache effect' value={activity.effect} />
         <DetailStat
           label='Started'
           value={formatClock(wallClockOffset + activity.startAt, { milliseconds: true })}
         />
-        <DetailStat label='Trigger' value={activity.trigger} />
-        <DetailStat label='Cache effect' value={activity.effect} />
-        <DetailStat label='Result' value={activity.result} />
         <DetailStat
           label='Duration'
           value={activity.durationMs === undefined ? '—' : formatMs(activity.durationMs)}
         />
-        {activity.serviceName ? <DetailStat label='Service' value={activity.serviceName} /> : null}
         {activity.queryId ? (
           <DetailStat label='Query ID' value={activity.queryId} copyValue={activity.queryId} />
         ) : null}
@@ -588,6 +638,28 @@ function ActivityDetails({
           />
         ) : null}
       </DetailStats>
+      {activity.error ? (
+        <DetailBlock>
+          <JsonViewer
+            value={activity.errorDetailsState === 'evicted' ? undefined : activity.errorDetails}
+            label='Error details'
+            emptyLabel={
+              activity.errorDetailsState === 'evicted'
+                ? 'Original error details vacuumed to keep the recording bounded'
+                : 'No structured error details captured'
+            }
+          />
+        </DetailBlock>
+      ) : null}
+      {activity.kind === 'fetch' && activity.graph && activity.graph.length > 0 ? (
+        <QueryGraphDetails
+          activity={activity}
+          activities={activities}
+          relatedOnly={relatedOnly}
+          onRelatedOnlyChange={onRelatedOnlyChange}
+          onActivitySelect={onActivitySelect}
+        />
+      ) : null}
       {activity.write ? (
         <>
           <DetailBlock>
@@ -737,6 +809,161 @@ function ActivityDetails({
         </DetailSection>
       ) : null}
     </DetailsPane>
+  )
+}
+
+interface QueryGraphRow {
+  key: string
+  path: string
+  role?: 'junction'
+  serviceName: string
+  activities: TimelineActivity[]
+}
+
+function QueryGraphDetails({
+  activity,
+  activities,
+  relatedOnly,
+  onRelatedOnlyChange,
+  onActivitySelect,
+}: {
+  activity: TimelineActivity
+  activities: readonly TimelineActivity[]
+  relatedOnly: string | null
+  onRelatedOnlyChange: (key: string | null) => void
+  onActivitySelect: (activityId: string) => void
+}) {
+  const { colors, styles } = useDevtoolsTheme()
+  const runs = [
+    ...new Map(
+      (activity.graph ?? []).map(ref => [timelineGraphKey(ref.operationId, ref.runId), ref]),
+    ).entries(),
+  ]
+
+  return (
+    <DetailSection label='Query graph'>
+      {runs.map(([runKey, ref]) => {
+        const related = activities.filter(item => activityHasGraph(item, runKey))
+        const rows = queryGraphRows(related, ref.operationId, ref.runId)
+        return (
+          <div key={runKey} style={{ display: 'grid', gap: 5, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {ref.operationLabel}
+              </span>
+              <span style={{ color: colors.faint, whiteSpace: 'nowrap' }}>
+                {related.length} {related.length === 1 ? 'fetch' : 'fetches'}
+              </span>
+              <button
+                type='button'
+                onClick={() => onRelatedOnlyChange(relatedOnly === runKey ? null : runKey)}
+                style={{ ...buttonStyle(colors, relatedOnly === runKey), marginLeft: 'auto' }}
+              >
+                {relatedOnly === runKey ? 'Show all' : 'Show only related'}
+              </button>
+            </div>
+            <div style={{ borderTop: `1px solid ${colors.rowBorder}` }}>
+              {rows.map(row => {
+                const durations = row.activities
+                  .map(item => item.durationMs)
+                  .filter((value): value is number => value !== undefined)
+                const min = durations.length > 0 ? Math.min(...durations) : undefined
+                const max = durations.length > 0 ? Math.max(...durations) : undefined
+                return (
+                  <button
+                    key={row.key}
+                    type='button'
+                    onClick={() => onActivitySelect(row.activities[0]!.id)}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(110px, 1fr) minmax(70px, .7fr) auto auto',
+                      alignItems: 'center',
+                      gap: 8,
+                      width: '100%',
+                      minHeight: 27,
+                      padding: '3px 0',
+                      border: 0,
+                      borderBottom: `1px solid ${colors.rowBorder}`,
+                      background: 'transparent',
+                      color: colors.text,
+                      font: 'inherit',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ color: row.path === '(root)' ? colors.text : colors.muted }}>
+                      {row.path === '(root)'
+                        ? 'root'
+                        : `nested: ${row.path}${row.role === 'junction' ? ' junction' : ''}`}
+                    </span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {row.serviceName}
+                    </span>
+                    <span style={{ color: colors.faint, whiteSpace: 'nowrap' }}>
+                      {row.activities.length > 1 ? `${row.activities.length} ×` : ''}
+                    </span>
+                    <span style={{ ...styles.code, color: colors.muted, whiteSpace: 'nowrap' }}>
+                      {min === undefined
+                        ? '—'
+                        : min === max
+                          ? formatMs(min)
+                          : `${formatMs(min)}–${formatMs(max!)}`}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </DetailSection>
+  )
+}
+
+function queryGraphRows(
+  activities: readonly TimelineActivity[],
+  operationId: string,
+  runId: string,
+): QueryGraphRow[] {
+  const rows = new Map<string, QueryGraphRow>()
+  for (const activity of activities) {
+    const ref = activity.graph?.find(
+      item => item.operationId === operationId && item.runId === runId,
+    )
+    if (!ref) continue
+    const serviceName = activity.serviceName ?? activity.label
+    const key = `${ref.path}\u0000${ref.role ?? ''}\u0000${serviceName}`
+    const row = rows.get(key)
+    if (row) {
+      row.activities.push(activity)
+    } else {
+      rows.set(key, {
+        key,
+        path: ref.path,
+        ...(ref.role ? { role: ref.role } : {}),
+        serviceName,
+        activities: [activity],
+      })
+    }
+  }
+  return [...rows.values()].sort((a, b) => {
+    if (a.path === '(root)') return -1
+    if (b.path === '(root)') return 1
+    return a.path.localeCompare(b.path) || a.serviceName.localeCompare(b.serviceName)
+  })
+}
+
+function timelineGraphKey(operationId: string, runId: string): string {
+  return `${operationId}\u0000${runId}`
+}
+
+function activityHasGraph(activity: TimelineActivity, key: string): boolean {
+  return activity.graph?.some(ref => timelineGraphKey(ref.operationId, ref.runId) === key) ?? false
+}
+
+function activityMatchesAnyGraph(activity: TimelineActivity, keys: ReadonlySet<string>): boolean {
+  return (
+    activity.graph?.some(ref => keys.has(timelineGraphKey(ref.operationId, ref.runId))) ?? false
   )
 }
 

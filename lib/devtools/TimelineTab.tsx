@@ -20,7 +20,7 @@ export function TimelineFollowControl({
       aria-label={value ? 'Pause live timeline' : 'Resume live timeline'}
       aria-pressed={value}
       onClick={() => onChange(!value)}
-      title={
+      data-tooltip={
         value
           ? 'Following new timeline activity. Scroll away or click to pause.'
           : 'Return to the latest timeline activity.'

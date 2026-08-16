@@ -66,11 +66,14 @@ import {
   type Query,
   type QueryConfig,
   type QueryDescriptor,
+  type QueryExecutionOptions,
+  type QueryGraphRef,
   type QueryState,
   type QueuedEvent,
   type ServiceState,
 } from './queryTypes.js'
 import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
+import { normalizeError } from './errors.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -156,6 +159,11 @@ interface PublishedEventEffects {
 interface FetchContext {
   reason: Exclude<FetchReason, 'retry'>
   causes: TraceCause[]
+  graph?: QueryGraphRef[]
+}
+
+function graphRefKey(ref: QueryGraphRef): string {
+  return `${ref.operationId}\u0000${ref.runId}\u0000${ref.path}\u0000${ref.role ?? ''}`
 }
 
 type LaneAuthoritativeAcceptance =
@@ -166,7 +174,18 @@ export interface QueryFetchStats {
   errorCount: number
   lastDurationMs?: number
   totalDurationMs: number
+  history: QueryFetchHistoryEntry[]
 }
+
+export interface QueryFetchHistoryEntry {
+  fetchId: number
+  startedAt: number
+  durationMs: number
+  ok: boolean
+  reason: FetchReason
+}
+
+export const QUERY_FETCH_HISTORY_LIMIT = 50
 
 export interface DevtoolsCacheEditResult {
   ok: boolean
@@ -212,6 +231,7 @@ export class QueryStore<
   #nextTraceId = 1
   #nextFetchId = 1
   #followupFetchContexts = new Map<string, FetchContext>()
+  #activeFetchGraphs = new Map<string, Map<string, QueryGraphRef>>()
 
   #fetchEventJournal = new FetchEventJournal()
   #mutationLanes: MutationLanes<QueuedMutation>
@@ -448,7 +468,7 @@ export class QueryStore<
   getQueryStats(queryId: string): QueryFetchStats | undefined {
     const stats = this.#queryStats.get(queryId)
     if (!stats) return undefined
-    return { ...stats }
+    return { ...stats, history: [...stats.history] }
   }
 
   getQueryGeneration(queryId: string): number | undefined {
@@ -504,7 +524,7 @@ export class QueryStore<
   subscribe<T>(
     queryId: string,
     fn: (state: QueryState<T, TMeta>) => void,
-    options: { staleTime?: number | undefined } = {},
+    options: QueryExecutionOptions = {},
   ): () => void {
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
@@ -595,9 +615,13 @@ export class QueryStore<
    * `staleTime` is not part of query identity: a later, stricter subscriber must be
    * able to revalidate an already-live query without rebuilding its subscription.
    */
-  ensureFresh(queryId: string, options: { staleTime?: number | undefined } = {}): void {
+  ensureFresh(queryId: string, options: QueryExecutionOptions = {}): void {
     const q = this.#getQuery(queryId)
     if (!q) return
+
+    if (q.state.isFetching && options.graph) {
+      this.#attachFetchGraph(queryId, options.graph)
+    }
 
     const staleTime = options.staleTime ?? 0
     const isFresh =
@@ -613,17 +637,23 @@ export class QueryStore<
       this.#queue(queryId, {
         reason: 'subscription',
         causes: [{ kind: 'subscription', traceId: this.#nextTraceId++ }],
+        ...(options.graph ? { graph: [options.graph] } : {}),
       })
     }
   }
 
   /** Refetch a specific query by id. */
-  refetch(queryId: string, context?: FetchContext): void {
+  refetch(
+    queryId: string,
+    context?: FetchContext,
+    options: Omit<QueryExecutionOptions, 'staleTime'> = {},
+  ): void {
     const q = this.#getQuery(queryId)
     if (!q) return
     const fetchContext = context ?? {
       reason: 'manual' as const,
       causes: [{ kind: 'manual' as const, traceId: this.#nextTraceId++ }],
+      ...(options.graph ? { graph: [options.graph] } : {}),
     }
 
     if (!q.state.isFetching) {
@@ -936,7 +966,7 @@ export class QueryStore<
       try {
         return await run()
       } catch (error) {
-        const normalized = error instanceof Error ? error : new Error(String(error))
+        const normalized = normalizeError(error)
         if (!control || (await control.onAttemptFailure(normalized, attempt)) === 'discard') {
           throw normalized
         }
@@ -1139,7 +1169,7 @@ export class QueryStore<
         return result
       },
       (err: unknown) => {
-        const error = err instanceof Error ? err : new Error(String(err))
+        const error = normalizeError(err)
         hooks?.onError?.(error, cause)
         this.#mutations.end(mutationId)
         this.#events.emit({
@@ -1165,41 +1195,57 @@ export class QueryStore<
       reason: 'subscription' as const,
       causes: [{ kind: 'subscription' as const, traceId: this.#nextTraceId++ }],
     }
+    const graph = new Map((fetchContext.graph ?? []).map(ref => [graphRefKey(ref), ref]))
+    this.#activeFetchGraphs.set(queryId, graph)
     this.#fetching({ queryId })
     const generation = this.#queryGenerations.get(queryId)
-    if (generation === undefined) return
+    if (generation === undefined) {
+      if (this.#activeFetchGraphs.get(queryId) === graph) this.#activeFetchGraphs.delete(queryId)
+      return
+    }
 
-    let retryAttempt = 0
-    while (true) {
-      const outcome = await this.#runFetchAttempt(queryId, generation, {
-        reason: retryAttempt === 0 ? fetchContext.reason : 'retry',
-        attempt: retryAttempt,
-        causes: fetchContext.causes,
-      })
-      if (outcome.kind !== 'failed') return
+    try {
+      let retryAttempt = 0
+      while (true) {
+        const outcome = await this.#runFetchAttempt(
+          queryId,
+          generation,
+          {
+            reason: retryAttempt === 0 ? fetchContext.reason : 'retry',
+            attempt: retryAttempt,
+            causes: fetchContext.causes,
+          },
+          graph,
+        )
+        if (outcome.kind !== 'failed') return
 
-      const query = this.#getQuery(queryId)
-      if (
-        !query ||
-        this.#queryGenerations.get(queryId) !== generation ||
-        !this.#hasRetryOwner(queryId) ||
-        !this.#shouldRetry(query, retryAttempt, outcome.error)
-      ) {
-        if (query && this.#queryGenerations.get(queryId) === generation) {
-          this.#fetchFailed({ queryId, error: outcome.error })
+        const query = this.#getQuery(queryId)
+        if (
+          !query ||
+          this.#queryGenerations.get(queryId) !== generation ||
+          !this.#hasRetryOwner(queryId) ||
+          !this.#shouldRetry(query, retryAttempt, outcome.error)
+        ) {
+          if (query && this.#queryGenerations.get(queryId) === generation) {
+            this.#fetchFailed({ queryId, error: outcome.error })
+          }
+          return
         }
-        return
+
+        retryAttempt++
+        const configuredDelay = query.config.retryDelay ?? this.#retryDelay
+        const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
+        await new Promise<void>(resolve => setTimeout(resolve, delay))
+
+        if (this.#queryGenerations.get(queryId) !== generation) return
+        if (!this.#hasRetryOwner(queryId)) {
+          this.#fetchFailed({ queryId, error: outcome.error })
+          return
+        }
       }
-
-      retryAttempt++
-      const configuredDelay = query.config.retryDelay ?? this.#retryDelay
-      const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
-      await new Promise<void>(resolve => setTimeout(resolve, delay))
-
-      if (this.#queryGenerations.get(queryId) !== generation) return
-      if (!this.#hasRetryOwner(queryId)) {
-        this.#fetchFailed({ queryId, error: outcome.error })
-        return
+    } finally {
+      if (this.#activeFetchGraphs.get(queryId) === graph) {
+        this.#activeFetchGraphs.delete(queryId)
       }
     }
   }
@@ -1208,6 +1254,7 @@ export class QueryStore<
     queryId: string,
     generation: number,
     context: { reason: FetchReason; attempt: number; causes: TraceCause[] },
+    graphRefs: ReadonlyMap<string, QueryGraphRef>,
   ): Promise<FetchAttemptOutcome> {
     const query = this.#getQuery(queryId)
     if (!query || this.#queryGenerations.get(queryId) !== generation) {
@@ -1224,8 +1271,10 @@ export class QueryStore<
       params: query.desc.params,
     }
     const journalCursor = this.#fetchEventJournal.begin(trace.serviceName)
+    const graph = [...graphRefs.values()]
     this.#events.emit({
       kind: 'fetch:start',
+      timestamp: startedAt,
       serviceName: trace.serviceName,
       method: trace.method,
       queryId,
@@ -1234,13 +1283,15 @@ export class QueryStore<
       reason: context.reason,
       attempt: context.attempt,
       ...(context.causes.length > 0 ? { causes: context.causes } : {}),
+      ...(graph.length > 0 ? { graph } : {}),
       ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
       params: trace.params,
     })
 
     try {
       const result = await this.#fetch(queryId)
-      const durationMs = Date.now() - startedAt
+      const endedAt = Date.now()
+      const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
       if (current && this.#queryGenerations.get(queryId) === generation) {
         const journal = this.#fetchEventJournal.read(journalCursor)
@@ -1255,13 +1306,20 @@ export class QueryStore<
             ...(cacheCause === undefined ? {} : { cause: cacheCause }),
           })
         }
-        this.#recordFetchStats(queryId, { ok: true, durationMs })
+        this.#recordFetchStats(queryId, {
+          fetchId,
+          startedAt,
+          durationMs,
+          ok: true,
+          reason: context.reason,
+        })
       }
 
       const data = result.data
       const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
       this.#events.emit({
         kind: 'fetch:end',
+        timestamp: endedAt,
         serviceName: trace.serviceName,
         method: trace.method,
         queryId,
@@ -1269,19 +1327,28 @@ export class QueryStore<
         fetchId,
         durationMs,
         itemCount,
+        ...(graphRefs.size > 0 ? { graph: [...graphRefs.values()] } : {}),
       })
       return { kind: 'completed' }
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err))
-      const durationMs = Date.now() - startedAt
+      const error = normalizeError(err)
+      const endedAt = Date.now()
+      const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
       const isCurrent = Boolean(current && this.#queryGenerations.get(queryId) === generation)
       if (isCurrent) {
-        this.#recordFetchStats(queryId, { ok: false, durationMs })
+        this.#recordFetchStats(queryId, {
+          fetchId,
+          startedAt,
+          durationMs,
+          ok: false,
+          reason: context.reason,
+        })
       }
 
       this.#events.emit({
         kind: 'fetch:error',
+        timestamp: endedAt,
         serviceName: trace.serviceName,
         method: trace.method,
         queryId,
@@ -1289,11 +1356,18 @@ export class QueryStore<
         fetchId,
         durationMs,
         error,
+        ...(graphRefs.size > 0 ? { graph: [...graphRefs.values()] } : {}),
       })
       return isCurrent ? { kind: 'failed', error } : { kind: 'stale' }
     } finally {
       this.#fetchEventJournal.end(journalCursor)
     }
+  }
+
+  #attachFetchGraph(queryId: string, ref: QueryGraphRef): void {
+    const refs = this.#activeFetchGraphs.get(queryId)
+    if (!refs) return
+    refs.set(graphRefKey(ref), ref)
   }
 
   #shouldRetry(query: Query<unknown, TMeta, unknown>, retryAttempt: number, error: Error): boolean {
@@ -1790,20 +1864,20 @@ export class QueryStore<
     this.#notify(touched)
   }
 
-  #recordFetchStats(
-    queryId: string,
-    { ok, durationMs }: { ok: boolean; durationMs: number },
-  ): void {
+  #recordFetchStats(queryId: string, entry: QueryFetchHistoryEntry): void {
+    const { ok, durationMs } = entry
     const current = this.#queryStats.get(queryId) ?? {
       fetchCount: 0,
       errorCount: 0,
       totalDurationMs: 0,
+      history: [],
     }
     this.#queryStats.set(queryId, {
       fetchCount: current.fetchCount + 1,
       errorCount: current.errorCount + (ok ? 0 : 1),
       totalDurationMs: current.totalDurationMs + durationMs,
       lastDurationMs: durationMs,
+      history: [...current.history.slice(-(QUERY_FETCH_HISTORY_LIMIT - 1)), entry],
     })
   }
 

@@ -1,4 +1,6 @@
 import type { FigbirdEvent } from '../core/events.js'
+import { errorDetails } from '../core/errors.js'
+import type { QueryGraphRef } from '../core/queryTypes.js'
 import type {
   DevtoolsEvent,
   DevtoolsSnapshot,
@@ -13,6 +15,10 @@ import type { DevtoolsModel } from './model.js'
 export type TimelineActivityKind = 'fetch' | 'realtime' | 'connection' | 'write'
 export type TimelineActivityTone = 'green' | 'amber' | 'red' | 'blue' | 'neutral'
 
+export interface TimelineGraphRef extends QueryGraphRef {
+  operationLabel: string
+}
+
 const ACTION_WRAPPER_START_TOLERANCE_MS = 10
 
 export interface TimelineActivity {
@@ -23,6 +29,7 @@ export interface TimelineActivity {
   label: string
   operation: string
   detail: string
+  detailTooltip?: string
   status: string
   tone: TimelineActivityTone
   trigger: string
@@ -31,6 +38,7 @@ export interface TimelineActivity {
   serviceName?: string
   queryId?: string
   queryIds?: string[]
+  graph?: readonly TimelineGraphRef[]
   traceId?: number
   entity?: { serviceName: string; itemId: string | number }
   durationMs?: number
@@ -40,6 +48,8 @@ export interface TimelineActivity {
   data?: unknown
   dataState?: PayloadRetentionState
   liveData?: unknown
+  errorDetails?: unknown
+  errorDetailsState?: PayloadRetentionState
   write?: {
     id: string
     type: WriteRecord['type']
@@ -79,18 +89,51 @@ export function buildTimelineActivities(
       snapshot,
     ),
   ]
-  return activities.sort((a, b) => a.startAt - b.startAt || a.id.localeCompare(b.id))
+  return activities.sort(compareTimelineActivities)
+}
+
+function compareTimelineActivities(first: TimelineActivity, second: TimelineActivity): number {
+  const startMillisecond = Math.round(first.startAt) - Math.round(second.startAt)
+  if (startMillisecond !== 0) return first.startAt - second.startAt
+
+  if (first.kind === 'fetch' && second.kind === 'fetch') {
+    const rootPriority = Number(!isRootFetch(first)) - Number(!isRootFetch(second))
+    if (rootPriority !== 0) return rootPriority
+
+    const firstSequence = fetchSequence(first)
+    const secondSequence = fetchSequence(second)
+    if (firstSequence !== undefined && secondSequence !== undefined) {
+      const sequence = firstSequence - secondSequence
+      if (sequence !== 0) return sequence
+    }
+  }
+
+  return first.startAt - second.startAt || first.id.localeCompare(second.id)
+}
+
+function isRootFetch(activity: TimelineActivity): boolean {
+  if (activity.kind !== 'fetch') return false
+  if (activity.graph?.some(ref => ref.path === '(root)')) return true
+  return activity.detail
+    .split(' · ')
+    .flatMap(part => part.split(','))
+    .some(part => part.trim() === 'root')
+}
+
+function fetchSequence(activity: TimelineActivity): number | undefined {
+  const match = /^fetch:(\d+)$/.exec(activity.id)
+  return match ? Number(match[1]) : undefined
 }
 
 export function timelineExtent(
   activities: readonly TimelineActivity[],
-  startedAt: number,
+  _startedAt: number,
   nowPoint: number,
 ): TimelineExtent | null {
   if (activities.length === 0) return null
   const earliest = Math.min(...activities.map(activity => activity.startAt))
   const latest = Math.max(...activities.map(activity => activity.endAt ?? nowPoint))
-  const start = startedAt > 0 ? Math.min(startedAt, earliest) : earliest
+  const start = earliest
   return { start, end: Math.max(start + 1_000, latest) }
 }
 
@@ -131,6 +174,13 @@ function buildFetchActivities(
   context: EventContext,
   nowPoint: number,
 ): TimelineActivity[] {
+  const operationLabels = new Map(
+    model.operations.map(operation => [
+      operation.key,
+      operation.composition?.operation ??
+        `${operation.summary.serviceName}.${operation.summary.method}`,
+    ]),
+  )
   return queries.flatMap(query =>
     query.spans.map((span, index) => {
       const start = span.fetchId === undefined ? undefined : context.fetchStarts.get(span.fetchId)
@@ -150,11 +200,16 @@ function buildFetchActivities(
       const durationMs =
         terminalEvent?.kind === 'fetch:end' || terminalEvent?.kind === 'fetch:error'
           ? terminalEvent.durationMs
-          : (span.endAt ?? nowPoint) - span.startAt
-      const scope = model.scopesByQueryId
-        .get(query.queryId)
-        ?.map(item => item.label)
-        .join(', ')
+          : Math.max(0, (span.endAt ?? nowPoint) - span.startAt)
+      const scopes = model.scopesByQueryId.get(query.queryId) ?? []
+      const scope = [...new Set(scopes.map(item => normalizeScopeLabel(item.label)))].join(', ')
+      const scopeTooltip =
+        scopes.length > 1
+          ? [
+              `Shared by ${scopes.length} query operations`,
+              ...new Set(scopes.map(item => item.title)),
+            ].join('\n')
+          : undefined
       const effect = cacheEffect(
         traceEvents.filter(
           item => item.event.kind !== 'cache:updated' || item.event.source === 'fetch',
@@ -185,6 +240,18 @@ function buildFetchActivities(
             ? 'evicted'
             : undefined
       const livePayload = query.method === 'get' ? query.resourceId : query.query
+      const capturedErrorDetails =
+        span.errorDetailsState === 'retained'
+          ? span.errorDetails
+          : terminalEvent?.kind === 'fetch:error' && terminal?.payloadState !== 'evicted'
+            ? errorDetails(terminalEvent.error)
+            : undefined
+      const capturedErrorDetailsState =
+        capturedErrorDetails !== undefined
+          ? 'retained'
+          : span.errorDetailsState === 'evicted' || terminal?.payloadState === 'evicted'
+            ? 'evicted'
+            : undefined
       return searchable({
         id: `fetch:${span.fetchId ?? `${query.queryId}:${span.startAt}:${index}`}`,
         kind: 'fetch',
@@ -195,6 +262,7 @@ function buildFetchActivities(
         detail: [query.resourceId === undefined ? '' : `#${query.resourceId}`, scope ?? '']
           .filter(Boolean)
           .join(' · '),
+        ...(scopeTooltip ? { detailTooltip: scopeTooltip } : {}),
         status: failed ? 'error' : pending ? 'pending' : 'success',
         tone: failed ? 'red' : pending ? 'blue' : 'green',
         trigger,
@@ -202,6 +270,14 @@ function buildFetchActivities(
         result,
         serviceName: query.serviceName,
         queryId: query.queryId,
+        ...(span.graph && span.graph.length > 0
+          ? {
+              graph: span.graph.map(ref => ({
+                ...ref,
+                operationLabel: operationLabels.get(ref.operationId) ?? ref.operationId,
+              })),
+            }
+          : {}),
         ...(traceId === undefined ? {} : { traceId }),
         durationMs,
         ...(payload === undefined ? {} : { payload }),
@@ -210,10 +286,20 @@ function buildFetchActivities(
         ...(span.result === undefined ? {} : { data: span.result }),
         ...(span.resultState ? { dataState: span.resultState } : {}),
         ...(query.present && query.data !== undefined ? { liveData: query.data } : {}),
+        ...(capturedErrorDetails === undefined ? {} : { errorDetails: capturedErrorDetails }),
+        ...(capturedErrorDetailsState ? { errorDetailsState: capturedErrorDetailsState } : {}),
         error: failed,
       })
     }),
   )
+}
+
+function normalizeScopeLabel(label: string): string {
+  const parts = label
+    .split(',')
+    .map(part => part.trim())
+    .filter(Boolean)
+  return [...new Set(parts)].join(', ')
 }
 
 function buildRealtimeActivities(
@@ -402,6 +488,8 @@ function writeActivity(
       : { entity: { serviceName: write.serviceName, itemId: write.itemId } }),
     ...(write.traceId === undefined ? {} : { traceId: write.traceId }),
     ...(write.durationMs === undefined ? {} : { durationMs: write.durationMs }),
+    ...(write.errorDetails === undefined ? {} : { errorDetails: write.errorDetails }),
+    ...(write.errorDetailsState ? { errorDetailsState: write.errorDetailsState } : {}),
     ...(write.serviceName === undefined || write.itemId === undefined
       ? {}
       : {

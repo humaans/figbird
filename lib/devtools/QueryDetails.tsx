@@ -6,6 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
+import { QUERY_FETCH_HISTORY_LIMIT } from '../core/queryStore.js'
 import type { QueryRecord, QuerySpan } from './collector.js'
 import { compactJson, formatMs, now } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
@@ -122,7 +123,7 @@ export function QueryDetails({
       subtitle={
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
           <code
-            title={[
+            data-tooltip={[
               'Cache identity derived from the operation and parameters. Changing filters creates a new query ID.',
               rootFetches.length > 1 ? rootFetches.map(root => root.queryId).join('\n') : undefined,
             ]
@@ -174,7 +175,11 @@ export function QueryDetails({
             <ClassBadge value={activeQuery.classification} />
             <span style={styles.spacer} />
             <span style={{ color: colors.muted, whiteSpace: 'nowrap' }}>
-              {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
+              {(activeQuery.prefetchCount ?? 0) > 0 && activeQuery.subscriberCount === 0
+                ? 'speculative prefetch'
+                : (activeQuery.prepareCount ?? 0) > 0 && activeQuery.subscriberCount === 0
+                  ? 'prepared query'
+                  : plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
             </span>
           </div>
           {activeQuery.resourceId !== undefined ? (
@@ -193,22 +198,39 @@ export function QueryDetails({
             </div>
           ) : null}
           {activeQuery.lastError ? (
-            <div
-              title={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
-              style={{
-                color: colors.red,
-                background: colors.panel2,
-                borderLeft: `3px solid ${colors.red}`,
-                padding: '7px 9px',
-                marginBottom: 10,
-              }}
-            >
-              <div style={{ fontWeight: 650, marginBottom: 2 }}>Last fetch error</div>
-              {activeQuery.lastError.message}
-            </div>
+            <>
+              <div
+                data-tooltip={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
+                style={{
+                  color: colors.red,
+                  background: colors.panel2,
+                  borderLeft: `3px solid ${colors.red}`,
+                  padding: '7px 9px',
+                  marginBottom: 8,
+                }}
+              >
+                <div style={{ fontWeight: 650, marginBottom: 2 }}>Last fetch error</div>
+                {activeQuery.lastError.message}
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <JsonViewer
+                  value={
+                    activeQuery.lastError.detailsState === 'evicted'
+                      ? undefined
+                      : activeQuery.lastError.details
+                  }
+                  label='Error details'
+                  emptyLabel={
+                    activeQuery.lastError.detailsState === 'evicted'
+                      ? 'Original error details vacuumed to keep memory bounded'
+                      : 'No structured error details captured'
+                  }
+                  maxHeight={280}
+                />
+              </div>
+            </>
           ) : null}
           <QueryPerformance query={activeQuery} average={average} onFetchSelect={onFetchSelect} />
-          <QueryRealtimeUpdates query={activeQuery} />
           {!splitDetails ? <QueryData query={activeQuery} separated /> : null}
           <QueryDetailBlock separated>
             <JsonViewer
@@ -307,51 +329,6 @@ function QueryData({
   )
 }
 
-function QueryRealtimeUpdates({ query }: { query: QuerySummary }) {
-  const { colors } = useDevtoolsTheme()
-  return (
-    <DetailSection label='Realtime Updates' separated>
-      <div style={{ color: colors.text }}>{realtimeUpdatesLabel(query)}</div>
-      <div style={{ color: colors.muted, marginTop: 2 }}>{realtimeUpdatesDescription(query)}</div>
-    </DetailSection>
-  )
-}
-
-function realtimeUpdatesLabel(query: QuerySummary): string {
-  switch (realtimeUpdatesMode(query)) {
-    case 'merge':
-      return 'Merges matching events locally'
-    case 'manual':
-      return 'Ignores realtime events'
-    default:
-      return 'Refetches uncertain events'
-  }
-}
-
-function realtimeUpdatesDescription(query: QuerySummary): string {
-  const mode = realtimeUpdatesMode(query)
-  if (mode === 'manual') {
-    return 'This snapshot changes only when it is refetched manually.'
-  }
-  if (mode === 'merge') {
-    return 'Matching cache changes can be applied safely without refetching.'
-  }
-
-  const reasons = query.classificationReasons ?? []
-  const windowReasons = reasons.filter(reason => reason.code === 'window-filter')
-  if (windowReasons.length > 0) {
-    return 'Sorted or paginated results can’t always be updated safely in place.'
-  }
-  return 'The server is needed when an event can’t be applied safely in place.'
-}
-
-function realtimeUpdatesMode(query: QuerySummary): 'merge' | 'manual' | 'refetch' {
-  if (query.realtimeStrategy) return query.realtimeStrategy
-  if (query.classificationReasons?.some(reason => reason.code === 'snapshot')) return 'manual'
-  if (query.classification === 'local-exact' || query.classification === 'get') return 'merge'
-  return 'refetch'
-}
-
 function PaginationDetails({
   pagination,
   pages,
@@ -413,7 +390,7 @@ function PaginationDetails({
                 >
                   <strong style={{ fontWeight: 600 }}>Page {index + 1}</strong>
                   <code
-                    title={[position, continuation].filter(Boolean).join(' · ')}
+                    data-tooltip={[position, continuation].filter(Boolean).join(' · ')}
                     style={{
                       ...styles.code,
                       minWidth: 0,
@@ -501,7 +478,7 @@ function QueryPerformance({
         ) : null}
         <span style={{ whiteSpace: 'nowrap' }}>{plural(query.fetchCount, 'fetch', 'fetches')}</span>
       </div>
-      {query.spans.length > 0 ? (
+      {query.fetchCount > 0 || query.spans.some(span => span.endAt === undefined) ? (
         <div
           style={{
             display: 'grid',
@@ -511,8 +488,19 @@ function QueryPerformance({
             marginTop: 8,
           }}
         >
-          <span style={{ color: colors.faint, fontSize: 11 }}>Recent latency</span>
-          <Sparkline spans={query.spans} onSelect={onFetchSelect} />
+          <span
+            data-tooltip={
+              query.fetchCount > QUERY_FETCH_HISTORY_LIMIT
+                ? `Showing the latest ${QUERY_FETCH_HISTORY_LIMIT} of ${query.fetchCount} completed fetches`
+                : undefined
+            }
+            style={{ color: colors.faint, fontSize: 11 }}
+          >
+            {query.fetchCount > QUERY_FETCH_HISTORY_LIMIT
+              ? `Last ${QUERY_FETCH_HISTORY_LIMIT} of ${query.fetchCount}`
+              : 'Fetch latency'}
+          </span>
+          <Sparkline query={query} onSelect={onFetchSelect} />
         </div>
       ) : null}
     </DetailSection>
@@ -561,7 +549,7 @@ function QueryPlanRow({
             role: 'button',
             tabIndex: 0,
             'aria-label': `Inspect nested query ${path}`,
-            title: `Inspect ${path}`,
+            'data-tooltip': `Inspect ${path}`,
             onClick: onSelect,
             onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
               if (event.key === 'Enter' || event.key === ' ') {
@@ -601,7 +589,8 @@ function QueryPlanRow({
         </div>
         {detail ? (
           <div
-            title={detail}
+            data-tooltip={detail}
+            data-tooltip-overflow=''
             style={{
               ...styles.code,
               color: colors.muted,
@@ -620,59 +609,126 @@ function QueryPlanRow({
 }
 
 function Sparkline({
-  spans,
+  query,
   onSelect,
 }: {
-  spans: QueryRecord['spans']
+  query: QuerySummary
   onSelect: (span: QuerySpan) => void
 }) {
   const { colors } = useDevtoolsTheme()
-  if (spans.length === 0) return null
   const nowPoint = now()
-  const visibleSpans = spans.slice(-30)
-  const max = Math.max(1, ...visibleSpans.map(span => spanDuration(span, nowPoint)))
+  const recordedByFetchId = new Map(
+    query.spans.flatMap(span =>
+      span.fetchId === undefined ? [] : [[span.fetchId, span] as const],
+    ),
+  )
+  const historyFetchIds = new Set(query.fetchHistory?.map(entry => entry.fetchId) ?? [])
+  const completed = [
+    ...(query.fetchHistory ?? []).map(entry => ({
+      key: `history:${entry.fetchId}`,
+      duration: entry.durationMs,
+      state: entry.ok ? ('success' as const) : ('error' as const),
+      trigger: fetchReasonLabel(entry.reason),
+      span: recordedByFetchId.get(entry.fetchId),
+    })),
+    ...query.spans.flatMap((span, index) =>
+      span.endAt === undefined || (span.fetchId !== undefined && historyFetchIds.has(span.fetchId))
+        ? []
+        : [
+            {
+              key: `span:${span.fetchId ?? `${span.startAt}:${index}`}`,
+              duration: spanDuration(span, nowPoint),
+              state: span.ok === false ? ('error' as const) : ('success' as const),
+              trigger: fetchReasonLabel(span.reason),
+              span,
+            },
+          ],
+    ),
+  ].slice(-QUERY_FETCH_HISTORY_LIMIT)
+  const missingCount = Math.min(
+    Math.max(0, query.fetchCount - completed.length),
+    QUERY_FETCH_HISTORY_LIMIT - completed.length,
+  )
+  const active = query.spans.flatMap((span, index) =>
+    span.endAt === undefined
+      ? [
+          {
+            key: `active:${span.fetchId ?? `${span.startAt}:${index}`}`,
+            duration: spanDuration(span, nowPoint),
+            state: 'pending' as const,
+            trigger: fetchReasonLabel(span.reason),
+            span,
+          },
+        ]
+      : [],
+  )
+  const entries = [
+    ...Array.from({ length: missingCount }, (_, index) => ({
+      key: `unavailable:${index}`,
+      duration: 0,
+      state: 'unavailable' as const,
+      trigger: 'timing unavailable',
+      span: undefined,
+    })),
+    ...completed,
+    ...active,
+  ]
+  if (entries.length === 0) return null
+  const max = Math.max(1, ...entries.map(entry => entry.duration))
   return (
     <span
       aria-label='Recent fetch history'
-      style={{ display: 'flex', alignItems: 'end', gap: 1, height: 22 }}
+      style={{ display: 'flex', alignItems: 'end', gap: 1, height: 22, minWidth: 0 }}
     >
-      {visibleSpans.map((span, index) => {
-        const duration = spanDuration(span, nowPoint)
-        const state = span.endAt === undefined ? 'pending' : span.ok === false ? 'error' : 'success'
-        const trigger = fetchReasonLabel(span.reason)
+      {entries.map(entry => {
+        const inspectable = entry.span !== undefined
+        const title =
+          entry.state === 'unavailable'
+            ? 'Timing unavailable · fetch completed before detailed recording began'
+            : `${formatMs(entry.duration)} · ${entry.state}\nTrigger: ${entry.trigger}${
+                inspectable ? '\nClick to inspect this fetch' : '\nDetailed recording unavailable'
+              }`
         return (
           <button
             type='button'
-            key={`${span.startAt}:${index}`}
-            aria-label={`${formatMs(duration)}, ${state}, ${trigger}`}
-            title={`${formatMs(duration)} · ${state}\nTrigger: ${trigger}\nClick to inspect this fetch`}
-            onClick={() => onSelect(span)}
+            key={entry.key}
+            aria-label={
+              entry.state === 'unavailable'
+                ? 'Fetch timing unavailable'
+                : `${formatMs(entry.duration)}, ${entry.state}, ${entry.trigger}`
+            }
+            data-tooltip={title}
+            onClick={inspectable ? () => onSelect(entry.span!) : undefined}
             style={{
               display: 'flex',
               alignItems: 'end',
               justifyContent: 'center',
-              width: 7,
+              flex: '1 1 5px',
+              minWidth: 3,
+              maxWidth: 7,
               height: 22,
               padding: 0,
               border: 0,
               background: 'transparent',
-              cursor: 'pointer',
+              cursor: inspectable ? 'pointer' : 'default',
             }}
           >
             <span
               aria-hidden='true'
               style={{
-                width: 4,
-                height: Math.max(3, (duration / max) * 20),
+                width: 'min(4px, 80%)',
+                height: Math.max(3, (entry.duration / max) * 20),
                 background:
-                  span.endAt === undefined
+                  entry.state === 'pending'
                     ? colors.blue
-                    : span.ok === false
+                    : entry.state === 'error'
                       ? colors.red
-                      : colors.green,
+                      : entry.state === 'unavailable'
+                        ? colors.faint
+                        : colors.green,
                 borderRadius: 2,
-                opacity: span.endAt === undefined ? 0.75 : 1,
-                boxShadow: span.endAt === undefined ? `inset 0 0 0 1px ${colors.bg}` : undefined,
+                opacity: entry.state === 'pending' ? 0.75 : 1,
+                boxShadow: entry.state === 'pending' ? `inset 0 0 0 1px ${colors.bg}` : undefined,
               }}
             />
           </button>

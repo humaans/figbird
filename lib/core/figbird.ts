@@ -42,12 +42,18 @@ import { QueryRef } from './queryRef.js'
 import {
   QueryStore,
   type DevtoolsCacheEditResult,
+  type QueryFetchHistoryEntry,
   type ReconnectJitter,
   type RetryDelay,
   type VisibilitySource,
 } from './queryStore.js'
 
-export type { ReconnectJitter, RetryDelay, VisibilitySource } from './queryStore.js'
+export type {
+  QueryFetchHistoryEntry,
+  ReconnectJitter,
+  RetryDelay,
+  VisibilitySource,
+} from './queryStore.js'
 import {
   normalizeQueryConfig,
   queryOfParams,
@@ -515,7 +521,7 @@ export class Figbird<
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
-    const unsub = ref.subscribe(() => {}, options ?? {})
+    const unsub = ref.subscribe(() => {}, { ...options, source: 'prepare' })
     return {
       key: ref.hash(),
       promise: ref.suspensePromise(),
@@ -566,7 +572,7 @@ export class Figbird<
 
     // The pin also carries the staleTime so a warm-in-store read within the window
     // skips the SWR revalidation instead of re-fetching.
-    const release = ref.subscribe(() => {}, { staleTime })
+    const release = ref.subscribe(() => {}, { staleTime, source: 'prefetch' })
     const timer = setTimeout(() => {
       this.#prefetches.delete(hash)
       release()
@@ -982,6 +988,7 @@ export class Figbird<
           errorCount: stats?.errorCount ?? 0,
           ...(stats?.lastDurationMs !== undefined ? { lastDurationMs: stats.lastDurationMs } : {}),
           totalDurationMs: stats?.totalDurationMs ?? 0,
+          fetchHistory: stats?.history ?? [],
         })
       }
     }
@@ -1053,6 +1060,8 @@ export interface InspectedQuery {
   errorCount: number
   lastDurationMs?: number
   totalDurationMs: number
+  /** Bounded, payload-free latency history used by attached developer tools. */
+  fetchHistory?: readonly QueryFetchHistoryEntry[]
 }
 
 export interface InspectedCacheEntity {

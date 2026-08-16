@@ -32,6 +32,22 @@ export type TraceCause =
   | { kind: 'subscription'; traceId: number }
 
 /**
+ * Identifies the relational operation run and structural node that owns a fetch.
+ * This is execution metadata only: it must never participate in query identity.
+ */
+export interface QueryGraphRef {
+  operationId: string
+  runId: string
+  path: string
+  role?: 'junction'
+}
+
+export interface QueryExecutionOptions {
+  staleTime?: number | undefined
+  graph?: QueryGraphRef | undefined
+}
+
+/**
  * Queued event for batch processing
  */
 interface QueuedEventBase {

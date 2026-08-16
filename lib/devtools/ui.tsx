@@ -3,11 +3,15 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from 'react'
+import { createPortal } from 'react-dom'
 
 const MIN_DETAILS_WIDTH = 280
 const DEFAULT_DETAILS_WIDTH = 360
@@ -32,6 +36,7 @@ export interface DevtoolsColors {
   blue: string
   purple: string
   activeButtonBg: string
+  relatedRowBg: string
   drawerShadow: string
 }
 
@@ -56,6 +61,7 @@ export const lightColors: DevtoolsColors = {
   blue: '#1d65d8',
   purple: '#8a3ffc',
   activeButtonBg: 'rgba(29,101,216,.1)',
+  relatedRowBg: 'rgba(29,101,216,.045)',
   drawerShadow: '0 -18px 50px rgba(29,42,58,.2)',
 }
 
@@ -75,6 +81,7 @@ export const darkColors: DevtoolsColors = {
   blue: '#74a7ff',
   purple: '#c98cff',
   activeButtonBg: 'rgba(116,167,255,.16)',
+  relatedRowBg: 'rgba(116,167,255,.07)',
   drawerShadow: '0 -18px 50px rgba(0,0,0,.45)',
 }
 
@@ -169,6 +176,7 @@ export function makeStyles(colors: DevtoolsColors) {
       textAlign: 'left',
       color: colors.text,
       fontWeight: 400,
+      cursor: 'default',
       padding: '6px 10px',
       boxShadow: `inset 0 -1px ${colors.border}`,
       position: 'sticky',
@@ -248,6 +256,190 @@ export function makeStyles(colors: DevtoolsColors) {
 
 export function useDevtoolsTheme(): DevtoolsTheme {
   return useContext(ThemeContext)
+}
+
+interface TooltipTarget {
+  anchor: HTMLElement
+  content: string
+}
+
+interface TooltipPosition {
+  left: number
+  top: number
+}
+
+const TOOLTIP_DELAY_MS = 700
+const TOOLTIP_SKIP_DELAY_MS = 400
+
+/** One delegated tooltip surface for the entire devtools panel. */
+export function TooltipLayer({ rootRef }: { rootRef: RefObject<HTMLElement | null> }) {
+  const { colors } = useDevtoolsTheme()
+  const [target, setTarget] = useState<TooltipTarget | null>(null)
+  const [position, setPosition] = useState<TooltipPosition | null>(null)
+  const tooltipRef = useRef<HTMLDivElement>(null)
+  const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const tooltipSessionActive = useRef(false)
+
+  const hide = useCallback((keepSession = false) => {
+    if (showTimer.current) clearTimeout(showTimer.current)
+    if (sessionTimer.current) clearTimeout(sessionTimer.current)
+    showTimer.current = null
+    sessionTimer.current = null
+    setTarget(null)
+    setPosition(null)
+    if (keepSession && tooltipSessionActive.current) {
+      sessionTimer.current = setTimeout(() => {
+        sessionTimer.current = null
+        tooltipSessionActive.current = false
+      }, TOOLTIP_SKIP_DELAY_MS)
+    } else {
+      tooltipSessionActive.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const ownerWindow = root.ownerDocument.defaultView
+    if (!ownerWindow) return
+
+    const tooltipAnchor = (eventTarget: EventTarget | null): HTMLElement | null => {
+      if (!(eventTarget instanceof ownerWindow.Element)) return null
+      let anchor: Element | null = eventTarget.closest('[data-tooltip]')
+      while (anchor instanceof ownerWindow.HTMLElement && root.contains(anchor)) {
+        const overflowOnly = anchor.hasAttribute('data-tooltip-overflow')
+        const clipped =
+          anchor.scrollWidth > anchor.clientWidth || anchor.scrollHeight > anchor.clientHeight
+        if (!overflowOnly || clipped) return anchor
+        anchor = anchor.parentElement?.closest('[data-tooltip]') ?? null
+      }
+      return null
+    }
+    const show = (anchor: HTMLElement, immediate: boolean) => {
+      const content = anchor.dataset.tooltip
+      if (!content) return
+      if (showTimer.current) clearTimeout(showTimer.current)
+      if (sessionTimer.current) clearTimeout(sessionTimer.current)
+      sessionTimer.current = null
+      const reveal = () => {
+        showTimer.current = null
+        if (!anchor.isConnected) return
+        tooltipSessionActive.current = true
+        setTarget({ anchor, content })
+      }
+      if (immediate || tooltipSessionActive.current) reveal()
+      else showTimer.current = setTimeout(reveal, TOOLTIP_DELAY_MS)
+    }
+    const onPointerOver = (event: PointerEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (!anchor || tooltipAnchor(event.relatedTarget) === anchor) return
+      show(anchor, false)
+    }
+    const onPointerOut = (event: PointerEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (!anchor) return
+      const nextAnchor = tooltipAnchor(event.relatedTarget)
+      if (nextAnchor === anchor) return
+      if (nextAnchor) show(nextAnchor, false)
+      else hide(true)
+    }
+    const onFocusIn = (event: FocusEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (anchor) show(anchor, true)
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (!anchor) return
+      const related = event.relatedTarget
+      if (related instanceof ownerWindow.Node && anchor.contains(related)) return
+      hide()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') hide()
+    }
+
+    root.addEventListener('pointerover', onPointerOver)
+    root.addEventListener('pointerout', onPointerOut)
+    root.addEventListener('focusin', onFocusIn)
+    root.addEventListener('focusout', onFocusOut)
+    const onPointerDown = () => hide()
+    root.addEventListener('pointerdown', onPointerDown)
+    root.addEventListener('keydown', onKeyDown)
+    return () => {
+      root.removeEventListener('pointerover', onPointerOver)
+      root.removeEventListener('pointerout', onPointerOut)
+      root.removeEventListener('focusin', onFocusIn)
+      root.removeEventListener('focusout', onFocusOut)
+      root.removeEventListener('pointerdown', onPointerDown)
+      root.removeEventListener('keydown', onKeyDown)
+      if (showTimer.current) clearTimeout(showTimer.current)
+      if (sessionTimer.current) clearTimeout(sessionTimer.current)
+    }
+  }, [hide, rootRef])
+
+  const updatePosition = useCallback(() => {
+    if (!target || !tooltipRef.current) return
+    const { ownerDocument } = target.anchor
+    const ownerWindow = ownerDocument.defaultView
+    if (!ownerWindow) return
+    const anchorRect = target.anchor.getBoundingClientRect()
+    const tooltipRect = tooltipRef.current.getBoundingClientRect()
+    const gutter = 8
+    const gap = 7
+    const centered = anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2
+    const left = Math.max(
+      gutter,
+      Math.min(centered, ownerWindow.innerWidth - tooltipRect.width - gutter),
+    )
+    const below = anchorRect.bottom + gap
+    const top =
+      below + tooltipRect.height <= ownerWindow.innerHeight - gutter
+        ? below
+        : Math.max(gutter, anchorRect.top - tooltipRect.height - gap)
+    setPosition({ left, top })
+  }, [target])
+
+  useLayoutEffect(() => {
+    if (!target) return
+    updatePosition()
+    const ownerDocument = target.anchor.ownerDocument
+    const ownerWindow = ownerDocument.defaultView
+    ownerDocument.addEventListener('scroll', updatePosition, true)
+    ownerWindow?.addEventListener('resize', updatePosition)
+    return () => {
+      ownerDocument.removeEventListener('scroll', updatePosition, true)
+      ownerWindow?.removeEventListener('resize', updatePosition)
+    }
+  }, [target, updatePosition])
+
+  if (!target) return null
+  return createPortal(
+    <div
+      ref={tooltipRef}
+      role='tooltip'
+      style={{
+        position: 'fixed',
+        zIndex: 2147483647,
+        left: position?.left ?? -10_000,
+        top: position?.top ?? -10_000,
+        maxWidth: 'min(360px, calc(100vw - 16px))',
+        padding: '6px 8px',
+        borderRadius: 4,
+        background: colors.text,
+        color: colors.bg,
+        boxShadow: '0 4px 18px rgba(0,0,0,.24)',
+        font: '11px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        letterSpacing: 0,
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
+        pointerEvents: 'none',
+      }}
+    >
+      {target.content}
+    </div>,
+    target.anchor.ownerDocument.body,
+  )
 }
 
 export function usePreferredColorScheme(theme: DevtoolsThemeMode): ColorScheme {
@@ -362,7 +554,6 @@ export function DetailsPane({
         role='separator'
         aria-label='Resize details pane'
         aria-orientation='vertical'
-        title='Resize details pane'
         onMouseDown={onResizeStart}
         style={{
           position: 'absolute',
@@ -417,7 +608,7 @@ export function DetailsPane({
         <button
           type='button'
           aria-label='Close details'
-          title='Close details'
+          data-tooltip='Close details'
           style={iconButtonStyle(colors)}
           onClick={onClose}
         >
@@ -520,7 +711,7 @@ export function CopyButton({ value, label = 'value' }: { value: string; label?: 
     <button
       type='button'
       aria-label={`Copy ${label}`}
-      title={copied ? 'Copied' : `Copy ${label}`}
+      data-tooltip={copied ? 'Copied' : `Copy ${label}`}
       onClick={event => {
         event.stopPropagation()
         void copyText(value).then(success => {
@@ -546,7 +737,7 @@ export function CopyButton({ value, label = 'value' }: { value: string; label?: 
   )
 }
 
-async function copyText(value: string): Promise<boolean> {
+export async function copyText(value: string): Promise<boolean> {
   try {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       await navigator.clipboard.writeText(value)
@@ -616,7 +807,6 @@ export function ColumnResizeHandle({
       role='separator'
       aria-label={`Resize ${label} column`}
       aria-orientation='vertical'
-      title={`Resize ${label} column`}
       onMouseDown={onMouseDown}
       style={{
         position: 'absolute',
@@ -690,17 +880,17 @@ export function useDetailsPaneWidth({
 export function Badge({
   tone,
   children,
-  title,
+  tooltip,
 }: {
   tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
   children: string
-  title?: string | undefined
+  tooltip?: string | undefined
 }) {
   const { colors } = useDevtoolsTheme()
   const color = toneColor(colors, tone)
   return (
     <span
-      title={title}
+      data-tooltip={tooltip}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

@@ -5,6 +5,13 @@ import { createCollector } from '../../lib/devtools/collector.js'
 import { PANEL_VISIBILITY_CALLBACK, type DevtoolsPanelWindow } from './panelVisibility.js'
 import { ExtensionSession } from './remote.js'
 
+interface DevtoolsNavigationEvent {
+  addListener(listener: (url: string) => void): void
+  removeListener(listener: (url: string) => void): void
+}
+
+declare const chrome: { devtools: { network: { onNavigated: DevtoolsNavigationEvent } } }
+
 function Panel() {
   const session = useMemo(() => new ExtensionSession(), [])
   const collector = useMemo(
@@ -28,7 +35,6 @@ function Panel() {
       } else {
         session.stop()
         session.figbird.reset()
-        collector.reset()
       }
     }
     const updateFromDocument = () => {
@@ -49,6 +55,12 @@ function Panel() {
       collector.reset()
     }
   }, [collector, session])
+
+  useEffect(() => {
+    const resetForNavigation = () => session.resetForNavigation()
+    chrome.devtools.network.onNavigated.addListener(resetForNavigation)
+    return () => chrome.devtools.network.onNavigated.removeListener(resetForNavigation)
+  }, [session])
 
   useEffect(() => session.subscribeReset(() => collector.reset()), [collector, session])
 

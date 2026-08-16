@@ -1,4 +1,5 @@
 import type { DevtoolsEvent } from './collector.js'
+import { errorDetails } from '../core/errors.js'
 import { compactJson, formatClock, formatMs } from './format.js'
 import type { EventQueryScope } from './model.js'
 
@@ -40,7 +41,7 @@ export function eventPayload(event: DevtoolsEvent['event']): unknown {
     case 'mutate:error':
     case 'action:error':
     case 'connection:error':
-      return { name: event.error.name, message: event.error.message }
+      return errorDetails(event.error)
     case 'connection:connected':
     case 'connection:disconnected':
     case 'connection:reconnected':
@@ -94,7 +95,7 @@ export function eventPayloadLabel(event: DevtoolsEvent['event']): string {
 
 export function displayEvent(event: DevtoolsEvent['event']): unknown {
   if ('error' in event && event.error) {
-    return { ...event, error: { name: event.error.name, message: event.error.message } }
+    return { ...event, error: errorDetails(event.error) }
   }
   return event
 }
@@ -146,7 +147,13 @@ export function buildActivities(
       const details = activityDetails(key, representative, group.events)
       const identity = activityIdentity(key, representative.event)
       const lifecycle = activityStatus(key, group.events)
-      const queryId = group.events.map(item => eventQueryId(item.event)).find(Boolean)
+      // Connection traces can fan out into many unrelated query fetches. Associating
+      // the whole lifecycle with the first query makes that arbitrary query look like
+      // the owner of the reconnect, so connection groups intentionally have no scope.
+      const queryId =
+        kind === 'connection'
+          ? undefined
+          : group.events.map(item => eventQueryId(item.event)).find(Boolean)
       return {
         key,
         representative,
