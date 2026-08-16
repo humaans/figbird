@@ -1175,9 +1175,19 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.truthy(timelineButton)
   click(timelineButton!)
   const timelineText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
-  t.true(timelineText.includes('issues.find'))
-  t.true(timelineText.includes('issueLabels.find'))
-  t.is(timelineText.match(/issues realtime/g)?.length, 1)
+  const timelineRows = $all('[data-timeline-activity]')
+  const timelineRowText = timelineRows.map(row => row.textContent ?? '')
+  t.true(timelineRowText.some(text => text.includes('issues') && text.includes('find')))
+  t.true(timelineRowText.some(text => text.includes('issueLabels') && text.includes('find')))
+  t.is(
+    timelineRows.filter(
+      row =>
+        row.getAttribute('data-timeline-activity') === 'realtime' &&
+        row.textContent?.includes('issues') &&
+        row.textContent.includes('patched'),
+    ).length,
+    1,
+  )
   t.falsy($all('button').find(button => button.textContent === '30s'))
   t.truthy($('[aria-label="Timeline overview"]'))
   t.truthy($('[aria-label="Timeline overview"] canvas'))
@@ -1189,9 +1199,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   click(liveTimelineButton!)
   t.truthy($('[aria-label="Resume live timeline"]'))
 
-  const timelineActivities = $all('[data-timeline-activity]').map(row =>
-    row.getAttribute('data-timeline-activity'),
-  )
+  const timelineActivities = timelineRows.map(row => row.getAttribute('data-timeline-activity'))
   t.deepEqual(timelineActivities, ['fetch', 'fetch', 'realtime', 'connection', 'connection'])
   t.is($all('[data-timeline-outage="offline"]').length, 1)
   t.true(timelineText.includes('websocket'))

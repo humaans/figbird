@@ -15,6 +15,7 @@ export interface TimelineActivity {
   startAt: number
   endAt?: number
   label: string
+  operation: string
   detail: string
   status: string
   tone: TimelineActivityTone
@@ -170,7 +171,8 @@ function buildFetchActivities(
         kind: 'fetch',
         startAt: span.startAt,
         ...(span.endAt === undefined ? {} : { endAt: span.endAt }),
-        label: `${query.serviceName}.${query.method}`,
+        label: query.serviceName,
+        operation: query.method,
         detail: [query.resourceId === undefined ? '' : `#${query.resourceId}`, scope ?? '']
           .filter(Boolean)
           .join(' · '),
@@ -201,20 +203,15 @@ function buildRealtimeActivities(
       item.traceId === undefined ? [] : (context.traceEvents.get(item.traceId) ?? [])
     const effect = cacheEffect(traceEvents, 'received')
     const fetches = traceEvents.filter(related => related.event.kind === 'fetch:start').length
-    const result = [
-      event?.type ?? 'event',
-      event?.itemId === undefined ? '' : `#${event.itemId}`,
-      fetches > 0 ? `${fetches} ${fetches === 1 ? 'fetch' : 'fetches'} triggered` : '',
-    ]
-      .filter(Boolean)
-      .join(' · ')
+    const result = fetches > 0 ? `${fetches} ${fetches === 1 ? 'fetch' : 'fetches'} triggered` : '—'
     return searchable({
       id: `realtime:${item.at}:${item.serviceName}:${index}`,
       kind: 'realtime',
       startAt: item.at,
       endAt: item.at,
-      label: `${item.serviceName} realtime`,
-      detail: event ? `${event.type}${event.itemId === undefined ? '' : ` #${event.itemId}`}` : '',
+      label: item.serviceName,
+      operation: event?.type ?? 'event',
+      detail: event?.itemId === undefined ? '' : `#${event.itemId}`,
       status: 'received',
       tone: 'blue',
       trigger: 'socket event',
@@ -243,7 +240,7 @@ function connectionActivity(
     event.traceId === undefined ? [] : (context.traceEvents.get(event.traceId) ?? [])
   const sweep = traceEvents.find(item => item.event.kind === 'reconnect:sweep')?.event
   const fetches = traceEvents.filter(item => item.event.kind === 'fetch:start').length
-  const status = connectionStatus(event)
+  const operation = connectionOperation(event)
   const result = [
     'transport' in event ? (event.transport ?? '') : '',
     'attempt' in event && event.attempt !== undefined ? `attempt ${event.attempt}` : '',
@@ -259,7 +256,8 @@ function connectionActivity(
     kind: 'connection',
     startAt: at,
     endAt: at,
-    label: status,
+    label: 'socket',
+    operation,
     detail: connectionDetail(event),
     status: failed
       ? event.kind === 'connection:disconnected'
@@ -314,7 +312,8 @@ function writeActivity(write: WriteRecord, initiatingAction?: WriteRecord): Time
   const label =
     write.type === 'action'
       ? (write.name ?? '(anonymous action)')
-      : `${write.serviceName ?? ''}.${write.method ?? ''}${write.itemId === undefined ? '' : ` #${write.itemId}`}`
+      : (write.serviceName ?? 'mutation')
+  const operation = write.type === 'action' ? 'action' : (write.method ?? 'mutate')
   const actionName = initiatingAction?.name ?? (initiatingAction ? '(anonymous action)' : undefined)
   return searchable({
     id: `write:${write.id}`,
@@ -322,7 +321,16 @@ function writeActivity(write: WriteRecord, initiatingAction?: WriteRecord): Time
     startAt: write.startedAt,
     ...(write.endedAt === undefined ? {} : { endAt: write.endedAt }),
     label,
-    detail: actionName ? `${actionName} action` : write.type,
+    operation,
+    detail:
+      write.type === 'mutation'
+        ? [
+            write.itemId === undefined ? '' : `#${write.itemId}`,
+            actionName ? `${actionName} action` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '',
     status: write.status,
     tone: failed ? 'red' : write.status === 'in-flight' ? 'amber' : 'green',
     trigger: initiatingAction || write.type === 'action' ? 'action' : 'UI mutation',
@@ -397,18 +405,20 @@ function fetchTrigger(
   return cause ? cause.replace('-', ' ') : 'request'
 }
 
-function connectionStatus(event: Extract<FigbirdEvent, { kind: `connection:${string}` }>): string {
+function connectionOperation(
+  event: Extract<FigbirdEvent, { kind: `connection:${string}` }>,
+): string {
   switch (event.kind) {
     case 'connection:connected':
-      return 'Connected'
+      return 'connected'
     case 'connection:disconnected':
-      return 'Disconnected'
+      return 'disconnected'
     case 'connection:reconnected':
-      return 'Reconnected'
+      return 'reconnected'
     case 'connection:error':
-      return event.phase === 'connect' ? 'Connection error' : 'Reconnect error'
+      return event.phase === 'connect' ? 'connect error' : 'reconnect error'
     case 'connection:reconnect-failed':
-      return 'Reconnection failed'
+      return 'reconnect failed'
   }
 }
 
@@ -438,6 +448,7 @@ function searchable(activity: Omit<TimelineActivity, 'searchText'>): TimelineAct
     searchText: [
       activity.kind,
       activity.label,
+      activity.operation,
       activity.detail,
       activity.status,
       activity.trigger,

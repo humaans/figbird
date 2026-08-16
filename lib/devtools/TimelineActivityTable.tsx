@@ -29,13 +29,14 @@ type TimelineVisibility = 'all' | 'fetch' | 'realtime' | 'write' | 'connection' 
 
 const COLUMNS = [
   { label: 'Time', width: 96, minWidth: 78 },
-  { label: 'Activity', width: 190, minWidth: 130 },
-  { label: 'Context', width: 125, minWidth: 80 },
-  { label: 'Status', width: 94, minWidth: 78 },
-  { label: 'Trigger', width: 110, minWidth: 80 },
-  { label: 'Cache effect', width: 135, minWidth: 90 },
-  { label: 'Result', width: 125, minWidth: 85 },
-  { label: 'Duration', width: 78, minWidth: 62 },
+  { label: 'Activity', width: 145, minWidth: 100 },
+  { label: 'Operation', width: 85, minWidth: 70 },
+  { label: 'Context', width: 120, minWidth: 80 },
+  { label: 'Status', width: 84, minWidth: 70 },
+  { label: 'Trigger', width: 100, minWidth: 75 },
+  { label: 'Cache effect', width: 125, minWidth: 90 },
+  { label: 'Result', width: 115, minWidth: 80 },
+  { label: 'Duration', width: 74, minWidth: 60 },
   { label: 'Waterfall', width: 200, minWidth: 130 },
 ] as const
 
@@ -389,6 +390,7 @@ function ActivityRow({
           </strong>
         </span>
       </td>
+      <EllipsisCell value={activity.operation} />
       <EllipsisCell value={activity.detail || '—'} />
       <td style={styles.td}>
         <Badge tone={activity.tone}>{activity.status}</Badge>
@@ -517,7 +519,9 @@ function ActivityDetails({
   const { colors } = useDevtoolsTheme()
   return (
     <DetailsPane
-      title={activity.label}
+      title={
+        activity.operation === 'action' ? activity.label : `${activity.label}.${activity.operation}`
+      }
       subtitle={activity.write?.type ?? activity.kind}
       width={width}
       onResizeStart={onResizeStart}
@@ -531,6 +535,8 @@ function ActivityDetails({
           marginBottom: 16,
         }}
       >
+        <DetailStat label='Operation' value={activity.operation} />
+        {activity.detail ? <DetailStat label='Context' value={activity.detail} /> : null}
         <DetailStat label='Status' value={activity.status} />
         <DetailStat
           label='Started'
