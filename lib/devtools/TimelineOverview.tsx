@@ -3,7 +3,6 @@ import type { TimelineActivity, TimelineActivityKind, TimelineExtent } from './t
 import { useDevtoolsTheme } from './ui.js'
 
 const OVERVIEW_HEIGHT = 54
-const LABEL_WIDTH = 180
 const DRAG_THRESHOLD = 3
 
 export interface TimelineRange {
@@ -65,60 +64,39 @@ export function TimelineOverview({
   }
 
   return (
-    <div
+    <button
+      type='button'
+      aria-label='Timeline overview'
+      title='Drag to filter the activity table by time. Click to clear the range.'
+      onMouseDown={onMouseDown}
+      onKeyDown={event => {
+        if (event.key === 'Escape') onRangeChange(null)
+      }}
       style={{
-        display: 'grid',
-        gridTemplateColumns: `${LABEL_WIDTH}px minmax(0, 1fr)`,
-        minHeight: OVERVIEW_HEIGHT,
+        position: 'relative',
+        display: 'block',
+        width: '100%',
+        height: OVERVIEW_HEIGHT,
         flexShrink: 0,
+        overflow: 'hidden',
+        border: 0,
         borderBottom: `1px solid ${colors.border}`,
-        background: colors.panel2,
+        padding: 0,
+        background: colors.panel,
+        cursor: 'crosshair',
       }}
     >
-      <div
+      <canvas
+        ref={canvasRef}
+        aria-hidden='true'
         style={{
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          padding: '0 10px',
-          minWidth: 0,
+          display: 'block',
+          width: '100%',
+          height: OVERVIEW_HEIGHT,
+          pointerEvents: 'none',
         }}
-      >
-        <strong style={{ color: colors.text, fontWeight: 650 }}>Recording overview</strong>
-        <span style={{ color: colors.faint, marginTop: 2 }}>
-          {activities.length} {activities.length === 1 ? 'activity' : 'activities'}
-        </span>
-      </div>
-      <button
-        type='button'
-        aria-label='Timeline overview'
-        title='Drag to filter the activity table by time. Click to clear the range.'
-        onMouseDown={onMouseDown}
-        onKeyDown={event => {
-          if (event.key === 'Escape') onRangeChange(null)
-        }}
-        style={{
-          position: 'relative',
-          overflow: 'hidden',
-          border: 0,
-          borderLeft: `1px solid ${colors.border}`,
-          padding: 0,
-          background: colors.panel,
-          cursor: 'crosshair',
-        }}
-      >
-        <canvas
-          ref={canvasRef}
-          aria-hidden='true'
-          style={{
-            display: 'block',
-            width: '100%',
-            height: OVERVIEW_HEIGHT,
-            pointerEvents: 'none',
-          }}
-        />
-      </button>
-    </div>
+      />
+    </button>
   )
 }
 
