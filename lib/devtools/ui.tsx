@@ -167,8 +167,8 @@ export function makeStyles(colors: DevtoolsColors) {
     },
     th: {
       textAlign: 'left',
-      color: colors.muted,
-      fontWeight: 600,
+      color: colors.text,
+      fontWeight: 400,
       padding: '6px 10px',
       boxShadow: `inset 0 -1px ${colors.border}`,
       position: 'sticky',
@@ -506,9 +506,7 @@ export function DetailStat({
     >
       <span style={{ color: colors.muted }}>{label}</span>
       <span style={{ display: 'flex', alignItems: 'baseline', gap: 5, minWidth: 0 }}>
-        <strong style={{ color: colors.text, minWidth: 0, overflowWrap: 'anywhere' }}>
-          {value}
-        </strong>
+        <span style={{ color: colors.text, minWidth: 0, overflowWrap: 'anywhere' }}>{value}</span>
         {copyValue ? <CopyButton value={copyValue} /> : null}
       </span>
     </div>

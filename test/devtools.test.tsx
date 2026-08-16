@@ -785,8 +785,9 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   const row = $all('tbody tr')[0]
   t.truthy(row)
   t.is(row?.querySelectorAll('td')[1]?.textContent, 'paginate')
-  t.true(
-    (row?.textContent ?? '').includes('paginate(25, {"status":"open","$sort":{"createdAt":-1}})'),
+  t.is(
+    row?.querySelectorAll('td')[2]?.textContent,
+    '25, {"status":"open","$sort":{"createdAt":-1}}',
   )
   click(row!)
 
@@ -1171,21 +1172,22 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const rowText = $all('tbody tr').map(row => row.textContent ?? '')
   const queryHeaders = $all('th').map(header => header.textContent ?? '')
   t.deepEqual(queryHeaders, [
-    'Service',
-    'Query Operation',
-    'Definition',
-    'Maintenance',
-    'Rows',
-    'Fetch Activity',
-    'Last Fetch',
-    'Fetched',
+    'service',
+    'operation',
+    'definition',
+    'maintenance',
+    'rows',
+    'fetch activity',
+    'last fetch',
+    'fetched',
   ])
   t.is(rowText.length, 1)
   t.true(rowText[0]!.includes('issues'))
-  t.true(rowText[0]!.includes('find() → labels'))
+  t.true(rowText[0]!.includes('→ labels'))
+  t.false(rowText[0]!.includes('find()'))
   t.false(rowText[0]!.includes('issueLabels'))
 
-  const classHeader = $all('th').find(header => header.textContent === 'Maintenance')
+  const classHeader = $all('th').find(header => header.textContent === 'maintenance')
   t.true(classHeader?.getAttribute('title')?.includes('local-exact'))
   const classBadge = $all('span').find(element => element.textContent === 'local-exact')
   t.true(classBadge?.getAttribute('title')?.includes('merge directly'))
@@ -1286,7 +1288,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const eventHeaders = $all('[aria-label="Figbird devtools"] [style*="position: sticky"]').at(
     -1,
   )?.textContent
-  t.true(eventHeaders?.includes('GroupServiceOperationScopeStatusDetails'))
+  t.true(eventHeaders?.includes('groupserviceoperationscopestatusdetails'))
   const realtimeEventRow = $all('[title="Select event details"]').find(row =>
     row.textContent?.includes('realtime'),
   )

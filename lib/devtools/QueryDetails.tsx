@@ -311,7 +311,7 @@ function QueryRealtimeUpdates({ query }: { query: QuerySummary }) {
   const { colors } = useDevtoolsTheme()
   return (
     <DetailSection label='Realtime Updates' separated>
-      <div style={{ color: colors.text, fontWeight: 600 }}>{realtimeUpdatesLabel(query)}</div>
+      <div style={{ color: colors.text }}>{realtimeUpdatesLabel(query)}</div>
       <div style={{ color: colors.muted, marginTop: 2 }}>{realtimeUpdatesDescription(query)}</div>
     </DetailSection>
   )

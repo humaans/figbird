@@ -34,13 +34,13 @@ import {
 } from './ui.js'
 
 const EVENT_COLUMNS = [
-  { label: 'Time', width: 108, minWidth: 84 },
-  { label: 'Group', width: 112, minWidth: 84 },
-  { label: 'Service', width: 130, minWidth: 92 },
-  { label: 'Operation', width: 92, minWidth: 72 },
-  { label: 'Scope', width: 135, minWidth: 92 },
-  { label: 'Status', width: 94, minWidth: 74 },
-  { label: 'Details', width: 300, minWidth: 160 },
+  { label: 'time', width: 108, minWidth: 84 },
+  { label: 'group', width: 112, minWidth: 84 },
+  { label: 'service', width: 130, minWidth: 92 },
+  { label: 'operation', width: 92, minWidth: 72 },
+  { label: 'scope', width: 135, minWidth: 92 },
+  { label: 'status', width: 94, minWidth: 74 },
+  { label: 'details', width: 300, minWidth: 160 },
 ] as const
 
 export function EventsTab({
@@ -125,8 +125,8 @@ export function EventsTab({
             top: 0,
             zIndex: 1,
             background: colors.bg,
-            color: colors.muted,
-            fontWeight: 600,
+            color: colors.text,
+            fontWeight: 400,
             borderBottom: `1px solid ${colors.border}`,
           }}
         >
@@ -140,7 +140,7 @@ export function EventsTab({
                 alignItems: 'center',
               }}
             >
-              {index === 1 && visibility !== 'groups' ? 'Raw Event' : column.label}
+              {index === 1 && visibility !== 'groups' ? 'raw event' : column.label}
               <ColumnResizeHandle
                 label={column.label}
                 onMouseDown={event => onColumnResizeStart(index, event)}

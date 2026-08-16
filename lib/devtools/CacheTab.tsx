@@ -32,12 +32,12 @@ import {
 } from './ui.js'
 
 const CACHE_COLUMNS = [
-  { label: 'Service', width: 140, minWidth: 95 },
-  { label: 'Entity', width: 150, minWidth: 90 },
-  { label: 'Value', width: 310, minWidth: 160 },
-  { label: 'Est. Size', width: 90, minWidth: 72 },
-  { label: 'Memberships', width: 110, minWidth: 76 },
-  { label: 'Last Changed', width: 150, minWidth: 110 },
+  { label: 'service', width: 140, minWidth: 95 },
+  { label: 'entity', width: 150, minWidth: 90 },
+  { label: 'value', width: 310, minWidth: 160 },
+  { label: 'est. size', width: 90, minWidth: 72 },
+  { label: 'memberships', width: 110, minWidth: 76 },
+  { label: 'last changed', width: 150, minWidth: 110 },
 ] as const
 
 const CACHE_SIZE_DESCRIPTION =
@@ -262,7 +262,7 @@ export function CacheTab({
                   <th
                     key={column.label}
                     style={{ ...styles.th, position: 'sticky' }}
-                    {...(column.label === 'Est. Size' ? { title: CACHE_SIZE_DESCRIPTION } : {})}
+                    {...(column.label === 'est. size' ? { title: CACHE_SIZE_DESCRIPTION } : {})}
                   >
                     {column.label}
                     <ColumnResizeHandle
@@ -346,12 +346,15 @@ export function CacheTab({
                     </td>
                     <td style={styles.td}>
                       {entity.lastChange ? (
-                        <span title={formatClock(entity.lastChange.wallAt, { milliseconds: true })}>
+                        <span
+                          title={formatClock(entity.lastChange.wallAt, { milliseconds: true })}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                        >
                           <Badge
                             tone={entity.lastChange.source === 'devtools' ? 'blue' : 'neutral'}
                           >
                             {entity.lastChange.source}
-                          </Badge>{' '}
+                          </Badge>
                           <span style={{ color: colors.faint }}>
                             {formatAge(Date.now() - entity.lastChange.wallAt)} ago
                           </span>

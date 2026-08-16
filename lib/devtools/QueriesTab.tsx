@@ -33,54 +33,54 @@ export function operationIsRetained(operation: DevtoolsOperation): boolean {
 
 const QUERY_COLUMNS = [
   {
-    label: 'Service',
+    label: 'service',
     width: 185,
     minWidth: 120,
     description:
       'Query service. The dot shows its state: green active, amber inactive cached, blue pending, red error, or gray skipped/retained history.',
   },
   {
-    label: 'Query Operation',
+    label: 'operation',
     width: 112,
     minWidth: 88,
     description:
       'The logical Figbird operation. Paginate and all may use find as their transport request method.',
   },
   {
-    label: 'Definition',
+    label: 'definition',
     width: 420,
     minWidth: 180,
-    description: 'Query operation and parameters, followed by its related data paths.',
+    description: 'Query arguments followed by its related data paths.',
   },
   {
-    label: 'Maintenance',
+    label: 'maintenance',
     width: 160,
     minWidth: 105,
     description:
       'How Figbird maintains the result.\nlocal-exact: membership and ordering are provable locally.\nserver-window: a limited or sorted server result; uncertain changes trigger a refetch.\nserver-authoritative: the server decides membership; cursor queries may still merge updates proven not to move page boundaries.\nget: a direct lookup by ID.',
   },
   {
-    label: 'Rows',
+    label: 'rows',
     width: 75,
     minWidth: 55,
     description: 'Number of rows currently in the query result.',
   },
   {
-    label: 'Fetch Activity',
+    label: 'fetch activity',
     width: 175,
     minWidth: 100,
     description:
       'Completed fetch attempts · realtime notifications observed while the query was active · failed fetches. Extra counts appear only when non-zero.',
   },
   {
-    label: 'Last Fetch',
+    label: 'last fetch',
     width: 90,
     minWidth: 65,
     description:
       'Duration of the most recently completed fetch. "cached" or "warm" means data was available without a measured fetch in this devtools session.',
   },
   {
-    label: 'Fetched',
+    label: 'fetched',
     width: 80,
     minWidth: 60,
     description: "Time since this query's data was last fetched.",
@@ -211,6 +211,7 @@ export function QueriesTab({
             {rows.map(({ operation, localSubscriberCount }) => {
               const query = operation.summary
               const plan = queryPlan(operation)
+              const definition = queryDefinition(plan)
               const isSelected = selectedOperationKey === operation.key
               return (
                 <tr
@@ -284,10 +285,10 @@ export function QueriesTab({
                         .join('\n\n')}
                       style={{
                         ...ellipsizedCode,
-                        color: colors.text,
+                        color: definition === '—' ? colors.faint : colors.text,
                       }}
                     >
-                      {plan}
+                      {definition}
                     </span>
                   </td>
                   <td style={styles.td}>
@@ -347,6 +348,14 @@ function queryPlan(operation: DevtoolsOperation): string {
       : compactJson(query.query),
   ].filter(Boolean)
   return `${query.method}(${args.join(', ')})`
+}
+
+function queryDefinition(plan: string): string {
+  const call = /^[^(]+\((.*)\)(.*)$/.exec(plan)
+  if (!call) return plan
+  const argumentsText = call[1]!.trim()
+  const relations = call[2]!.trim()
+  return [argumentsText, relations].filter(Boolean).join(' ') || '—'
 }
 
 function queryOperationName(operation: DevtoolsOperation): string {
