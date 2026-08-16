@@ -1,9 +1,4 @@
-import {
-  entityKey,
-  type EntityKey,
-  type ItemId,
-  type ProcessedRealtimeEvent,
-} from './queryTypes.js'
+import { entityKey, type EntityKey, type ItemId, type ProcessedCacheEvent } from './queryTypes.js'
 
 /** Maximum retained events per service while one or more fetches are in flight. */
 export const MAX_FETCH_JOURNAL_EVENTS = 1024
@@ -14,7 +9,7 @@ interface ActiveFetch {
 }
 
 interface ServiceJournal {
-  events: ProcessedRealtimeEvent[]
+  events: ProcessedCacheEvent[]
   activeFetches: Map<number, ActiveFetch>
 }
 
@@ -24,7 +19,7 @@ export interface FetchJournalCursor {
 }
 
 export interface FetchJournalSnapshot {
-  readonly events: readonly ProcessedRealtimeEvent[]
+  readonly events: readonly ProcessedCacheEvent[]
   readonly overflowed: boolean
 }
 
@@ -88,7 +83,7 @@ export class FetchEventJournal {
     }
   }
 
-  record(events: readonly ProcessedRealtimeEvent[]): void {
+  record(events: readonly ProcessedCacheEvent[]): void {
     for (const event of events) {
       const journal = this.#services.get(event.serviceName)
       if (!journal) continue
@@ -126,8 +121,8 @@ export class FetchEventJournal {
 }
 
 export interface FetchRebasePlan {
-  readonly events: readonly ProcessedRealtimeEvent[]
-  readonly latestEventById: ReadonlyMap<EntityKey, ProcessedRealtimeEvent>
+  readonly events: readonly ProcessedCacheEvent[]
+  readonly latestEventById: ReadonlyMap<EntityKey, ProcessedCacheEvent>
   readonly itemIds: ReadonlySet<EntityKey>
 }
 
@@ -139,7 +134,7 @@ export function planFetchRebase({
   isItemStale,
 }: {
   responseItems: readonly unknown[]
-  journalEvents: readonly ProcessedRealtimeEvent[]
+  journalEvents: readonly ProcessedCacheEvent[]
   getId: (item: unknown) => ItemId | undefined
   isItemStale: (current: unknown, next: unknown) => boolean
 }): FetchRebasePlan {
@@ -149,7 +144,7 @@ export function planFetchRebase({
     if (itemId !== undefined) responseItemsById.set(entityKey(itemId), item)
   }
 
-  const latestJournalEventById = new Map<EntityKey, ProcessedRealtimeEvent>()
+  const latestJournalEventById = new Map<EntityKey, ProcessedCacheEvent>()
   for (const event of journalEvents) {
     latestJournalEventById.set(event.itemId, event)
   }
@@ -166,7 +161,7 @@ export function planFetchRebase({
   }
 
   const events = journalEvents.filter(event => !supersededItemIds.has(event.itemId))
-  const latestEventById = new Map<EntityKey, ProcessedRealtimeEvent>()
+  const latestEventById = new Map<EntityKey, ProcessedCacheEvent>()
   for (const event of events) {
     latestEventById.set(event.itemId, event)
   }
@@ -184,7 +179,7 @@ export type FetchResponseMode = 'entity' | 'projection' | 'snapshot'
 
 function overlayProjectionItem(
   responseItem: unknown,
-  event: ProcessedRealtimeEvent,
+  event: ProcessedCacheEvent,
 ): unknown | undefined {
   if (event.type === 'removed') return undefined
   if (
@@ -226,7 +221,7 @@ export function rebaseResponseData({
 }: {
   data: unknown
   mode: FetchResponseMode
-  latestEventById: ReadonlyMap<EntityKey, ProcessedRealtimeEvent>
+  latestEventById: ReadonlyMap<EntityKey, ProcessedCacheEvent>
   entities: ReadonlyMap<EntityKey, unknown>
   getId: (item: unknown) => ItemId | undefined
   isItemStale: (current: unknown, next: unknown) => boolean

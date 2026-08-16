@@ -18,7 +18,7 @@ import {
   type ItemId,
   queryOfParams,
   type EventType,
-  type ProcessedRealtimeEvent,
+  type ProcessedCacheEvent,
   type Query,
   type QueryState,
   type QueuedEvent,
@@ -164,71 +164,65 @@ export function applyEventsToService<TMeta>({
   events: QueuedEvent[]
   getId: (item: unknown) => ItemId | undefined
   isItemStale: (curr: unknown, next: unknown) => boolean
-  processedEvents: ProcessedRealtimeEvent[]
+  processedEvents: ProcessedCacheEvent[]
 }): void {
   for (const event of events) {
-    const { type, items } = event
-    for (const [index, item] of items.entries()) {
-      const cause = event.causes?.[index]
-      if (type === 'created') {
-        const incomingId = getId(item)
-        if (incomingId !== undefined) {
-          const itemId = entityKey(incomingId)
-          const previousItem = service.entities.get(itemId) ?? null
+    const { type, item, cause } = event
+    if (type === 'created') {
+      const incomingId = getId(item)
+      if (incomingId !== undefined) {
+        const itemId = entityKey(incomingId)
+        const previousItem = service.entities.get(itemId) ?? null
+        service.entities.set(itemId, item)
+        processedEvents.push({
+          serviceName,
+          type,
+          item,
+          previousItem,
+          itemId,
+          ...(cause === undefined ? {} : { cause }),
+          ...(event.mode === 'optimistic'
+            ? { mode: event.mode, mutationLaneKey: event.mutationLaneKey }
+            : { mode: event.mode, source: event.source }),
+        })
+      }
+    } else if (type === 'updated' || type === 'patched') {
+      const incomingId = getId(item)
+      if (incomingId !== undefined) {
+        const itemId = entityKey(incomingId)
+        const currItem = service.entities.get(itemId)
+        if (event.mode !== 'server' || !currItem || !isItemStale(currItem, item)) {
           service.entities.set(itemId, item)
           processedEvents.push({
             serviceName,
             type,
             item,
-            previousItem,
+            previousItem: currItem ?? null,
             itemId,
-            source: event.source,
             ...(cause === undefined ? {} : { cause }),
-            ...(event.origin === 'projection'
-              ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
-              : { origin: event.origin }),
+            ...(event.mode === 'optimistic'
+              ? { mode: event.mode, mutationLaneKey: event.mutationLaneKey }
+              : { mode: event.mode, source: event.source }),
           })
         }
-      } else if (type === 'updated' || type === 'patched') {
-        const incomingId = getId(item)
-        if (incomingId !== undefined) {
-          const itemId = entityKey(incomingId)
-          const currItem = service.entities.get(itemId)
-          if (event.origin === 'projection' || !currItem || !isItemStale(currItem, item)) {
-            service.entities.set(itemId, item)
-            processedEvents.push({
-              serviceName,
-              type,
-              item,
-              previousItem: currItem ?? null,
-              itemId,
-              source: event.source,
-              ...(cause === undefined ? {} : { cause }),
-              ...(event.origin === 'projection'
-                ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
-                : { origin: event.origin }),
-            })
-          }
-        }
-      } else if (type === 'removed') {
-        const incomingId = getId(item)
-        if (incomingId !== undefined) {
-          const itemId = entityKey(incomingId)
-          const previousItem = service.entities.get(itemId) ?? null
-          service.entities.delete(itemId)
-          processedEvents.push({
-            serviceName,
-            type,
-            item,
-            previousItem,
-            itemId,
-            source: event.source,
-            ...(cause === undefined ? {} : { cause }),
-            ...(event.origin === 'projection'
-              ? { origin: event.origin, mutationLaneKey: event.mutationLaneKey }
-              : { origin: event.origin }),
-          })
-        }
+      }
+    } else if (type === 'removed') {
+      const incomingId = getId(item)
+      if (incomingId !== undefined) {
+        const itemId = entityKey(incomingId)
+        const previousItem = service.entities.get(itemId) ?? null
+        service.entities.delete(itemId)
+        processedEvents.push({
+          serviceName,
+          type,
+          item,
+          previousItem,
+          itemId,
+          ...(cause === undefined ? {} : { cause }),
+          ...(event.mode === 'optimistic'
+            ? { mode: event.mode, mutationLaneKey: event.mutationLaneKey }
+            : { mode: event.mode, source: event.source }),
+        })
       }
     }
   }
@@ -254,14 +248,14 @@ export function diffCompleteSet<TMeta>({
   nextItemIds: Set<EntityKey>
   /** Items changed by events during the fetch; those events already own their diff. */
   ignoredItemIds?: ReadonlySet<EntityKey>
-}): ProcessedRealtimeEvent[] {
-  const events: ProcessedRealtimeEvent[] = []
+}): ProcessedCacheEvent[] {
+  const events: ProcessedCacheEvent[] = []
   for (const [itemId, previousItem] of previousEntities) {
     if (ignoredItemIds?.has(itemId)) continue
     if (!nextItemIds.has(itemId)) {
       service.entities.delete(itemId)
       events.push({
-        origin: 'authoritative',
+        mode: 'server',
         serviceName,
         type: 'removed',
         item: previousItem,
@@ -277,7 +271,7 @@ export function diffCompleteSet<TMeta>({
     const previousItem = previousEntities.get(itemId)
     if (!previousItem) {
       events.push({
-        origin: 'authoritative',
+        mode: 'server',
         serviceName,
         type: 'created',
         item,
@@ -287,7 +281,7 @@ export function diffCompleteSet<TMeta>({
       })
     } else if (previousItem !== item) {
       events.push({
-        origin: 'authoritative',
+        mode: 'server',
         serviceName,
         type: 'updated',
         item,
@@ -314,7 +308,7 @@ type QueryEventApplication = 'applied' | 'reconcile' | 'ignored'
 function applyVisibleEventEffect<TMeta>(
   context: QueryEventContext<TMeta>,
   queryId: string,
-  event: ProcessedRealtimeEvent,
+  event: ProcessedCacheEvent,
   effect: 'remove' | 'replace',
 ): boolean {
   const { service, touch, getId, itemRemoved } = context
@@ -395,7 +389,7 @@ export function applyVisibleEventToQuery<TMeta>({
 }: {
   service: ServiceState<TMeta>
   queryId: string
-  event: ProcessedRealtimeEvent
+  event: ProcessedCacheEvent
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemRemoved: (meta: TMeta) => TMeta
@@ -418,7 +412,7 @@ export function applyVisibleEventToQuery<TMeta>({
 function applyMergeEventToQuery<TMeta>(
   context: QueryEventContext<TMeta>,
   queryId: string,
-  event: ProcessedRealtimeEvent,
+  event: ProcessedCacheEvent,
 ): QueryEventApplication {
   const { service, touch, getId, itemAdded, itemRemoved, defaultSort } = context
   const query = service.queries.get(queryId)
@@ -509,21 +503,23 @@ export function updateQueriesFromEvents<TMeta>({
   itemAdded,
   itemRemoved,
   serverMaintainedQueriesToRefetch,
+  onEffect,
   excludeQueryId,
   defaultSort,
 }: {
   service: ServiceState<TMeta>
-  appliedItems: readonly ProcessedRealtimeEvent[]
+  appliedItems: readonly ProcessedCacheEvent[]
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
   serverMaintainedQueriesToRefetch: Set<string>
+  onEffect?: (queryId: string, effect: 'merged' | 'reconcile') => void
   /** A query whose state already reflects the applied items (e.g. the fetch they came from). */
   excludeQueryId?: string
   /** The backend's implicit order for queries without `$sort` — see QueryStore options. */
   defaultSort?: Record<string, number> | undefined
-}): Map<string, 'merged' | 'reconcile'> {
+}): void {
   const context: QueryEventContext<TMeta> = {
     service,
     touch,
@@ -532,7 +528,6 @@ export function updateQueriesFromEvents<TMeta>({
     itemRemoved,
     defaultSort,
   }
-  const effects = new Map<string, 'merged' | 'reconcile'>()
   for (const event of appliedItems) {
     for (const [queryId, query] of service.queries) {
       if (queryId === excludeQueryId || query.config.realtime !== 'merge') continue
@@ -540,13 +535,12 @@ export function updateQueriesFromEvents<TMeta>({
       const result = applyMergeEventToQuery(context, queryId, event)
       if (result === 'reconcile') {
         serverMaintainedQueriesToRefetch.add(queryId)
-        effects.set(queryId, 'reconcile')
+        onEffect?.(queryId, 'reconcile')
       } else if (result === 'applied') {
-        effects.set(queryId, 'merged')
+        onEffect?.(queryId, 'merged')
       }
     }
   }
-  return effects
 }
 
 export type QueryReapplyResult = 'applied' | 'reconcile' | 'ignored'
@@ -650,7 +644,7 @@ export function replayFetchedQueryFromEvents<TMeta>({
 }: {
   service: ServiceState<TMeta>
   queryId: string
-  events: readonly ProcessedRealtimeEvent[]
+  events: readonly ProcessedCacheEvent[]
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta

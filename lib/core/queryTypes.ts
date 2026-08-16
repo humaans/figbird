@@ -53,15 +53,14 @@ export interface QueryExecutionOptions {
 interface QueuedEventBase {
   serviceName: string
   type: EventType
-  items: unknown[]
-  source: 'realtime' | 'mutation' | 'optimistic'
-  causes?: readonly TraceCause[]
+  item: unknown
+  cause?: TraceCause
 }
 
 /** Internal entity changes waiting at the store's atomic event boundary. */
 export type QueuedEvent =
-  | (QueuedEventBase & { origin: 'authoritative' })
-  | (QueuedEventBase & { origin: 'projection'; mutationLaneKey: string })
+  | (QueuedEventBase & { mode: 'server'; source: 'realtime' | 'mutation' })
+  | (QueuedEventBase & { mode: 'optimistic'; mutationLaneKey: string })
 
 /**
  * A realtime event after it has been applied to the entity cache. Carries the
@@ -75,19 +74,23 @@ interface ProcessedEventBase {
   previousItem: unknown | null
   /** Always defined — events whose item has no resolvable id are never applied. */
   itemId: EntityKey
-  source: 'realtime' | 'mutation' | 'fetch' | 'optimistic' | 'devtools'
   cause?: TraceCause
 }
 
 /** An optimistic entity change after cache application. */
 export type ProcessedProjectionEvent = ProcessedEventBase & {
-  origin: 'projection'
+  mode: 'optimistic'
   mutationLaneKey: string
 }
 
-/** An authoritative or optimistic entity change after cache application. */
-export type ProcessedRealtimeEvent =
-  (ProcessedEventBase & { origin: 'authoritative' }) | ProcessedProjectionEvent
+/** A server, optimistic, or explicitly local entity change after cache application. */
+export type ProcessedServerEvent = ProcessedEventBase & {
+  mode: 'server'
+  source: 'realtime' | 'mutation' | 'fetch'
+}
+
+export type ProcessedCacheEvent =
+  ProcessedServerEvent | ProcessedProjectionEvent | (ProcessedEventBase & { mode: 'local' })
 
 export type QueryStatus = 'loading' | 'success' | 'error'
 

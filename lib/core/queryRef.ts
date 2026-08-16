@@ -2,7 +2,7 @@ import { createQueryId } from './queryIdentity.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryStore } from './queryStore.js'
 import type {
-  ProcessedRealtimeEvent,
+  ProcessedCacheEvent,
   QueryConfig,
   QueryDescriptor,
   QueryExecutionOptions,
@@ -99,7 +99,7 @@ export class QueryRef<
   }
 
   /** Apply a value-only update to an already-visible row. @internal */
-  applyVisibleEvent(event: ProcessedRealtimeEvent): void {
+  applyVisibleEvent(event: ProcessedCacheEvent): void {
     this.#queryStore.materialize(this)
     this.#queryStore.applyVisibleEvent(this.#queryId, event)
   }

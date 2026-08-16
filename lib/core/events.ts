@@ -225,6 +225,10 @@ export class FigbirdEventEmitter implements FigbirdEvents {
   }> = []
   #flushScheduled = false
 
+  get hasListeners(): boolean {
+    return this.#listeners.size > 0
+  }
+
   /**
    * Emission is deferred to a microtask (batched, order-preserving). Some emits
    * happen synchronously inside a React render (subscribing to a query can start a

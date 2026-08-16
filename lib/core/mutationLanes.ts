@@ -4,7 +4,7 @@ import {
   type ItemId,
   type MutationDescriptor,
   type ProcessedProjectionEvent,
-  type ProcessedRealtimeEvent,
+  type ProcessedServerEvent,
   type TraceCause,
 } from './queryTypes.js'
 
@@ -42,7 +42,7 @@ export interface ProjectionChange {
 
 export interface AuthoritativeTransition {
   projection: ProjectionChange
-  event: ProcessedRealtimeEvent
+  event: ProcessedServerEvent
 }
 
 export type MutationOutcome = { ok: true; item: unknown } | { ok: false; error: Error }
@@ -50,7 +50,7 @@ export type MutationOutcome = { ok: true; item: unknown } | { ok: false; error: 
 export interface LaneSettlement<TEntry extends MutationLaneEntry> {
   projection: ProjectionChange
   cancelled: TEntry[]
-  authoritativeEvent: ProcessedRealtimeEvent | null
+  authoritativeEvent: ProcessedServerEvent | null
 }
 
 export interface ReleasedLaneEffects {
@@ -162,7 +162,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       const end = nextCreate === -1 ? state.entries.length : nextCreate
       cancelled = state.entries.splice(0, end)
     }
-    let authoritativeEvent: ProcessedRealtimeEvent | null = null
+    let authoritativeEvent: ProcessedServerEvent | null = null
 
     if (outcome.ok) {
       const type = MUTATION_EVENT_TYPE[entry.desc.method]
@@ -172,7 +172,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       this.#setBase(state, type, outcome.item)
       if (eventItem !== null && eventItem !== undefined) {
         authoritativeEvent = {
-          origin: 'authoritative',
+          mode: 'server',
           source: 'mutation',
           serviceName: state.serviceName,
           type,
@@ -219,7 +219,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return {
       projection: this.#reproject(state),
       event: {
-        origin: 'authoritative',
+        mode: 'server',
         source: 'realtime',
         serviceName: state.serviceName,
         type,
@@ -277,8 +277,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       if (lane.visible === ABSENT) {
         if (!lane.lastPresent) continue
         events.push({
-          origin: 'projection',
-          source: 'optimistic',
+          mode: 'optimistic',
           serviceName,
           type: 'removed',
           item: lane.lastPresent,
@@ -289,8 +288,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
         })
       } else {
         events.push({
-          origin: 'projection',
-          source: 'optimistic',
+          mode: 'optimistic',
           serviceName,
           type: lane.base === ABSENT ? 'created' : 'patched',
           item: lane.visible,

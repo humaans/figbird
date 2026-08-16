@@ -7,7 +7,8 @@ import {
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
-import { FigbirdEventEmitter, type FetchReason, type TraceCause } from './events.js'
+import { type FigbirdEventEmitter, type FetchReason, type TraceCause } from './events.js'
+import { QueryTelemetry } from './queryTelemetry.js'
 import { MutationTracker } from './mutationTracker.js'
 import { GatedMutationAttempt } from './gatedMutationAttempt.js'
 import {
@@ -62,7 +63,7 @@ import {
   type ItemMatcher,
   type MutationDescriptor,
   type ProcessedProjectionEvent,
-  type ProcessedRealtimeEvent,
+  type ProcessedCacheEvent,
   type Query,
   type QueryConfig,
   type QueryDescriptor,
@@ -101,20 +102,14 @@ type StoreResponse<TMeta> =
 
 type MutationTraceCause = Extract<TraceCause, { kind: 'mutation' }> & { mutationId: number }
 
+interface MutationTrackingContext {
+  mutationId: number
+  cause?: MutationTraceCause
+}
+
 function resolveCreateOptimisticItem(desc: CreateMutationDescriptor): unknown {
   const { optimistic } = desc
   return optimistic == null || typeof optimistic === 'boolean' ? desc.data : optimistic
-}
-
-function mergeTraceCauses(
-  current: readonly TraceCause[],
-  next: readonly TraceCause[],
-): TraceCause[] {
-  const keyed = new Map<number, TraceCause>()
-  for (const cause of [...current, ...next]) {
-    keyed.set(cause.traceId, cause)
-  }
-  return [...keyed.values()]
 }
 
 interface MutationTrackingEntry {
@@ -126,13 +121,13 @@ interface MutationTrackingEntry {
 }
 
 interface MutationTrackingHooks<T> {
-  onSuccess?: (result: T, cause: MutationTraceCause) => void
-  onError?: (error: Error, cause: MutationTraceCause) => void
+  onSuccess?: (result: T, context: MutationTrackingContext) => void
+  onError?: (error: Error, context: MutationTrackingContext) => void
 }
 
 interface TrackedMutation<T> {
   mutationId: number
-  cause: MutationTraceCause
+  cause?: MutationTraceCause
   promise: Promise<T>
 }
 
@@ -145,9 +140,9 @@ interface QueuedMutation {
 }
 
 interface AppliedEventEffect {
-  event: ProcessedRealtimeEvent
+  event: ProcessedCacheEvent
   reconcileQueryIds: Set<string>
-  queryEffects: Map<string, 'merged' | 'reconcile'>
+  queryEffects?: Map<string, 'merged' | 'reconcile'>
   observabilityOnly?: boolean
 }
 
@@ -158,12 +153,8 @@ interface PublishedEventEffects {
 
 interface FetchContext {
   reason: Exclude<FetchReason, 'retry'>
-  causes: TraceCause[]
+  causes?: TraceCause[]
   graph?: QueryGraphRef[]
-}
-
-function graphRefKey(ref: QueryGraphRef): string {
-  return `${ref.operationId}\u0000${ref.runId}\u0000${ref.path}\u0000${ref.role ?? ''}`
 }
 
 type LaneAuthoritativeAcceptance =
@@ -214,13 +205,13 @@ export class QueryStore<
   TQuery = Record<string, unknown>,
 > {
   #adapter: Adapter<TParams, TMeta, TQuery>
-  #events: FigbirdEventEmitter
+  #telemetry: QueryTelemetry
   #mutations: MutationTracker
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
-  #processedEventListeners: Set<(event: ProcessedRealtimeEvent) => void> = new Set()
+  #processedEventListeners: Set<(event: ProcessedCacheEvent) => void> = new Set()
   #projectionSettlementListeners: Set<(event: ProcessedProjectionEvent) => void> = new Set()
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
@@ -228,10 +219,7 @@ export class QueryStore<
   #queryGenerations: Map<string, number> = new Map()
   #queryStats: Map<string, QueryFetchStats> = new Map()
   #nextQueryGeneration = 1
-  #nextTraceId = 1
-  #nextFetchId = 1
   #followupFetchContexts = new Map<string, FetchContext>()
-  #activeFetchGraphs = new Map<string, Map<string, QueryGraphRef>>()
 
   #fetchEventJournal = new FetchEventJournal()
   #mutationLanes: MutationLanes<QueuedMutation>
@@ -242,9 +230,9 @@ export class QueryStore<
   #visibility: VisibilitySource
   #reconcileWindows: Map<
     string,
-    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null; causes: TraceCause[] }
+    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null; causes?: TraceCause[] }
   > = new Map()
-  #deferredWhileHidden: Map<string, TraceCause[]> = new Map()
+  #deferredWhileHidden: Map<string, TraceCause[] | undefined> = new Map()
 
   #defaultSort: Record<string, number> | undefined
   #retry: number | false
@@ -302,7 +290,7 @@ export class QueryStore<
     this.#mutationLanes = new MutationLanes(item => this.#peekId(item))
     this.#defaultSort = defaultSort
     this.#eventBatchInterval = eventBatchInterval
-    this.#events = new FigbirdEventEmitter()
+    this.#telemetry = new QueryTelemetry()
     this.#mutations = new MutationTracker()
     this.#reconcileCooldown = reconcileCooldown
     this.#retry = this.#normalizeRetry(retry)
@@ -312,28 +300,28 @@ export class QueryStore<
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
     if (this.#adapter.subscribeToConnectionEvents) {
       this.#adapter.subscribeToConnectionEvents(event => {
-        const traceId = this.#nextTraceId++
+        const traceId = this.#telemetry.nextTraceId()
         switch (event.type) {
           case 'connected':
-            this.#events.emit({
+            this.#telemetry.emit({
               kind: 'connection:connected',
-              traceId,
+              ...(traceId === undefined ? {} : { traceId }),
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
             })
             break
           case 'disconnected':
-            this.#events.emit({
+            this.#telemetry.emit({
               kind: 'connection:disconnected',
-              traceId,
+              ...(traceId === undefined ? {} : { traceId }),
               ...(event.reason ? { reason: event.reason } : {}),
               reconnecting: event.reconnecting,
             })
             break
           case 'reconnected':
-            this.#events.emit({
+            this.#telemetry.emit({
               kind: 'connection:reconnected',
-              traceId,
+              ...(traceId === undefined ? {} : { traceId }),
               ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
@@ -341,36 +329,43 @@ export class QueryStore<
             this.#scheduleReconnectSweep(traceId)
             break
           case 'error':
-            this.#events.emit({
+            this.#telemetry.emit({
               kind: 'connection:error',
-              traceId,
+              ...(traceId === undefined ? {} : { traceId }),
               phase: event.phase,
               error: event.error,
             })
             break
           case 'reconnect-failed':
-            this.#events.emit({
+            this.#telemetry.emit({
               kind: 'connection:reconnect-failed',
-              traceId,
+              ...(traceId === undefined ? {} : { traceId }),
               ...(event.error ? { error: event.error } : {}),
             })
             break
         }
       })
     } else {
-      this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep(this.#nextTraceId++))
+      this.#adapter.subscribeToReconnect?.(() =>
+        this.#scheduleReconnectSweep(this.#telemetry.nextTraceId()),
+      )
     }
   }
 
   // Public store API
   /** The instance's observability event emitter — the store is its single owner. */
   get events(): FigbirdEventEmitter {
-    return this.#events
+    return this.#telemetry.events
   }
 
   /** The instance's active mutation tracker — the store is its single owner. */
   get mutations(): MutationTracker {
     return this.#mutations
+  }
+
+  /** Whether an observability consumer is currently attached. @internal */
+  isObservabilityActive(): boolean {
+    return this.#telemetry.active
   }
 
   /** Returns the entire store state map keyed by service name. */
@@ -396,13 +391,14 @@ export class QueryStore<
       return { ok: false, error: 'Edited JSON must retain the entity ID' }
     }
 
-    const traceId = this.#nextTraceId++
-    const cause = { kind: 'manual' as const, traceId }
-    const queryEffects = new Map<string, 'merged' | 'reconcile'>()
-    const event: ProcessedRealtimeEvent = {
-      origin: 'authoritative',
-      source: 'devtools',
-      cause,
+    const cause = this.#telemetry.cause('manual')
+    const traceId = cause?.traceId
+    const queryEffects = this.#telemetry.active
+      ? new Map<string, 'merged' | 'reconcile'>()
+      : undefined
+    const event: ProcessedCacheEvent = {
+      mode: 'local',
+      ...(cause === undefined ? {} : { cause }),
       serviceName,
       type: 'patched',
       item,
@@ -423,7 +419,7 @@ export class QueryStore<
           defaultSort: this.#defaultSort,
         })
         if (result === 'applied') {
-          queryEffects.set(queryId, 'merged')
+          queryEffects?.set(queryId, 'merged')
           continue
         }
         if (
@@ -436,7 +432,7 @@ export class QueryStore<
             itemRemoved: meta => this.#adapter.itemRemoved(meta),
           })
         ) {
-          queryEffects.set(queryId, 'merged')
+          queryEffects?.set(queryId, 'merged')
         }
       }
     })
@@ -446,18 +442,18 @@ export class QueryStore<
     // Consumers distinguish this source from authoritative server events, so this
     // remains a purely local operation and never schedules a reconciliation fetch.
     this.#emitProcessedEvent(event)
-    this.#events.emit({
+    this.#telemetry.emit({
       kind: 'cache:updated',
-      traceId,
+      ...(traceId === undefined ? {} : { traceId }),
       source: 'devtools',
       serviceName,
       type: 'patched',
       itemId,
       item,
       previousItem,
-      queryEffects: [...queryEffects].map(([queryId, outcome]) => ({ queryId, outcome })),
+      queryEffects: [...(queryEffects ?? [])].map(([queryId, outcome]) => ({ queryId, outcome })),
     })
-    return { ok: true, traceId }
+    return { ok: true, ...(traceId === undefined ? {} : { traceId }) }
   }
 
   /** Returns the current state for a query by id, if present. */
@@ -554,7 +550,7 @@ export class QueryStore<
    * Used internally for relational-filter invalidation; each event carries the
    * previous entity so listeners can detect which fields changed.
    */
-  subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void {
+  subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void {
     this.#processedEventListeners.add(fn)
     return () => {
       this.#processedEventListeners.delete(fn)
@@ -620,7 +616,7 @@ export class QueryStore<
     if (!q) return
 
     if (q.state.isFetching && options.graph) {
-      this.#attachFetchGraph(queryId, options.graph)
+      this.#telemetry.attachGraph(queryId, options.graph)
     }
 
     const staleTime = options.staleTime ?? 0
@@ -636,7 +632,7 @@ export class QueryStore<
     ) {
       this.#queue(queryId, {
         reason: 'subscription',
-        causes: [{ kind: 'subscription', traceId: this.#nextTraceId++ }],
+        ...this.#causeContext('subscription'),
         ...(options.graph ? { graph: [options.graph] } : {}),
       })
     }
@@ -652,7 +648,7 @@ export class QueryStore<
     if (!q) return
     const fetchContext = context ?? {
       reason: 'manual' as const,
-      causes: [{ kind: 'manual' as const, traceId: this.#nextTraceId++ }],
+      ...this.#causeContext('manual'),
       ...(options.graph ? { graph: [options.graph] } : {}),
     }
 
@@ -676,7 +672,7 @@ export class QueryStore<
   }
 
   /** Replace/remove a row already visible in one query without changing membership. @internal */
-  applyVisibleEvent(queryId: string, event: ProcessedRealtimeEvent): void {
+  applyVisibleEvent(queryId: string, event: ProcessedCacheEvent): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (!serviceName) return
     const getId = this.#getIdReader(serviceName)
@@ -724,7 +720,7 @@ export class QueryStore<
       control: undefined,
       run: () => this.#adapter.mutate(serviceName, method, [...args]),
       hooks: {
-        onSuccess: (item, cause) =>
+        onSuccess: (item, { cause }) =>
           this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item }, cause),
       },
     })
@@ -794,7 +790,7 @@ export class QueryStore<
       control,
       ...(optimistic
         ? {
-            project: (cause: MutationTraceCause) =>
+            project: (cause?: MutationTraceCause) =>
               this.#processEvent(
                 desc.serviceName,
                 { type: 'created', item: optimisticItem },
@@ -806,15 +802,15 @@ export class QueryStore<
       hooks: {
         // Apply the cache update before ending the tracker entry, so by the time a
         // `useMutating` subscriber sees "not busy" the data is already in the cache.
-        onSuccess: (item, cause) =>
+        onSuccess: (item, { cause }) =>
           this.#processEvent(desc.serviceName, { type: 'created', item }, cause),
-        onError: (_error, cause) => {
+        onError: (_error, { mutationId, cause }) => {
           if (!optimistic) return
           this.#processEvent(desc.serviceName, { type: 'removed', item: optimisticItem }, cause)
-          this.#events.emit({
+          this.#telemetry.emit({
             kind: 'mutate:rollback',
-            mutationId: cause.mutationId,
-            traceId: cause.traceId,
+            mutationId,
+            ...(cause ? { traceId: cause.traceId } : {}),
             serviceName: desc.serviceName,
             method: desc.method,
           })
@@ -839,7 +835,7 @@ export class QueryStore<
       control,
       run: () => this.#adapter.mutate(desc.serviceName, desc.method, [...args]),
       hooks: {
-        onSuccess: (item, cause) =>
+        onSuccess: (item, { cause }) =>
           this.#processEvent(
             desc.serviceName,
             {
@@ -883,15 +879,15 @@ export class QueryStore<
       },
       () => entry.attempt.promise,
       {
-        onSuccess: (item, cause) =>
+        onSuccess: (item, { cause }) =>
           this.#settleQueuedMutation(lane, entry, { ok: true, item }, cause),
-        onError: (error, cause) => {
+        onError: (error, { mutationId, cause }) => {
           this.#settleQueuedMutation(lane, entry, { ok: false, error }, cause)
           if (optimistic) {
-            this.#events.emit({
+            this.#telemetry.emit({
               kind: 'mutate:rollback',
-              mutationId: cause.mutationId,
-              traceId: cause.traceId,
+              mutationId,
+              ...(cause ? { traceId: cause.traceId } : {}),
               serviceName: desc.serviceName,
               method: desc.method,
               id,
@@ -901,7 +897,7 @@ export class QueryStore<
       },
     )
 
-    entry.cause = tracked.cause
+    if (tracked.cause) entry.cause = tracked.cause
     this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
     entry.attempt.whenReady(() => {
       this.#expediteMutationPredecessors(lane, entry)
@@ -916,10 +912,10 @@ export class QueryStore<
         if (!projection) return false
         entry.args = this.#buildMutationArgs(next)
         this.#applyProjection(projection, true, tracked.cause)
-        this.#events.emit({
+        this.#telemetry.emit({
           kind: 'mutate:update',
           mutationId: tracked.mutationId,
-          traceId: tracked.cause.traceId,
+          ...(tracked.cause ? { traceId: tracked.cause.traceId } : {}),
           serviceName: next.serviceName,
           method: next.method,
           id,
@@ -978,7 +974,7 @@ export class QueryStore<
     lane: MutationLane,
     entry: QueuedMutation,
     error: Error,
-    cause: TraceCause,
+    cause?: TraceCause,
   ): void {
     if (!entry.attempt.cancel(error)) return
     const projection = this.#mutationLanes.cancel(lane, entry)
@@ -990,7 +986,7 @@ export class QueryStore<
     lane: MutationLane,
     entry: QueuedMutation,
     outcome: { ok: true; item: unknown } | { ok: false; error: Error },
-    cause: TraceCause,
+    cause?: TraceCause,
   ): void {
     const settlement = this.#mutationLanes.settle(lane, entry, outcome)
     if (!settlement) return
@@ -1091,14 +1087,14 @@ export class QueryStore<
   }: {
     tracking: MutationTrackingEntry
     control: ScheduledMutationControl | undefined
-    project?: (cause: MutationTraceCause) => void
+    project?: (cause?: MutationTraceCause) => void
     run: () => Promise<unknown>
     hooks?: MutationTrackingHooks<unknown>
   }): RegisteredMutation {
     const attempt = new GatedMutationAttempt(control)
     const tracked = this.#trackMutation(
       tracking,
-      cause => {
+      ({ cause }) => {
         project?.(cause)
         return attempt.promise
       },
@@ -1130,36 +1126,33 @@ export class QueryStore<
    */
   #trackMutation<T>(
     entry: MutationTrackingEntry,
-    run: (cause: MutationTraceCause) => Promise<T>,
+    run: (context: MutationTrackingContext) => Promise<T>,
     hooks?: MutationTrackingHooks<T>,
   ): TrackedMutation<T> {
     const { serviceName, method, id, optimistic, args } = entry
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
     const mutationId = this.#mutations.start({ serviceName, method, ...idField })
-    const cause = {
-      kind: 'mutation' as const,
-      traceId: this.#nextTraceId++,
-      mutationId,
-    }
-    this.#events.emit({
+    const cause = this.#telemetry.mutationCause(mutationId) as MutationTraceCause | undefined
+    const context: MutationTrackingContext = { mutationId, ...(cause ? { cause } : {}) }
+    this.#telemetry.emit({
       kind: 'mutate:start',
       mutationId,
-      traceId: cause.traceId,
+      ...(cause ? { traceId: cause.traceId } : {}),
       serviceName,
       method,
       ...idField,
       optimistic,
       args,
     })
-    const promise = run(cause).then(
+    const promise = run(context).then(
       result => {
-        hooks?.onSuccess?.(result, cause)
+        hooks?.onSuccess?.(result, context)
         this.#mutations.end(mutationId)
-        this.#events.emit({
+        this.#telemetry.emit({
           kind: 'mutate:end',
           mutationId,
-          traceId: cause.traceId,
+          ...(cause ? { traceId: cause.traceId } : {}),
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
@@ -1170,12 +1163,12 @@ export class QueryStore<
       },
       (err: unknown) => {
         const error = normalizeError(err)
-        hooks?.onError?.(error, cause)
+        hooks?.onError?.(error, context)
         this.#mutations.end(mutationId)
-        this.#events.emit({
+        this.#telemetry.emit({
           kind: 'mutate:error',
           mutationId,
-          traceId: cause.traceId,
+          ...(cause ? { traceId: cause.traceId } : {}),
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
@@ -1186,21 +1179,20 @@ export class QueryStore<
         throw error
       },
     )
-    return { mutationId, cause, promise }
+    return { mutationId, ...(cause ? { cause } : {}), promise }
   }
 
   // Query lifecycle
   async #queue(queryId: string, context?: FetchContext): Promise<void> {
     const fetchContext = context ?? {
       reason: 'subscription' as const,
-      causes: [{ kind: 'subscription' as const, traceId: this.#nextTraceId++ }],
+      ...this.#causeContext('subscription'),
     }
-    const graph = new Map((fetchContext.graph ?? []).map(ref => [graphRefKey(ref), ref]))
-    this.#activeFetchGraphs.set(queryId, graph)
+    const graph = this.#telemetry.beginGraph(queryId, fetchContext.graph)
     this.#fetching({ queryId })
     const generation = this.#queryGenerations.get(queryId)
     if (generation === undefined) {
-      if (this.#activeFetchGraphs.get(queryId) === graph) this.#activeFetchGraphs.delete(queryId)
+      this.#telemetry.finishGraph(queryId, graph)
       return
     }
 
@@ -1213,7 +1205,7 @@ export class QueryStore<
           {
             reason: retryAttempt === 0 ? fetchContext.reason : 'retry',
             attempt: retryAttempt,
-            causes: fetchContext.causes,
+            ...(fetchContext.causes ? { causes: fetchContext.causes } : {}),
           },
           graph,
         )
@@ -1244,16 +1236,14 @@ export class QueryStore<
         }
       }
     } finally {
-      if (this.#activeFetchGraphs.get(queryId) === graph) {
-        this.#activeFetchGraphs.delete(queryId)
-      }
+      this.#telemetry.finishGraph(queryId, graph)
     }
   }
 
   async #runFetchAttempt(
     queryId: string,
     generation: number,
-    context: { reason: FetchReason; attempt: number; causes: TraceCause[] },
+    context: { reason: FetchReason; attempt: number; causes?: TraceCause[] },
     graphRefs: ReadonlyMap<string, QueryGraphRef>,
   ): Promise<FetchAttemptOutcome> {
     const query = this.#getQuery(queryId)
@@ -1262,7 +1252,7 @@ export class QueryStore<
     }
 
     const startedAt = Date.now()
-    const fetchId = this.#nextFetchId++
+    const fetchId = this.#telemetry.nextFetchId()
     const trace = {
       generation,
       serviceName: query.desc.serviceName,
@@ -1272,7 +1262,7 @@ export class QueryStore<
     }
     const journalCursor = this.#fetchEventJournal.begin(trace.serviceName)
     const graph = [...graphRefs.values()]
-    this.#events.emit({
+    this.#telemetry.emit({
       kind: 'fetch:start',
       timestamp: startedAt,
       serviceName: trace.serviceName,
@@ -1282,7 +1272,7 @@ export class QueryStore<
       fetchId,
       reason: context.reason,
       attempt: context.attempt,
-      ...(context.causes.length > 0 ? { causes: context.causes } : {}),
+      ...(context.causes ? { causes: context.causes } : {}),
       ...(graph.length > 0 ? { graph } : {}),
       ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
       params: trace.params,
@@ -1298,7 +1288,7 @@ export class QueryStore<
         if (journal.overflowed) {
           this.#discardFetchedResponse(queryId)
         } else {
-          const cacheCause = context.causes[0]
+          const cacheCause = context.causes?.[0]
           this.#fetched({
             queryId,
             result,
@@ -1317,7 +1307,7 @@ export class QueryStore<
 
       const data = result.data
       const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'fetch:end',
         timestamp: endedAt,
         serviceName: trace.serviceName,
@@ -1346,7 +1336,7 @@ export class QueryStore<
         })
       }
 
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'fetch:error',
         timestamp: endedAt,
         serviceName: trace.serviceName,
@@ -1362,12 +1352,6 @@ export class QueryStore<
     } finally {
       this.#fetchEventJournal.end(journalCursor)
     }
-  }
-
-  #attachFetchGraph(queryId: string, ref: QueryGraphRef): void {
-    const refs = this.#activeFetchGraphs.get(queryId)
-    if (!refs) return
-    refs.set(graphRefKey(ref), ref)
   }
 
   #shouldRetry(query: Query<unknown, TMeta, unknown>, retryAttempt: number, error: Error): boolean {
@@ -1393,7 +1377,7 @@ export class QueryStore<
   #takeFollowupFetchContext(queryId: string): FetchContext {
     const context = this.#followupFetchContexts.get(queryId) ?? {
       reason: 'follow-up' as const,
-      causes: [{ kind: 'fetch-rebase' as const, traceId: this.#nextTraceId++ }],
+      ...this.#causeContext('fetch-rebase'),
     }
     this.#followupFetchContexts.delete(queryId)
     return context
@@ -1566,7 +1550,7 @@ export class QueryStore<
   }: {
     queryId: string
     result: StoreResponse<TMeta>
-    journalEvents: readonly ProcessedRealtimeEvent[]
+    journalEvents: readonly ProcessedCacheEvent[]
     cause?: TraceCause
   }): void {
     let shouldRefetch = false
@@ -1681,10 +1665,10 @@ export class QueryStore<
             const currentItem = service.entities.get(key)
             if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
               service.entities.set(key, item)
-              if (!isCompleteSet && currentItem !== item) {
+              if (!isCompleteSet && currentItem !== item && this.#telemetry.active) {
                 eventEffects.push({
                   event: {
-                    origin: 'authoritative',
+                    mode: 'server',
                     source: 'fetch',
                     serviceName: query.desc.serviceName,
                     type: currentItem === undefined ? 'created' : 'updated',
@@ -1857,7 +1841,7 @@ export class QueryStore<
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     this.#requestReconcile(queryId, {
       force: isMaterializedRoot,
-      causes: [{ kind: 'fetch-rebase', traceId: this.#nextTraceId++ }],
+      ...this.#causeContext('fetch-rebase'),
     })
     // An immediate reconciliation has already restored isFetching=true; hidden
     // or inactive queries expose the settled state and remain pending instead.
@@ -1908,21 +1892,18 @@ export class QueryStore<
     this.#realtime.add(serviceName)
   }
 
-  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): TraceCause[] {
-    const causes: TraceCause[] = []
-    for (const item of items) {
-      const traceId = this.#nextTraceId++
-      causes.push({ kind: 'realtime', traceId })
-      this.#events.emit({
-        kind: 'realtime',
-        traceId,
-        serviceName,
-        type,
-        itemId: this.#getIdWarn(serviceName, item),
-        item,
-      })
-    }
-    return causes
+  #emitRealtime(serviceName: string, type: Event['type'], item: unknown): TraceCause | undefined {
+    if (!this.#telemetry.active) return undefined
+    const cause = this.#telemetry.cause('realtime')
+    this.#telemetry.emit({
+      kind: 'realtime',
+      ...(cause ? { traceId: cause.traceId } : {}),
+      serviceName,
+      type,
+      itemId: this.#getIdWarn(serviceName, item),
+      item,
+    })
+    return cause
   }
 
   /** Push an authoritative event onto the atomic queue. */
@@ -1930,16 +1911,15 @@ export class QueryStore<
     serviceName: string,
     event: Event,
     source: 'realtime' | 'mutation',
-    cause: TraceCause,
+    cause?: TraceCause,
   ): void {
-    const items = Array.isArray(event.item) ? event.item : [event.item]
     this.#eventQueue.push({
-      origin: 'authoritative',
+      mode: 'server',
       source,
       serviceName,
       type: event.type,
-      items,
-      causes: [cause],
+      item: event.item,
+      ...(cause ? { cause } : {}),
     })
   }
 
@@ -1947,22 +1927,21 @@ export class QueryStore<
     const event = this.#projectionEvent(change)
     if (!event) return null
     return {
-      origin: 'projection',
-      source: 'optimistic',
+      mode: 'optimistic',
       serviceName: change.lane.serviceName,
       type: event.type,
-      items: Array.isArray(event.item) ? event.item : [event.item],
+      item: event.item,
       mutationLaneKey: change.lane.key,
-      ...(cause === undefined ? {} : { causes: [cause] }),
+      ...(cause === undefined ? {} : { cause }),
     }
   }
 
   /** Apply an event immediately — used for mutation results and optimistic writes. */
-  #processEvent(serviceName: string, event: Event, cause: TraceCause): void {
+  #processEvent(serviceName: string, event: Event, cause?: TraceCause): void {
     this.#ingestAuthoritativeEvent(serviceName, event, {
       immediate: true,
       source: 'mutation',
-      cause,
+      ...(cause ? { cause } : {}),
     })
   }
 
@@ -1979,31 +1958,31 @@ export class QueryStore<
     event: Event,
     context:
       | { immediate: false; source: 'realtime' }
-      | { immediate: true; source: 'mutation'; cause: TraceCause },
+      | { immediate: true; source: 'mutation'; cause?: TraceCause },
   ): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
-    const causes =
-      context.source === 'realtime'
-        ? this.#emitRealtimeForItems(serviceName, event.type, items)
-        : items.map(() => context.cause)
-    for (const [index, item] of items.entries()) {
+    for (const item of items) {
+      const cause =
+        context.source === 'realtime'
+          ? this.#emitRealtime(serviceName, event.type, item)
+          : context.cause
       const accepted = this.#acceptLaneAuthoritative(
         serviceName,
         event.type,
         item,
         context.source,
-        causes[index],
+        cause,
       )
       if (!accepted.handled) {
         this.#enqueueAuthoritativeEvent(
           serviceName,
           { type: event.type, item },
           context.source,
-          causes[index]!,
+          cause,
         )
         continue
       }
-      if (accepted.projection) this.#applyProjection(accepted.projection, false, causes[index])
+      if (accepted.projection) this.#applyProjection(accepted.projection, false, cause)
     }
 
     if (this.#eventQueue.length === 0) return
@@ -2065,7 +2044,7 @@ export class QueryStore<
     excludeQueryId?: string
   }): AppliedEventEffect[] {
     const getId = this.#getIdReader(serviceName)
-    const processedEvents: ProcessedRealtimeEvent[] = []
+    const processedEvents: ProcessedCacheEvent[] = []
     applyEventsToService({
       service,
       serviceName,
@@ -2092,14 +2071,17 @@ export class QueryStore<
   }: {
     service: ServiceState<TMeta>
     serviceName: string
-    processedEvents: readonly ProcessedRealtimeEvent[]
+    processedEvents: readonly ProcessedCacheEvent[]
     touch: (queryId: string) => void
     excludeQueryId?: string
   }): AppliedEventEffect[] {
     const getId = this.#getIdReader(serviceName)
     return processedEvents.map(event => {
       const reconcileQueryIds = new Set<string>()
-      const queryEffects = updateQueriesFromEvents({
+      const queryEffects = this.#telemetry.active
+        ? new Map<string, 'merged' | 'reconcile'>()
+        : undefined
+      updateQueriesFromEvents({
         service,
         appliedItems: [event],
         touch,
@@ -2107,10 +2089,16 @@ export class QueryStore<
         itemAdded: meta => this.#adapter.itemAdded(meta),
         itemRemoved: meta => this.#adapter.itemRemoved(meta),
         serverMaintainedQueriesToRefetch: reconcileQueryIds,
+        ...(queryEffects
+          ? {
+              onEffect: (queryId: string, effect: 'merged' | 'reconcile') =>
+                queryEffects.set(queryId, effect),
+            }
+          : {}),
         ...(excludeQueryId ? { excludeQueryId } : {}),
         defaultSort: this.#defaultSort,
       })
-      return { event, reconcileQueryIds, queryEffects }
+      return { event, reconcileQueryIds, ...(queryEffects ? { queryEffects } : {}) }
     })
   }
 
@@ -2121,29 +2109,31 @@ export class QueryStore<
   ): PublishedEventEffects {
     const immediateReconciles = new Set<string>()
     const reconcileCauses = new Map<string, TraceCause[]>()
-    const resolvedEffects = effects.map(effect => ({
-      ...effect,
-      cause: effect.event.cause ?? this.#fallbackEventCause(effect.event.source),
-    }))
+    const fallbackCauses = this.#telemetry.active
+      ? new Map<ProcessedCacheEvent, TraceCause | undefined>()
+      : undefined
+    const causeFor = (event: ProcessedCacheEvent): TraceCause | undefined => {
+      if (event.cause) return event.cause
+      if (!fallbackCauses) return undefined
+      if (!fallbackCauses.has(event)) {
+        fallbackCauses.set(event, this.#telemetry.fallbackCause(event))
+      }
+      return fallbackCauses.get(event)
+    }
     const hasAuthoritative =
-      refetchPolicy === 'realtime' &&
-      effects.some(effect => effect.event.origin === 'authoritative')
-    const addReconcile = (queryId: string, cause: TraceCause) => {
+      refetchPolicy === 'realtime' && effects.some(effect => effect.event.mode === 'server')
+    const addReconcile = (queryId: string, cause?: TraceCause) => {
       immediateReconciles.add(queryId)
-      const current = reconcileCauses.get(queryId) ?? []
-      reconcileCauses.set(queryId, mergeTraceCauses(current, [cause]))
+      if (!cause) return
+      const merged = this.#telemetry.merge(reconcileCauses.get(queryId), [cause])
+      if (merged) reconcileCauses.set(queryId, merged)
     }
 
-    for (const {
-      event,
-      reconcileQueryIds,
-      queryEffects,
-      observabilityOnly,
-      cause,
-    } of resolvedEffects) {
+    for (const { event, reconcileQueryIds, queryEffects, observabilityOnly } of effects) {
       if (observabilityOnly) continue
+      const cause = causeFor(event)
       const deferred =
-        event.origin === 'projection' &&
+        event.mode === 'optimistic' &&
         this.#mutationLanes.deferQueryIds(event.mutationLaneKey, reconcileQueryIds)
       if (!deferred) {
         for (const queryId of reconcileQueryIds) addReconcile(queryId, cause)
@@ -2153,26 +2143,26 @@ export class QueryStore<
       // they can recompute locally. Their listener distinguishes projections
       // from authoritative events and only the latter may trigger a refetch.
       const projectionSettled =
-        event.origin === 'projection' &&
+        event.mode === 'optimistic' &&
         !this.#mutationLanes.deferProjection(event.mutationLaneKey, event)
       this.#emitProcessedEvent(event)
       if (projectionSettled) this.#emitProjectionSettlement(event)
 
       if (refetchPolicy === 'realtime') {
         const refetchableQueryIds = this.#refetchableQueryIds(serviceName)
-        if (event.origin === 'authoritative') {
+        if (event.mode === 'server') {
           for (const queryId of refetchableQueryIds) {
-            queryEffects.set(queryId, 'reconcile')
+            queryEffects?.set(queryId, 'reconcile')
             addReconcile(queryId, cause)
           }
-        } else if (!hasAuthoritative) {
+        } else if (event.mode === 'optimistic' && !hasAuthoritative) {
           const deferred = this.#mutationLanes.deferQueryIds(
             event.mutationLaneKey,
             refetchableQueryIds,
           )
           if (!deferred) {
             for (const queryId of refetchableQueryIds) {
-              queryEffects.set(queryId, 'reconcile')
+              queryEffects?.set(queryId, 'reconcile')
               addReconcile(queryId, cause)
             }
           }
@@ -2180,33 +2170,40 @@ export class QueryStore<
       }
     }
 
-    for (const { event, queryEffects, cause } of resolvedEffects) {
-      this.#events.emit({
+    for (const { event, queryEffects } of effects) {
+      if (!this.#telemetry.active) break
+      const cause = causeFor(event)
+      this.#telemetry.emit({
         kind: 'cache:updated',
-        traceId: cause.traceId,
-        source: event.source,
+        ...(cause ? { traceId: cause.traceId } : {}),
+        source: this.#cacheEventSource(event),
         serviceName: event.serviceName,
         type: event.type,
         itemId: event.itemId,
         item: event.item,
         previousItem: event.previousItem,
-        queryEffects: [...queryEffects].map(([queryId, outcome]) => ({ queryId, outcome })),
+        queryEffects: [...(queryEffects ?? [])].map(([queryId, outcome]) => ({ queryId, outcome })),
       })
     }
 
     return { reconcileQueryIds: immediateReconciles, reconcileCauses }
   }
 
-  #fallbackEventCause(source: ProcessedRealtimeEvent['source']): TraceCause {
-    const traceId = this.#nextTraceId++
-    if (source === 'realtime') return { kind: 'realtime', traceId }
-    if (source === 'mutation' || source === 'optimistic') return { kind: 'mutation', traceId }
-    if (source === 'fetch') return { kind: 'fetch-rebase', traceId }
-    return { kind: 'manual', traceId }
+  #cacheEventSource(
+    event: ProcessedCacheEvent,
+  ): 'realtime' | 'mutation' | 'fetch' | 'optimistic' | 'devtools' {
+    if (event.mode === 'optimistic') return 'optimistic'
+    if (event.mode === 'local') return 'devtools'
+    return event.source
+  }
+
+  #causeContext(kind: TraceCause['kind']): { causes?: TraceCause[] } {
+    const cause = this.#telemetry.cause(kind)
+    return cause ? { causes: [cause] } : {}
   }
 
   /** Publish an authoritative transition whose entity-cache effect already happened. */
-  #publishAppliedEvent(event: ProcessedRealtimeEvent): void {
+  #publishAppliedEvent(event: ProcessedCacheEvent): void {
     let effects: AppliedEventEffect[] = []
     const touched = this.#transactOverServiceByName(event.serviceName, (service, touch) => {
       effects = this.#updateQueriesForEvents({
@@ -2302,7 +2299,7 @@ export class QueryStore<
     }
   }
 
-  #emitProcessedEvent(event: ProcessedRealtimeEvent): void {
+  #emitProcessedEvent(event: ProcessedCacheEvent): void {
     for (const listener of this.#processedEventListeners) {
       try {
         listener(event)
@@ -2351,9 +2348,9 @@ export class QueryStore<
    */
   #requestReconcile(
     queryId: string,
-    { force = false, causes = [] }: { force?: boolean; causes?: readonly TraceCause[] } = {},
+    { force = false, causes }: { force?: boolean; causes?: readonly TraceCause[] } = {},
   ): void {
-    const mergedCauses = mergeTraceCauses([], causes)
+    const mergedCauses = this.#telemetry.merge(undefined, causes)
     if (!force && this.#listenerCount(queryId) === 0) {
       this.#emitReconcileDecision(queryId, 'inactive', mergedCauses)
       this.#markQueryPending(queryId)
@@ -2363,7 +2360,7 @@ export class QueryStore<
     if (this.#visibility.isHidden()) {
       this.#deferredWhileHidden.set(
         queryId,
-        mergeTraceCauses(this.#deferredWhileHidden.get(queryId) ?? [], mergedCauses),
+        this.#telemetry.merge(this.#deferredWhileHidden.get(queryId), mergedCauses),
       )
       this.#emitReconcileDecision(queryId, 'deferred-hidden', mergedCauses)
       this.#markQueryPending(queryId)
@@ -2373,7 +2370,10 @@ export class QueryStore<
     if (this.#reconcileCooldown <= 0) {
       this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
       this.#emitReconcileStarted(queryId, mergedCauses)
-      this.refetch(queryId, { reason: 'reconcile', causes: mergedCauses })
+      this.refetch(queryId, {
+        reason: 'reconcile',
+        ...(mergedCauses ? { causes: mergedCauses } : {}),
+      })
       return
     }
 
@@ -2384,25 +2384,28 @@ export class QueryStore<
       this.#reconcileWindows.set(queryId, {
         lastAt: now,
         trailing: window?.trailing ?? null,
-        causes: [],
       })
       this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
       this.#emitReconcileStarted(queryId, mergedCauses)
-      this.refetch(queryId, { reason: 'reconcile', causes: mergedCauses })
+      this.refetch(queryId, {
+        reason: 'reconcile',
+        ...(mergedCauses ? { causes: mergedCauses } : {}),
+      })
       return
     }
 
-    window.causes = mergeTraceCauses(window.causes, mergedCauses)
+    const coalescedCauses = this.#telemetry.merge(window.causes, mergedCauses)
+    if (coalescedCauses) window.causes = coalescedCauses
     this.#emitReconcileDecision(queryId, 'coalesced', mergedCauses)
     if (window.trailing) return // the pending trailing refetch already covers this
 
     const timer = setTimeout(
       () => {
         const current = this.#reconcileWindows.get(queryId)
-        const trailingCauses = current?.causes ?? []
+        const trailingCauses = current?.causes
         if (current) {
           current.trailing = null
-          current.causes = []
+          delete current.causes
         }
         if (!this.#getQuery(queryId)) {
           this.#reconcileWindows.delete(queryId)
@@ -2410,7 +2413,7 @@ export class QueryStore<
         }
         // Re-enter the gate after the window expires unless the tab went hidden or
         // the last subscriber left in the meantime.
-        this.#requestReconcile(queryId, { causes: trailingCauses })
+        this.#requestReconcile(queryId, trailingCauses ? { causes: trailingCauses } : {})
       },
       window.lastAt + this.#reconcileCooldown - now,
     )
@@ -2422,28 +2425,28 @@ export class QueryStore<
   #emitReconcileDecision(
     queryId: string,
     decision: 'fetch-now' | 'coalesced' | 'deferred-hidden' | 'inactive',
-    causes: readonly TraceCause[],
+    causes: readonly TraceCause[] | undefined,
   ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName !== undefined) {
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'reconcile:decision',
         queryId,
         serviceName,
         decision,
-        ...(causes.length > 0 ? { causes } : {}),
+        ...(causes ? { causes } : {}),
       })
     }
   }
 
-  #emitReconcileStarted(queryId: string, causes: readonly TraceCause[]): void {
+  #emitReconcileStarted(queryId: string, causes: readonly TraceCause[] | undefined): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName !== undefined) {
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'reconcile:started',
         queryId,
         serviceName,
-        ...(causes.length > 0 ? { causes } : {}),
+        ...(causes ? { causes } : {}),
       })
     }
   }
@@ -2455,7 +2458,7 @@ export class QueryStore<
     this.#deferredWhileHidden.clear()
     for (const [queryId, causes] of deferred) {
       if (!this.#getQuery(queryId)) continue
-      this.#requestReconcile(queryId, { causes })
+      this.#requestReconcile(queryId, causes ? { causes } : {})
     }
   }
 
@@ -2518,26 +2521,26 @@ export class QueryStore<
   }
 
   #refetchActiveQueries(
-    traceId: number,
+    traceId: number | undefined,
     queries: readonly { queryId: string; force: boolean }[],
   ): void {
     for (const query of queries) {
       this.#requestReconcile(query.queryId, {
         force: query.force,
-        causes: [{ kind: 'reconnect', traceId }],
+        ...(traceId === undefined ? {} : { causes: [{ kind: 'reconnect' as const, traceId }] }),
       })
     }
   }
 
-  #scheduleReconnectSweep(traceId: number): void {
+  #scheduleReconnectSweep(traceId: number | undefined): void {
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
     if (delay === 0) {
       const queries = this.#activeReconnectQueries()
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'reconnect:sweep',
-        traceId,
+        ...(traceId === undefined ? {} : { traceId }),
         phase: 'started',
         delayMs: 0,
         queryCount: queries.length,
@@ -2546,14 +2549,19 @@ export class QueryStore<
       return
     }
 
-    this.#events.emit({ kind: 'reconnect:sweep', traceId, phase: 'scheduled', delayMs: delay })
+    this.#telemetry.emit({
+      kind: 'reconnect:sweep',
+      ...(traceId === undefined ? {} : { traceId }),
+      phase: 'scheduled',
+      delayMs: delay,
+    })
 
     const timer = setTimeout(() => {
       this.#reconnectSweepTimer = null
       const queries = this.#activeReconnectQueries()
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'reconnect:sweep',
-        traceId,
+        ...(traceId === undefined ? {} : { traceId }),
         phase: 'started',
         delayMs: delay,
         queryCount: queries.length,

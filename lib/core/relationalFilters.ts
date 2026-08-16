@@ -1,7 +1,7 @@
 import type { QueryAST } from './queryBuilder.js'
 import type { RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
-import { entityKey, type ProcessedRealtimeEvent, type ServiceState } from './queryTypes.js'
+import { entityKey, type ProcessedCacheEvent, type ServiceState } from './queryTypes.js'
 
 /**
  * Relational filters — dotted-path predicates over related entities, e.g.
@@ -142,7 +142,7 @@ export function shouldRefetchRelationalFilterQuery<TMeta extends Record<string, 
   // caller rather than re-derived on every processed event.
   paths: RelationalFilterPath[],
   dependencies: RelationalFilterDependency[],
-  event: ProcessedRealtimeEvent,
+  event: ProcessedCacheEvent,
 ): boolean {
   const dep = dependencies.find(item => item.serviceName === event.serviceName)
   if (!dep) return false

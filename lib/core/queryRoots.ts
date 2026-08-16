@@ -1,6 +1,6 @@
 import type { PageCursor, PageInfo } from '../adapters/adapter.js'
 import type { QueryRef } from './queryRef.js'
-import type { ProcessedRealtimeEvent, QueryGraphRef, QueryState } from './queryTypes.js'
+import type { ProcessedCacheEvent, QueryGraphRef, QueryState } from './queryTypes.js'
 import type { AnySchema, Schema } from './schema.js'
 
 /** The relational engine's adapter-neutral view of its root rows. */
@@ -269,8 +269,8 @@ export class PagedQueryRoot<
     onRows: (rows: unknown[]) => void
     onChange: () => void
     cursorRealtime?: {
-      subscribe(fn: (event: ProcessedRealtimeEvent) => void): () => void
-      canKeepPrefix(event: ProcessedRealtimeEvent): boolean
+      subscribe(fn: (event: ProcessedCacheEvent) => void): () => void
+      canKeepPrefix(event: ProcessedCacheEvent): boolean
     }
     realtime: InspectedPagination['realtime']
     staleTime?: number

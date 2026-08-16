@@ -638,17 +638,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   subscribeToReconnect(handler: () => void): () => void {
-    const source = this.#getReconnectEventSource()
-    if (!source) return () => {}
-
-    source.on('reconnect', handler)
-    return () => {
-      if (source.off) {
-        source.off('reconnect', handler)
-      } else {
-        source.removeListener?.('reconnect', handler)
-      }
-    }
+    return this.subscribeToConnectionEvents(event => {
+      if (event.type === 'reconnected') handler()
+    })
   }
 
   subscribeToConnectionEvents(handler: (event: AdapterConnectionEvent) => void): () => void {

@@ -2966,6 +2966,7 @@ test('inspect: stable read-only projection of live queries', async t => {
   const ref = figbird.query(figbird.q.issues.related('comments'))
   const sharedRootRef = figbird.query(figbird.q.issues.related('creator'))
   const unsub = ref.subscribe(() => {})
+  const unsubSecondSubscriber = ref.subscribe(() => {})
   const unsubSharedRoot = sharedRootRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
 
@@ -2987,6 +2988,17 @@ test('inspect: stable read-only projection of live queries', async t => {
   t.truthy(rootFetch)
   t.truthy(commentsFetch)
   t.is(rootFetch!.graph![0]!.runId, commentsFetch!.graph![0]!.runId)
+  t.is(
+    new Set(
+      fetches.flatMap(event =>
+        (event.graph ?? [])
+          .filter(graph => graph.operationId === ref.hash())
+          .map(graph => graph.runId),
+      ),
+    ).size,
+    1,
+    'a second subscriber joining an in-flight graph reuses the same run',
+  )
   t.true(
     rootFetch!.graph!.some(
       graph => graph.operationId === sharedRootRef.hash() && graph.path === '(root)',
@@ -2996,6 +3008,7 @@ test('inspect: stable read-only projection of live queries', async t => {
 
   unsubEvents()
   unsubSharedRoot()
+  unsubSecondSubscriber()
   unsub()
 })
 

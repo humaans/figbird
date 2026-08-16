@@ -7,7 +7,7 @@ import type { QueryRef } from './queryRef.js'
 import type { QueryLifecycleConfig } from './queryIdentity.js'
 import type {
   ProcessedProjectionEvent,
-  ProcessedRealtimeEvent,
+  ProcessedCacheEvent,
   QueryConfig,
   QueryDescriptor,
   QueryGraphRef,
@@ -67,7 +67,8 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
     pageSource?(serviceName: string): PageSource<TParams, TMeta> | undefined
   }
   queryStore: {
-    subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void
+    isObservabilityActive(): boolean
+    subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void
     subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
     ensureRealtimeSubscription(serviceName: string): void
     reapplyQuery(queryId: string, mutationLaneKeys: ReadonlySet<string>): void
@@ -220,11 +221,9 @@ export class RelationalQueryRef<
   // "comments.reactions"). A relation is "synced" once its entry exists here — even a
   // kind:'empty' entry counts, so loading detection doesn't hang on empty relations.
   #relationSubs: Map<string, RelationSub<S, TParams, TMeta, TQuery>> = new Map()
-  #listeners: Set<(state: RelationalQueryState<T>) => void> = new Set()
-  #listenerStaleTimes: Map<(state: RelationalQueryState<T>) => void, number> = new Map()
-  #listenerSources: Map<
+  #listeners: Map<
     (state: RelationalQueryState<T>) => void,
-    'subscriber' | 'prepare' | 'prefetch'
+    { staleTime: number; source: 'subscriber' | 'prepare' | 'prefetch' }
   > = new Map()
   #processedEventUnsub: (() => void) | null = null
   #relationalFilterRefetchQueued = false
@@ -336,7 +335,7 @@ export class RelationalQueryRef<
       }
     }
     const snapshot = this.getSnapshot()
-    const listenerSources = [...this.#listenerSources.values()]
+    const listenerMetadata = [...this.#listeners.values()]
     return {
       key: this.#queryId,
       ...(this.#name ? { name: this.#name } : {}),
@@ -344,9 +343,9 @@ export class RelationalQueryRef<
       ast: this.#ast,
       ...(this.#pagedRoot ? { pagination: this.#pagedRoot.inspectPagination() } : {}),
       ...(snapshot.status === 'success' ? { data: snapshot.data } : {}),
-      subscriberCount: listenerSources.filter(source => source === 'subscriber').length,
-      prefetchCount: listenerSources.filter(source => source === 'prefetch').length,
-      prepareCount: listenerSources.filter(source => source === 'prepare').length,
+      subscriberCount: listenerMetadata.filter(({ source }) => source === 'subscriber').length,
+      prefetchCount: listenerMetadata.filter(({ source }) => source === 'prefetch').length,
+      prepareCount: listenerMetadata.filter(({ source }) => source === 'prepare').length,
       nodes,
     }
   }
@@ -403,9 +402,7 @@ export class RelationalQueryRef<
   ): () => void {
     const staleTime = options?.staleTime ?? 0
     const claimsColdStart = this.#coldStartAwaitingSubscriber
-    this.#listeners.add(fn)
-    this.#listenerStaleTimes.set(fn, staleTime)
-    this.#listenerSources.set(fn, options?.source ?? 'subscriber')
+    this.#listeners.set(fn, { staleTime, source: options?.source ?? 'subscriber' })
     this.#staleTime = this.#currentStaleTime()
 
     if (!this.#root) {
@@ -428,8 +425,6 @@ export class RelationalQueryRef<
 
     return () => {
       this.#listeners.delete(fn)
-      this.#listenerStaleTimes.delete(fn)
-      this.#listenerSources.delete(fn)
       this.#staleTime = this.#currentStaleTime()
       this.#root?.setStaleTime(this.#staleTime)
 
@@ -445,15 +440,19 @@ export class RelationalQueryRef<
   }
 
   #currentStaleTime(): number {
-    if (this.#listenerStaleTimes.size === 0) return 0
+    if (this.#listeners.size === 0) return 0
     let staleTime = Infinity
-    for (const value of this.#listenerStaleTimes.values()) {
-      staleTime = Math.min(staleTime, value)
+    for (const listener of this.#listeners.values()) {
+      staleTime = Math.min(staleTime, listener.staleTime)
     }
     return staleTime
   }
 
-  #beginGraphRun(): string {
+  #beginGraphRun(): string | null {
+    if (!this.#host.queryStore.isObservabilityActive()) {
+      this.#graphRunId = null
+      return null
+    }
     const runId = `${this.#queryId}:${this.#nextGraphRun++}`
     this.#graphRunId = runId
     return runId
@@ -470,7 +469,7 @@ export class RelationalQueryRef<
   }
 
   #ensureFresh(staleTime: number): void {
-    this.#beginGraphRun()
+    if (!this.#graphRunId) this.#beginGraphRun()
     this.#root?.ensureFresh(staleTime, this.#graph('(root)'))
     for (const sub of this.#relationSubs.values()) {
       this.#ensureRelationSubFresh(sub, staleTime)
@@ -934,11 +933,11 @@ export class RelationalQueryRef<
         !this.#ast.snapshot &&
         cursorQueryCanKeepPrefix(this.#ast.query)
           ? {
-              subscribe: (fn: (event: ProcessedRealtimeEvent) => void) =>
+              subscribe: (fn: (event: ProcessedCacheEvent) => void) =>
                 this.#host.queryStore.subscribeToProcessedEvents(event => {
                   if (event.serviceName === serviceName) fn(event)
                 }),
-              canKeepPrefix: (event: ProcessedRealtimeEvent) =>
+              canKeepPrefix: (event: ProcessedCacheEvent) =>
                 !this.#ast.server &&
                 (event.type === 'patched' || event.type === 'updated') &&
                 event.previousItem !== null &&
@@ -1471,7 +1470,7 @@ export class RelationalQueryRef<
       this.#host.queryStore.ensureRealtimeSubscription(dependency.serviceName)
     }
 
-    const affectsFilter = (event: ProcessedRealtimeEvent) =>
+    const affectsFilter = (event: ProcessedCacheEvent) =>
       shouldRefetchRelationalFilterQuery(
         this.#schema,
         this.#host.getState(),
@@ -1483,9 +1482,9 @@ export class RelationalQueryRef<
 
     const unsubscribeEvents = this.#host.queryStore.subscribeToProcessedEvents(event => {
       if (!affectsFilter(event)) return
-      if (event.origin === 'projection' || event.source === 'devtools') {
+      if (event.mode !== 'server') {
         const laneKeys =
-          event.origin === 'projection' ? new Set([event.mutationLaneKey]) : new Set<string>()
+          event.mode === 'optimistic' ? new Set([event.mutationLaneKey]) : new Set<string>()
         for (const queryId of this.#root?.queryIds() ?? []) {
           this.#host.queryStore.reapplyQuery(queryId, laneKeys)
         }
@@ -1537,7 +1536,7 @@ export class RelationalQueryRef<
     const snapshot = this.getSnapshot()
     this.#settleSuspense(snapshot)
     // Notify all listeners with the cached snapshot
-    for (const listener of this.#listeners) {
+    for (const listener of this.#listeners.keys()) {
       listener(snapshot)
     }
     this.#scheduleGraphRunCompletion(snapshot)
@@ -1629,7 +1628,6 @@ export class RelationalQueryRef<
     this.#lastRelationData.clear()
     this.#lastRelationAssembly = null
     this.#lastGatherWasPartial = false
-    this.#listenerStaleTimes.clear()
     this.#staleTime = 0
     // Evict from the figbird-level cache so a subsequent query rebuilds a fresh ref.
     // Reset the suspense promise state too — a fresh cold-start will need a fresh promise.
