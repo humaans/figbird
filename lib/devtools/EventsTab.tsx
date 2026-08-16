@@ -18,6 +18,7 @@ import { formatClock } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
 import type { EventQueryScope } from './model.js'
 import {
+  Badge,
   ColumnResizeHandle,
   DetailSection,
   DetailStat,
@@ -313,33 +314,20 @@ function EventScopeBadge({
     return <span style={{ color: colors.faint }}>-</span>
   }
   const scope = scopes[0]!
-  const background = scopes.some(item => item.kind === 'root')
-    ? colors.amber
+  const tone = scopes.some(item => item.kind === 'root')
+    ? 'amber'
     : scopes.some(item => item.kind === 'nested')
-      ? colors.blue
-      : colors.muted
+      ? 'blue'
+      : 'neutral'
   return (
-    <span
+    <Badge
+      tone={tone}
       title={[...scopes.map(item => item.title), queryId ? `query id: ${queryId}` : '']
         .filter(Boolean)
         .join('\n')}
-      style={{
-        display: 'inline-block',
-        maxWidth: 150,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        color: colors.bg,
-        background,
-        borderRadius: 3,
-        padding: '1px 6px',
-        fontSize: 11,
-        fontWeight: 700,
-        lineHeight: '17px',
-      }}
     >
       {scopes.length === 1 ? scope.label : `${scopes.length} scopes`}
-    </span>
+    </Badge>
   )
 }
 

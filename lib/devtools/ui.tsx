@@ -165,7 +165,7 @@ export function makeStyles(colors: DevtoolsColors) {
       whiteSpace: 'nowrap',
     },
     td: {
-      padding: '6px 10px',
+      padding: '5px 10px',
       borderBottom: `1px solid ${colors.rowBorder}`,
       verticalAlign: 'middle',
       overflow: 'hidden',
@@ -225,14 +225,6 @@ export function makeStyles(colors: DevtoolsColors) {
       gridTemplateColumns: '108px 132px minmax(104px, 160px) 1fr',
       gap: 10,
       padding: '5px 10px',
-      borderBottom: `1px solid ${colors.rowBorder}`,
-      alignItems: 'center',
-    },
-    writeRow: {
-      display: 'grid',
-      gridTemplateColumns: '96px 1fr 80px 90px',
-      gap: 8,
-      padding: '6px 10px',
       borderBottom: `1px solid ${colors.rowBorder}`,
       alignItems: 'center',
     },
@@ -562,19 +554,30 @@ export function Badge({
     <span
       title={title}
       style={{
-        display: 'inline-block',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
         alignSelf: 'center',
-        flexShrink: 0,
+        minWidth: 0,
+        maxWidth: '100%',
+        flexShrink: 1,
         color,
-        border: `1px solid ${color}`,
-        borderRadius: 999,
-        padding: '1px 6px',
         fontSize: 11,
-        lineHeight: '16px',
+        lineHeight: '14px',
         whiteSpace: 'nowrap',
       }}
     >
-      {children}
+      <span
+        aria-hidden='true'
+        style={{
+          width: 6,
+          height: 6,
+          flexShrink: 0,
+          borderRadius: 999,
+          background: color,
+        }}
+      />
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{children}</span>
     </span>
   )
 }
