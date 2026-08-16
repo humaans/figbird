@@ -7,11 +7,12 @@ import {
   displayEvent,
   eventDetails,
   eventPayload,
+  eventPayloadLabel,
   eventQueryId,
   eventSearchText,
-  eventTone,
   rawEventRow,
   traceIdsForEvent,
+  type ActivityRow,
   type EventListRow,
 } from './eventModel.js'
 import { formatClock } from './format.js'
@@ -34,9 +35,12 @@ import {
 
 const EVENT_COLUMNS = [
   { label: 'Time', width: 108, minWidth: 84 },
-  { label: 'Activity', width: 132, minWidth: 96 },
-  { label: 'Scope', width: 140, minWidth: 96 },
-  { label: 'Details', width: 360, minWidth: 180 },
+  { label: 'Group', width: 112, minWidth: 84 },
+  { label: 'Service', width: 130, minWidth: 92 },
+  { label: 'Operation', width: 92, minWidth: 72 },
+  { label: 'Scope', width: 135, minWidth: 92 },
+  { label: 'Status', width: 94, minWidth: 74 },
+  { label: 'Details', width: 300, minWidth: 160 },
 ] as const
 
 export function EventsTab({
@@ -46,6 +50,7 @@ export function EventsTab({
   scopes,
   selectedTraceId,
   onSelectedTraceIdChange,
+  onViewQuery,
 }: {
   events: DevtoolsEvent[]
   filter: string
@@ -53,19 +58,23 @@ export function EventsTab({
   scopes: ReadonlyMap<string, readonly EventQueryScope[]>
   selectedTraceId?: number | null
   onSelectedTraceIdChange?: (traceId: number | null) => void
+  onViewQuery?: (queryId: string) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
   const [columnWidths, onColumnResizeStart] = useResizableColumns(EVENT_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
-  const gridTemplateColumns = resizableGridTemplate(columnWidths, 3)
+  const gridTemplateColumns = resizableGridTemplate(columnWidths, 6)
   const gridMinWidth =
     columnWidths.reduce((sum, width) => sum + width, 0) + (EVENT_COLUMNS.length - 1) * 10
   const traceIndex = useMemo(() => buildTraceIndex(events), [events])
-  const activities = useMemo(() => buildActivities(events, traceIndex), [events, traceIndex])
+  const activities = useMemo(
+    () => buildActivities(events, traceIndex, scopes),
+    [events, scopes, traceIndex],
+  )
   const normalizedFilter = filter.toLowerCase()
   const rows: EventListRow[] =
-    visibility === 'activity'
+    visibility === 'groups'
       ? activities.filter(activity =>
           normalizedFilter ? activity.searchText.includes(normalizedFilter) : true,
         )
@@ -100,7 +109,7 @@ export function EventsTab({
     }
     const activity = activities.find(item => item.traceId === selectedTraceId)
     setSelectedEventId(
-      visibility === 'activity' && activity ? activity.representative.id : traceEvents.at(-1)!.id,
+      visibility === 'groups' && activity ? activity.representative.id : traceEvents.at(-1)!.id,
     )
   }, [activities, selectedEvent, selectedTraceId, traceEvents, traceIndex, visibility])
 
@@ -131,7 +140,7 @@ export function EventsTab({
                 alignItems: 'center',
               }}
             >
-              {index === 1 && visibility !== 'activity' ? 'Event' : column.label}
+              {index === 1 && visibility !== 'groups' ? 'Raw Event' : column.label}
               <ColumnResizeHandle
                 label={column.label}
                 onMouseDown={event => onColumnResizeStart(index, event)}
@@ -141,7 +150,7 @@ export function EventsTab({
         </div>
         {rows.length === 0 ? (
           <div style={{ padding: 16, color: colors.muted }}>
-            No matching {visibility === 'activity' ? 'activity' : 'events'} recorded.
+            No matching {visibility === 'groups' ? 'causal groups' : 'raw events'} recorded.
           </div>
         ) : null}
         {rows.map(row => {
@@ -180,7 +189,14 @@ export function EventsTab({
                 {formatClock(item.wallAt, { milliseconds: true })}
               </span>
               <EventKind kind={row.kind} />
-              <EventScopeBadge scopes={queryScopes} queryId={queryId} />
+              <EllipsisValue value={row.subject} />
+              <EllipsisValue value={row.operation} code />
+              <EventScopeBadge
+                scopes={queryScopes}
+                queryId={queryId}
+                {...(onViewQuery ? { onViewQuery } : {})}
+              />
+              <EventStatus status={row.status} tone={row.tone} />
               <span
                 style={{
                   ...styles.code,
@@ -199,23 +215,28 @@ export function EventsTab({
       {selectedEvent ? (
         <EventDetails
           item={selectedEvent}
+          {...(selectedTraceId !== null && selectedTraceId !== undefined
+            ? { traceId: selectedTraceId }
+            : {})}
+          {...(visibility === 'groups' && selectedActivity ? { group: selectedActivity } : {})}
           relatedEvents={
             selectedTraceId
               ? traceEvents
-              : visibility === 'activity'
+              : visibility === 'groups'
                 ? (selectedActivity?.events ?? [])
                 : []
           }
           relatedLabel={
             selectedTraceId
               ? `Causal trace #${selectedTraceId}`
-              : visibility === 'activity'
-                ? 'Related activity'
+              : visibility === 'groups'
+                ? 'Raw events in group'
                 : null
           }
           width={detailsWidth}
           onResizeStart={onDetailsResizeStart}
           onClose={() => setSelectedEventId(null)}
+          onSelectEvent={eventId => setSelectedEventId(eventId)}
         />
       ) : null}
     </section>
@@ -224,59 +245,109 @@ export function EventsTab({
 
 function EventDetails({
   item,
+  group,
+  traceId,
   relatedEvents,
   relatedLabel,
   width,
   onResizeStart,
   onClose,
+  onSelectEvent,
 }: {
   item: DevtoolsEvent
+  group?: ActivityRow
+  traceId?: number
   relatedEvents?: DevtoolsEvent[]
   relatedLabel: string | null
   width: number
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
+  onSelectEvent: (eventId: number) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
-  const queryId = eventQueryId(item.event)
+  const queryId = group?.queryId ?? eventQueryId(item.event)
   const payload = eventPayload(item.event)
   return (
     <DetailsPane
-      title={item.event.kind}
-      subtitle={formatClock(item.wallAt, { milliseconds: true })}
+      title={group?.kind ?? item.event.kind}
+      subtitle={
+        group
+          ? `Causal group · ${formatClock(item.wallAt, { milliseconds: true })}`
+          : formatClock(item.wallAt, { milliseconds: true })
+      }
       width={width}
       onResizeStart={onResizeStart}
       onClose={onClose}
     >
       <DetailStats>
-        {'serviceName' in item.event ? (
-          <DetailStat label='Service' value={item.event.serviceName} />
+        <DetailStat
+          label='Service'
+          value={
+            group?.subject ?? ('serviceName' in item.event ? item.event.serviceName : 'figbird')
+          }
+        />
+        {group ? <DetailStat label='Operation' value={group.operation} /> : null}
+        {group ? <DetailStat label='Status' value={group.status} /> : null}
+        {!group && 'type' in item.event ? (
+          <DetailStat label='Type' value={item.event.type} />
         ) : null}
-        {'type' in item.event ? <DetailStat label='Type' value={item.event.type} /> : null}
-        {'method' in item.event ? <DetailStat label='Method' value={item.event.method} /> : null}
-        {queryId ? <DetailStat label='Query ID' value={queryId} /> : null}
+        {!group && 'method' in item.event ? (
+          <DetailStat label='Method' value={item.event.method} />
+        ) : null}
+        {queryId ? <DetailStat label='Query ID' value={queryId} copyValue={queryId} /> : null}
+        {(group?.traceId ?? traceId) !== undefined ? (
+          <DetailStat
+            label='Trace ID'
+            value={`#${group?.traceId ?? traceId}`}
+            copyValue={String(group?.traceId ?? traceId)}
+          />
+        ) : null}
+        {'mutationId' in item.event ? (
+          <DetailStat
+            label='Write ID'
+            value={`mutation:${item.event.mutationId}`}
+            copyValue={`mutation:${item.event.mutationId}`}
+          />
+        ) : null}
+        {'actionId' in item.event ? (
+          <DetailStat
+            label='Write ID'
+            value={`action:${item.event.actionId}`}
+            copyValue={`action:${item.event.actionId}`}
+          />
+        ) : null}
+        {eventEntityId(item.event) !== undefined ? (
+          <DetailStat
+            label='Entity ID'
+            value={`#${eventEntityId(item.event)}`}
+            copyValue={String(eventEntityId(item.event))}
+          />
+        ) : null}
       </DetailStats>
       <DetailBlock>
-        <JsonViewer
-          value={payload}
-          label={item.event.kind === 'realtime' ? 'Realtime payload' : 'Event payload'}
-          emptyLabel='No payload'
-        />
+        <JsonViewer value={payload} label={eventPayloadLabel(item.event)} emptyLabel='No payload' />
       </DetailBlock>
       {relatedEvents && relatedEvents.length > 1 ? (
-        <DetailSection label={relatedLabel ?? 'Related activity'}>
+        <DetailSection label={relatedLabel ?? 'Related raw events'}>
           <div style={{ borderTop: `1px solid ${colors.rowBorder}` }}>
             {relatedEvents.map(traceEvent => (
-              <div
+              <button
+                type='button'
                 key={traceEvent.id}
+                onClick={() => onSelectEvent(traceEvent.id)}
                 style={{
                   display: 'grid',
+                  width: '100%',
                   gridTemplateColumns: '82px minmax(112px, auto) minmax(0, 1fr)',
                   gap: 8,
                   padding: '7px 0',
                   borderBottom: `1px solid ${colors.rowBorder}`,
                   color: traceEvent.id === item.id ? colors.text : colors.muted,
                   background: traceEvent.id === item.id ? colors.activeButtonBg : 'transparent',
+                  border: 0,
+                  font: 'inherit',
+                  textAlign: 'left',
+                  cursor: 'pointer',
                 }}
               >
                 <code style={{ ...styles.code, color: colors.faint }}>
@@ -289,7 +360,7 @@ function EventDetails({
                 >
                   {eventDetails(traceEvent)}
                 </span>
-              </div>
+              </button>
             ))}
           </div>
         </DetailSection>
@@ -301,16 +372,24 @@ function EventDetails({
   )
 }
 
+function eventEntityId(event: DevtoolsEvent['event']): string | number | undefined {
+  if (event.kind === 'realtime' || event.kind === 'cache:updated') return event.itemId
+  if ('mutationId' in event) return event.id
+  return undefined
+}
+
 function EventScopeBadge({
   scopes,
   queryId,
+  onViewQuery,
 }: {
   scopes: readonly EventQueryScope[] | undefined
   queryId: string | undefined
+  onViewQuery?: (queryId: string) => void
 }) {
   const { colors } = useDevtoolsTheme()
   if (!scopes || scopes.length === 0) {
-    return <span style={{ color: colors.faint }}>-</span>
+    return <span style={{ color: colors.faint }}>—</span>
   }
   const scope = scopes[0]!
   const tone = scopes.some(item => item.kind === 'root')
@@ -318,7 +397,7 @@ function EventScopeBadge({
     : scopes.some(item => item.kind === 'nested')
       ? 'blue'
       : 'neutral'
-  return (
+  const badge = (
     <Badge
       tone={tone}
       title={[...scopes.map(item => item.title), queryId ? `query id: ${queryId}` : '']
@@ -328,6 +407,66 @@ function EventScopeBadge({
       {scopes.length === 1 ? scope.label : `${scopes.length} scopes`}
     </Badge>
   )
+  return queryId && onViewQuery ? (
+    <button
+      type='button'
+      title={`Open query ${queryId}`}
+      onClick={event => {
+        event.stopPropagation()
+        onViewQuery(queryId)
+      }}
+      style={{
+        border: 0,
+        padding: 0,
+        background: 'transparent',
+        textAlign: 'left',
+        cursor: 'pointer',
+      }}
+    >
+      {badge}
+    </button>
+  ) : (
+    badge
+  )
+}
+
+function EllipsisValue({ value, code = false }: { value: string; code?: boolean }) {
+  const { colors, styles } = useDevtoolsTheme()
+  return (
+    <span
+      title={value}
+      style={{
+        ...(code ? styles.code : {}),
+        color: colors.muted,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {value || '—'}
+    </span>
+  )
+}
+
+function EventStatus({
+  status,
+  tone,
+}: {
+  status: string
+  tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
+}) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: toneColor(colors, tone) }}>
+      <span
+        aria-hidden='true'
+        style={{ width: 6, height: 6, borderRadius: 999, background: 'currentColor' }}
+      />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {status}
+      </span>
+    </span>
+  )
 }
 
 function EventKind({ kind }: { kind: string }) {
@@ -335,7 +474,7 @@ function EventKind({ kind }: { kind: string }) {
   return (
     <span
       style={{
-        color: toneColor(colors, eventTone(kind)),
+        color: colors.text,
         fontWeight: 600,
         overflow: 'hidden',
         textOverflow: 'ellipsis',

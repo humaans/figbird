@@ -429,23 +429,39 @@ export function DetailsPane({
   )
 }
 
-export function DetailSection({ label, children }: { label: string; children: ReactNode }) {
+export function DetailSection({
+  label,
+  meta,
+  separated = false,
+  children,
+}: {
+  label: string
+  meta?: string
+  separated?: boolean
+  children: ReactNode
+}) {
   const { colors } = useDevtoolsTheme()
   return (
-    <DetailBlock>
+    <section
+      style={{
+        marginBottom: 14,
+        paddingTop: separated ? 12 : 0,
+        borderTop: separated ? `1px solid ${colors.rowBorder}` : undefined,
+      }}
+    >
       <div
         style={{
-          color: colors.muted,
-          fontSize: 10,
-          fontWeight: 700,
-          textTransform: 'uppercase',
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 8,
           marginBottom: 5,
         }}
       >
-        {label}
+        <strong style={{ color: colors.text, fontWeight: 650 }}>{label}</strong>
+        {meta ? <span style={{ color: colors.muted }}>{meta}</span> : null}
       </div>
       {children}
-    </DetailBlock>
+    </section>
   )
 }
 
@@ -468,7 +484,15 @@ export function DetailStats({ children }: { children: ReactNode }) {
   )
 }
 
-export function DetailStat({ label, value }: { label: string; value: string }) {
+export function DetailStat({
+  label,
+  value,
+  copyValue,
+}: {
+  label: string
+  value: string
+  copyValue?: string
+}) {
   const { colors } = useDevtoolsTheme()
   return (
     <div
@@ -481,9 +505,68 @@ export function DetailStat({ label, value }: { label: string; value: string }) {
       }}
     >
       <span style={{ color: colors.muted }}>{label}</span>
-      <strong style={{ color: colors.text, minWidth: 0, overflowWrap: 'anywhere' }}>{value}</strong>
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 5, minWidth: 0 }}>
+        <strong style={{ color: colors.text, minWidth: 0, overflowWrap: 'anywhere' }}>
+          {value}
+        </strong>
+        {copyValue ? <CopyButton value={copyValue} /> : null}
+      </span>
     </div>
   )
+}
+
+export function CopyButton({ value, label = 'value' }: { value: string; label?: string }) {
+  const { colors } = useDevtoolsTheme()
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type='button'
+      aria-label={`Copy ${label}`}
+      title={copied ? 'Copied' : `Copy ${label}`}
+      onClick={event => {
+        event.stopPropagation()
+        void copyText(value).then(success => {
+          if (!success) return
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1_200)
+        })
+      }}
+      style={{
+        flex: '0 0 auto',
+        border: 0,
+        padding: 0,
+        background: 'transparent',
+        color: copied ? colors.green : colors.faint,
+        font: 'inherit',
+        fontSize: 11,
+        lineHeight: 1,
+        cursor: 'pointer',
+      }}
+    >
+      {copied ? '✓' : '⧉'}
+    </button>
+  )
+}
+
+async function copyText(value: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+    if (typeof document === 'undefined') return false
+    const input = document.createElement('textarea')
+    input.value = value
+    input.style.position = 'fixed'
+    input.style.opacity = '0'
+    document.body.append(input)
+    input.select()
+    const copied = document.execCommand('copy')
+    input.remove()
+    return copied
+  } catch {
+    return false
+  }
 }
 
 export interface ResizableColumn {

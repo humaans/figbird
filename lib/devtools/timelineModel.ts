@@ -1,7 +1,7 @@
 import type { FigbirdEvent } from '../core/events.js'
 import type { DevtoolsEvent, DevtoolsSnapshot, QueryRecord, WriteRecord } from './collector.js'
 import { buildTraceIndex, displayEvent, traceIdsForEvent } from './eventModel.js'
-import { formatMs } from './format.js'
+import { compactJson, formatMs } from './format.js'
 import type { DevtoolsModel } from './model.js'
 
 export type TimelineActivityKind = 'fetch' | 'realtime' | 'connection' | 'write'
@@ -24,7 +24,9 @@ export interface TimelineActivity {
   result: string
   serviceName?: string
   queryId?: string
+  queryIds?: string[]
   traceId?: number
+  entity?: { serviceName: string; itemId: string | number }
   durationMs?: number
   payload?: unknown
   data?: unknown
@@ -148,7 +150,7 @@ function buildFetchActivities(
         traceEvents.filter(
           item => item.event.kind !== 'cache:updated' || item.event.source === 'fetch',
         ),
-        failed ? '' : 'cache refreshed',
+        failed ? '—' : 'cache refreshed',
       )
       const trigger = fetchTrigger(
         span.reason ?? (start?.event.kind === 'fetch:start' ? start.event.reason : undefined),
@@ -177,7 +179,7 @@ function buildFetchActivities(
         detail: [query.resourceId === undefined ? '' : `#${query.resourceId}`, scope ?? '']
           .filter(Boolean)
           .join(' · '),
-        status: failed ? 'failed' : pending ? 'fetching' : 'complete',
+        status: failed ? 'error' : pending ? 'pending' : 'success',
         tone: failed ? 'red' : pending ? 'blue' : 'green',
         trigger,
         effect,
@@ -203,7 +205,8 @@ function buildRealtimeActivities(
     const event = raw?.event.kind === 'realtime' ? raw.event : undefined
     const traceEvents =
       item.traceId === undefined ? [] : (context.traceEvents.get(item.traceId) ?? [])
-    const effect = cacheEffect(traceEvents, 'received')
+    const queryIds = affectedQueryIds(traceEvents)
+    const effect = cacheEffect(traceEvents, '—')
     const fetches = traceEvents.filter(related => related.event.kind === 'fetch:start').length
     const result = fetches > 0 ? `${fetches} ${fetches === 1 ? 'fetch' : 'fetches'} triggered` : '—'
     return searchable({
@@ -212,15 +215,19 @@ function buildRealtimeActivities(
       startAt: item.at,
       endAt: item.at,
       label: item.serviceName,
-      operation: event?.type ?? 'event',
+      operation: normalizeRealtimeOperation(event?.type),
       detail: event?.itemId === undefined ? '' : `#${event.itemId}`,
       status: 'received',
       tone: 'blue',
-      trigger: 'socket event',
+      trigger: 'realtime event',
       effect,
       result,
       serviceName: item.serviceName,
+      ...(queryIds.length > 0 ? { queryIds } : {}),
       ...(item.traceId === undefined ? {} : { traceId: item.traceId }),
+      ...(event?.itemId === undefined
+        ? {}
+        : { entity: { serviceName: item.serviceName, itemId: event.itemId } }),
       durationMs: 0,
       ...(event?.item === undefined ? {} : { payload: event.item }),
       error: false,
@@ -261,14 +268,22 @@ function connectionActivity(
     label: 'socket',
     operation,
     detail: connectionDetail(event),
-    status: failed
-      ? event.kind === 'connection:disconnected'
-        ? 'offline'
-        : 'failed'
-      : 'connected',
-    tone: failed ? 'red' : 'green',
+    status:
+      event.kind === 'connection:disconnected'
+        ? event.reconnecting
+          ? 'reconnecting'
+          : 'offline'
+        : failed
+          ? 'error'
+          : 'connected',
+    tone:
+      event.kind === 'connection:disconnected' && event.reconnecting
+        ? 'blue'
+        : failed
+          ? 'red'
+          : 'green',
     trigger: 'transport',
-    effect: sweep?.kind === 'reconnect:sweep' ? `reconnect sweep ${sweep.phase}` : '—',
+    effect: '—',
     result: result || '—',
     ...(event.traceId === undefined ? {} : { traceId: event.traceId }),
     durationMs: 0,
@@ -311,6 +326,12 @@ function actionContainsMutation(action: WriteRecord, mutation: WriteRecord): boo
 
 function writeActivity(write: WriteRecord, initiatingAction?: WriteRecord): TimelineActivity {
   const failed = write.status === 'error' || write.status === 'rollback'
+  const status =
+    write.status === 'in-flight'
+      ? 'pending'
+      : write.status === 'rollback'
+        ? 'rolled back'
+        : write.status
   const label =
     write.type === 'action'
       ? (write.name ?? '(anonymous action)')
@@ -333,16 +354,21 @@ function writeActivity(write: WriteRecord, initiatingAction?: WriteRecord): Time
             .filter(Boolean)
             .join(' · ')
         : '',
-    status: write.status,
-    tone: failed ? 'red' : write.status === 'in-flight' ? 'amber' : 'green',
+    status,
+    tone: failed ? 'red' : write.status === 'in-flight' ? 'blue' : 'green',
     trigger: initiatingAction || write.type === 'action' ? 'action' : 'UI mutation',
-    effect: write.optimistic
-      ? write.rolledBack
-        ? 'optimistic rollback'
-        : 'optimistic cache'
-      : '—',
-    result: write.error ?? (write.status === 'in-flight' ? 'pending' : 'complete'),
+    effect: write.optimistic ? (write.rolledBack ? 'rolled back' : 'projected') : '—',
+    result:
+      write.error ??
+      (write.status === 'in-flight'
+        ? 'pending'
+        : write.status === 'rollback'
+          ? 'rolled back'
+          : 'complete'),
     ...(write.serviceName === undefined ? {} : { serviceName: write.serviceName }),
+    ...(write.serviceName === undefined || write.itemId === undefined
+      ? {}
+      : { entity: { serviceName: write.serviceName, itemId: write.itemId } }),
     ...(write.traceId === undefined ? {} : { traceId: write.traceId }),
     ...(write.durationMs === undefined ? {} : { durationMs: write.durationMs }),
     write: {
@@ -389,9 +415,11 @@ function cacheEffect(events: readonly DevtoolsEvent[], fallback: string): string
   const reconcile = [...outcomes.values()].filter(outcome => outcome === 'reconcile').length
   return (
     [
-      merged > 0 ? `${merged} merged` : '',
-      reconcile > 0 ? `${reconcile} reconcile` : '',
-      merged === 0 && reconcile === 0 && updated ? 'cache updated' : '',
+      merged > 0 ? `${merged} ${merged === 1 ? 'query updated' : 'queries updated'}` : '',
+      reconcile > 0
+        ? `${reconcile} ${reconcile === 1 ? 'refetch scheduled' : 'refetches scheduled'}`
+        : '',
+      merged === 0 && reconcile === 0 && updated ? 'cache refreshed' : '',
     ]
       .filter(Boolean)
       .join(' · ') || fallback
@@ -405,6 +433,30 @@ function fetchTrigger(
   if (reason) return reason.replace('-', ' ')
   const cause = causes?.[0]?.kind
   return cause ? cause.replace('-', ' ') : 'request'
+}
+
+function affectedQueryIds(events: readonly DevtoolsEvent[]): string[] {
+  const ids = new Set<string>()
+  for (const item of events) {
+    if (item.event.kind !== 'cache:updated') continue
+    for (const effect of item.event.queryEffects) ids.add(effect.queryId)
+  }
+  return [...ids]
+}
+
+function normalizeRealtimeOperation(type: string | undefined): string {
+  switch (type) {
+    case 'created':
+      return 'create'
+    case 'updated':
+      return 'update'
+    case 'patched':
+      return 'patch'
+    case 'removed':
+      return 'remove'
+    default:
+      return type ?? 'event'
+  }
 }
 
 function connectionOperation(
@@ -456,6 +508,15 @@ function searchable(activity: Omit<TimelineActivity, 'searchText'>): TimelineAct
       activity.trigger,
       activity.effect,
       activity.result,
+      activity.serviceName ?? '',
+      activity.queryId ?? '',
+      ...(activity.queryIds ?? []),
+      activity.traceId === undefined ? '' : String(activity.traceId),
+      activity.entity ? String(activity.entity.itemId) : '',
+      activity.payload === undefined ? '' : compactJson(activity.payload),
+      activity.data === undefined ? '' : compactJson(activity.data),
+      activity.write ? compactJson(activity.write.args) : '',
+      activity.write?.id ?? '',
       activity.durationMs === undefined ? '' : formatMs(activity.durationMs),
     ]
       .join(' ')

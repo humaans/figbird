@@ -10,6 +10,10 @@ export interface EventListRow {
   key: string
   representative: DevtoolsEvent
   kind: string
+  subject: string
+  operation: string
+  status: string
+  tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
   details: string
   queryId?: string
   traceId?: number
@@ -50,6 +54,44 @@ export function eventPayload(event: DevtoolsEvent['event']): unknown {
   }
 }
 
+export function eventPayloadLabel(event: DevtoolsEvent['event']): string {
+  switch (event.kind) {
+    case 'fetch:start':
+      return 'Parameters'
+    case 'fetch:end':
+      return 'Fetch result'
+    case 'mutate:start':
+    case 'mutate:update':
+    case 'action:start':
+      return 'Arguments'
+    case 'mutate:end':
+    case 'mutate:rollback':
+      return 'Mutation result'
+    case 'action:end':
+      return 'Action result'
+    case 'realtime':
+      return 'Realtime payload'
+    case 'fetch:error':
+    case 'mutate:error':
+    case 'action:error':
+    case 'connection:error':
+    case 'connection:reconnect-failed':
+      return 'Error'
+    case 'connection:connected':
+    case 'connection:disconnected':
+    case 'connection:reconnected':
+    case 'reconnect:sweep':
+      return 'Connection event'
+    case 'cache:updated':
+      return 'Cache change'
+    case 'reconcile:decision':
+    case 'reconcile:started':
+      return 'Reconciliation event'
+    default:
+      return 'Instrumentation data'
+  }
+}
+
 export function displayEvent(event: DevtoolsEvent['event']): unknown {
   if ('error' in event && event.error) {
     return { ...event, error: { name: event.error.name, message: event.error.message } }
@@ -64,6 +106,9 @@ export function rawEventRow(item: DevtoolsEvent, index: TraceIndex): EventListRo
     key: `event:${item.id}`,
     representative: item,
     kind: item.event.kind,
+    subject: eventSubject(item.event),
+    operation: eventOperation(item.event),
+    ...eventStatus(item.event),
     details: eventDetails(item),
     ...(queryId === undefined ? {} : { queryId }),
     ...(traceId === undefined ? {} : { traceId }),
@@ -73,6 +118,7 @@ export function rawEventRow(item: DevtoolsEvent, index: TraceIndex): EventListRo
 export function buildActivities(
   events: readonly DevtoolsEvent[],
   index: TraceIndex,
+  scopes?: ReadonlyMap<string, readonly EventQueryScope[]>,
 ): ActivityRow[] {
   const grouped = new Map<string, { traceId?: number; events: DevtoolsEvent[] }>()
   for (const item of events) {
@@ -97,14 +143,27 @@ export function buildActivities(
       const representative = activityRepresentative(group.events)
       const kind = activityKind(key, representative)
       const details = activityDetails(key, representative, group.events)
+      const identity = activityIdentity(key, representative.event)
+      const lifecycle = activityStatus(key, group.events)
       const queryId = group.events.map(item => eventQueryId(item.event)).find(Boolean)
       return {
         key,
         representative,
         events: group.events,
         kind,
+        ...identity,
+        ...lifecycle,
         details,
-        searchText: [kind, details, ...group.events.map(item => eventSearchText(item))]
+        searchText: [
+          kind,
+          identity.subject,
+          identity.operation,
+          lifecycle.status,
+          details,
+          ...group.events.map(item =>
+            eventSearchText(item, scopes?.get(eventQueryId(item.event) ?? '')),
+          ),
+        ]
           .join(' ')
           .toLowerCase(),
         ...(queryId === undefined ? {} : { queryId }),
@@ -154,7 +213,7 @@ function activityRepresentative(events: readonly DevtoolsEvent[]): DevtoolsEvent
 
 function activityKind(key: string, representative: DevtoolsEvent): string {
   if (isMutationEvent(representative.event) || key.startsWith('mutation:')) return 'mutation'
-  if (key.startsWith('action:')) return 'action'
+  if (key.startsWith('action:') || representative.event.kind === 'action:start') return 'action'
   const event = representative.event
   if (event.kind.startsWith('connection:')) return 'connection'
   if (event.kind.startsWith('fetch:')) return 'fetch'
@@ -176,7 +235,9 @@ function activityDetails(
   if (isMutationEvent(representative.event) || key.startsWith('mutation:')) {
     return mutationActivityDetails(representative, events)
   }
-  if (key.startsWith('action:')) return actionActivityDetails(representative, events)
+  if (key.startsWith('action:') || representative.event.kind === 'action:start') {
+    return actionActivityDetails(representative, events)
+  }
 
   const event = representative.event
   if (event.kind.startsWith('connection:')) {
@@ -198,9 +259,9 @@ function activityDetails(
     const fetches = events.filter(item => item.event.kind === 'fetch:start').length
     return joinEventParts([
       `${event.serviceName} ${event.type}${event.itemId === undefined ? '' : ` #${event.itemId}`}`,
-      effects.merged > 0 ? pluralActivity(effects.merged, 'query merged', 'queries merged') : '',
+      effects.merged > 0 ? pluralActivity(effects.merged, 'query updated', 'queries updated') : '',
       effects.reconcile > 0
-        ? pluralActivity(effects.reconcile, 'query reconciled', 'queries reconciled')
+        ? pluralActivity(effects.reconcile, 'refetch scheduled', 'refetches scheduled')
         : '',
       fetches > 0 ? pluralActivity(fetches, 'fetch', 'fetches') : '',
     ])
@@ -219,7 +280,7 @@ function activityDetails(
             : `${event.source} cache update`,
       effects.merged > 0 ? pluralActivity(effects.merged, 'query updated', 'queries updated') : '',
       effects.reconcile > 0
-        ? pluralActivity(effects.reconcile, 'query reconciled', 'queries reconciled')
+        ? pluralActivity(effects.reconcile, 'refetch scheduled', 'refetches scheduled')
         : '',
     ])
   }
@@ -236,7 +297,7 @@ function activityDetails(
         ? pluralActivity(terminal.event.itemCount, 'row', 'rows')
         : terminal?.event.kind === 'fetch:error'
           ? errorMessage(terminal.event.error)
-          : 'in flight',
+          : '',
       terminal?.event.kind === 'fetch:end' || terminal?.event.kind === 'fetch:error'
         ? formatMs(terminal.event.durationMs)
         : '',
@@ -284,8 +345,8 @@ function mutationActivityDetails(
       : terminal?.event.kind === 'mutate:rollback'
         ? 'rolled back'
         : terminal?.event.kind === 'mutate:end'
-          ? 'completed'
-          : 'in flight',
+          ? 'success'
+          : 'pending',
     terminal?.event.kind === 'mutate:end' || terminal?.event.kind === 'mutate:error'
       ? formatMs(terminal.event.durationMs)
       : '',
@@ -306,8 +367,8 @@ function actionActivityDetails(
     terminal?.event.kind === 'action:error'
       ? errorMessage(terminal.event.error)
       : terminal?.event.kind === 'action:end'
-        ? 'completed'
-        : 'in flight',
+        ? 'success'
+        : 'pending',
     terminal?.event.kind === 'action:end' || terminal?.event.kind === 'action:error'
       ? formatMs(terminal.event.durationMs)
       : '',
@@ -352,12 +413,19 @@ function traceIdsFromCauses(
 }
 
 export function eventSearchText(item: DevtoolsEvent, scopes?: readonly EventQueryScope[]): string {
+  const payload = eventPayload(item.event)
+  const status = eventStatus(item.event).status
   return [
     formatClock(item.wallAt, { milliseconds: true }),
     item.event.kind,
+    eventSubject(item.event),
+    eventOperation(item.event),
+    status,
     eventQueryId(item.event) ?? '',
     ...(scopes?.map(scope => scope.label) ?? []),
     eventDetails(item),
+    payload === undefined ? '' : compactJson(payload),
+    compactJson(displayEvent(item.event)),
   ].join(' ')
 }
 
@@ -369,6 +437,8 @@ export function eventQueryId(event: DevtoolsEvent['event']): string | undefined 
     case 'reconcile:started':
     case 'reconcile:decision':
       return event.queryId
+    case 'cache:updated':
+      return event.queryEffects[0]?.queryId
     default:
       return undefined
   }
@@ -386,7 +456,7 @@ export function eventDetails(item: DevtoolsEvent): string {
     case 'fetch:end':
       return joinEventParts([
         `${event.serviceName}.${event.method}`,
-        `${event.itemCount} ${event.itemCount === 1 ? 'item' : 'items'}`,
+        `${event.itemCount} ${event.itemCount === 1 ? 'row' : 'rows'}`,
         formatMs(event.durationMs),
       ])
     case 'fetch:error':
@@ -471,30 +541,139 @@ export function eventDetails(item: DevtoolsEvent): string {
   }
 }
 
+function activityIdentity(
+  key: string,
+  event: DevtoolsEvent['event'],
+): { subject: string; operation: string } {
+  if (key.startsWith('action:') || event.kind === 'action:start') {
+    return {
+      subject: 'action',
+      operation: event.kind === 'action:start' ? (event.name ?? '(anonymous)') : 'run',
+    }
+  }
+  return { subject: eventSubject(event), operation: eventOperation(event) }
+}
+
+function activityStatus(
+  key: string,
+  events: readonly DevtoolsEvent[],
+): { status: string; tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral' } {
+  const representative = activityRepresentative(events).event
+  if (key.startsWith('mutation:') || isMutationEvent(representative)) {
+    const terminal = [...events]
+      .reverse()
+      .find(item => ['mutate:end', 'mutate:error', 'mutate:rollback'].includes(item.event.kind))
+    if (!terminal) return { status: 'pending', tone: 'blue' }
+    return eventStatus(terminal.event)
+  }
+  if (key.startsWith('action:') || representative.kind === 'action:start') {
+    const terminal = [...events]
+      .reverse()
+      .find(item => item.event.kind === 'action:end' || item.event.kind === 'action:error')
+    return terminal ? eventStatus(terminal.event) : { status: 'pending', tone: 'blue' }
+  }
+  if (
+    representative.kind === 'realtime' ||
+    representative.kind === 'cache:updated' ||
+    representative.kind.startsWith('connection:')
+  ) {
+    return eventStatus(representative)
+  }
+  const terminal = [...events]
+    .reverse()
+    .find(item => item.event.kind === 'fetch:end' || item.event.kind === 'fetch:error')
+  if (terminal) return eventStatus(terminal.event)
+  return eventStatus(events.at(-1)!.event)
+}
+
+function eventSubject(event: DevtoolsEvent['event']): string {
+  if ('serviceName' in event) return event.serviceName
+  if (event.kind.startsWith('connection:')) return 'socket'
+  if (event.kind === 'reconnect:sweep') return 'socket'
+  if (
+    event.kind === 'action:start' ||
+    event.kind === 'action:end' ||
+    event.kind === 'action:error'
+  ) {
+    return event.name ?? 'action'
+  }
+  return 'figbird'
+}
+
+function eventOperation(event: DevtoolsEvent['event']): string {
+  if (event.kind === 'realtime' || event.kind === 'cache:updated') {
+    return normalizeRealtimeOperation(event.type)
+  }
+  if ('method' in event) return event.method
+  if (event.kind.startsWith('connection:')) return event.kind.slice('connection:'.length)
+  if (event.kind.startsWith('fetch:')) return event.kind.slice('fetch:'.length)
+  if (event.kind.startsWith('reconcile:')) return event.kind.slice('reconcile:'.length)
+  if (event.kind === 'reconnect:sweep') return 'sweep'
+  if (event.kind.startsWith('action:')) return 'action'
+  return event.kind
+}
+
+function eventStatus(event: DevtoolsEvent['event']): {
+  status: string
+  tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
+} {
+  switch (event.kind) {
+    case 'fetch:start':
+    case 'mutate:start':
+    case 'mutate:update':
+    case 'action:start':
+    case 'reconcile:started':
+      return { status: 'pending', tone: 'blue' }
+    case 'fetch:end':
+    case 'mutate:end':
+    case 'action:end':
+      return { status: 'success', tone: 'green' }
+    case 'fetch:error':
+    case 'mutate:error':
+    case 'action:error':
+    case 'connection:error':
+    case 'connection:reconnect-failed':
+      return { status: 'error', tone: 'red' }
+    case 'mutate:rollback':
+      return { status: 'rolled back', tone: 'red' }
+    case 'realtime':
+      return { status: 'received', tone: 'blue' }
+    case 'cache:updated':
+      return event.source === 'optimistic'
+        ? { status: 'projected', tone: 'amber' }
+        : { status: 'success', tone: 'green' }
+    case 'connection:connected':
+    case 'connection:reconnected':
+      return { status: 'connected', tone: 'green' }
+    case 'connection:disconnected':
+      return event.reconnecting
+        ? { status: 'reconnecting', tone: 'blue' }
+        : { status: 'offline', tone: 'red' }
+    case 'reconnect:sweep':
+      return { status: event.phase, tone: 'blue' }
+    case 'reconcile:decision':
+      return { status: event.decision, tone: 'neutral' }
+  }
+}
+
+function normalizeRealtimeOperation(type: string): string {
+  switch (type) {
+    case 'created':
+      return 'create'
+    case 'updated':
+      return 'update'
+    case 'patched':
+      return 'patch'
+    case 'removed':
+      return 'remove'
+  }
+  return type
+}
+
 function joinEventParts(parts: string[]): string {
   return parts.filter(Boolean).join(' · ')
 }
 
 function errorMessage(error: Error): string {
   return error.message || String(error)
-}
-
-export function eventTone(kind: string): 'green' | 'amber' | 'red' | 'blue' | 'neutral' {
-  if (kind === 'connection' || kind === 'fetch' || kind === 'cache edit') return 'blue'
-  if (kind === 'mutation' || kind === 'mutation cache' || kind === 'optimistic') return 'amber'
-  if (kind === 'action') return 'green'
-  if (kind === 'connection:connected' || kind === 'connection:reconnected') return 'green'
-  if (
-    kind === 'connection:disconnected' ||
-    kind === 'connection:error' ||
-    kind === 'connection:reconnect-failed'
-  ) {
-    return 'red'
-  }
-  if (kind.endsWith(':error') || kind.endsWith(':rollback')) return 'red'
-  if (kind === 'realtime') return 'blue'
-  if (kind.endsWith(':update')) return 'blue'
-  if (kind.endsWith(':start')) return 'amber'
-  if (kind.endsWith(':end')) return 'green'
-  return 'neutral'
 }

@@ -1,9 +1,10 @@
 import type { CSSProperties } from 'react'
 import type { QueryVisibility } from './Devtools.js'
+import type { QuerySpan } from './collector.js'
 import { compactJson, formatAge, formatMs } from './format.js'
 import type { DevtoolsModel, DevtoolsOperation, QuerySummary } from './model.js'
 import { QueryDetails } from './QueryDetails.js'
-import { ClassBadge, plural, QueryStatusDot } from './QueryPresentation.js'
+import { ClassBadge, plural, queryStatus, QueryStatusDot } from './QueryPresentation.js'
 import {
   ColumnResizeHandle,
   useDetailsPaneWidth,
@@ -25,22 +26,34 @@ export function operationIsInactive(operation: DevtoolsOperation): boolean {
   )
 }
 
+export function operationIsRetained(operation: DevtoolsOperation): boolean {
+  const queries = [operation.summary, ...operation.underlying.map(item => item.query)]
+  return operation.summary.skipped !== true && queries.every(query => !query.present)
+}
+
 const QUERY_COLUMNS = [
   {
-    label: 'Query',
-    width: 250,
-    minWidth: 150,
+    label: 'Service',
+    width: 185,
+    minWidth: 120,
     description:
-      'Root query operation. The dot shows its state: green active, amber cached, blue fetching, red error, or gray skipped/retained history.',
+      'Query service. The dot shows its state: green active, amber inactive cached, blue pending, red error, or gray skipped/retained history.',
   },
   {
-    label: 'Plan',
+    label: 'Query Operation',
+    width: 112,
+    minWidth: 88,
+    description:
+      'The logical Figbird operation. Paginate and all may use find as their transport request method.',
+  },
+  {
+    label: 'Definition',
     width: 420,
     minWidth: 180,
     description: 'Query operation and parameters, followed by its related data paths.',
   },
   {
-    label: 'Class',
+    label: 'Maintenance',
     width: 160,
     minWidth: 105,
     description:
@@ -50,24 +63,24 @@ const QUERY_COLUMNS = [
     label: 'Rows',
     width: 75,
     minWidth: 55,
-    description: 'Number of items currently in the query result.',
+    description: 'Number of rows currently in the query result.',
   },
   {
-    label: 'Fetches',
+    label: 'Fetch Activity',
     width: 175,
     minWidth: 100,
     description:
-      'Completed fetch attempts · realtime service events observed while the query was active · event-driven refetches · failed fetches. Extra counts appear only when non-zero.',
+      'Completed fetch attempts · realtime notifications observed while the query was active · failed fetches. Extra counts appear only when non-zero.',
   },
   {
-    label: 'Last',
+    label: 'Last Fetch',
     width: 90,
     minWidth: 65,
     description:
       'Duration of the most recently completed fetch. "cached" or "warm" means data was available without a measured fetch in this devtools session.',
   },
   {
-    label: 'Age',
+    label: 'Fetched',
     width: 80,
     minWidth: 60,
     description: "Time since this query's data was last fetched.",
@@ -81,6 +94,7 @@ export function QueriesTab({
   inspectedQueryCounts,
   selectedQueryId,
   onSelectedQueryIdChange,
+  onFetchSelect,
 }: {
   model: DevtoolsModel
   filter: string
@@ -88,6 +102,7 @@ export function QueriesTab({
   inspectedQueryCounts: ReadonlyMap<string, number> | null
   selectedQueryId: string | null
   onSelectedQueryIdChange: (queryId: string | null) => void
+  onFetchSelect: (span: QuerySpan) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const [columnWidths, onColumnResizeStart] = useResizableColumns(QUERY_COLUMNS)
@@ -99,6 +114,7 @@ export function QueriesTab({
       if (inspectedQueryCounts && localSubscriberCount === 0) return []
       if (visibility === 'skipped' && query.skipped !== true) return []
       if (visibility === 'inactive' && !operationIsInactive(operation)) return []
+      if (visibility === 'retained' && !operationIsRetained(operation)) return []
       if (visibility === 'active' && query.skipped === true) return []
       if (
         visibility === 'active' &&
@@ -110,6 +126,11 @@ export function QueriesTab({
       const haystack = [
         query.serviceName,
         query.method,
+        query.resourceId ?? '',
+        query.classification,
+        queryStatus(query).kind,
+        compactJson(query.data),
+        ...operation.rootFetches.map(root => root.queryId),
         operation.composition?.detail ?? '',
         JSON.stringify(query.query ?? {}),
         ...operation.underlying.map(item =>
@@ -117,7 +138,12 @@ export function QueriesTab({
             item.path,
             item.query.serviceName,
             item.query.method,
+            item.query.queryId,
+            item.query.resourceId ?? '',
+            item.query.classification,
+            queryStatus(item.query).kind,
             JSON.stringify(item.query.query ?? {}),
+            compactJson(item.query.data),
           ].join(' '),
         ),
       ].join(' ')
@@ -226,9 +252,6 @@ export function QueriesTab({
                         }}
                       >
                         {query.serviceName}
-                        <span style={{ color: colors.muted, fontWeight: 500 }}>
-                          .{query.method}
-                        </span>
                       </span>
                       {inspectedQueryCounts ? (
                         <span
@@ -239,6 +262,14 @@ export function QueriesTab({
                         </span>
                       ) : null}
                     </span>
+                  </td>
+                  <td style={styles.td}>
+                    <code
+                      title={queryOperationTitle(operation)}
+                      style={{ ...styles.code, color: colors.text, fontWeight: 600 }}
+                    >
+                      {queryOperationName(operation)}
+                    </code>
                   </td>
                   <td style={{ ...styles.td, maxWidth: 420 }}>
                     <span
@@ -285,6 +316,7 @@ export function QueriesTab({
           operation={selectedOperation}
           selectedQueryId={selectedQueryId}
           width={detailsWidth}
+          onFetchSelect={onFetchSelect}
           onResizeStart={onDetailsResizeStart}
           onClose={() => onSelectedQueryIdChange(null)}
         />
@@ -317,6 +349,20 @@ function queryPlan(operation: DevtoolsOperation): string {
   return `${query.method}(${args.join(', ')})`
 }
 
+function queryOperationName(operation: DevtoolsOperation): string {
+  if (!operation.composition) return operation.summary.method
+  const qualified = operation.composition.operation
+  const operationCall = qualified.slice(qualified.indexOf('.') + 1)
+  return operationCall.split('(')[0] ?? operation.summary.method
+}
+
+function queryOperationTitle(operation: DevtoolsOperation): string {
+  const logical = queryOperationName(operation)
+  return logical === operation.summary.method
+    ? `Query operation and request method: ${logical}`
+    : `Query operation: ${logical}\nRequest method: ${operation.summary.method}`
+}
+
 function formatPlanValue(value: string | number): string {
   return typeof value === 'string' ? JSON.stringify(value) : String(value)
 }
@@ -329,9 +375,8 @@ function QueryRows({ query }: { query: QuerySummary }) {
 function QueryFetchStats({ query }: { query: QuerySummary }) {
   const { colors } = useDevtoolsTheme()
   const parts = [plural(query.fetchCount, 'fetch', 'fetches')]
-  if (query.realtimeSeen > 0) parts.push(plural(query.realtimeSeen, 'event', 'events'))
-  if (query.reconciles > 0) parts.push(plural(query.reconciles, 'refetch', 'refetches'))
-  if (query.errorCount > 0) parts.push(plural(query.errorCount, 'error', 'errors'))
+  if (query.realtimeSeen > 0) parts.push(`${query.realtimeSeen} realtime`)
+  if (query.errorCount > 0) parts.push(plural(query.errorCount, 'failed', 'failed'))
 
   return (
     <span
@@ -359,7 +404,7 @@ function QueryLastTiming({ query }: { query: QuerySummary }) {
           ? 'warm'
           : query.isFetching
             ? 'pending'
-            : '-'
+            : '—'
       : formatMs(query.lastDurationMs)
   const mutedTiming =
     query.lastDurationMs === undefined && (duration === 'cached' || duration === 'warm')
@@ -393,7 +438,7 @@ function QueryAge({ query }: { query: QuerySummary }) {
         color: colors.muted,
       }}
     >
-      {query.fetchedAt ? formatAge(Date.now() - query.fetchedAt) : '-'}
+      {query.fetchedAt ? formatAge(Date.now() - query.fetchedAt) : '—'}
     </span>
   )
 }

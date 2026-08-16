@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type RefObject,
 } from 'react'
 import { formatClock, formatMs } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
@@ -51,6 +52,10 @@ export function TimelineActivityTable({
   visibility,
   follow,
   onFollowChange,
+  requestedActivityId,
+  onRequestedActivityHandled,
+  onQuerySelect,
+  onCacheEntitySelect,
   onTraceSelect,
 }: {
   activities: readonly TimelineActivity[]
@@ -61,10 +66,15 @@ export function TimelineActivityTable({
   visibility: TimelineVisibility
   follow: boolean
   onFollowChange: (value: boolean) => void
+  requestedActivityId?: string
+  onRequestedActivityHandled?: () => void
+  onQuerySelect?: (queryId: string) => void
+  onCacheEntitySelect?: (serviceName: string, itemId: string | number) => void
   onTraceSelect?: (traceId: number) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const selectedRowRef = useRef<HTMLTableRowElement>(null)
   const scrollPausedFollowRef = useRef(false)
   const [range, setRange] = useState<TimelineRange | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -88,11 +98,11 @@ export function TimelineActivityTable({
     ? filteredActivities.filter(activity => intersects(activity, range, nowPoint))
     : filteredActivities
   const inFlightWriteCount = activities.filter(
-    activity => activity.kind === 'write' && activity.status === 'in-flight',
+    activity => activity.kind === 'write' && activity.status === 'pending',
   ).length
   const projectedWriteCount = activities.filter(
     activity =>
-      activity.kind === 'write' && activity.status === 'in-flight' && activity.write?.optimistic,
+      activity.kind === 'write' && activity.status === 'pending' && activity.write?.optimistic,
   ).length
   const latestVisibleActivityId = rows.at(-1)?.id
   const waterfallIndex = COLUMNS.length - 1
@@ -117,6 +127,21 @@ export function TimelineActivityTable({
   }, [activities, selectedId])
 
   useEffect(() => setSelectedId(null), [filter, visibility])
+
+  useEffect(() => {
+    if (!requestedActivityId) return
+    if (!activities.some(activity => activity.id === requestedActivityId)) return
+    setRange(null)
+    setSelectedId(requestedActivityId)
+    onFollowChange(false)
+    onRequestedActivityHandled?.()
+  }, [activities, onFollowChange, onRequestedActivityHandled, requestedActivityId])
+
+  useLayoutEffect(() => {
+    const row = selectedRowRef.current
+    if (!row || typeof row.scrollIntoView !== 'function') return
+    row.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
 
   useLayoutEffect(() => {
     const scroll = scrollRef.current
@@ -147,7 +172,7 @@ export function TimelineActivityTable({
     return (
       <div style={{ ...styles.scroll, height: 'auto', flex: 1, minHeight: 0 }}>
         <div style={{ padding: 16, color: colors.muted }}>
-          No timeline activity yet. Recording continues until you press Clear.
+          No timeline activity yet. Recording continues until you press Clear recording.
         </div>
       </div>
     )
@@ -224,6 +249,7 @@ export function TimelineActivityTable({
                   key={activity.id}
                   activity={activity}
                   selected={activity.id === selectedId}
+                  {...(activity.id === selectedId ? { rowRef: selectedRowRef } : {})}
                   extent={displayExtent}
                   nowPoint={nowPoint}
                   wallClockOffset={wallClockOffset}
@@ -243,6 +269,8 @@ export function TimelineActivityTable({
             width={detailsWidth}
             onResizeStart={onDetailsResizeStart}
             onClose={() => setSelectedId(null)}
+            {...(onQuerySelect ? { onQuerySelect } : {})}
+            {...(onCacheEntitySelect ? { onCacheEntitySelect } : {})}
             {...(onTraceSelect ? { onTraceSelect } : {})}
           />
         ) : null}
@@ -263,9 +291,12 @@ export function TimelineActivityTable({
         <span>
           {rows.length} / {activities.length} activities
         </span>
-        <span>{rows.filter(activity => activity.kind === 'fetch').length} fetches</span>
+        <span>{activityCount(rows, 'fetch')} fetches</span>
+        <span>{activityCount(rows, 'realtime')} realtime</span>
+        <span>{activityCount(rows, 'write')} writes</span>
+        <span>{activityCount(rows, 'connection')} connections</span>
         <span>{rows.filter(activity => activity.error).length} errors</span>
-        {inFlightWriteCount > 0 ? <span>{inFlightWriteCount} writes in flight</span> : null}
+        {inFlightWriteCount > 0 ? <span>{inFlightWriteCount} pending writes</span> : null}
         {projectedWriteCount > 0 ? <span>{projectedWriteCount} projected</span> : null}
         <span>{formatMs(displayExtent.end - displayExtent.start)} window</span>
         <span style={{ marginLeft: 'auto' }}>
@@ -293,9 +324,14 @@ export function TimelineActivityTable({
   )
 }
 
+function activityCount(activities: readonly TimelineActivity[], kind: TimelineActivity['kind']) {
+  return activities.filter(activity => activity.kind === kind).length
+}
+
 function ActivityRow({
   activity,
   selected,
+  rowRef,
   extent,
   nowPoint,
   wallClockOffset,
@@ -303,6 +339,7 @@ function ActivityRow({
 }: {
   activity: TimelineActivity
   selected: boolean
+  rowRef?: RefObject<HTMLTableRowElement | null>
   extent: TimelineExtent
   nowPoint: number
   wallClockOffset: number
@@ -311,6 +348,7 @@ function ActivityRow({
   const { colors, styles } = useDevtoolsTheme()
   return (
     <tr
+      ref={rowRef}
       data-timeline-activity={activity.kind}
       aria-selected={selected}
       tabIndex={0}
@@ -466,6 +504,8 @@ function ActivityDetails({
   width,
   onResizeStart,
   onClose,
+  onQuerySelect,
+  onCacheEntitySelect,
   onTraceSelect,
 }: {
   activity: TimelineActivity
@@ -473,6 +513,8 @@ function ActivityDetails({
   width: number
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
+  onQuerySelect?: (queryId: string) => void
+  onCacheEntitySelect?: (serviceName: string, itemId: string | number) => void
   onTraceSelect?: (traceId: number) => void
 }) {
   const { colors } = useDevtoolsTheme()
@@ -487,7 +529,10 @@ function ActivityDetails({
       onClose={onClose}
     >
       <DetailStats>
-        <DetailStat label='Operation' value={activity.operation} />
+        <DetailStat
+          label={activity.kind === 'fetch' ? 'Request method' : 'Operation'}
+          value={activity.operation}
+        />
         {activity.detail ? <DetailStat label='Context' value={activity.detail} /> : null}
         <DetailStat label='Status' value={activity.status} />
         <DetailStat
@@ -502,14 +547,25 @@ function ActivityDetails({
           value={activity.durationMs === undefined ? '—' : formatMs(activity.durationMs)}
         />
         {activity.serviceName ? <DetailStat label='Service' value={activity.serviceName} /> : null}
-        {activity.queryId ? <DetailStat label='Query ID' value={activity.queryId} /> : null}
+        {activity.queryId ? (
+          <DetailStat label='Query ID' value={activity.queryId} copyValue={activity.queryId} />
+        ) : null}
         {activity.write?.type === 'mutation' ? (
           <DetailStat
             label='Cache mode'
             value={activity.write.optimistic ? 'projected immediately' : 'after confirmation'}
           />
         ) : null}
-        {activity.write ? <DetailStat label='Write ID' value={activity.write.id} /> : null}
+        {activity.write ? (
+          <DetailStat label='Write ID' value={activity.write.id} copyValue={activity.write.id} />
+        ) : null}
+        {activity.traceId !== undefined ? (
+          <DetailStat
+            label='Trace ID'
+            value={`#${activity.traceId}`}
+            copyValue={String(activity.traceId)}
+          />
+        ) : null}
         {activity.write?.initiatingAction ? (
           <DetailStat label='Action' value={activity.write.initiatingAction.name} />
         ) : null}
@@ -539,7 +595,7 @@ function ActivityDetails({
           <DetailBlock>
             <JsonViewer
               value={activity.data}
-              label='Current query data'
+              label='Current query data — not captured at fetch time'
               emptyLabel='No query data captured'
             />
           </DetailBlock>
@@ -548,8 +604,8 @@ function ActivityDetails({
         <DetailBlock>
           <JsonViewer
             value={activity.payload}
-            label='Event payload'
-            emptyLabel='No event payload captured'
+            label='Realtime payload'
+            emptyLabel='No realtime payload captured'
           />
         </DetailBlock>
       ) : activity.kind === 'connection' ? (
@@ -560,6 +616,33 @@ function ActivityDetails({
             emptyLabel='No connection event captured'
           />
         </DetailBlock>
+      ) : null}
+      {onQuerySelect && relatedQueryIds(activity).length > 0 ? (
+        <DetailSection label='Queries'>
+          {relatedQueryIds(activity).map(queryId => (
+            <button
+              key={queryId}
+              type='button'
+              onClick={() => onQuerySelect(queryId)}
+              style={{ ...buttonStyle(colors, false), width: '100%', textAlign: 'left' }}
+            >
+              Open query {queryId} →
+            </button>
+          ))}
+        </DetailSection>
+      ) : null}
+      {activity.entity && onCacheEntitySelect ? (
+        <DetailSection label='Cached entity'>
+          <button
+            type='button'
+            onClick={() =>
+              onCacheEntitySelect(activity.entity!.serviceName, activity.entity!.itemId)
+            }
+            style={{ ...buttonStyle(colors, false), width: '100%', textAlign: 'left' }}
+          >
+            Open {activity.entity.serviceName} #{activity.entity.itemId} in Cache →
+          </button>
+        </DetailSection>
       ) : null}
       {activity.traceId !== undefined && onTraceSelect ? (
         <DetailSection label='Causal trace'>
@@ -574,6 +657,12 @@ function ActivityDetails({
       ) : null}
     </DetailsPane>
   )
+}
+
+function relatedQueryIds(activity: TimelineActivity): string[] {
+  return [
+    ...new Set([...(activity.queryId ? [activity.queryId] : []), ...(activity.queryIds ?? [])]),
+  ]
 }
 
 function intersects(activity: TimelineActivity, range: TimelineRange, nowPoint: number): boolean {

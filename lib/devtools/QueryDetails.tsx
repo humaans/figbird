@@ -6,8 +6,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
-import type { QueryRecord } from './collector.js'
-import { compactJson, formatMs } from './format.js'
+import type { QueryRecord, QuerySpan } from './collector.js'
+import { compactJson, formatMs, now } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
 import type {
   DevtoolsOperation,
@@ -16,7 +16,14 @@ import type {
   UnderlyingFetch,
 } from './model.js'
 import { ClassBadge, plural, queryStatus, QueryStatusDot } from './QueryPresentation.js'
-import { Badge, DetailsPane, useDevtoolsTheme, type DevtoolsColors } from './ui.js'
+import {
+  Badge,
+  CopyButton,
+  DetailSection,
+  DetailsPane,
+  useDevtoolsTheme,
+  type DevtoolsColors,
+} from './ui.js'
 
 const SPLIT_DETAILS_WIDTH = 600
 
@@ -24,12 +31,14 @@ export function QueryDetails({
   operation,
   selectedQueryId,
   width,
+  onFetchSelect,
   onResizeStart,
   onClose,
 }: {
   operation: DevtoolsOperation
   selectedQueryId: string | null
   width: number
+  onFetchSelect: (span: QuerySpan) => void
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
 }) {
@@ -49,11 +58,12 @@ export function QueryDetails({
   const selectedUnderlying =
     underlying.find(item => underlyingFetchKey(item) === selectedUnderlyingKey) ?? null
   const activeQuery: QuerySummary = selectedUnderlying?.query ?? summary
-  const activeQueryId = selectedUnderlying?.query.queryId
+  const activeQueryId =
+    selectedUnderlying?.query.queryId ?? (rootFetches.length === 1 ? rootFetches[0]!.queryId : null)
   const average =
     activeQuery.fetchCount > 0 ? activeQuery.totalDurationMs / activeQuery.fetchCount : 0
   const status = queryStatus(activeQuery)
-  const rootTitle = `${summary.serviceName}.${summary.method}`
+  const rootTitle = composition?.operation ?? `${summary.serviceName}.${summary.method}`
   const rootOperation = composition?.operation ?? rootTitle
   const activeOperation = `${activeQuery.serviceName}.${activeQuery.method}`
   const splitDetails = width >= SPLIT_DETAILS_WIDTH
@@ -110,23 +120,28 @@ export function QueryDetails({
     <DetailsPane
       title={breadcrumb}
       subtitle={
-        <code
-          title={[
-            'Cache identity derived from the operation and parameters. Changing filters creates a new query ID.',
-            rootFetches.length > 1 ? rootFetches.map(root => root.queryId).join('\n') : undefined,
-          ]
-            .filter(Boolean)
-            .join('\n\n')}
-          style={{
-            ...styles.code,
-            color: colors.muted,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {selectedUnderlying ? `${activeOperation} · ${activeQueryId}` : rootQueryIdentity}
-        </code>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+          <code
+            title={[
+              'Cache identity derived from the operation and parameters. Changing filters creates a new query ID.',
+              rootFetches.length > 1 ? rootFetches.map(root => root.queryId).join('\n') : undefined,
+            ]
+              .filter(Boolean)
+              .join('\n\n')}
+            style={{
+              ...styles.code,
+              color: colors.muted,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {selectedUnderlying
+              ? `${activeOperation} · ${activeQueryId}`
+              : `${summary.method} request · ${rootQueryIdentity}`}
+          </code>
+          {activeQueryId ? <CopyButton value={activeQueryId} label='Query ID' /> : null}
+        </span>
       }
       width={width}
       onResizeStart={onResizeStart}
@@ -162,7 +177,21 @@ export function QueryDetails({
               {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
             </span>
           </div>
-          <QueryMaintenance query={activeQuery} />
+          {activeQuery.resourceId !== undefined ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                margin: '-3px 0 10px',
+                color: colors.muted,
+              }}
+            >
+              <span>Resource ID</span>
+              <code style={{ ...styles.code, color: colors.text }}>#{activeQuery.resourceId}</code>
+              <CopyButton value={String(activeQuery.resourceId)} label='Resource ID' />
+            </div>
+          ) : null}
           {activeQuery.lastError ? (
             <div
               title={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
@@ -178,16 +207,20 @@ export function QueryDetails({
               {activeQuery.lastError.message}
             </div>
           ) : null}
-          <QueryPerformance query={activeQuery} average={average} />
+          <QueryPerformance query={activeQuery} average={average} onFetchSelect={onFetchSelect} />
+          <QueryRealtimeUpdates query={activeQuery} />
           {!splitDetails ? <QueryData query={activeQuery} separated /> : null}
           <QueryDetailBlock separated>
-            <JsonViewer value={activeQuery.query ?? {}} label='Parameters' />
+            <JsonViewer
+              value={queryArguments(activeQuery)}
+              label={activeQuery.method === 'get' ? 'Arguments' : 'Parameters'}
+            />
           </QueryDetailBlock>
           {!selectedUnderlying && operation.pagination ? (
             <PaginationDetails pagination={operation.pagination} pages={rootFetches} />
           ) : null}
           {showQueryPlan ? (
-            <QueryDetailSection
+            <DetailSection
               label={selectedUnderlying ? 'Related queries' : 'Query plan'}
               meta={plural(directChildren.length, 'relation', 'relations')}
               separated
@@ -222,7 +255,7 @@ export function QueryDetails({
                   />
                 ))}
               </div>
-            </QueryDetailSection>
+            </DetailSection>
           ) : null}
         </div>
         {splitDetails ? (
@@ -242,6 +275,15 @@ export function QueryDetails({
       </div>
     </DetailsPane>
   )
+}
+
+function queryArguments(query: QuerySummary): unknown {
+  if (query.method !== 'get') return query.query ?? {}
+  if (query.resourceId === undefined) return query.query ?? {}
+  return {
+    id: query.resourceId,
+    ...(query.query && Object.keys(query.query).length > 0 ? { query: query.query } : {}),
+  }
 }
 
 function QueryData({
@@ -265,74 +307,49 @@ function QueryData({
   )
 }
 
-function QueryMaintenance({ query }: { query: QuerySummary }) {
+function QueryRealtimeUpdates({ query }: { query: QuerySummary }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <div
-      title={`${maintenanceLabel(query)} · ${maintenanceReason(query)}`}
-      style={{
-        margin: '-3px 0 14px',
-        color: colors.faint,
-        fontSize: 11,
-        lineHeight: 1.4,
-      }}
-    >
-      {maintenanceLabel(query)} · {maintenanceReason(query)}
-    </div>
+    <DetailSection label='Realtime Updates' separated>
+      <div style={{ color: colors.text, fontWeight: 600 }}>{realtimeUpdatesLabel(query)}</div>
+      <div style={{ color: colors.muted, marginTop: 2 }}>{realtimeUpdatesDescription(query)}</div>
+    </DetailSection>
   )
 }
 
-function maintenanceLabel(query: QuerySummary): string {
-  switch (query.realtimeStrategy) {
+function realtimeUpdatesLabel(query: QuerySummary): string {
+  switch (realtimeUpdatesMode(query)) {
     case 'merge':
-      return 'Merge matching events locally'
+      return 'Merges matching events locally'
     case 'manual':
-      return 'Ignore realtime automatically'
+      return 'Ignores realtime events'
     default:
-      return 'Refetch on uncertain events'
+      return 'Refetches uncertain events'
   }
 }
 
-function maintenanceReason(query: QuerySummary): string {
+function realtimeUpdatesDescription(query: QuerySummary): string {
+  const mode = realtimeUpdatesMode(query)
+  if (mode === 'manual') {
+    return 'This snapshot changes only when it is refetched manually.'
+  }
+  if (mode === 'merge') {
+    return 'Matching cache changes can be applied safely without refetching.'
+  }
+
   const reasons = query.classificationReasons ?? []
   const windowReasons = reasons.filter(reason => reason.code === 'window-filter')
-  if (windowReasons.length > 0 && windowReasons.length === reasons.length) {
-    const fields = [
-      ...new Set(windowReasons.map(reason => reason.detail).filter(Boolean)),
-    ] as string[]
-    if (fields.length > 0) {
-      return `${formatList(fields)} ${fields.length === 1 ? 'creates' : 'create'} a server window boundary`
-    }
+  if (windowReasons.length > 0) {
+    return 'Sorted or paginated results can’t always be updated safely in place.'
   }
-  if (reasons.length > 0) return reasons.map(classificationReasonLabel).join(' · ')
-  return query.classification === 'get'
-    ? 'Direct entity lookup'
-    : 'Membership and ordering are provable locally'
+  return 'The server is needed when an event can’t be applied safely in place.'
 }
 
-function formatList(values: string[]): string {
-  if (values.length < 2) return values[0] ?? ''
-  if (values.length === 2) return `${values[0]} and ${values[1]}`
-  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`
-}
-
-function classificationReasonLabel(reason: { code: string; detail?: string }): string {
-  switch (reason.code) {
-    case 'server-flag':
-      return `forced server authority${reason.detail ? ` by ${reason.detail}` : ''}`
-    case 'native-pagination':
-      return 'native cursor pagination'
-    case 'select-projection':
-      return `projected rows${reason.detail ? ` via ${reason.detail}` : ''}`
-    case 'server-only-operator':
-      return `server-only operator ${reason.detail ?? ''}`.trim()
-    case 'window-filter':
-      return `window boundary ${reason.detail ?? ''}`.trim()
-    case 'snapshot':
-      return 'snapshot query ignores realtime'
-    default:
-      return reason.detail ?? reason.code
-  }
+function realtimeUpdatesMode(query: QuerySummary): 'merge' | 'manual' | 'refetch' {
+  if (query.realtimeStrategy) return query.realtimeStrategy
+  if (query.classificationReasons?.some(reason => reason.code === 'snapshot')) return 'manual'
+  if (query.classification === 'local-exact' || query.classification === 'get') return 'merge'
+  return 'refetch'
 }
 
 function PaginationDetails({
@@ -355,7 +372,7 @@ function PaginationDetails({
     .join(' · ')
 
   return (
-    <QueryDetailSection label='Pagination' separated>
+    <DetailSection label='Pagination' separated>
       <div style={{ color: colors.muted }}>{summary}</div>
       {pages.length > 1 ? (
         <details style={{ marginTop: 8 }}>
@@ -417,7 +434,7 @@ function PaginationDetails({
           </div>
         </details>
       ) : null}
-    </QueryDetailSection>
+    </DetailSection>
   )
 }
 
@@ -437,10 +454,18 @@ function breadcrumbButtonStyle(colors: DevtoolsColors): CSSProperties {
   }
 }
 
-function QueryPerformance({ query, average }: { query: QuerySummary; average: number }) {
+function QueryPerformance({
+  query,
+  average,
+  onFetchSelect,
+}: {
+  query: QuerySummary
+  average: number
+  onFetchSelect: (span: QuerySpan) => void
+}) {
   const { colors } = useDevtoolsTheme()
   return (
-    <QueryDetailSection label='Performance' separated>
+    <DetailSection label='Performance' separated>
       <div
         style={{
           display: 'flex',
@@ -487,40 +512,10 @@ function QueryPerformance({ query, average }: { query: QuerySummary; average: nu
           }}
         >
           <span style={{ color: colors.faint, fontSize: 11 }}>Recent latency</span>
-          <Sparkline spans={query.spans} />
+          <Sparkline spans={query.spans} onSelect={onFetchSelect} />
         </div>
       ) : null}
-    </QueryDetailSection>
-  )
-}
-
-function QueryDetailSection({
-  label,
-  meta,
-  separated = false,
-  children,
-}: {
-  label: string
-  meta?: string
-  separated?: boolean
-  children: ReactNode
-}) {
-  const { colors } = useDevtoolsTheme()
-  return (
-    <QueryDetailBlock separated={separated}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
-          marginBottom: 5,
-        }}
-      >
-        <strong style={{ color: colors.text, fontWeight: 650 }}>{label}</strong>
-        {meta ? <span style={{ color: colors.muted }}>{meta}</span> : null}
-      </div>
-      {children}
-    </QueryDetailBlock>
+    </DetailSection>
   )
 }
 
@@ -624,27 +619,86 @@ function QueryPlanRow({
   )
 }
 
-function Sparkline({ spans }: { spans: QueryRecord['spans'] }) {
+function Sparkline({
+  spans,
+  onSelect,
+}: {
+  spans: QueryRecord['spans']
+  onSelect: (span: QuerySpan) => void
+}) {
   const { colors } = useDevtoolsTheme()
   if (spans.length === 0) return null
-  const max = Math.max(1, ...spans.map(span => (span.endAt ?? span.startAt) - span.startAt))
+  const nowPoint = now()
+  const visibleSpans = spans.slice(-30)
+  const max = Math.max(1, ...visibleSpans.map(span => spanDuration(span, nowPoint)))
   return (
-    <span style={{ display: 'flex', alignItems: 'end', gap: 2, height: 22 }}>
-      {spans.slice(-30).map((span, index) => {
-        const duration = (span.endAt ?? span.startAt) - span.startAt
+    <span
+      aria-label='Recent fetch history'
+      style={{ display: 'flex', alignItems: 'end', gap: 1, height: 22 }}
+    >
+      {visibleSpans.map((span, index) => {
+        const duration = spanDuration(span, nowPoint)
+        const state = span.endAt === undefined ? 'pending' : span.ok === false ? 'error' : 'success'
+        const trigger = fetchReasonLabel(span.reason)
         return (
-          <span
+          <button
+            type='button'
             key={`${span.startAt}:${index}`}
-            title={formatMs(duration)}
+            aria-label={`${formatMs(duration)}, ${state}, ${trigger}`}
+            title={`${formatMs(duration)} · ${state}\nTrigger: ${trigger}\nClick to inspect this fetch`}
+            onClick={() => onSelect(span)}
             style={{
-              width: 4,
-              height: Math.max(3, (duration / max) * 20),
-              background: span.ok === false ? colors.red : colors.green,
-              borderRadius: 2,
+              display: 'flex',
+              alignItems: 'end',
+              justifyContent: 'center',
+              width: 7,
+              height: 22,
+              padding: 0,
+              border: 0,
+              background: 'transparent',
+              cursor: 'pointer',
             }}
-          />
+          >
+            <span
+              aria-hidden='true'
+              style={{
+                width: 4,
+                height: Math.max(3, (duration / max) * 20),
+                background:
+                  span.endAt === undefined
+                    ? colors.blue
+                    : span.ok === false
+                      ? colors.red
+                      : colors.green,
+                borderRadius: 2,
+                opacity: span.endAt === undefined ? 0.75 : 1,
+                boxShadow: span.endAt === undefined ? `inset 0 0 0 1px ${colors.bg}` : undefined,
+              }}
+            />
+          </button>
         )
       })}
     </span>
   )
+}
+
+function spanDuration(span: QuerySpan, nowPoint: number): number {
+  return Math.max(0, (span.endAt ?? nowPoint) - span.startAt)
+}
+
+function fetchReasonLabel(reason: string | undefined): string {
+  switch (reason) {
+    case 'subscription':
+      return 'subscription'
+    case 'manual':
+      return 'manual refetch'
+    case 'reconcile':
+      return 'realtime reconciliation'
+    case 'retry':
+      return 'retry'
+    case 'follow-up':
+      return 'follow-up fetch'
+    default:
+      return 'unknown trigger'
+  }
 }

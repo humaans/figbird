@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { CacheTab, type DevtoolsCacheEditor } from './CacheTab.js'
 import { EventsTab } from './EventsTab.js'
-import { QueriesTab, operationIsInactive } from './QueriesTab.js'
+import { QueriesTab, operationIsInactive, operationIsRetained } from './QueriesTab.js'
 import { TimelineFollowControl, TimelineTab } from './TimelineTab.js'
 import type { TimelineVisibility } from './TimelineActivityTable.js'
-import type { Collector } from './collector.js'
+import type { Collector, QuerySpan } from './collector.js'
 import { buildDevtoolsModel } from './model.js'
 import {
   ThemeContext,
@@ -18,8 +18,8 @@ import {
 } from './ui.js'
 
 type Tab = 'queries' | 'timeline' | 'events' | 'cache'
-export type QueryVisibility = 'active' | 'inactive' | 'all' | 'skipped'
-export type EventVisibility = 'activity' | 'all'
+export type QueryVisibility = 'active' | 'inactive' | 'retained' | 'all' | 'skipped'
+export type EventVisibility = 'groups' | 'raw'
 
 export type DevtoolsInspectionSnapshot =
   | { kind: 'idle'; version: number }
@@ -68,13 +68,54 @@ export function FigbirdDevtoolsPanel({
   const [queryFilter, setQueryFilter] = useState('')
   const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
-  const [eventVisibility, setEventVisibility] = useState<EventVisibility>('activity')
+  const [eventVisibility, setEventVisibility] = useState<EventVisibility>('groups')
   const [timelineFilter, setTimelineFilter] = useState('')
   const [timelineVisibility, setTimelineVisibility] = useState<TimelineVisibility>('all')
   const [cacheFilter, setCacheFilter] = useState('')
   const [selectedQueryId, setSelectedQueryId] = useState<string | null>(null)
   const [selectedTraceId, setSelectedTraceId] = useState<number | null>(null)
+  const [requestedTimelineActivityId, setRequestedTimelineActivityId] = useState<string | null>(
+    null,
+  )
+  const [requestedCacheEntity, setRequestedCacheEntity] = useState<{
+    serviceName: string
+    itemId: string | number
+  } | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
+
+  const inspectFetch = useCallback((span: QuerySpan) => {
+    if (span.fetchId !== undefined) {
+      setTimelineFilter('')
+      setTimelineVisibility('all')
+      setTimelineFollow(false)
+      setRequestedTimelineActivityId(`fetch:${span.fetchId}`)
+      setTab('timeline')
+      return
+    }
+
+    const traceId = span.traceIds?.[0]
+    if (traceId !== undefined) {
+      setSelectedTraceId(traceId)
+      setTab('events')
+    }
+  }, [])
+
+  const openQuery = useCallback(
+    (queryId: string) => {
+      inspection?.stop()
+      setQueryFilter('')
+      setQueryVisibility('all')
+      setSelectedQueryId(queryId)
+      setTab('queries')
+    },
+    [inspection],
+  )
+
+  const openCacheEntity = useCallback((serviceName: string, itemId: string | number) => {
+    setCacheFilter('')
+    setRequestedCacheEntity({ serviceName, itemId })
+    setTab('cache')
+  }, [])
 
   useEffect(() => {
     collector.start()
@@ -93,6 +134,7 @@ export function FigbirdDevtoolsPanel({
   const model = useMemo(() => buildDevtoolsModel(snapshot), [snapshot])
   const skippedQueryCount = model.operations.filter(operation => operation.summary.skipped).length
   const inactiveQueryCount = model.operations.filter(operationIsInactive).length
+  const retainedQueryCount = model.operations.filter(operationIsRetained).length
   const timelineEmpty =
     snapshot.timeline.realtime.length === 0 &&
     snapshot.timeline.connection.length === 0 &&
@@ -104,9 +146,13 @@ export function FigbirdDevtoolsPanel({
   }, [collector])
   const clearAction =
     tab === 'events'
-      ? { disabled: snapshot.events.length === 0, run: () => collector.clearEvents() }
+      ? {
+          label: 'Clear events',
+          disabled: snapshot.events.length === 0,
+          run: () => collector.clearEvents(),
+        }
       : tab === 'timeline'
-        ? { disabled: timelineEmpty, run: clearTimeline }
+        ? { label: 'Clear recording', disabled: timelineEmpty, run: clearTimeline }
         : null
   const inspected = inspectionSnapshot.kind === 'selected' ? inspectionSnapshot : null
 
@@ -139,19 +185,22 @@ export function FigbirdDevtoolsPanel({
               />
               <select
                 aria-label='Query visibility'
-                title='Choose live, inactive cached, skipped, or historical queries'
+                title='Choose live, inactive cached, retained history, skipped, or all queries'
                 value={queryVisibility}
                 onChange={event => setQueryVisibility(event.currentTarget.value as QueryVisibility)}
                 style={styles.select}
               >
                 <option value='active'>Live queries</option>
                 <option value='inactive'>
-                  Inactive queries{inactiveQueryCount > 0 ? ` (${inactiveQueryCount})` : ''}
+                  Inactive cached{inactiveQueryCount > 0 ? ` (${inactiveQueryCount})` : ''}
                 </option>
-                <option value='all'>All queries</option>
+                <option value='retained'>
+                  Retained history{retainedQueryCount > 0 ? ` (${retainedQueryCount})` : ''}
+                </option>
                 <option value='skipped'>
                   Skipped queries{skippedQueryCount > 0 ? ` (${skippedQueryCount})` : ''}
                 </option>
+                <option value='all'>All queries</option>
               </select>
               {inspection ? (
                 <button
@@ -230,17 +279,19 @@ export function FigbirdDevtoolsPanel({
                 style={styles.input}
                 value={eventFilter}
                 onChange={event => setEventFilter(event.currentTarget.value)}
-                placeholder={eventVisibility === 'activity' ? 'Filter activity' : 'Filter events'}
+                placeholder={
+                  eventVisibility === 'groups' ? 'Filter causal groups' : 'Filter raw events'
+                }
               />
               <select
                 aria-label='Event visibility'
-                title='Activity groups causal work; All events shows the raw instrumentation stream'
+                title='Causal groups connect related work; Raw events shows the instrumentation stream'
                 value={eventVisibility}
                 onChange={event => setEventVisibility(event.currentTarget.value as EventVisibility)}
                 style={styles.select}
               >
-                <option value='activity'>Activity</option>
-                <option value='all'>All events</option>
+                <option value='groups'>Causal groups</option>
+                <option value='raw'>Raw events</option>
               </select>
             </>
           ) : null}
@@ -249,7 +300,7 @@ export function FigbirdDevtoolsPanel({
               style={styles.input}
               value={cacheFilter}
               onChange={event => setCacheFilter(event.currentTarget.value)}
-              placeholder='Filter entity ID or value'
+              placeholder='Filter service, entity ID, or value'
             />
           ) : null}
           {tab === 'events' ? (
@@ -264,7 +315,11 @@ export function FigbirdDevtoolsPanel({
             <TimelineFollowControl value={timelineFollow} onChange={setTimelineFollow} />
           ) : null}
           {clearAction ? (
-            <ClearButton disabled={clearAction.disabled} onClick={clearAction.run} />
+            <ClearButton
+              label={clearAction.label}
+              disabled={clearAction.disabled}
+              onClick={clearAction.run}
+            />
           ) : null}
           <span style={styles.spacer} />
           {status ? (
@@ -280,6 +335,7 @@ export function FigbirdDevtoolsPanel({
               inspectedQueryCounts={inspected?.queryCounts ?? null}
               selectedQueryId={selectedQueryId}
               onSelectedQueryIdChange={setSelectedQueryId}
+              onFetchSelect={inspectFetch}
             />
           ) : null}
           {tab === 'timeline' ? (
@@ -290,6 +346,10 @@ export function FigbirdDevtoolsPanel({
               visibility={timelineVisibility}
               follow={timelineFollow}
               onFollowChange={setTimelineFollow}
+              requestedActivityId={requestedTimelineActivityId}
+              onRequestedActivityHandled={() => setRequestedTimelineActivityId(null)}
+              onQuerySelect={openQuery}
+              onCacheEntitySelect={openCacheEntity}
               onTraceSelect={traceId => {
                 setSelectedTraceId(traceId)
                 setTab('events')
@@ -304,6 +364,7 @@ export function FigbirdDevtoolsPanel({
               scopes={model.scopesByQueryId}
               selectedTraceId={selectedTraceId}
               onSelectedTraceIdChange={setSelectedTraceId}
+              onViewQuery={openQuery}
             />
           ) : null}
           {tab === 'cache' ? (
@@ -311,18 +372,14 @@ export function FigbirdDevtoolsPanel({
               services={snapshot.cache ?? []}
               model={model}
               filter={cacheFilter}
+              requestedEntity={requestedCacheEntity}
+              onRequestedEntityHandled={() => setRequestedCacheEntity(null)}
               {...(cacheEditor ? { editor: cacheEditor } : {})}
               onViewTrace={traceId => {
                 setSelectedTraceId(traceId)
                 setTab('events')
               }}
-              onViewQuery={queryId => {
-                inspection?.stop()
-                setQueryFilter('')
-                setQueryVisibility('all')
-                setSelectedQueryId(queryId)
-                setTab('queries')
-              }}
+              onViewQuery={openQuery}
             />
           ) : null}
         </main>
@@ -349,7 +406,15 @@ function inspectionTitle({
   return `Clear area filter: ${queryCounts.size} query roots mounted in ${label}`
 }
 
-function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+function ClearButton({
+  label,
+  disabled,
+  onClick,
+}: {
+  label: string
+  disabled: boolean
+  onClick: () => void
+}) {
   const { colors } = useDevtoolsTheme()
   return (
     <button
@@ -358,7 +423,7 @@ function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => 
       disabled={disabled}
       onClick={onClick}
     >
-      Clear
+      {label}
     </button>
   )
 }

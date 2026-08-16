@@ -21,19 +21,23 @@ import {
   ColumnResizeHandle,
   DetailBlock,
   DetailSection,
+  DetailStat,
+  DetailStats,
   DetailsPane,
   buttonStyle,
   useDetailsPaneWidth,
   useResizableColumns,
   useDevtoolsTheme,
+  type DevtoolsColors,
 } from './ui.js'
 
 const CACHE_COLUMNS = [
+  { label: 'Service', width: 140, minWidth: 95 },
   { label: 'Entity', width: 150, minWidth: 90 },
   { label: 'Value', width: 310, minWidth: 160 },
   { label: 'Est. Size', width: 90, minWidth: 72 },
-  { label: 'Queries', width: 110, minWidth: 76 },
-  { label: 'Provenance', width: 150, minWidth: 110 },
+  { label: 'Memberships', width: 110, minWidth: 76 },
+  { label: 'Last Changed', width: 150, minWidth: 110 },
 ] as const
 
 const CACHE_SIZE_DESCRIPTION =
@@ -54,6 +58,8 @@ export function CacheTab({
   editor,
   onViewTrace,
   onViewQuery,
+  requestedEntity,
+  onRequestedEntityHandled,
 }: {
   services: DevtoolsCacheService[]
   model: DevtoolsModel
@@ -61,6 +67,8 @@ export function CacheTab({
   editor?: DevtoolsCacheEditor
   onViewTrace?: (traceId: number) => void
   onViewQuery?: (queryId: string) => void
+  requestedEntity?: { serviceName: string; itemId: string | number } | null
+  onRequestedEntityHandled?: () => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const orderedServices = useMemo(
@@ -68,7 +76,7 @@ export function CacheTab({
     [services],
   )
   const [serviceName, setServiceName] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [columnWidths, onColumnResizeStart] = useResizableColumns(CACHE_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0)
@@ -88,20 +96,50 @@ export function CacheTab({
   const totalSize = [...serviceSizes.values()].reduce((total, size) => total + size, 0)
 
   useEffect(() => {
-    if (serviceName && orderedServices.some(service => service.serviceName === serviceName)) return
-    setServiceName(orderedServices[0]?.serviceName ?? null)
-    setSelectedId(null)
+    if (!serviceName || orderedServices.some(service => service.serviceName === serviceName)) return
+    setServiceName(null)
+    setSelectedKey(null)
   }, [orderedServices, serviceName])
 
-  const service = orderedServices.find(item => item.serviceName === serviceName)
+  useEffect(() => {
+    if (!requestedEntity) return
+    const service = orderedServices.find(item => item.serviceName === requestedEntity.serviceName)
+    if (!service) {
+      onRequestedEntityHandled?.()
+      return
+    }
+    const entity = service.entities.find(item => item.id === String(requestedEntity.itemId))
+    setServiceName(service.serviceName)
+    setSelectedKey(entity ? cacheEntityKey(service.serviceName, entity.id) : null)
+    onRequestedEntityHandled?.()
+  }, [onRequestedEntityHandled, orderedServices, requestedEntity])
+
   const normalizedFilter = filter.trim().toLowerCase()
-  const entities = (service?.entities ?? [])
-    .filter(entity => {
+  const entries = orderedServices
+    .filter(service => serviceName === null || service.serviceName === serviceName)
+    .flatMap(service => service.entities.map(entity => ({ service, entity })))
+    .filter(({ service, entity }) => {
       if (!normalizedFilter) return true
-      return `${entity.id} ${compactJson(entity.value)}`.toLowerCase().includes(normalizedFilter)
+      return [
+        service.serviceName,
+        entity.id,
+        compactJson(entity.value),
+        entity.queryIds.join(' '),
+        entity.lastChange?.source ?? 'initial snapshot',
+        entity.lastChange?.type ?? '',
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedFilter)
     })
-    .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
-  const selected = service?.entities.find(entity => entity.id === selectedId)
+    .sort(
+      (a, b) =>
+        a.service.serviceName.localeCompare(b.service.serviceName) ||
+        a.entity.id.localeCompare(b.entity.id, undefined, { numeric: true }),
+    )
+  const selected = entries.find(
+    ({ service, entity }) => cacheEntityKey(service.serviceName, entity.id) === selectedKey,
+  )
 
   return (
     <section style={{ height: '100%', display: 'flex', minWidth: 0 }}>
@@ -132,6 +170,19 @@ export function CacheTab({
             {formatBytes(totalSize)}
           </code>
         </div>
+        <button
+          type='button'
+          onClick={() => {
+            setServiceName(null)
+            setSelectedKey(null)
+          }}
+          style={cacheServiceButtonStyle(colors, serviceName === null)}
+        >
+          <span>All services</span>
+          <span style={{ color: colors.faint, marginLeft: 'auto' }}>
+            {orderedServices.reduce((count, item) => count + item.entities.length, 0)}
+          </span>
+        </button>
         {orderedServices.map(item => {
           const selectedService = item.serviceName === serviceName
           return (
@@ -140,22 +191,11 @@ export function CacheTab({
               type='button'
               onClick={() => {
                 setServiceName(item.serviceName)
-                setSelectedId(null)
+                setSelectedKey(null)
               }}
-              style={{
-                width: '100%',
-                border: 0,
-                borderBottom: `1px solid ${colors.rowBorder}`,
-                borderLeft: `3px solid ${selectedService ? colors.blue : 'transparent'}`,
-                padding: '8px 9px',
-                background: selectedService ? colors.activeButtonBg : 'transparent',
-                color: colors.text,
-                font: 'inherit',
-                textAlign: 'left',
-                cursor: 'pointer',
-              }}
+              style={cacheServiceButtonStyle(colors, selectedService)}
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
                 <strong
                   style={{
                     minWidth: 0,
@@ -207,7 +247,7 @@ export function CacheTab({
         })}
       </nav>
       <div style={{ ...styles.scroll, flex: 1, minWidth: 0 }}>
-        {!service ? (
+        {orderedServices.length === 0 ? (
           <div style={{ padding: 16, color: colors.muted }}>No entities cached yet.</div>
         ) : (
           <table style={{ ...styles.table, minWidth: tableWidth }}>
@@ -234,26 +274,27 @@ export function CacheTab({
               </tr>
             </thead>
             <tbody>
-              {entities.length === 0 ? (
+              {entries.length === 0 ? (
                 <tr>
                   <td colSpan={CACHE_COLUMNS.length} style={{ ...styles.td, color: colors.muted }}>
                     No matching cached entities.
                   </td>
                 </tr>
               ) : null}
-              {entities.map(entity => {
-                const isSelected = entity.id === selectedId
+              {entries.map(({ service, entity }) => {
+                const key = cacheEntityKey(service.serviceName, entity.id)
+                const isSelected = key === selectedKey
                 const estimatedSize = estimateSerializedBytes(entity.value)
                 return (
                   <tr
-                    key={entity.id}
+                    key={key}
                     tabIndex={0}
                     aria-selected={isSelected}
-                    onClick={() => setSelectedId(entity.id)}
+                    onClick={() => setSelectedKey(key)}
                     onKeyDown={event => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault()
-                        setSelectedId(entity.id)
+                        setSelectedKey(key)
                       }
                     }}
                     style={{
@@ -263,6 +304,9 @@ export function CacheTab({
                       boxShadow: isSelected ? `inset 3px 0 ${colors.blue}` : undefined,
                     }}
                   >
+                    <td style={styles.td}>
+                      <span style={{ fontWeight: 600 }}>{service.serviceName}</span>
+                    </td>
                     <td style={styles.td}>
                       <code style={{ ...styles.code, fontWeight: 650 }}>#{entity.id}</code>
                     </td>
@@ -323,15 +367,15 @@ export function CacheTab({
           </table>
         )}
       </div>
-      {service && selected ? (
+      {selected ? (
         <CacheEntityDetails
-          key={`${service.serviceName}:${selected.id}`}
-          service={service}
-          entity={selected}
+          key={cacheEntityKey(selected.service.serviceName, selected.entity.id)}
+          service={selected.service}
+          entity={selected.entity}
           model={model}
           width={detailsWidth}
           onResizeStart={onDetailsResizeStart}
-          onClose={() => setSelectedId(null)}
+          onClose={() => setSelectedKey(null)}
           {...(editor ? { editor } : {})}
           {...(onViewTrace ? { onViewTrace } : {})}
           {...(onViewQuery ? { onViewQuery } : {})}
@@ -405,6 +449,10 @@ function CacheEntityDetails({
       onResizeStart={onResizeStart}
       onClose={onClose}
     >
+      <DetailStats>
+        <DetailStat label='Service' value={service.serviceName} />
+        <DetailStat label='Entity ID' value={`#${entity.id}`} copyValue={entity.id} />
+      </DetailStats>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12 }}>
         {entity.lastChange ? <Badge tone='neutral'>{entity.lastChange.type}</Badge> : null}
         <span style={{ color: colors.muted }}>
@@ -617,4 +665,25 @@ function queryMembership(
 function formatEstimatedSize(value: unknown): string {
   const bytes = estimateSerializedBytes(value)
   return bytes === null ? '—' : formatBytes(bytes)
+}
+
+function cacheEntityKey(serviceName: string, entityId: string): string {
+  return JSON.stringify([serviceName, entityId])
+}
+
+function cacheServiceButtonStyle(colors: DevtoolsColors, selected: boolean): CSSProperties {
+  return {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    border: 0,
+    borderBottom: `1px solid ${colors.rowBorder}`,
+    borderLeft: `3px solid ${selected ? colors.blue : 'transparent'}`,
+    padding: '8px 9px',
+    background: selected ? colors.activeButtonBg : 'transparent',
+    color: colors.text,
+    font: 'inherit',
+    textAlign: 'left',
+    cursor: 'pointer',
+  }
 }

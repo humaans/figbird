@@ -16,6 +16,8 @@ import { ExtensionInspectionSession } from '../extensions/src/inspection.js'
 import { inspectQueryArea } from '../extensions/src/inspectionPage.js'
 import { ExtensionSession } from '../extensions/src/remote.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
+import { buildActivities, buildTraceIndex } from '../lib/devtools/eventModel.js'
+import { buildTimelineActivities } from '../lib/devtools/timelineModel.js'
 import { createTestApp, dom } from './helpers.js'
 
 interface Note {
@@ -314,12 +316,27 @@ test('collector marks optimistic mutation failures as rolled back writes', async
   await t.throwsAsync(figbird.m.notes.patch(1, { content: 'bad' }))
   await sleep(70)
 
-  const mutation = collector.getSnapshot().writes.find(write => write.type === 'mutation')
+  const snapshot = collector.getSnapshot()
+  const mutation = snapshot.writes.find(write => write.type === 'mutation')
   t.truthy(mutation)
   t.is(mutation?.status, 'error')
   t.true(mutation?.rolledBack)
   t.is(mutation?.error, 'nope')
   t.deepEqual(mutation?.args, [1, { content: 'bad' }])
+
+  const writeActivity = buildTimelineActivities(
+    snapshot,
+    buildDevtoolsModel(snapshot),
+    performance.now(),
+  ).find(activity => activity.kind === 'write')
+  t.is(writeActivity?.status, 'error')
+  t.is(writeActivity?.effect, 'rolled back')
+
+  const mutationGroup = buildActivities(snapshot.events, buildTraceIndex(snapshot.events)).find(
+    activity => activity.kind === 'mutation',
+  )
+  t.is(mutationGroup?.status, 'error')
+  t.is(mutationGroup?.tone, 'red')
 
   collector.stop()
 })
@@ -588,7 +605,16 @@ test('collector bounds inactive query and settled write history', t => {
     generation: 2,
     serviceName: 'notes',
     method: 'find',
+    fetchId: 99,
+    reason: 'retry',
   })
+  const activeSpan = collector
+    .getSnapshot()
+    .queries.find(query => query.queryId === 'live-3')
+    ?.spans.at(-1)
+  t.is(activeSpan?.fetchId, 99)
+  t.is(activeSpan?.endAt, undefined)
+  t.is(activeSpan?.reason, 'retry')
   const timelineClearStartedAt = performance.now()
   collector.clearTimeline()
   listeners.event?.({
@@ -597,6 +623,7 @@ test('collector bounds inactive query and settled write history', t => {
     generation: 2,
     serviceName: 'notes',
     method: 'find',
+    fetchId: 99,
     durationMs: 100,
     itemCount: 1,
   })
@@ -605,6 +632,7 @@ test('collector bounds inactive query and settled write history', t => {
     .queries.find(query => query.queryId === 'live-3')
     ?.spans.at(-1)
   t.true((postClearSpan?.startAt ?? 0) >= timelineClearStartedAt)
+  t.is(postClearSpan?.ok, true)
 
   collector.stop()
 })
@@ -756,12 +784,15 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
   const row = $all('tbody tr')[0]
   t.truthy(row)
+  t.is(row?.querySelectorAll('td')[1]?.textContent, 'paginate')
   t.true(
     (row?.textContent ?? '').includes('paginate(25, {"status":"open","$sort":{"createdAt":-1}})'),
   )
   click(row!)
 
   const details = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
+  t.true(details.includes('issues.paginate(25)'))
+  t.true(details.includes('find request'))
   t.true(details.includes('Pagination'))
   t.true(details.includes('35 of 35 rows loaded · 2 pages · complete'))
   t.true(details.includes('Page chain'))
@@ -1055,6 +1086,8 @@ test('panel shows root queries and nests relation fetches in details', async t =
       generation: 1,
       serviceName: 'issues',
       method: 'find',
+      fetchId: 10,
+      reason: 'subscription',
     })
     events.emit({
       kind: 'fetch:end',
@@ -1062,6 +1095,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       generation: 1,
       serviceName: 'issues',
       method: 'find',
+      fetchId: 10,
       durationMs: 8,
       itemCount: 1,
     })
@@ -1071,6 +1105,8 @@ test('panel shows root queries and nests relation fetches in details', async t =
       generation: 1,
       serviceName: 'issueLabels',
       method: 'find',
+      fetchId: 11,
+      reason: 'subscription',
     })
     events.emit({
       kind: 'fetch:end',
@@ -1078,6 +1114,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       generation: 1,
       serviceName: 'issueLabels',
       method: 'find',
+      fetchId: 11,
       durationMs: 5,
       itemCount: 2,
     })
@@ -1132,12 +1169,23 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.true(($all('tbody tr')[0]?.textContent ?? '').includes('1 here'))
 
   const rowText = $all('tbody tr').map(row => row.textContent ?? '')
+  const queryHeaders = $all('th').map(header => header.textContent ?? '')
+  t.deepEqual(queryHeaders, [
+    'Service',
+    'Query Operation',
+    'Definition',
+    'Maintenance',
+    'Rows',
+    'Fetch Activity',
+    'Last Fetch',
+    'Fetched',
+  ])
   t.is(rowText.length, 1)
   t.true(rowText[0]!.includes('issues'))
   t.true(rowText[0]!.includes('find() → labels'))
   t.false(rowText[0]!.includes('issueLabels'))
 
-  const classHeader = $all('th').find(header => header.textContent === 'Class')
+  const classHeader = $all('th').find(header => header.textContent === 'Maintenance')
   t.true(classHeader?.getAttribute('title')?.includes('local-exact'))
   const classBadge = $all('span').find(element => element.textContent === 'local-exact')
   t.true(classBadge?.getAttribute('title')?.includes('merge directly'))
@@ -1151,12 +1199,14 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.true(devtoolsText.includes('Query data'))
   t.true(devtoolsText.includes('Visible issue'))
   t.true(devtoolsText.includes('Parameters'))
+  t.true(devtoolsText.includes('Realtime Updates'))
+  t.true(devtoolsText.includes('Merges matching events locally'))
   t.true(devtoolsText.includes('issueLabels'))
   t.false(devtoolsText.includes('Composition'))
   t.false(devtoolsText.includes('Underlying fetches'))
   t.truthy($('[role="separator"][aria-label="Resize details pane"]'))
 
-  const rootQueryId = $all('code').find(element => element.textContent === 'root')
+  const rootQueryId = $all('code').find(element => element.textContent?.includes('root'))
   t.true(rootQueryId?.getAttribute('title')?.includes('Cache identity'))
 
   const nestedQuery = $('[aria-label="Inspect nested query labels"]')
@@ -1174,6 +1224,25 @@ test('panel shows root queries and nests relation fetches in details', async t =
   click(rootBreadcrumb!)
   t.true(($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes('Query plan'))
 
+  const fetchHistoryBar = $('[aria-label="8ms, success, subscription"]')
+  t.truthy(fetchHistoryBar)
+  t.true(fetchHistoryBar?.getAttribute('title')?.includes('Trigger: subscription'))
+  click(fetchHistoryBar!)
+  const selectedFetch = $all('[data-timeline-activity="fetch"]').find(
+    row => row.getAttribute('aria-selected') === 'true',
+  )
+  t.true(selectedFetch?.textContent?.includes('issues'))
+  t.true(selectedFetch?.textContent?.includes('success'))
+  t.true(
+    ($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes(
+      'Current query data — not captured at fetch time',
+    ),
+  )
+  t.truthy($all('button').find(button => button.textContent?.includes('Open query root')))
+  const resumeAfterFetchNavigation = $('[aria-label="Resume live timeline"]')
+  t.truthy(resumeAfterFetchNavigation)
+  click(resumeAfterFetchNavigation!)
+
   const timelineButton = $all('button').find(button => button.textContent === 'timeline')
   t.truthy(timelineButton)
   click(timelineButton!)
@@ -1187,7 +1256,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       row =>
         row.getAttribute('data-timeline-activity') === 'realtime' &&
         row.textContent?.includes('issues') &&
-        row.textContent.includes('patched'),
+        row.textContent.includes('patch'),
     ).length,
     1,
   )
@@ -1210,6 +1279,14 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const eventsButton = $all('button').find(button => button.textContent === 'events')
   t.truthy(eventsButton)
   click(eventsButton!)
+  t.deepEqual(
+    $all('[aria-label="Event visibility"] option').map(option => option.textContent ?? ''),
+    ['Causal groups', 'Raw events'],
+  )
+  const eventHeaders = $all('[aria-label="Figbird devtools"] [style*="position: sticky"]').at(
+    -1,
+  )?.textContent
+  t.true(eventHeaders?.includes('GroupServiceOperationScopeStatusDetails'))
   const realtimeEventRow = $all('[title="Select event details"]').find(row =>
     row.textContent?.includes('realtime'),
   )

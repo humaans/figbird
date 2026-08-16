@@ -33,7 +33,7 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
   const color =
     status.kind === 'error'
       ? colors.red
-      : status.kind === 'fetching'
+      : status.kind === 'pending'
         ? colors.blue
         : status.kind === 'skipped'
           ? colors.faint
@@ -59,7 +59,7 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
 }
 
 export function queryStatus(query: QuerySummary): {
-  kind: 'active' | 'cached' | 'error' | 'fetching' | 'retained' | 'skipped'
+  kind: 'active' | 'cached' | 'error' | 'pending' | 'retained' | 'skipped'
   label: string
 } {
   if (!query.present) {
@@ -72,7 +72,7 @@ export function queryStatus(query: QuerySummary): {
     return { kind: 'error', label: statusLabel(query, 'error') }
   }
   if (query.isFetching || query.status === 'loading') {
-    return { kind: 'fetching', label: statusLabel(query, 'fetching') }
+    return { kind: 'pending', label: statusLabel(query, 'pending') }
   }
   if (query.subscriberCount === 0) {
     return { kind: 'cached', label: statusLabel(query, 'cached') }

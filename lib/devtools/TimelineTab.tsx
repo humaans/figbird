@@ -53,6 +53,10 @@ export function TimelineTab({
   visibility,
   follow,
   onFollowChange,
+  requestedActivityId,
+  onRequestedActivityHandled,
+  onQuerySelect,
+  onCacheEntitySelect,
   onTraceSelect,
 }: {
   snapshot: DevtoolsSnapshot
@@ -61,6 +65,10 @@ export function TimelineTab({
   visibility: TimelineVisibility
   follow: boolean
   onFollowChange: (value: boolean) => void
+  requestedActivityId?: string | null
+  onRequestedActivityHandled?: () => void
+  onQuerySelect?: (queryId: string) => void
+  onCacheEntitySelect?: (serviceName: string, itemId: string | number) => void
   onTraceSelect?: (traceId: number) => void
 }) {
   const hasInFlight =
@@ -85,6 +93,10 @@ export function TimelineTab({
         visibility={visibility}
         follow={follow}
         onFollowChange={onFollowChange}
+        {...(requestedActivityId ? { requestedActivityId } : {})}
+        {...(onRequestedActivityHandled ? { onRequestedActivityHandled } : {})}
+        {...(onQuerySelect ? { onQuerySelect } : {})}
+        {...(onCacheEntitySelect ? { onCacheEntitySelect } : {})}
         {...(onTraceSelect ? { onTraceSelect } : {})}
       />
     </section>

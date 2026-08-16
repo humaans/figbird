@@ -156,6 +156,7 @@ type CapturedQueryState = Omit<
 >
 
 interface QueryMetrics {
+  activeSpans: Map<number, QuerySpan>
   errorCount: number
   fetchCount: number
   lastDurationMs?: number
@@ -217,6 +218,7 @@ function makeQueryRecord(
     lastObservedAt: observedAt,
     lastKnown: state,
     metrics: {
+      activeSpans: new Map(),
       fetchCount: row.fetchCount,
       errorCount: row.errorCount,
       ...(row.lastDurationMs !== undefined ? { lastDurationMs: row.lastDurationMs } : {}),
@@ -264,6 +266,7 @@ function makePlaceholderQueryRecord(
     lastKnown: state,
     lastObservedAt: observedAt,
     metrics: {
+      activeSpans: new Map(),
       fetchCount: 0,
       errorCount: 0,
       totalDurationMs: 0,
@@ -301,7 +304,9 @@ function toPublicQueryRecord(record: InternalQueryRecord): QueryRecord {
     errorCount: metrics.errorCount,
     ...(metrics.lastDurationMs !== undefined ? { lastDurationMs: metrics.lastDurationMs } : {}),
     totalDurationMs: metrics.totalDurationMs,
-    spans: metrics.spans.toArray(),
+    spans: [...metrics.spans.toArray(), ...metrics.activeSpans.values()].sort(
+      (a, b) => a.startAt - b.startAt,
+    ),
     realtimeSeen: metrics.realtimeSeen,
     reconciles: metrics.reconciles,
     ...(metrics.lastError ? { lastError: metrics.lastError } : {}),
@@ -473,6 +478,9 @@ class FigbirdCollector implements Collector {
     this.#timelineLaneIds.clear()
     for (const record of this.#queries.values()) {
       record.metrics.spans.clear()
+      for (const span of record.metrics.activeSpans.values()) {
+        span.startAt = this.#timelineStartedAt
+      }
     }
     this.#scheduleNotify()
   }
@@ -657,14 +665,21 @@ class FigbirdCollector implements Collector {
   }
 
   #recordFetchStart(event: Extract<FetchEvent, { kind: 'fetch:start' }>, at: number): void {
-    if (event.fetchId !== undefined) {
-      this.#fetchTraces.set(event.fetchId, {
-        ...(event.reason ? { reason: event.reason } : {}),
-        traceIds: event.causes?.map(cause => cause.traceId) ?? [],
-      })
-    }
     const record = this.#ensureFetchRecord(event, at, true)
     if (record.current?.generation !== event.generation) return
+    if (event.fetchId !== undefined) {
+      const traceIds = event.causes?.map(cause => cause.traceId) ?? []
+      this.#fetchTraces.set(event.fetchId, {
+        ...(event.reason ? { reason: event.reason } : {}),
+        traceIds,
+      })
+      record.metrics.activeSpans.set(event.fetchId, {
+        startAt: Math.max(at, this.#timelineStartedAt),
+        fetchId: event.fetchId,
+        ...(event.reason ? { reason: event.reason } : {}),
+        ...(traceIds.length > 0 ? { traceIds } : {}),
+      })
+    }
     const current = {
       ...record.current,
       status: record.current.status === 'success' ? ('success' as const) : ('loading' as const),
@@ -738,6 +753,7 @@ class FigbirdCollector implements Collector {
     const observedStartAt = at - event.durationMs
     const startAt = Math.max(observedStartAt, this.#timelineStartedAt)
     const trace = event.fetchId === undefined ? undefined : this.#fetchTraces.get(event.fetchId)
+    if (event.fetchId !== undefined) metrics.activeSpans.delete(event.fetchId)
     metrics.spans.push({
       startAt,
       endAt: at,
