@@ -163,11 +163,33 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.true(snapshot.timeline.realtime.length > 0)
   t.deepEqual(snapshot.timeline.laneOrder, [])
   t.is(collector.getSnapshot(), snapshot)
+  const realtimeBeforeClear = buildTimelineActivities(
+    snapshot,
+    buildDevtoolsModel(snapshot),
+    performance.now(),
+  ).find(activity => activity.kind === 'realtime')
 
   collector.clearEvents()
   const clearedEvents = collector.getSnapshot()
   t.is(clearedEvents.events.length, 0)
   t.is(clearedEvents.timeline.realtime.length, snapshot.timeline.realtime.length)
+  const realtimeAfterClear = buildTimelineActivities(
+    clearedEvents,
+    buildDevtoolsModel(clearedEvents),
+    performance.now(),
+  ).find(activity => activity.kind === 'realtime')
+  t.deepEqual(
+    realtimeAfterClear && {
+      effect: realtimeAfterClear.effect,
+      queryIds: realtimeAfterClear.queryIds,
+      result: realtimeAfterClear.result,
+    },
+    realtimeBeforeClear && {
+      effect: realtimeBeforeClear.effect,
+      queryIds: realtimeBeforeClear.queryIds,
+      result: realtimeBeforeClear.result,
+    },
+  )
 
   feathers.service('notes').emit('patched', { id: 1, content: 'changed again' })
   await sleep(70)
@@ -330,12 +352,18 @@ test('collector marks optimistic mutation failures as rolled back writes', async
   t.true(mutation?.rolledBack)
   t.is(mutation?.error, 'Validation Error')
   t.deepEqual(mutation?.errorDetails, {
-    name: 'ValidationError',
-    message: 'Validation Error',
-    code: 422,
-    issues: [{ name: 'content', reason: 'required' }],
+    state: 'retained',
+    value: {
+      name: 'ValidationError',
+      message: 'Validation Error',
+      code: 422,
+      issues: [{ name: 'content', reason: 'required' }],
+    },
   })
-  t.deepEqual(mutation?.args, [1, { content: 'bad' }])
+  t.deepEqual(mutation?.args, {
+    state: 'retained',
+    value: [1, { content: 'bad' }],
+  })
 
   const writeActivity = buildTimelineActivities(
     snapshot,
@@ -347,7 +375,10 @@ test('collector marks optimistic mutation failures as rolled back writes', async
   t.deepEqual(writeActivity?.errorDetails, mutation?.errorDetails)
 
   const mutationError = snapshot.events.find(item => item.event.kind === 'mutate:error')
-  t.deepEqual(mutationError ? eventPayload(mutationError.event) : undefined, mutation?.errorDetails)
+  t.deepEqual(
+    mutationError ? eventPayload(mutationError.event) : undefined,
+    mutation?.errorDetails?.state === 'retained' ? mutation.errorDetails.value : undefined,
+  )
 
   const mutationGroup = buildActivities(snapshot.events, buildTraceIndex(snapshot.events)).find(
     activity => activity.kind === 'mutation',
@@ -535,10 +566,13 @@ test('collector bounds inactive query and settled write history', t => {
   t.is(afterStaleError?.status, 'success')
   t.is(afterStaleError?.lastError?.generation, 1)
   t.deepEqual(afterStaleError?.lastError?.details, {
-    name: 'ValidationError',
-    message: 'old generation failed',
-    code: 422,
-    issues: [{ name: 'title', reason: 'required' }],
+    state: 'retained',
+    value: {
+      name: 'ValidationError',
+      message: 'old generation failed',
+      code: 422,
+      issues: [{ name: 'title', reason: 'required' }],
+    },
   })
   t.deepEqual(afterStaleError?.spans.at(-1)?.errorDetails, afterStaleError?.lastError?.details)
 
@@ -609,7 +643,10 @@ test('collector bounds inactive query and settled write history', t => {
   })
   retainedPayload.content = 'changed later'
   const retainedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
-  t.deepEqual(retainedWrite?.args, [7, { content: 'captured' }])
+  t.deepEqual(retainedWrite?.args, {
+    state: 'retained',
+    value: [7, { content: 'captured' }],
+  })
   const retainedEvent = collector
     .getSnapshot()
     .events.find(item => item.event.kind === 'mutate:start' && item.event.mutationId === 7)
@@ -626,7 +663,10 @@ test('collector bounds inactive query and settled write history', t => {
   })
   updatedPayload.content = 'changed later'
   const updatedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
-  t.deepEqual(updatedWrite?.args, [7, { content: 'coalesced' }])
+  t.deepEqual(updatedWrite?.args, {
+    state: 'retained',
+    value: [7, { content: 'coalesced' }],
+  })
 
   listeners.event?.({
     kind: 'fetch:start',
@@ -792,7 +832,7 @@ test('devtools model keeps operation identity separate from shared fetch identit
       },
     ],
     events: [],
-    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
+    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [], traces: [] },
     writes: [],
   }
 
@@ -878,7 +918,7 @@ test('query details show a cursor operation as one inspectable page chain', t =>
       },
     ],
     events: [],
-    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [] },
+    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [], traces: [] },
     writes: [],
   }
   const collector: Collector = {
@@ -923,6 +963,18 @@ test('extension bridge starts debug collection only while connected', async t =>
     inspectCalls++
     return inspect()
   }
+  figbird.inspectCache = () => [
+    {
+      serviceName: 'notes',
+      entities: [
+        {
+          id: 'large',
+          queryIds: [],
+          value: { items: Array.from({ length: 50_000 }, (_, index) => index) },
+        },
+      ],
+    },
+  ]
   const subscribe = figbird.events.subscribe.bind(figbird.events)
   let eventSubscriptions = 0
   figbird.events.subscribe = listener => {
@@ -954,6 +1006,8 @@ test('extension bridge starts debug collection only while connected', async t =>
   const envelope = JSON.parse(read!)
   t.is(envelope.protocol, 3)
   t.true(Array.isArray(envelope.read.queries))
+  t.is(envelope.read.cache[0].entities[0].value.items.length, 201)
+  t.is(envelope.read.cache[0].entities[0].value.items.at(-1), '[49800 more items]')
   t.is(inspectCalls, 1)
   const unchanged = JSON.parse(bridgeState.readJson(connection!.sessionId, envelope.version)!)
   t.is(unchanged.version, envelope.version)
@@ -1061,6 +1115,7 @@ test('extension session disconnects after stop and preserves state across transi
   let connects = 0
   let reads = 0
   let resets = 0
+  let publishedFrames = 0
   const transientSession = new ExtensionSession(async expression => {
     if (expression.endsWith('?.connect()')) {
       connects++
@@ -1076,12 +1131,17 @@ test('extension session disconnects after stop and preserves state across transi
     throw new Error(`Unexpected expression: ${expression}`)
   })
   transientSession.subscribeReset(() => resets++)
+  transientSession.subscribeRead(frame => {
+    publishedFrames++
+    t.deepEqual(frame.events, [])
+  })
   transientSession.start()
   await sleep(1_100)
   transientSession.stop()
 
   t.is(connects, 1)
   t.true(reads >= 2)
+  t.true(publishedFrames >= 1)
   t.is(resets, 0)
   transientSession.resetForNavigation()
   t.is(resets, 1)
@@ -1258,6 +1318,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
       laneOrder: ['query:root', 'query:labels', 'realtime:issues'],
       realtime: [{ at: timelineAt - 3, serviceName: 'issues' }],
       connection: [],
+      traces: [],
     },
     writes: [],
   }

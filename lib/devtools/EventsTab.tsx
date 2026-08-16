@@ -272,7 +272,7 @@ function EventDetails({
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const queryId = group?.queryId ?? eventQueryId(item.event)
-  const payload = item.payloadState === 'evicted' ? undefined : eventPayload(item.event)
+  const payload = item.payload?.state === 'evicted' ? undefined : eventPayload(item.event)
   return (
     <DetailsPane
       title={group?.kind ?? item.event.kind}
@@ -335,7 +335,7 @@ function EventDetails({
           value={payload}
           label={eventPayloadLabel(item.event)}
           emptyLabel={
-            item.payloadState === 'evicted'
+            item.payload?.state === 'evicted'
               ? 'Payload vacuumed to keep the recording bounded'
               : 'No payload'
           }

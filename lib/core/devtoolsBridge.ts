@@ -1,7 +1,7 @@
 import type { FigbirdEvent, FigbirdEvents } from './events.js'
 import type { InspectedCacheService, InspectedQuery } from './figbird.js'
 import type { InspectedRelationalQuery } from './relationalQuery.js'
-import type { InFlightMutation, MutationActivity } from './mutationTracker.js'
+import type { InFlightMutation } from './mutationTracker.js'
 import { CappedBuffer } from './cappedBuffer.js'
 import { errorDetails } from './errors.js'
 
@@ -15,11 +15,12 @@ const PAYLOAD_MAX_ARRAY_ITEMS = 200
 const PAYLOAD_MAX_OBJECT_PROPERTIES = 100
 const PAYLOAD_MAX_NODES = 2_000
 const PAYLOAD_MAX_STRING_CHARACTERS = 100_000
+const FRAME_MAX_NODES = 50_000
+const FRAME_MAX_STRING_CHARACTERS = 2_000_000
 let cachedStartupCaptureUntil = 0
 
 interface DevtoolsSource {
   events: FigbirdEvents
-  mutating: MutationActivity
   inspect(): InspectedQuery[]
   inspectCache(): InspectedCacheService[]
   inspectRelational(): InspectedRelationalQuery[]
@@ -76,7 +77,6 @@ interface DevtoolsBridgeSession {
   cacheDirty: boolean
   events: CappedBuffer<FigbirdEvent>
   expires: ReturnType<typeof setTimeout> | null
-  mutationsDirty: boolean
   queriesDirty: boolean
   relationalDirty: boolean
   source: DevtoolsSource
@@ -205,7 +205,6 @@ function createPageBridge(): DevtoolsPageBridge {
         cacheDirty: true,
         events: new CappedBuffer(EVENT_LIMIT),
         expires: null,
-        mutationsDirty: true,
         queriesDirty: true,
         relationalDirty: true,
         source,
@@ -216,10 +215,6 @@ function createPageBridge(): DevtoolsPageBridge {
         source.events.subscribe(event => {
           session.events.push(event)
           if (event.kind === 'cache:updated') session.cacheDirty = true
-          session.version++
-        }),
-        source.mutating.subscribe(() => {
-          session.mutationsDirty = true
           session.version++
         }),
         source.subscribeToStateChanges(() => {
@@ -286,22 +281,28 @@ function createPageBridge(): DevtoolsPageBridge {
         return `{"protocol":2,"version":${session.version},"read":null}`
       }
       const pendingEvents = session.events.toArray()
+      const frameBudget: PayloadBudget = {
+        nodes: FRAME_MAX_NODES,
+        stringCharacters: FRAME_MAX_STRING_CHARACTERS,
+      }
       const serialized = serializeWireEnvelope({
         protocol: 3,
         version: session.version,
         read: {
-          ...(session.cacheDirty ? { cache: session.source.inspectCache() } : {}),
-          events: pendingEvents.map(toWireEvent),
-          ...(session.mutationsDirty
-            ? { inFlightMutations: session.source.mutating.getSnapshot() }
+          events: pendingEvents.map(event => toWireEvent(event, frameBudget)),
+          ...(session.cacheDirty
+            ? { cache: sanitizeCache(session.source.inspectCache(), frameBudget) }
             : {}),
-          ...(session.queriesDirty ? { queries: session.source.inspect() } : {}),
-          ...(session.relationalDirty ? { relational: session.source.inspectRelational() } : {}),
+          ...(session.queriesDirty
+            ? { queries: sanitizeQueries(session.source.inspect(), frameBudget) }
+            : {}),
+          ...(session.relationalDirty
+            ? { relational: sanitizeRelational(session.source.inspectRelational(), frameBudget) }
+            : {}),
         },
       })
       session.events.clear()
       session.cacheDirty = false
-      session.mutationsDirty = false
       session.queriesDirty = false
       session.relationalDirty = false
       return serialized
@@ -370,27 +371,31 @@ function clearStartupCaptureMarker(): void {
   }
 }
 
-function toWireEvent(event: FigbirdEvent): DevtoolsWireEvent {
+function toWireEvent(event: FigbirdEvent, frameBudget?: PayloadBudget): DevtoolsWireEvent {
   switch (event.kind) {
     case 'fetch:start':
       return event.params === undefined
         ? event
-        : { ...event, params: sanitizeDevtoolsPayload(event.params) }
+        : { ...event, params: sanitizeDevtoolsPayload(event.params, frameBudget) }
     case 'realtime':
       return event.item === undefined
         ? event
-        : { ...event, item: sanitizeDevtoolsPayload(event.item) }
+        : { ...event, item: sanitizeDevtoolsPayload(event.item, frameBudget) }
     case 'cache:updated':
       return {
         ...event,
-        item: sanitizeDevtoolsPayload(event.item),
+        item: sanitizeDevtoolsPayload(event.item, frameBudget),
         previousItem:
-          event.previousItem === null ? null : sanitizeDevtoolsPayload(event.previousItem),
+          event.previousItem === null
+            ? null
+            : sanitizeDevtoolsPayload(event.previousItem, frameBudget),
       }
     case 'mutate:start':
     case 'mutate:update':
     case 'action:start':
-      return event.args === undefined ? event : { ...event, args: sanitizeDevtoolsArgs(event.args) }
+      return event.args === undefined
+        ? event
+        : { ...event, args: sanitizeDevtoolsArgs(event.args, frameBudget) }
     case 'fetch:error':
     case 'mutate:error':
     case 'action:error':
@@ -400,7 +405,7 @@ function toWireEvent(event: FigbirdEvent): DevtoolsWireEvent {
         error: {
           message: event.error.message,
           name: event.error.name,
-          details: sanitizeDevtoolsPayload(errorDetails(event.error)),
+          details: sanitizeDevtoolsPayload(errorDetails(event.error), frameBudget),
         },
       }
     case 'connection:reconnect-failed':
@@ -410,7 +415,7 @@ function toWireEvent(event: FigbirdEvent): DevtoolsWireEvent {
             error: {
               message: event.error.message,
               name: event.error.name,
-              details: sanitizeDevtoolsPayload(errorDetails(event.error)),
+              details: sanitizeDevtoolsPayload(errorDetails(event.error), frameBudget),
             },
           }
         : event
@@ -419,21 +424,82 @@ function toWireEvent(event: FigbirdEvent): DevtoolsWireEvent {
   }
 }
 
+function sanitizeQueries(
+  queries: readonly InspectedQuery[],
+  frameBudget: PayloadBudget,
+): DevtoolsWireQuery[] {
+  return queries.map(query => ({
+    ...query,
+    query: sanitizeRecord(query.query ?? {}, frameBudget),
+    ...(query.data === undefined ? {} : { data: sanitizeDevtoolsPayload(query.data, frameBudget) }),
+  }))
+}
+
+function sanitizeCache(
+  cache: readonly InspectedCacheService[],
+  frameBudget: PayloadBudget,
+): InspectedCacheService[] {
+  return cache.map(service => ({
+    ...service,
+    entities: service.entities.map(entity => ({
+      ...entity,
+      value: sanitizeDevtoolsPayload(entity.value, frameBudget),
+    })),
+  }))
+}
+
+function sanitizeRelational(
+  relational: readonly InspectedRelationalQuery[],
+  frameBudget: PayloadBudget,
+): InspectedRelationalQuery[] {
+  return relational.map(query => ({
+    ...query,
+    ...(query.data === undefined ? {} : { data: sanitizeDevtoolsPayload(query.data, frameBudget) }),
+  }))
+}
+
+function sanitizeRecord(
+  value: Record<string, unknown>,
+  frameBudget: PayloadBudget,
+): Record<string, unknown> {
+  const sanitized = sanitizeDevtoolsPayload(value, frameBudget)
+  return typeof sanitized === 'object' && sanitized !== null && !Array.isArray(sanitized)
+    ? (sanitized as Record<string, unknown>)
+    : {}
+}
+
 interface PayloadBudget {
   nodes: number
   stringCharacters: number
 }
 
-function sanitizeDevtoolsArgs(args: readonly unknown[]): readonly unknown[] {
-  const sanitized = sanitizeDevtoolsPayload(args)
+function sanitizeDevtoolsArgs(
+  args: readonly unknown[],
+  frameBudget?: PayloadBudget,
+): readonly unknown[] {
+  const sanitized = sanitizeDevtoolsPayload(args, frameBudget)
   return Array.isArray(sanitized) ? sanitized : ['[Payload truncated]']
 }
 
-function sanitizeDevtoolsPayload(value: unknown): unknown {
-  return sanitizePayloadValue(value, 0, new Set<object>(), {
-    nodes: PAYLOAD_MAX_NODES,
-    stringCharacters: PAYLOAD_MAX_STRING_CHARACTERS,
-  })
+function sanitizeDevtoolsPayload(value: unknown, frameBudget?: PayloadBudget): unknown {
+  const budget = {
+    nodes: Math.min(PAYLOAD_MAX_NODES, frameBudget?.nodes ?? PAYLOAD_MAX_NODES),
+    stringCharacters: Math.min(
+      PAYLOAD_MAX_STRING_CHARACTERS,
+      frameBudget?.stringCharacters ?? PAYLOAD_MAX_STRING_CHARACTERS,
+    ),
+  }
+  const initialNodes = budget.nodes
+  const initialStringCharacters = budget.stringCharacters
+  const sanitized = sanitizePayloadValue(value, 0, new Set<object>(), budget)
+  if (frameBudget) {
+    frameBudget.nodes = Math.max(0, frameBudget.nodes - (initialNodes - budget.nodes))
+    frameBudget.stringCharacters = Math.max(
+      0,
+      frameBudget.stringCharacters - (initialStringCharacters - budget.stringCharacters),
+    )
+  }
+  return sanitized
 }
 
 function sanitizePayloadValue(

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { FigbirdDevtoolsPanel } from '../../lib/devtools/Devtools.js'
-import { createCollector } from '../../lib/devtools/collector.js'
+import { createRemoteCollector } from '../../lib/devtools/collector.js'
 import { PANEL_VISIBILITY_CALLBACK, type DevtoolsPanelWindow } from './panelVisibility.js'
 import { ExtensionSession } from './remote.js'
 
@@ -14,10 +14,7 @@ declare const chrome: { devtools: { network: { onNavigated: DevtoolsNavigationEv
 
 function Panel() {
   const session = useMemo(() => new ExtensionSession(), [])
-  const collector = useMemo(
-    () => createCollector(session.figbird, { heartbeatMs: 0, snapshotValues: false }),
-    [session],
-  )
+  const collector = useMemo(() => createRemoteCollector(), [])
   const cacheEditor = useMemo(() => ({ update: session.editCacheEntity }), [session])
   const status = useSyncExternalStore(session.subscribeStatus, session.getStatus, session.getStatus)
 
@@ -34,7 +31,6 @@ function Panel() {
         session.start()
       } else {
         session.stop()
-        session.figbird.reset()
       }
     }
     const updateFromDocument = () => {
@@ -51,7 +47,6 @@ function Panel() {
       document.removeEventListener('visibilitychange', updateFromDocument)
       delete panelWindow[PANEL_VISIBILITY_CALLBACK]
       session.stop()
-      session.figbird.reset()
       collector.reset()
     }
   }, [collector, session])
@@ -63,6 +58,7 @@ function Panel() {
   }, [session])
 
   useEffect(() => session.subscribeReset(() => collector.reset()), [collector, session])
+  useEffect(() => session.subscribeRead(frame => collector.ingest(frame)), [collector, session])
 
   return (
     <FigbirdDevtoolsPanel

@@ -215,13 +215,13 @@ export function QueryDetails({
               <div style={{ marginBottom: 10 }}>
                 <JsonViewer
                   value={
-                    activeQuery.lastError.detailsState === 'evicted'
+                    activeQuery.lastError.details?.state === 'evicted'
                       ? undefined
-                      : activeQuery.lastError.details
+                      : activeQuery.lastError.details?.value
                   }
                   label='Error details'
                   emptyLabel={
-                    activeQuery.lastError.detailsState === 'evicted'
+                    activeQuery.lastError.details?.state === 'evicted'
                       ? 'Original error details vacuumed to keep memory bounded'
                       : 'No structured error details captured'
                   }

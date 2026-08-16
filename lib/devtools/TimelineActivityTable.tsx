@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { formatClock, formatMs } from './format.js'
 import { JsonViewer } from './JsonViewer.js'
+import { historicalValue } from './historicalValue.js'
 import type { TimelineRange } from './TimelineOverview.js'
 import { TimelineOverview } from './TimelineOverview.js'
 import {
@@ -641,10 +642,10 @@ function ActivityDetails({
       {activity.error ? (
         <DetailBlock>
           <JsonViewer
-            value={activity.errorDetailsState === 'evicted' ? undefined : activity.errorDetails}
+            value={historicalValue(activity.errorDetails)}
             label='Error details'
             emptyLabel={
-              activity.errorDetailsState === 'evicted'
+              activity.errorDetails?.state === 'evicted'
                 ? 'Original error details vacuumed to keep the recording bounded'
                 : 'No structured error details captured'
             }
@@ -664,10 +665,10 @@ function ActivityDetails({
         <>
           <DetailBlock>
             <JsonViewer
-              value={activity.write.argsState === 'evicted' ? undefined : activity.write.payload}
+              value={historicalValue(activity.write.payload)}
               label='Payload'
               emptyLabel={
-                activity.write.argsState === 'evicted'
+                activity.write.payload?.state === 'evicted'
                   ? 'Original payload vacuumed to keep the recording bounded'
                   : 'No payload'
               }
@@ -675,16 +676,16 @@ function ActivityDetails({
           </DetailBlock>
           <DetailBlock>
             <JsonViewer
-              value={activity.write.argsState === 'evicted' ? undefined : activity.write.args}
+              value={historicalValue(activity.write.args)}
               label='Arguments'
               emptyLabel={
-                activity.write.argsState === 'evicted'
+                activity.write.args?.state === 'evicted'
                   ? 'Original arguments vacuumed to keep the recording bounded'
                   : 'No arguments'
               }
             />
           </DetailBlock>
-          {activity.write.argsState === 'evicted' && activity.livePayload !== undefined ? (
+          {activity.write.args?.state === 'evicted' && activity.livePayload !== undefined ? (
             <DetailBlock>
               <JsonViewer
                 value={activity.livePayload}
@@ -695,16 +696,16 @@ function ActivityDetails({
         </>
       ) : activity.kind === 'fetch' ? (
         <>
-          {activity.payload !== undefined || activity.payloadState === 'evicted' ? (
+          {activity.payload !== undefined ? (
             <DetailBlock>
               <JsonViewer
-                value={activity.payload}
+                value={historicalValue(activity.payload)}
                 label='Parameters at fetch time'
                 emptyLabel='Original parameters vacuumed to keep the recording bounded'
               />
             </DetailBlock>
           ) : null}
-          {activity.payloadState === 'evicted' && activity.livePayload !== undefined ? (
+          {activity.payload?.state === 'evicted' && activity.livePayload !== undefined ? (
             <DetailBlock>
               <JsonViewer value={activity.livePayload} label='Current query parameters' />
             </DetailBlock>
@@ -712,26 +713,26 @@ function ActivityDetails({
           <DetailBlock>
             <JsonViewer
               value={
-                activity.dataState === undefined
+                activity.data === undefined
                   ? activity.liveData
-                  : activity.dataState === 'evicted'
+                  : activity.data.state === 'evicted'
                     ? undefined
-                    : activity.data
+                    : activity.data.value
               }
-              label={activity.dataState ? 'Response data at fetch time' : 'Current query data'}
+              label={activity.data ? 'Response data at fetch time' : 'Current query data'}
               emptyLabel={
-                activity.dataState === 'evicted'
+                activity.data?.state === 'evicted'
                   ? 'Original response vacuumed to keep the recording bounded'
                   : 'No query data available'
               }
             />
           </DetailBlock>
-          {activity.dataState === 'evicted' && activity.liveData !== undefined ? (
+          {activity.data?.state === 'evicted' && activity.liveData !== undefined ? (
             <DetailBlock>
               <JsonViewer
                 value={activity.liveData}
                 label={
-                  activity.dataState === 'evicted'
+                  activity.data?.state === 'evicted'
                     ? 'Current query data — original response vacuumed'
                     : 'Current query data'
                 }
@@ -743,16 +744,16 @@ function ActivityDetails({
         <>
           <DetailBlock>
             <JsonViewer
-              value={activity.payloadState === 'evicted' ? undefined : activity.payload}
+              value={historicalValue(activity.payload)}
               label='Realtime payload'
               emptyLabel={
-                activity.payloadState === 'evicted'
+                activity.payload?.state === 'evicted'
                   ? 'Original payload vacuumed to keep the recording bounded'
                   : 'No realtime payload captured'
               }
             />
           </DetailBlock>
-          {activity.payloadState === 'evicted' && activity.livePayload !== undefined ? (
+          {activity.payload?.state === 'evicted' && activity.livePayload !== undefined ? (
             <DetailBlock>
               <JsonViewer
                 value={activity.livePayload}
@@ -764,7 +765,7 @@ function ActivityDetails({
       ) : activity.kind === 'connection' ? (
         <DetailBlock>
           <JsonViewer
-            value={activity.payload}
+            value={historicalValue(activity.payload)}
             label='Connection event'
             emptyLabel='No connection event captured'
           />
