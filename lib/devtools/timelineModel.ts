@@ -27,6 +27,7 @@ export interface TimelineActivity {
   traceId?: number
   durationMs?: number
   payload?: unknown
+  data?: unknown
   write?: {
     id: string
     type: WriteRecord['type']
@@ -186,6 +187,7 @@ function buildFetchActivities(
         ...(traceId === undefined ? {} : { traceId }),
         durationMs,
         ...(payload === undefined ? {} : { payload }),
+        ...(query.data === undefined ? {} : { data: query.data }),
         error: failed,
       })
     }),

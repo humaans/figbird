@@ -577,9 +577,24 @@ function ActivityDetails({
             <JsonViewer value={activity.write.args} />
           </DetailSection>
         </>
-      ) : activity.payload !== undefined ? (
-        <DetailSection label={activity.kind === 'realtime' ? 'Event payload' : 'Parameters'}>
-          <JsonViewer value={activity.payload} />
+      ) : activity.kind === 'fetch' ? (
+        <>
+          {activity.payload !== undefined ? (
+            <DetailSection label='Parameters'>
+              <JsonViewer value={activity.payload} />
+            </DetailSection>
+          ) : null}
+          <DetailSection label='Current query data'>
+            <JsonViewer value={activity.data} emptyLabel='No query data captured' />
+          </DetailSection>
+        </>
+      ) : activity.kind === 'realtime' ? (
+        <DetailSection label='Event payload'>
+          <JsonViewer value={activity.payload} emptyLabel='No event payload captured' />
+        </DetailSection>
+      ) : activity.kind === 'connection' ? (
+        <DetailSection label='Connection event'>
+          <JsonViewer value={activity.payload} emptyLabel='No connection event captured' />
         </DetailSection>
       ) : null}
       {activity.traceId !== undefined && onTraceSelect ? (
