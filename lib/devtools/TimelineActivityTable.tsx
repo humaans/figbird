@@ -30,16 +30,16 @@ const FOLLOW_THRESHOLD = 24
 export type TimelineVisibility = 'all' | 'fetch' | 'realtime' | 'write' | 'connection' | 'errors'
 
 const COLUMNS = [
-  { label: 'Time', width: 96, minWidth: 78 },
-  { label: 'Activity', width: 145, minWidth: 100 },
-  { label: 'Operation', width: 85, minWidth: 70 },
-  { label: 'Context', width: 120, minWidth: 80 },
-  { label: 'Status', width: 84, minWidth: 70 },
-  { label: 'Trigger', width: 100, minWidth: 75 },
-  { label: 'Cache effect', width: 125, minWidth: 90 },
-  { label: 'Result', width: 115, minWidth: 80 },
-  { label: 'Duration', width: 74, minWidth: 60 },
-  { label: 'Waterfall', width: 200, minWidth: 130 },
+  { label: 'time', width: 96, minWidth: 78 },
+  { label: 'activity', width: 145, minWidth: 100 },
+  { label: 'operation', width: 85, minWidth: 70 },
+  { label: 'context', width: 120, minWidth: 80 },
+  { label: 'status', width: 84, minWidth: 70 },
+  { label: 'trigger', width: 100, minWidth: 75 },
+  { label: 'cacheEffect', width: 125, minWidth: 90 },
+  { label: 'result', width: 115, minWidth: 80 },
+  { label: 'duration', width: 74, minWidth: 60 },
+  { label: 'waterfall', width: 200, minWidth: 130 },
 ] as const
 
 export function TimelineActivityTable({
@@ -205,7 +205,7 @@ export function TimelineActivityTable({
                 {COLUMNS.map((column, index) => (
                   <th key={column.label} style={{ ...styles.th, position: 'sticky' }}>
                     {column.label}
-                    {column.label === 'Waterfall' && displayExtent ? (
+                    {column.label === 'waterfall' && displayExtent ? (
                       <span style={{ color: colors.faint, marginLeft: 7, fontWeight: 400 }}>
                         {formatOffset(displayExtent.end - displayExtent.start)}
                       </span>
