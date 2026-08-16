@@ -68,6 +68,7 @@ export function TimelineActivityTable({
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollPausedFollowRef = useRef(false)
   const [visibility, setVisibility] = useState<TimelineVisibility>('all')
   const [filter, setFilter] = useState('')
   const [range, setRange] = useState<TimelineRange | null>(null)
@@ -96,6 +97,7 @@ export function TimelineActivityTable({
     activity =>
       activity.kind === 'write' && activity.status === 'in-flight' && activity.write?.optimistic,
   ).length
+  const latestVisibleActivityId = rows.at(-1)?.id
   const waterfallIndex = COLUMNS.length - 1
   const fixedColumnsWidth = columnWidths
     .slice(0, waterfallIndex)
@@ -120,8 +122,9 @@ export function TimelineActivityTable({
   useLayoutEffect(() => {
     const scroll = scrollRef.current
     if (!scroll || !follow) return
+    scrollPausedFollowRef.current = false
     scroll.scrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
-  }, [activities.length, follow])
+  }, [follow, latestVisibleActivityId])
 
   useLayoutEffect(() => {
     const scroll = scrollRef.current
@@ -165,7 +168,10 @@ export function TimelineActivityTable({
         onRangeChange={next => {
           setRange(next)
           setSelectedId(null)
-          if (next) onFollowChange(false)
+          if (next) {
+            scrollPausedFollowRef.current = false
+            onFollowChange(false)
+          }
         }}
       />
       <div
@@ -251,10 +257,19 @@ export function TimelineActivityTable({
           aria-label='Timeline activity'
           style={{ ...styles.scroll, flex: 1, minWidth: 0 }}
           onScroll={event => {
-            if (!follow) return
             const scroll = event.currentTarget
             const distance = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop
-            if (distance > FOLLOW_THRESHOLD) onFollowChange(false)
+            if (distance > FOLLOW_THRESHOLD) {
+              if (follow) {
+                scrollPausedFollowRef.current = true
+                onFollowChange(false)
+              }
+              return
+            }
+            if (!follow && scrollPausedFollowRef.current) {
+              scrollPausedFollowRef.current = false
+              onFollowChange(true)
+            }
           }}
         >
           <table style={{ ...styles.table, minWidth: totalWidth, width: totalWidth }}>
