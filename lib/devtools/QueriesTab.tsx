@@ -89,7 +89,7 @@ export function QueriesTab({
   const { colors, styles } = useDevtoolsTheme()
   const [selectedOperationKey, setSelectedOperationKey] = useState<string | null>(null)
   const [columnWidths, onColumnResizeStart] = useResizableColumns(QUERY_COLUMNS)
-  const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
+  const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth({ defaultWidth: 680 })
   const rows: QueryRow[] = model.operations
     .flatMap(operation => {
       const query = operation.summary

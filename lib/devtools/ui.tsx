@@ -329,6 +329,7 @@ export function DetailsPane({
   width,
   onResizeStart,
   onClose,
+  contentStyle,
   children,
 }: {
   title: ReactNode
@@ -336,6 +337,7 @@ export function DetailsPane({
   width: number
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
+  contentStyle?: CSSProperties
   children: ReactNode
 }) {
   const { colors, styles } = useDevtoolsTheme()
@@ -407,7 +409,7 @@ export function DetailsPane({
           ×
         </button>
       </div>
-      <div style={styles.details}>{children}</div>
+      <div style={{ ...styles.details, ...contentStyle }}>{children}</div>
     </aside>
   )
 }
@@ -513,18 +515,30 @@ export function resizableGridTemplate(widths: readonly number[], flexibleIndex: 
     .join(' ')
 }
 
-export function useDetailsPaneWidth(): [number, (event: ReactMouseEvent<HTMLDivElement>) => void] {
-  const [width, setWidth] = useState(DEFAULT_DETAILS_WIDTH)
+export function useDetailsPaneWidth({
+  defaultWidth = DEFAULT_DETAILS_WIDTH,
+  maxWidth = MAX_DETAILS_WIDTH,
+}: {
+  defaultWidth?: number
+  maxWidth?: number
+} = {}): [number, (event: ReactMouseEvent<HTMLDivElement>) => void] {
+  const [width, setWidth] = useState(() => {
+    if (typeof window === 'undefined') return defaultWidth
+    return Math.max(MIN_DETAILS_WIDTH, Math.min(defaultWidth, maxWidth, window.innerWidth * 0.65))
+  })
   const onResizeStart = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       event.preventDefault()
       const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
       const startX = event.clientX
       const startWidth = width
-      const maxWidth = Math.min(MAX_DETAILS_WIDTH, ownerWindow.innerWidth * 0.65)
+      const availableMaxWidth = Math.min(maxWidth, ownerWindow.innerWidth * 0.65)
       const onMove = (move: MouseEvent) => {
         setWidth(
-          Math.max(MIN_DETAILS_WIDTH, Math.min(maxWidth, startWidth + startX - move.clientX)),
+          Math.max(
+            MIN_DETAILS_WIDTH,
+            Math.min(availableMaxWidth, startWidth + startX - move.clientX),
+          ),
         )
       }
       const onUp = () => {
@@ -534,7 +548,7 @@ export function useDetailsPaneWidth(): [number, (event: ReactMouseEvent<HTMLDivE
       ownerWindow.addEventListener('mousemove', onMove)
       ownerWindow.addEventListener('mouseup', onUp)
     },
-    [width],
+    [maxWidth, width],
   )
   return [width, onResizeStart]
 }

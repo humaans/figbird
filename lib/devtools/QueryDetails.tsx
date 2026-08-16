@@ -18,6 +18,8 @@ import type {
 import { ClassBadge, plural, queryStatus, QueryStatusDot } from './QueryPresentation.js'
 import { Badge, DetailsPane, useDevtoolsTheme, type DevtoolsColors } from './ui.js'
 
+const SPLIT_DETAILS_WIDTH = 600
+
 export function QueryDetails({
   operation,
   width,
@@ -44,6 +46,7 @@ export function QueryDetails({
   const rootTitle = `${summary.serviceName}.${summary.method}`
   const rootOperation = composition?.operation ?? rootTitle
   const activeOperation = `${activeQuery.serviceName}.${activeQuery.method}`
+  const splitDetails = width >= SPLIT_DETAILS_WIDTH
   const rootQueryIdentity =
     rootFetches.length === 1 ? rootFetches[0]!.queryId : `${rootFetches.length} root query IDs`
   const directChildren =
@@ -117,164 +120,203 @@ export function QueryDetails({
       width={width}
       onResizeStart={onResizeStart}
       onClose={onClose}
+      contentStyle={{ padding: 0, overflow: 'hidden' }}
     >
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 7,
-          minHeight: 24,
-          marginBottom: 10,
+          display: splitDetails ? 'grid' : 'block',
+          gridTemplateColumns: splitDetails
+            ? 'minmax(280px, 0.9fr) minmax(300px, 1.1fr)'
+            : undefined,
+          height: '100%',
+          minHeight: 0,
+          overflow: splitDetails ? 'hidden' : 'auto',
         }}
       >
-        <QueryStatusDot query={activeQuery} />
-        <span style={{ color: colors.text, fontWeight: 600 }}>{status.kind}</span>
-        <ClassBadge value={activeQuery.classification} />
-        <span style={styles.spacer} />
-        <span style={{ color: colors.muted, whiteSpace: 'nowrap' }}>
-          {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
-        </span>
-      </div>
-      <QueryDetailSection label='Realtime handling'>
-        <div
-          style={{
-            padding: '8px 10px',
-            background: colors.panel2,
-            borderLeft: `3px solid ${
-              activeQuery.realtimeStrategy === 'merge'
-                ? colors.green
-                : activeQuery.realtimeStrategy === 'manual'
-                  ? colors.faint
-                  : colors.amber
-            }`,
-          }}
-        >
-          <strong style={{ fontWeight: 650 }}>
-            {activeQuery.realtimeStrategy === 'merge'
-              ? 'Merges events locally'
-              : activeQuery.realtimeStrategy === 'manual'
-                ? 'Manual realtime'
-                : 'Reconciles uncertain events'}
-          </strong>
-          <div style={{ color: colors.muted, marginTop: 3 }}>
-            {activeQuery.classificationReasons?.length
-              ? activeQuery.classificationReasons.map(classificationReasonLabel).join(' · ')
-              : activeQuery.classification === 'get'
-                ? 'Direct entity lookup'
-                : 'Membership and ordering are locally provable'}
+        <div style={{ minWidth: 0, minHeight: 0, overflow: 'auto', padding: 12 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+              minHeight: 24,
+              marginBottom: 10,
+            }}
+          >
+            <QueryStatusDot query={activeQuery} />
+            <span style={{ color: colors.text, fontWeight: 600 }}>{status.kind}</span>
+            <ClassBadge value={activeQuery.classification} />
+            <span style={styles.spacer} />
+            <span style={{ color: colors.muted, whiteSpace: 'nowrap' }}>
+              {plural(activeQuery.subscriberCount, 'subscriber', 'subscribers')}
+            </span>
           </div>
-        </div>
-      </QueryDetailSection>
-      {activeQuery.lastError ? (
-        <div
-          title={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
-          style={{
-            color: colors.red,
-            background: colors.panel2,
-            borderLeft: `3px solid ${colors.red}`,
-            padding: '7px 9px',
-            marginBottom: 10,
-          }}
-        >
-          <div style={{ fontWeight: 650, marginBottom: 2 }}>Last fetch error</div>
-          {activeQuery.lastError.message}
-        </div>
-      ) : null}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          borderTop: `1px solid ${colors.rowBorder}`,
-          borderBottom: `1px solid ${colors.rowBorder}`,
-          marginBottom: 14,
-        }}
-      >
-        <QueryMetric value={String(activeQuery.itemCount)} label='rows' />
-        <QueryMetric value={String(activeQuery.fetchCount)} label='fetches' borderLeft />
-        <QueryMetric
-          value={
-            activeQuery.lastDurationMs === undefined ? '-' : formatMs(activeQuery.lastDurationMs)
-          }
-          label='last fetch'
-          borderTop
-        />
-        <QueryMetric
-          value={activeQuery.fetchCount === 0 ? '-' : formatMs(average)}
-          label='average'
-          borderLeft
-          borderTop
-        />
-      </div>
-      {activeQuery.spans.length > 0 ? (
-        <QueryDetailSection
-          label='Recent fetches'
-          meta={`${formatMs(activeQuery.totalDurationMs)} total`}
-        >
-          <Sparkline spans={activeQuery.spans} />
-        </QueryDetailSection>
-      ) : null}
-      {!selectedUnderlying && operation.pagination ? (
-        <PaginationDetails pagination={operation.pagination} pages={rootFetches} />
-      ) : null}
-      {!selectedUnderlying || directChildren.length > 0 ? (
-        <QueryDetailSection
-          label={selectedUnderlying ? 'Related queries' : 'Query plan'}
-          {...(directChildren.length > 0
-            ? { meta: plural(directChildren.length, 'relation', 'relations') }
-            : {})}
-        >
-          {!selectedUnderlying ? (
-            <QueryPlanRow
-              path='root'
-              operation={rootOperation}
-              detail={
-                composition?.planDetail ??
-                (summary.method === 'get'
-                  ? `id ${summary.resourceId ?? '?'}`
-                  : compactJson(summary.query ?? {}))
-              }
-            />
-          ) : null}
-          {directChildren.length > 0 ? (
+          <QueryDetailSection label='Realtime handling'>
             <div
               style={{
-                marginLeft: selectedUnderlying ? 0 : 7,
-                paddingLeft: selectedUnderlying ? 0 : 13,
-                borderLeft: selectedUnderlying ? undefined : `1px solid ${colors.border}`,
+                padding: '8px 10px',
+                background: colors.panel2,
+                borderLeft: `3px solid ${
+                  activeQuery.realtimeStrategy === 'merge'
+                    ? colors.green
+                    : activeQuery.realtimeStrategy === 'manual'
+                      ? colors.faint
+                      : colors.amber
+                }`,
               }}
             >
-              {directChildren.map(item => (
-                <QueryPlanRow
-                  key={underlyingFetchKey(item)}
-                  path={selectedUnderlying ? (item.path.split('.').pop() ?? item.path) : item.path}
-                  operation={`${item.query.serviceName}.${item.query.method}`}
-                  {...(item.role ? { role: item.role } : {})}
-                  detail={[
-                    plural(item.query.itemCount, 'row', 'rows'),
-                    item.query.lastDurationMs === undefined
-                      ? undefined
-                      : formatMs(item.query.lastDurationMs),
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                  classification={item.query.classification}
-                  onSelect={() => setSelectedUnderlyingKey(underlyingFetchKey(item))}
-                />
-              ))}
+              <strong style={{ fontWeight: 650 }}>
+                {activeQuery.realtimeStrategy === 'merge'
+                  ? 'Merges events locally'
+                  : activeQuery.realtimeStrategy === 'manual'
+                    ? 'Manual realtime'
+                    : 'Reconciles uncertain events'}
+              </strong>
+              <div style={{ color: colors.muted, marginTop: 3 }}>
+                {activeQuery.classificationReasons?.length
+                  ? activeQuery.classificationReasons.map(classificationReasonLabel).join(' · ')
+                  : activeQuery.classification === 'get'
+                    ? 'Direct entity lookup'
+                    : 'Membership and ordering are locally provable'}
+              </div>
+            </div>
+          </QueryDetailSection>
+          {activeQuery.lastError ? (
+            <div
+              title={`Most recently observed fetch error · query generation ${activeQuery.lastError.generation}`}
+              style={{
+                color: colors.red,
+                background: colors.panel2,
+                borderLeft: `3px solid ${colors.red}`,
+                padding: '7px 9px',
+                marginBottom: 10,
+              }}
+            >
+              <div style={{ fontWeight: 650, marginBottom: 2 }}>Last fetch error</div>
+              {activeQuery.lastError.message}
             </div>
           ) : null}
-        </QueryDetailSection>
-      ) : null}
-      <QueryDetailSection
-        label='Query data'
-        meta={activeQuery.skipped ? 'skipped' : plural(activeQuery.itemCount, 'row', 'rows')}
-      >
-        <JsonViewer value={activeQuery.data} />
-      </QueryDetailSection>
-      <QueryDetailSection label='Parameters'>
-        <JsonViewer value={activeQuery.query ?? {}} />
-      </QueryDetailSection>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              borderTop: `1px solid ${colors.rowBorder}`,
+              borderBottom: `1px solid ${colors.rowBorder}`,
+              marginBottom: 14,
+            }}
+          >
+            <QueryMetric value={String(activeQuery.itemCount)} label='rows' />
+            <QueryMetric value={String(activeQuery.fetchCount)} label='fetches' borderLeft />
+            <QueryMetric
+              value={
+                activeQuery.lastDurationMs === undefined
+                  ? '-'
+                  : formatMs(activeQuery.lastDurationMs)
+              }
+              label='last fetch'
+              borderTop
+            />
+            <QueryMetric
+              value={activeQuery.fetchCount === 0 ? '-' : formatMs(average)}
+              label='average'
+              borderLeft
+              borderTop
+            />
+          </div>
+          {activeQuery.spans.length > 0 ? (
+            <QueryDetailSection
+              label='Recent fetches'
+              meta={`${formatMs(activeQuery.totalDurationMs)} total`}
+            >
+              <Sparkline spans={activeQuery.spans} />
+            </QueryDetailSection>
+          ) : null}
+          {!selectedUnderlying && operation.pagination ? (
+            <PaginationDetails pagination={operation.pagination} pages={rootFetches} />
+          ) : null}
+          {!selectedUnderlying || directChildren.length > 0 ? (
+            <QueryDetailSection
+              label={selectedUnderlying ? 'Related queries' : 'Query plan'}
+              {...(directChildren.length > 0
+                ? { meta: plural(directChildren.length, 'relation', 'relations') }
+                : {})}
+            >
+              {!selectedUnderlying ? (
+                <QueryPlanRow
+                  path='root'
+                  operation={rootOperation}
+                  detail={
+                    composition?.planDetail ??
+                    (summary.method === 'get'
+                      ? `id ${summary.resourceId ?? '?'}`
+                      : compactJson(summary.query ?? {}))
+                  }
+                />
+              ) : null}
+              {directChildren.length > 0 ? (
+                <div
+                  style={{
+                    marginLeft: selectedUnderlying ? 0 : 7,
+                    paddingLeft: selectedUnderlying ? 0 : 13,
+                    borderLeft: selectedUnderlying ? undefined : `1px solid ${colors.border}`,
+                  }}
+                >
+                  {directChildren.map(item => (
+                    <QueryPlanRow
+                      key={underlyingFetchKey(item)}
+                      path={
+                        selectedUnderlying ? (item.path.split('.').pop() ?? item.path) : item.path
+                      }
+                      operation={`${item.query.serviceName}.${item.query.method}`}
+                      {...(item.role ? { role: item.role } : {})}
+                      detail={[
+                        plural(item.query.itemCount, 'row', 'rows'),
+                        item.query.lastDurationMs === undefined
+                          ? undefined
+                          : formatMs(item.query.lastDurationMs),
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      classification={item.query.classification}
+                      onSelect={() => setSelectedUnderlyingKey(underlyingFetchKey(item))}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </QueryDetailSection>
+          ) : null}
+          {!splitDetails ? <QueryData query={activeQuery} /> : null}
+          <QueryDetailSection label='Parameters'>
+            <JsonViewer value={activeQuery.query ?? {}} />
+          </QueryDetailSection>
+        </div>
+        {splitDetails ? (
+          <div
+            style={{
+              minWidth: 0,
+              minHeight: 0,
+              overflow: 'auto',
+              padding: 12,
+              borderLeft: `1px solid ${colors.border}`,
+              background: colors.bg,
+            }}
+          >
+            <QueryData query={activeQuery} fill />
+          </div>
+        ) : null}
+      </div>
     </DetailsPane>
+  )
+}
+
+function QueryData({ query, fill = false }: { query: QuerySummary; fill?: boolean }) {
+  return (
+    <QueryDetailSection
+      label='Query data'
+      meta={query.skipped ? 'skipped' : plural(query.itemCount, 'row', 'rows')}
+    >
+      <JsonViewer value={query.data} maxHeight={fill ? 'none' : 360} />
+    </QueryDetailSection>
   )
 }
 

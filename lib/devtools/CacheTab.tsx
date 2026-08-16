@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { compactJson, formatAge, formatClock, prettyJson } from './format.js'
+import {
+  compactJson,
+  estimateSerializedBytes,
+  formatAge,
+  formatBytes,
+  formatClock,
+  prettyJson,
+} from './format.js'
 import type { DevtoolsCacheEntity, DevtoolsCacheService } from './collector.js'
 import { JsonViewer } from './JsonViewer.js'
 import type { DevtoolsModel } from './model.js'
@@ -16,10 +23,14 @@ import {
 
 const CACHE_COLUMNS = [
   { label: 'entity', width: 150, minWidth: 90 },
+  { label: 'est. size', width: 90, minWidth: 72 },
   { label: 'value', width: 310, minWidth: 160 },
   { label: 'queries', width: 110, minWidth: 76 },
   { label: 'provenance', width: 150, minWidth: 110 },
 ] as const
+
+const CACHE_SIZE_DESCRIPTION =
+  'Estimated UTF-8 size of the JSON-serialized cache value. This is not JavaScript heap usage.'
 
 export interface DevtoolsCacheEditor {
   update(
@@ -52,6 +63,20 @@ export function CacheTab({
   const [columnWidths, onColumnResizeStart] = useResizableColumns(CACHE_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth()
   const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0)
+  const serviceSizes = useMemo(
+    () =>
+      new Map(
+        orderedServices.map(item => [
+          item.serviceName,
+          item.entities.reduce(
+            (total, entity) => total + (estimateSerializedBytes(entity.value) ?? 0),
+            0,
+          ),
+        ]),
+      ),
+    [orderedServices],
+  )
+  const totalSize = [...serviceSizes.values()].reduce((total, size) => total + size, 0)
 
   useEffect(() => {
     if (serviceName && orderedServices.some(service => service.serviceName === serviceName)) return
@@ -82,14 +107,21 @@ export function CacheTab({
         }}
       >
         <div
+          title={CACHE_SIZE_DESCRIPTION}
           style={{
             padding: '8px 10px',
             color: colors.muted,
             fontWeight: 650,
             borderBottom: `1px solid ${colors.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
           }}
         >
-          Normalized cache
+          <span>Normalized cache</span>
+          <code style={{ ...styles.code, color: colors.faint, marginLeft: 'auto' }}>
+            ≈ {formatBytes(totalSize)}
+          </code>
         </div>
         {orderedServices.map(item => {
           const selectedService = item.serviceName === serviceName
@@ -135,6 +167,10 @@ export function CacheTab({
                   }}
                 >
                   {item.entities.length}
+                  <span aria-hidden='true'>·</span>
+                  <span title={CACHE_SIZE_DESCRIPTION}>
+                    ≈ {formatBytes(serviceSizes.get(item.serviceName) ?? 0)}
+                  </span>
                   {item.materialized ? (
                     <svg
                       aria-label='Complete cached set'
@@ -174,7 +210,11 @@ export function CacheTab({
             <thead>
               <tr>
                 {CACHE_COLUMNS.map((column, index) => (
-                  <th key={column.label} style={{ ...styles.th, position: 'sticky' }}>
+                  <th
+                    key={column.label}
+                    style={{ ...styles.th, position: 'sticky' }}
+                    {...(column.label === 'est. size' ? { title: CACHE_SIZE_DESCRIPTION } : {})}
+                  >
                     {column.label}
                     <ColumnResizeHandle
                       label={column.label}
@@ -187,13 +227,14 @@ export function CacheTab({
             <tbody>
               {entities.length === 0 ? (
                 <tr>
-                  <td colSpan={4} style={{ ...styles.td, color: colors.muted }}>
+                  <td colSpan={CACHE_COLUMNS.length} style={{ ...styles.td, color: colors.muted }}>
                     No matching cached entities.
                   </td>
                 </tr>
               ) : null}
               {entities.map(entity => {
                 const isSelected = entity.id === selectedId
+                const estimatedSize = estimateSerializedBytes(entity.value)
                 return (
                   <tr
                     key={entity.id}
@@ -215,6 +256,18 @@ export function CacheTab({
                   >
                     <td style={styles.td}>
                       <code style={{ ...styles.code, fontWeight: 650 }}>#{entity.id}</code>
+                    </td>
+                    <td style={styles.td}>
+                      <code
+                        title={
+                          estimatedSize === null
+                            ? 'This value could not be JSON-serialized.'
+                            : `${estimatedSize.toLocaleString()} estimated UTF-8 JSON bytes`
+                        }
+                        style={{ ...styles.code, color: colors.muted, whiteSpace: 'nowrap' }}
+                      >
+                        {estimatedSize === null ? '—' : `≈ ${formatBytes(estimatedSize)}`}
+                      </code>
                     </td>
                     <td style={styles.td}>
                       <code
@@ -346,6 +399,9 @@ function CacheEntityDetails({
           {entity.queryIds.length} query{' '}
           {entity.queryIds.length === 1 ? 'membership' : 'memberships'}
         </span>
+        <code title={CACHE_SIZE_DESCRIPTION} style={{ ...styles.code, color: colors.muted }}>
+          {formatEstimatedSize(entity.value)}
+        </code>
         <span style={styles.spacer} />
         {editor && !editing ? (
           <button
@@ -502,4 +558,9 @@ function queryLabel(model: DevtoolsModel, queryId: string): string {
       return `${operation.summary.serviceName}.${operation.summary.method} › ${nested.path}`
   }
   return queryId
+}
+
+function formatEstimatedSize(value: unknown): string {
+  const bytes = estimateSerializedBytes(value)
+  return bytes === null ? '—' : `≈ ${formatBytes(bytes)}`
 }

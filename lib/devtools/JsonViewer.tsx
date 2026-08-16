@@ -17,7 +17,7 @@ export function JsonViewer({
 }: {
   value: unknown
   emptyLabel?: string
-  maxHeight?: number
+  maxHeight?: number | string
 }) {
   const { colors, styles } = useDevtoolsTheme()
   const [raw, setRaw] = useState(false)
