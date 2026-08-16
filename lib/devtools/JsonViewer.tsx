@@ -13,10 +13,14 @@ interface SpecialValue {
 export function JsonViewer({
   value,
   emptyLabel = 'No data available',
+  label,
+  meta,
   maxHeight = 360,
 }: {
   value: unknown
   emptyLabel?: string
+  label?: string
+  meta?: string
   maxHeight?: number | string
 }) {
   const { colors, styles } = useDevtoolsTheme()
@@ -24,7 +28,7 @@ export function JsonViewer({
   const [expandAll, setExpandAll] = useState(false)
   const normalized = useMemo(() => normalizeJson(value), [value])
 
-  if (value === undefined) {
+  if (value === undefined && !label) {
     return (
       <div
         style={{
@@ -61,7 +65,14 @@ export function JsonViewer({
           background: colors.toolbar,
         }}
       >
-        <code style={{ ...styles.code, color: colors.faint }}>{valueSummary(normalized)}</code>
+        {label ? (
+          <>
+            <strong style={{ color: colors.text, fontWeight: 650 }}>{label}</strong>
+            {meta ? <span style={{ color: colors.muted }}>{meta}</span> : null}
+          </>
+        ) : (
+          <code style={{ ...styles.code, color: colors.faint }}>{valueSummary(normalized)}</code>
+        )}
         <span style={styles.spacer} />
         {!raw && expandable ? (
           <button
@@ -72,14 +83,16 @@ export function JsonViewer({
             {expandAll ? 'Collapse nested' : 'Expand all'}
           </button>
         ) : null}
-        <button
-          type='button'
-          aria-pressed={raw}
-          style={jsonButtonStyle(colors, raw)}
-          onClick={() => setRaw(current => !current)}
-        >
-          Raw
-        </button>
+        {value !== undefined ? (
+          <button
+            type='button'
+            aria-pressed={raw}
+            style={jsonButtonStyle(colors, raw)}
+            onClick={() => setRaw(current => !current)}
+          >
+            Raw
+          </button>
+        ) : null}
       </div>
       <div
         style={{
@@ -90,7 +103,9 @@ export function JsonViewer({
           lineHeight: 1.55,
         }}
       >
-        {raw ? (
+        {value === undefined ? (
+          <span style={{ color: colors.faint }}>{emptyLabel}</span>
+        ) : raw ? (
           <pre
             style={{
               font: 'inherit',

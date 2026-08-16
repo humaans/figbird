@@ -170,9 +170,9 @@ export function QueryDetails({
           ) : null}
           <QueryPerformance query={activeQuery} average={average} />
           {!splitDetails ? <QueryData query={activeQuery} separated /> : null}
-          <QueryDetailSection label='Parameters' separated>
-            <JsonViewer value={activeQuery.query ?? {}} />
-          </QueryDetailSection>
+          <QueryDetailBlock separated>
+            <JsonViewer value={activeQuery.query ?? {}} label='Parameters' />
+          </QueryDetailBlock>
           {!selectedUnderlying && operation.pagination ? (
             <PaginationDetails pagination={operation.pagination} pages={rootFetches} />
           ) : null}
@@ -244,13 +244,14 @@ function QueryData({
   separated?: boolean
 }) {
   return (
-    <QueryDetailSection
-      label='Query data'
-      meta={query.skipped ? 'skipped' : plural(query.itemCount, 'row', 'rows')}
-      separated={separated}
-    >
-      <JsonViewer value={query.data} maxHeight={fill ? 'none' : 360} />
-    </QueryDetailSection>
+    <QueryDetailBlock separated={separated}>
+      <JsonViewer
+        value={query.data}
+        label='Query data'
+        meta={query.skipped ? 'skipped' : plural(query.itemCount, 'row', 'rows')}
+        maxHeight={fill ? 'none' : 360}
+      />
+    </QueryDetailBlock>
   )
 }
 
@@ -496,13 +497,7 @@ function QueryDetailSection({
 }) {
   const { colors } = useDevtoolsTheme()
   return (
-    <section
-      style={{
-        marginBottom: 14,
-        paddingTop: separated ? 12 : 0,
-        borderTop: separated ? `1px solid ${colors.rowBorder}` : undefined,
-      }}
-    >
+    <QueryDetailBlock separated={separated}>
       <div
         style={{
           display: 'flex',
@@ -514,6 +509,27 @@ function QueryDetailSection({
         <strong style={{ color: colors.text, fontWeight: 650 }}>{label}</strong>
         {meta ? <span style={{ color: colors.muted }}>{meta}</span> : null}
       </div>
+      {children}
+    </QueryDetailBlock>
+  )
+}
+
+function QueryDetailBlock({
+  separated = false,
+  children,
+}: {
+  separated?: boolean
+  children: ReactNode
+}) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <section
+      style={{
+        marginBottom: 14,
+        paddingTop: separated ? 12 : 0,
+        borderTop: separated ? `1px solid ${colors.rowBorder}` : undefined,
+      }}
+    >
       {children}
     </section>
   )
