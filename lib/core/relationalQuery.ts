@@ -4,6 +4,7 @@ import { cursorQueryCanKeepPrefix, cursorQueryInputsUnchanged } from './cursorMa
 import type { QueryAST } from './queryBuilder.js'
 import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
+import type { QueryLifecycleConfig } from './queryIdentity.js'
 import type {
   ProcessedProjectionEvent,
   ProcessedRealtimeEvent,
@@ -18,6 +19,7 @@ import {
   type PaginatedRootSource,
   type InspectedPagination,
   type RelationalPaginationState,
+  type RootMetadata,
   type RootSource,
 } from './queryRoots.js'
 import {
@@ -71,7 +73,10 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   }
   getState(): Map<string, ServiceState<TMeta>>
   /** Returns a QueryRef; typed loosely here and re-typed once at the engine's seam. */
-  queryDesc(desc: QueryDescriptor, config?: QueryConfig<unknown, unknown>): unknown
+  queryDesc(
+    desc: QueryDescriptor,
+    config?: QueryConfig<unknown, unknown> & QueryLifecycleConfig,
+  ): unknown
 }
 
 /**
@@ -169,6 +174,16 @@ export interface InspectedRelationalQuery {
   }>
 }
 
+/** Internal escape hatch for consumers that need a custom root query boundary. */
+export interface RelationalRootOverride {
+  descriptor: QueryDescriptor
+  config?: QueryConfig<unknown, unknown> & QueryLifecycleConfig
+}
+
+interface RelationalQueryOptions {
+  root?: RelationalRootOverride
+}
+
 /**
  * Reference to a relational query with nested relations.
  * Manages multiple sub-queries and assembles data on-the-fly from entity caches.
@@ -243,18 +258,21 @@ export class RelationalQueryRef<
 
   #onEvict: (() => void) | null = null
   #name: string | undefined
+  #rootOverride: RelationalRootOverride | null
 
   constructor(
     host: RelationalQueryHost<TParams, TMeta, TQuery>,
     ast: QueryAST,
     schema: S,
     onEvict?: () => void,
+    options?: RelationalQueryOptions,
   ) {
     this.#host = host
     this.#ast = ast
     this.#schema = schema
-    this.#queryId = `rq/${hashObject(ast)}`
+    this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
     this.#onEvict = onEvict ?? null
+    this.#rootOverride = options?.root ?? null
   }
 
   /** Returns internal details of this query reference (for debugging/testing). */
@@ -322,13 +340,18 @@ export class RelationalQueryRef<
     return this.#ast.kind
   }
 
+  /** Adapter-neutral metadata for the root query, excluding relation-only updates. */
+  rootMetadata(): RootMetadata {
+    return this.#root?.metadata() ?? { pageInfo: undefined, total: undefined, revision: undefined }
+  }
+
   /**
    * The host returns adapter-typed refs; the engine re-types them once here at its
    * only construction seam instead of casting at every call site.
    */
   #query(
     desc: QueryDescriptor,
-    config: QueryConfig<unknown, unknown>,
+    config: QueryConfig<unknown, unknown> & QueryLifecycleConfig,
   ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
     return this.#host.queryDesc(desc, config) as QueryRef<
       unknown[],
@@ -382,11 +405,12 @@ export class RelationalQueryRef<
   }
 
   #currentStaleTime(): number {
+    if (this.#listenerStaleTimes.size === 0) return 0
     let staleTime = Infinity
     for (const value of this.#listenerStaleTimes.values()) {
       staleTime = Math.min(staleTime, value)
     }
-    return staleTime === Infinity ? 0 : staleTime
+    return staleTime
   }
 
   #ensureFresh(staleTime: number): void {
@@ -896,8 +920,9 @@ export class RelationalQueryRef<
       return
     }
 
-    const rootDesc: QueryDescriptor =
-      this.#ast.kind === 'get'
+    const rootDesc: QueryDescriptor = this.#rootOverride
+      ? this.#rootOverride.descriptor
+      : this.#ast.kind === 'get'
         ? {
             serviceName,
             method: 'get',
@@ -919,6 +944,7 @@ export class RelationalQueryRef<
         ...(rootAllPages(this.#ast.kind) ? { allPages: true } : {}),
         ...(this.#ast.kind !== 'get' ? matcherConfig : {}),
         ...(this.#ast.server ? { server: true } : {}),
+        ...this.#rootOverride?.config,
       }),
       isGet: this.#ast.kind === 'get',
       onRows,

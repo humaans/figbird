@@ -7,11 +7,19 @@ export type QueryIdentityConfig = {
   [queryIdentityKey]?: string
 }
 
+/** Internal cache-lifecycle controls that remain part of query identity. */
+export interface QueryLifecycleConfig {
+  gcOnUnsubscribe?: boolean
+}
+
 let nextIsolatedQueryIdentity = 0
 
 /** Results that belong to one consumer and are removed with its last subscription. */
-export function isEphemeralQuery<TItem, TQuery>(config: QueryConfig<TItem, TQuery>): boolean {
+export function isEphemeralQuery<TItem, TQuery>(
+  config: QueryConfig<TItem, TQuery> & QueryLifecycleConfig,
+): boolean {
   return (
+    config.gcOnUnsubscribe === true ||
     config.fetchPolicy === 'network-only' ||
     (config.matcher !== undefined && config.matcherKey === undefined)
   )

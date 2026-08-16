@@ -12,9 +12,20 @@ export interface RootSnapshot {
   error: Error | null
 }
 
+/** Adapter-neutral metadata attached to the relational root query. */
+export interface RootMetadata {
+  /** Normalized native continuation metadata, when the root is page-backed. */
+  pageInfo: PageInfo | undefined
+  /** Server-reported result-set size, when the adapter supplied one. */
+  total: number | undefined
+  /** Root row identity, excluding relation-only changes. */
+  revision: unknown
+}
+
 /** Common lifecycle for a single-query root and an accumulating page root. */
 export interface RootSource {
   snapshot(): RootSnapshot
+  metadata(): RootMetadata
   setStaleTime(staleTime: number): void
   ensureFresh(staleTime?: number): void
   refetch(): void
@@ -141,6 +152,23 @@ export class SingleQueryRoot<
       rows: this.#asRows(state.data),
       isFetching: state.isFetching,
       error: null,
+    }
+  }
+
+  metadata(): RootMetadata {
+    const state = this.#queryRef.getSnapshot()
+    const pageTotal = state?.pageInfo?.total
+    const meta = state?.meta as { total?: unknown } | undefined
+    const total =
+      typeof pageTotal === 'number' && pageTotal >= 0
+        ? pageTotal
+        : typeof meta?.total === 'number' && meta.total >= 0
+          ? meta.total
+          : undefined
+    return {
+      pageInfo: state?.pageInfo,
+      total,
+      revision: state?.status === 'success' ? state.data : undefined,
     }
   }
 
@@ -387,6 +415,15 @@ export class PagedQueryRoot<
       rows: this.#allPagesData(),
       isFetching: pageStates.some(state => state.isFetching),
       error: null,
+    }
+  }
+
+  metadata(): RootMetadata {
+    const state = this.#pageRefs.at(-1)?.getSnapshot()
+    return {
+      pageInfo: state?.pageInfo,
+      total: this.#computeTotal(),
+      revision: this.#lastAllPagesData,
     }
   }
 

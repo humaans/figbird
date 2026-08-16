@@ -1,8 +1,8 @@
 /**
  * Tiny Feathers server for the figbird demo.
  *
- * Exposes services over Socket.IO: issues, tasks, comments, users, teams,
- * labels, issue-label joins, reactions.
+ * Exposes services over Socket.IO: issues, archived issues, tasks, comments,
+ * users, teams, labels, issue-label joins, reactions.
  *
  * Simulated conditions are a *dial*, not a tax:
  *   - Network latency has three profiles — fast (default, LAN-ish), realistic
@@ -94,6 +94,23 @@ class SlowMemoryService extends MemoryService {
   }
 }
 
+class ArchiveMemoryService extends SlowMemoryService {
+  find(params = {}) {
+    const { $search, ...query } = params.query ?? {}
+    if (typeof $search !== 'string' || $search.trim() === '') {
+      return super.find(params)
+    }
+    const term = $search.trim().toLocaleLowerCase()
+    const matchingIds = Object.values(this.store)
+      .filter(row => row.title.toLocaleLowerCase().includes(term))
+      .map(row => row.id)
+    return super.find({
+      ...params,
+      query: { ...query, id: { $in: matchingIds } },
+    })
+  }
+}
+
 const app = feathers()
 
 app.configure(
@@ -114,6 +131,10 @@ const users = new SlowMemoryService({ multi: false, paginate: false }, { speed: 
 const teams = new SlowMemoryService({ multi: false, paginate: false }, { speed: 0.6 })
 const labels = new SlowMemoryService({ multi: false, paginate: false }, { speed: 0.6 })
 const issues = new SlowMemoryService({ multi: false, paginate: { default: 50, max: 200 } })
+const archivedIssues = new ArchiveMemoryService(
+  { multi: false, paginate: { default: 50, max: 200 } },
+  { speed: 0.9 },
+)
 const comments = new SlowMemoryService(
   { multi: false, paginate: { default: 50, max: 500 } },
   { speed: 1.2 },
@@ -135,12 +156,23 @@ app.use('users', users)
 app.use('teams', teams)
 app.use('labels', labels)
 app.use('issues', issues)
+app.use('archivedIssues', archivedIssues)
 app.use('comments', comments)
 app.use('tasks', tasks)
 app.use('issueLabels', issueLabels)
 app.use('reactions', reactions)
 
-const allServices = [users, teams, labels, issues, comments, tasks, issueLabels, reactions]
+const allServices = [
+  users,
+  teams,
+  labels,
+  issues,
+  archivedIssues,
+  comments,
+  tasks,
+  issueLabels,
+  reactions,
+]
 
 const clearStores = () => {
   for (const svc of allServices) {
@@ -153,6 +185,8 @@ const clearStores = () => {
 // ----- Seed -----
 
 const SEED_BASE_TIME = Date.parse('2026-06-30T12:00:00.000Z')
+const ARCHIVE_SIZE = 5000
+const ARCHIVE_ID_BASE = 100_000
 
 const TITLE_LEADS = [
   'Hover state on primary button is off',
@@ -348,6 +382,39 @@ const seed = async () => {
         }
       }
       commentId++
+    }
+  }
+
+  // A deliberately deep, immutable archive for the virtualization demo. Keeping
+  // this on a separate service prevents 5,000 stress-test rows from changing the
+  // behavior of the normal Issues and Teams screens. Archive ids live in their
+  // own range so their label junction rows can share `issueLabels` safely.
+  for (let i = 1; i <= ARCHIVE_SIZE; i++) {
+    const id = ARCHIVE_ID_BASE + i
+    const lead = TITLE_LEADS[(i * 7) % TITLE_LEADS.length]
+    const assigneeId = pick(userIds)
+    archivedIssues.store[id] = {
+      id,
+      title: `${lead} — archived case ${String(i).padStart(4, '0')}`,
+      assigneeId,
+      teamId: users.store[assigneeId].teamId,
+      deletedAt: new Date(SEED_BASE_TIME - i * 37 * 60_000).toISOString(),
+      deletionReason: pick([
+        'Duplicate report',
+        'Resolved elsewhere',
+        'Imported by mistake',
+        'No longer reproducible',
+      ]),
+    }
+
+    // Every archived row has one-to-three labels, exercising the two-hop many
+    // relation on every page rather than only on a lucky subset of rows.
+    const chosen = new Set()
+    const labelCount = 1 + Math.floor(rng() * 3)
+    while (chosen.size < labelCount) chosen.add(pick(labelIds))
+    for (const labelId of chosen) {
+      issueLabels.store[issueLabelId] = { id: issueLabelId, issueId: id, labelId }
+      issueLabelId++
     }
   }
 

@@ -15,6 +15,7 @@
     "@feathersjs/socketio": "^5.0.0",
     "@feathersjs/socketio-client": "^5.0.0",
     "@socket.io/component-emitter": "^3.1.0",
+    "@tanstack/react-virtual": "^3.14.9",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-space-router": "^1.0.0-pre.8",
