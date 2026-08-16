@@ -34,11 +34,10 @@ const QUERY_COLUMNS = [
       'Root query operation. The dot shows its state: green active, amber cached, blue fetching, red error, or gray skipped/retained history.',
   },
   {
-    label: 'Shape',
+    label: 'Plan',
     width: 420,
     minWidth: 180,
-    description:
-      'Query method, parameters, related data, and the number of underlying relation fetches.',
+    description: 'Query operation and parameters, followed by its related data paths.',
   },
   {
     label: 'Class',
@@ -185,6 +184,7 @@ export function QueriesTab({
             ) : null}
             {rows.map(({ operation, localSubscriberCount }) => {
               const query = operation.summary
+              const plan = queryPlan(operation)
               const isSelected = selectedOperationKey === operation.key
               return (
                 <tr
@@ -243,24 +243,20 @@ export function QueriesTab({
                   <td style={{ ...styles.td, maxWidth: 420 }}>
                     <span
                       title={[
+                        plan,
                         operation.composition?.title,
-                        `params ${JSON.stringify(query.query ?? {}, null, 2)}`,
+                        query.query === undefined
+                          ? undefined
+                          : `Parameters\n${JSON.stringify(query.query, null, 2)}`,
                       ]
                         .filter(Boolean)
                         .join('\n\n')}
                       style={{
                         ...ellipsizedCode,
-                        color: operation.composition ? colors.text : colors.faint,
+                        color: colors.text,
                       }}
                     >
-                      {operation.composition?.detail ??
-                        (query.query === undefined ? '—' : compactJson(query.query))}
-                      {operation.rootFetches.length > 1
-                        ? ` · ${operation.rootFetches.length} root fetches`
-                        : ''}
-                      {operation.underlying.length > 0
-                        ? ` · ${operation.underlying.length} underlying`
-                        : ''}
+                      {plan}
                     </span>
                   </td>
                   <td style={styles.td}>
@@ -307,6 +303,22 @@ function operationContainsQuery(operation: DevtoolsOperation, queryId: string | 
 
 function operationRootQueryId(operation: DevtoolsOperation): string {
   return operation.rootFetches[0]?.queryId ?? operation.key
+}
+
+function queryPlan(operation: DevtoolsOperation): string {
+  if (operation.composition) return operation.composition.plan
+  const query = operation.summary
+  const args = [
+    query.resourceId === undefined ? '' : formatPlanValue(query.resourceId),
+    query.query === undefined || Object.keys(query.query).length === 0
+      ? ''
+      : compactJson(query.query),
+  ].filter(Boolean)
+  return `${query.method}(${args.join(', ')})`
+}
+
+function formatPlanValue(value: string | number): string {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value)
 }
 
 function QueryRows({ query }: { query: QuerySummary }) {

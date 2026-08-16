@@ -16,6 +16,7 @@ export type OperationPagination = NonNullable<InspectedRelationalQuery['paginati
 export interface QueryComposition {
   detail: string
   operation: string
+  plan: string
   planDetail: string
   title: string
 }
@@ -228,6 +229,7 @@ function describeComposition(
   return {
     detail: parts.join(' · '),
     operation: `${ast.service}.${head}`,
+    plan: formatAstPlan(ast),
     planDetail: [
       pagination ? describePagination(pagination) : '',
       rootQuery || 'all',
@@ -237,6 +239,19 @@ function describeComposition(
       .join(' · '),
     title: [name, astToTitle(ast)].filter(Boolean).join('\n'),
   }
+}
+
+function formatAstPlan(ast: QueryAST): string {
+  const query = compactAstQuery(ast.query)
+  const args =
+    ast.kind === 'get'
+      ? [formatAstValue(ast.resourceId), query]
+      : ast.kind === 'paginate'
+        ? [String(ast.pageSize ?? '?'), query]
+        : [query]
+  const call = `${ast.kind}(${args.filter(Boolean).join(', ')})`
+  const related = relationPaths(ast)
+  return related.length > 0 ? `${call} → ${formatList(related)}` : call
 }
 
 function describePagination(pagination: OperationPagination): string {

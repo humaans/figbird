@@ -756,7 +756,9 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
   const row = $all('tbody tr')[0]
   t.truthy(row)
-  t.true((row?.textContent ?? '').includes('paginate(25) · cursor · 2 pages'))
+  t.true(
+    (row?.textContent ?? '').includes('paginate(25, {"status":"open","$sort":{"createdAt":-1}})'),
+  )
   click(row!)
 
   const details = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
@@ -1132,7 +1134,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const rowText = $all('tbody tr').map(row => row.textContent ?? '')
   t.is(rowText.length, 1)
   t.true(rowText[0]!.includes('issues'))
-  t.true(rowText[0]!.includes('find · with labels'))
+  t.true(rowText[0]!.includes('find() → labels'))
   t.false(rowText[0]!.includes('issueLabels'))
 
   const classHeader = $all('th').find(header => header.textContent === 'Class')
