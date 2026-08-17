@@ -67,6 +67,12 @@ for review. The release workflow saves the Chrome ZIP and signed Firefox XPI in 
 folder from `chrome://extensions` using **Developer mode → Load unpacked** while store review is
 pending.
 
+Firefox signing and Chrome submission run as independent jobs after the shared release build. A
+store outage therefore does not block the other browser, and rerunning failed jobs retries only the
+affected publisher. The Firefox signer retries temporary upload and validation responses;
+persistent failures include the safe AMO response status, content type, and request ID in the
+Actions log.
+
 To release only one browser, open **Actions → Release browser devtools → Run workflow** on the
 default branch and select the required inputs.
 
