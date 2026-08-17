@@ -147,7 +147,7 @@ interface TaskService {
 const schema = createSchema({
   services: {
     tasks: service<TaskService>(),
-    people: service<PersonService>({ path: 'api/people' }),
+    people: service<PersonService, 'api/people'>({ path: 'api/people' }),
   },
   relationships: {/* per-service factories — see Relations */},
 })
@@ -1668,12 +1668,17 @@ type-check against the actual items, including both hops of a junction `many`.
 ## service
 
 ```ts
-service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>(options?)
+service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>()
+service<
+  { item: Note; query?: NoteQuery; create?; update?; patch?; methods? },
+  'api/notes'
+>({ path: 'api/notes' })
 ```
 
 Declares one service's types. Only `item` is required; omitted payloads default to
 `Partial<item>` for create/patch and `item` for update. `options.path` maps an ergonomic
-schema key to the transport-level service path. `methods` types custom Feathers methods.
+schema key to the transport-level service path; its literal type argument is required so
+path-based APIs remain narrow. `methods` types custom Feathers methods.
 
 ## one
 

@@ -93,15 +93,10 @@ export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
   string,
   ''
 >
-export function service<TServiceDef extends ServiceTypeDefinition, const TPath extends string>(
-  options: ServiceOptions<TPath>,
-): Service<ResolveDef<TServiceDef>, string, TPath>
-// Backwards-compatible overload for callers that specify only the definition type.
-// TypeScript cannot infer a trailing type parameter after an explicit leading one;
-// generated schemas should emit both type arguments to preserve a distinct path.
-export function service<TServiceDef extends ServiceTypeDefinition>(
-  options: ServiceOptions,
-): Service<ResolveDef<TServiceDef>, string, string>
+export function service<
+  TServiceDef extends ServiceTypeDefinition,
+  const TPath extends string,
+>(options: { path: TPath }): Service<ResolveDef<TServiceDef>, string, TPath>
 export function service<TServiceDef extends ServiceTypeDefinition>(
   options: ServiceOptions = {},
 ): Service<ResolveDef<TServiceDef>, string, string> {
@@ -358,8 +353,12 @@ function embed<TDest extends string>(
   return { ...normalizeHop(def), cardinality: 'embedded' }
 }
 
+/** Extract the resolved definition carried by a Service value's phantom slot. */
+type ServiceDefinitionOf<TService> =
+  TService extends Service<infer TDef, string, string> ? TDef : never
+
 /** Extract the item type carried by a Service value's phantom slot. */
-type ServiceItemOf<S> = S extends Service<infer TDef, string, string> ? TDef['item'] : unknown
+type ServiceItemOf<TService> = ServiceDefinitionOf<TService>['item']
 
 /**
  * Relationship helpers passed to a per-service relationships factory. Scoped to both
@@ -501,43 +500,44 @@ export type ServiceByPath<S extends Schema, P extends ServicePaths<S>> = {
 }[ServiceNames<S>]
 
 export type ServiceByIdentifier<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  I extends ServiceNames<S>
-    ? ServiceByName<S, I>
-    : I extends ServicePaths<S>
-      ? ServiceByPath<S, I>
-      : never
+  | (I extends ServiceNames<S> ? ServiceByName<S, I> : never)
+  | (I extends ServicePaths<S> ? ServiceByPath<S, I> : never)
 
-export type ServiceItem<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  ServiceByIdentifier<S, I> extends { [$phantom]?: { item: infer TItem } }
-    ? TItem
-    : Record<string, unknown>
+/** The resolved service definition selected specifically through its transport path. @internal */
+export type ServiceDefinitionByPath<
+  S extends Schema,
+  P extends ServicePaths<S>,
+> = ServiceDefinitionOf<ServiceByPath<S, P>>
 
-export type ServiceCreate<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  ServiceByIdentifier<S, I> extends { [$phantom]?: { create: infer TCreate } }
-    ? TCreate
-    : Record<string, unknown>
+export type ServiceItem<
+  S extends Schema,
+  I extends ServiceNames<S> | ServicePaths<S>,
+> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['item']
 
-export type ServiceUpdate<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  ServiceByIdentifier<S, I> extends { [$phantom]?: { update: infer TUpdate } }
-    ? TUpdate
-    : Record<string, unknown>
+export type ServiceCreate<
+  S extends Schema,
+  I extends ServiceNames<S> | ServicePaths<S>,
+> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['create']
 
-export type ServicePatch<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  ServiceByIdentifier<S, I> extends { [$phantom]?: { patch: infer TPatch } }
-    ? TPatch
-    : Record<string, unknown>
+export type ServiceUpdate<
+  S extends Schema,
+  I extends ServiceNames<S> | ServicePaths<S>,
+> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['update']
 
-export type ServiceQuery<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  ServiceByIdentifier<S, I> extends { [$phantom]?: { query: infer TQuery } }
-    ? TQuery
-    : Record<string, unknown>
+export type ServicePatch<
+  S extends Schema,
+  I extends ServiceNames<S> | ServicePaths<S>,
+> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['patch']
 
-export type ServiceMethods<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  ServiceByIdentifier<S, I> extends {
-    [$phantom]?: { methods: infer TMethods extends AnyMethodsType }
-  }
-    ? TMethods
-    : Record<string, never>
+export type ServiceQuery<
+  S extends Schema,
+  I extends ServiceNames<S> | ServicePaths<S>,
+> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['query']
+
+export type ServiceMethods<
+  S extends Schema,
+  I extends ServiceNames<S> | ServicePaths<S>,
+> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['methods']
 
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(

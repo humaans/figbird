@@ -41,6 +41,11 @@ export const schema = createSchema({
   },
 })
 
+// @ts-expect-error Explicit transport paths must be preserved with a literal path type.
+service<PersonService>({ path: 'api/people' })
+// @ts-expect-error A literal transport path type must have the matching runtime path.
+service<PersonService, 'api/people'>({})
+
 type AppSchema = typeof schema
 
 type Equal<TLeft, TRight> =
@@ -92,3 +97,36 @@ export type TaskServiceItem = ServiceItem<AppSchema, 'api/tasks'>
 // Test the actual hooks - these types will be checked by the test
 export const people = useFind('api/people')
 export const tasks = useFind('api/tasks')
+
+interface NameCollisionService {
+  item: { kind: 'schema-name' }
+}
+
+interface PathCollisionService {
+  item: { kind: 'transport-path' }
+}
+
+const collisionSchema = createSchema({
+  services: {
+    users: service<NameCollisionService, 'api/users'>({ path: 'api/users' }),
+    legacy: service<PathCollisionService, 'users'>({ path: 'users' }),
+  },
+})
+
+const collisionHooks = createHooks(collisionSchema)
+export const collisionPathResult = collisionHooks.useFind('users')
+const collisionFeathersService = collisionHooks.useFeathers().service('users')
+
+export type CollisionPathItem = NonNullable<typeof collisionPathResult.data>[number]
+export type CollisionFeathersItem = Awaited<ReturnType<typeof collisionFeathersService.get>>
+export type CollisionIdentifierItem = ServiceItem<typeof collisionSchema, 'users'>
+
+export type PathHookUsesTransportNamespace = Assert<
+  Equal<CollisionPathItem, PathCollisionService['item']>
+>
+export type FeathersUsesTransportNamespace = Assert<
+  Equal<CollisionFeathersItem, PathCollisionService['item']>
+>
+export type AmbiguousUtilityReturnsUnion = Assert<
+  Equal<CollisionIdentifierItem, NameCollisionService['item'] | PathCollisionService['item']>
+>

@@ -17,17 +17,7 @@ import {
   type AnyQueryBuilder,
   type QueryBuilderProxy,
 } from '../core/queryBuilder.js'
-import type {
-  Schema,
-  ServiceCreate,
-  ServiceItem,
-  ServiceMethods,
-  ServiceNames,
-  ServicePaths,
-  ServicePatch,
-  ServiceQuery,
-  ServiceUpdate,
-} from '../core/schema.js'
+import type { Schema, ServiceDefinitionByPath, ServiceNames, ServicePaths } from '../core/schema.js'
 import { resolveServicePath } from '../core/schema.js'
 import { useFigbird as useContextFigbird } from './context.js'
 import { useAction, type UseActionHook } from './useAction.js'
@@ -48,14 +38,16 @@ import { useWindowQuery, type UseWindowQueryHook } from './useWindowQuery.js'
 type WithServiceQuery<S extends Schema, P extends ServicePaths<S>, TParams> = Omit<
   TParams,
   'query'
-> & { query?: ServiceQuery<S, P> }
+> & { query?: ServiceDefinitionByPath<S, P>['query'] }
 
 type UseGetForSchema<S extends Schema, TParams = unknown> = <P extends ServicePaths<S>>(
   servicePath: P,
   resourceId: string | number,
   params?: WithServiceQuery<S, P, TParams> &
-    Partial<QueryConfig<ServiceItem<S, P>, ServiceQuery<S, P>>>,
-) => QueryResult<ServiceItem<S, P>>
+    Partial<
+      QueryConfig<ServiceDefinitionByPath<S, P>['item'], ServiceDefinitionByPath<S, P>['query']>
+    >,
+) => QueryResult<ServiceDefinitionByPath<S, P>['item']>
 
 type UseFindForSchema<
   S extends Schema,
@@ -64,25 +56,27 @@ type UseFindForSchema<
 > = <P extends ServicePaths<S>>(
   servicePath: P,
   params?: WithServiceQuery<S, P, TParams> &
-    Partial<QueryConfig<ServiceItem<S, P>[], ServiceQuery<S, P>>>,
-) => QueryResult<ServiceItem<S, P>[], TMeta>
+    Partial<
+      QueryConfig<ServiceDefinitionByPath<S, P>['item'][], ServiceDefinitionByPath<S, P>['query']>
+    >,
+) => QueryResult<ServiceDefinitionByPath<S, P>['item'][], TMeta>
 
 type UseMutationForSchema<S extends Schema> = <P extends ServicePaths<S>>(
   servicePath: P,
 ) => UseMutationResult<
-  ServiceItem<S, P>,
-  ServiceCreate<S, P>,
-  ServiceUpdate<S, P>,
-  ServicePatch<S, P>
+  ServiceDefinitionByPath<S, P>['item'],
+  ServiceDefinitionByPath<S, P>['create'],
+  ServiceDefinitionByPath<S, P>['update'],
+  ServiceDefinitionByPath<S, P>['patch']
 >
 
 type TypedServiceForSchema<S extends Schema, P extends ServicePaths<S>> = TypedFeathersService<
-  ServiceItem<S, P>,
-  ServiceCreate<S, P>,
-  ServiceUpdate<S, P>,
-  ServicePatch<S, P>,
-  ServiceQuery<S, P>,
-  ServiceMethods<S, P>
+  ServiceDefinitionByPath<S, P>['item'],
+  ServiceDefinitionByPath<S, P>['create'],
+  ServiceDefinitionByPath<S, P>['update'],
+  ServiceDefinitionByPath<S, P>['patch'],
+  ServiceDefinitionByPath<S, P>['query'],
+  ServiceDefinitionByPath<S, P>['methods']
 >
 
 type UseMutatingForSchema<S extends Schema> = (
