@@ -38,9 +38,10 @@ export interface ResolvedServiceDef {
 export interface Service<
   TDef extends ResolvedServiceDef = ResolvedServiceDef,
   TName extends string = string,
+  TPath extends string = string,
 > {
   readonly name: TName
-  readonly path: string
+  readonly path: TPath
   readonly [$phantom]?: TDef
 }
 
@@ -84,12 +85,27 @@ type ResolveDef<TServiceDef extends ServiceTypeDefinition> = {
   methods: DeriveMethods<TServiceDef>
 }
 
-// Phase 1: Create a service definition (no name yet)
-export function service<
-  TServiceDef extends ServiceTypeDefinition,
-  const TPath extends string = string,
->(options: ServiceOptions<TPath> = {}): Service<ResolveDef<TServiceDef>> {
-  return { name: '', path: options.path ?? '' } as Service<ResolveDef<TServiceDef>>
+// Phase 1: Create a service definition (no name yet). The overloads distinguish
+// an omitted path from an explicitly typed path so createSchema can use the schema
+// key as the literal default without widening every service path to `string`.
+export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
+  ResolveDef<TServiceDef>,
+  string,
+  ''
+>
+export function service<TServiceDef extends ServiceTypeDefinition, const TPath extends string>(
+  options: ServiceOptions<TPath>,
+): Service<ResolveDef<TServiceDef>, string, TPath>
+// Backwards-compatible overload for callers that specify only the definition type.
+// TypeScript cannot infer a trailing type parameter after an explicit leading one;
+// generated schemas should emit both type arguments to preserve a distinct path.
+export function service<TServiceDef extends ServiceTypeDefinition>(
+  options: ServiceOptions,
+): Service<ResolveDef<TServiceDef>, string, string>
+export function service<TServiceDef extends ServiceTypeDefinition>(
+  options: ServiceOptions = {},
+): Service<ResolveDef<TServiceDef>, string, string> {
+  return { name: '', path: options.path ?? '' } as Service<ResolveDef<TServiceDef>, string, string>
 }
 
 // Base schema interface - flexible to preserve specific service types
@@ -343,7 +359,7 @@ function embed<TDest extends string>(
 }
 
 /** Extract the item type carried by a Service value's phantom slot. */
-type ServiceItemOf<S> = S extends Service<infer TDef, string> ? TDef['item'] : unknown
+type ServiceItemOf<S> = S extends Service<infer TDef, string, string> ? TDef['item'] : unknown
 
 /**
  * Relationship helpers passed to a per-service relationships factory. Scoped to both
@@ -405,9 +421,12 @@ export type RelationshipsConfig<TServiceMap> = {
   ) => Record<string, RelationshipDef<any, any>>
 }
 
-// Helper type to re-key a service with its literal schema name
+// Helper type to re-key a service with its literal schema name while retaining its
+// transport path. An omitted path is represented by '' until the schema key is known.
 type ExtractServiceWithName<S, N extends string> =
-  S extends Service<infer TDef, string> ? Service<TDef, N> : never
+  S extends Service<infer TDef, string, infer TPath>
+    ? Service<TDef, N, TPath extends '' ? N : TPath>
+    : never
 
 // Phase 2: Create a schema with services object map (preserves literal keys + typed
 // relationships so downstream hooks can infer related item types at call sites).
@@ -470,24 +489,54 @@ export type ServiceNames<S extends Schema> = keyof S['services'] & string
 
 export type ServiceByName<S extends Schema, N extends ServiceNames<S>> = S['services'][N]
 
-export type ServiceItem<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { item: infer I } } ? I : Record<string, unknown>
+type ServicePath<TService> =
+  TService extends Service<ResolvedServiceDef, string, infer TPath> ? TPath : never
 
-export type ServiceCreate<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { create: infer C } } ? C : Record<string, unknown>
+export type ServicePaths<S extends Schema> = {
+  [N in ServiceNames<S>]: ServicePath<ServiceByName<S, N>>
+}[ServiceNames<S>]
 
-export type ServiceUpdate<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { update: infer U } } ? U : Record<string, unknown>
+export type ServiceByPath<S extends Schema, P extends ServicePaths<S>> = {
+  [N in ServiceNames<S>]: P extends ServicePath<ServiceByName<S, N>> ? ServiceByName<S, N> : never
+}[ServiceNames<S>]
 
-export type ServicePatch<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { patch: infer P } } ? P : Record<string, unknown>
+export type ServiceByIdentifier<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
+  I extends ServiceNames<S>
+    ? ServiceByName<S, I>
+    : I extends ServicePaths<S>
+      ? ServiceByPath<S, I>
+      : never
 
-export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { query: infer Q } } ? Q : Record<string, unknown>
+export type ServiceItem<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
+  ServiceByIdentifier<S, I> extends { [$phantom]?: { item: infer TItem } }
+    ? TItem
+    : Record<string, unknown>
 
-export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> =
-  ServiceByName<S, N> extends { [$phantom]?: { methods: infer M extends AnyMethodsType } }
-    ? M
+export type ServiceCreate<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
+  ServiceByIdentifier<S, I> extends { [$phantom]?: { create: infer TCreate } }
+    ? TCreate
+    : Record<string, unknown>
+
+export type ServiceUpdate<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
+  ServiceByIdentifier<S, I> extends { [$phantom]?: { update: infer TUpdate } }
+    ? TUpdate
+    : Record<string, unknown>
+
+export type ServicePatch<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
+  ServiceByIdentifier<S, I> extends { [$phantom]?: { patch: infer TPatch } }
+    ? TPatch
+    : Record<string, unknown>
+
+export type ServiceQuery<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
+  ServiceByIdentifier<S, I> extends { [$phantom]?: { query: infer TQuery } }
+    ? TQuery
+    : Record<string, unknown>
+
+export type ServiceMethods<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
+  ServiceByIdentifier<S, I> extends {
+    [$phantom]?: { methods: infer TMethods extends AnyMethodsType }
+  }
+    ? TMethods
     : Record<string, never>
 
 // Helper to find service by name string (for runtime lookup)

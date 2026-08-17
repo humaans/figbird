@@ -23,6 +23,7 @@ import type {
   ServiceItem,
   ServiceMethods,
   ServiceNames,
+  ServicePaths,
   ServicePatch,
   ServiceQuery,
   ServiceUpdate,
@@ -40,48 +41,48 @@ import { useQuery, type UseQueryHook } from './useQuery.js'
 import { useWindowQuery, type UseWindowQueryHook } from './useWindowQuery.js'
 
 /**
- * Strongly-typed call signatures per service name.
+ * Strongly-typed legacy call signatures per transport path.
  * Using a union of call signatures (one per service) gives the best inference:
- * passing a literal service name narrows the return type to that service.
+ * passing a literal service path narrows the return type to that service.
  */
-type WithServiceQuery<S extends Schema, N extends ServiceNames<S>, TParams> = Omit<
+type WithServiceQuery<S extends Schema, P extends ServicePaths<S>, TParams> = Omit<
   TParams,
   'query'
-> & { query?: ServiceQuery<S, N> }
+> & { query?: ServiceQuery<S, P> }
 
-type UseGetForSchema<S extends Schema, TParams = unknown> = <N extends ServiceNames<S>>(
-  serviceName: N,
+type UseGetForSchema<S extends Schema, TParams = unknown> = <P extends ServicePaths<S>>(
+  servicePath: P,
   resourceId: string | number,
-  params?: WithServiceQuery<S, N, TParams> &
-    Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
-) => QueryResult<ServiceItem<S, N>>
+  params?: WithServiceQuery<S, P, TParams> &
+    Partial<QueryConfig<ServiceItem<S, P>, ServiceQuery<S, P>>>,
+) => QueryResult<ServiceItem<S, P>>
 
 type UseFindForSchema<
   S extends Schema,
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
-> = <N extends ServiceNames<S>>(
-  serviceName: N,
-  params?: WithServiceQuery<S, N, TParams> &
-    Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
-) => QueryResult<ServiceItem<S, N>[], TMeta>
+> = <P extends ServicePaths<S>>(
+  servicePath: P,
+  params?: WithServiceQuery<S, P, TParams> &
+    Partial<QueryConfig<ServiceItem<S, P>[], ServiceQuery<S, P>>>,
+) => QueryResult<ServiceItem<S, P>[], TMeta>
 
-type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
-  serviceName: N,
+type UseMutationForSchema<S extends Schema> = <P extends ServicePaths<S>>(
+  servicePath: P,
 ) => UseMutationResult<
-  ServiceItem<S, N>,
-  ServiceCreate<S, N>,
-  ServiceUpdate<S, N>,
-  ServicePatch<S, N>
+  ServiceItem<S, P>,
+  ServiceCreate<S, P>,
+  ServiceUpdate<S, P>,
+  ServicePatch<S, P>
 >
 
-type TypedServiceForSchema<S extends Schema, N extends ServiceNames<S>> = TypedFeathersService<
-  ServiceItem<S, N>,
-  ServiceCreate<S, N>,
-  ServiceUpdate<S, N>,
-  ServicePatch<S, N>,
-  ServiceQuery<S, N>,
-  ServiceMethods<S, N>
+type TypedServiceForSchema<S extends Schema, P extends ServicePaths<S>> = TypedFeathersService<
+  ServiceItem<S, P>,
+  ServiceCreate<S, P>,
+  ServiceUpdate<S, P>,
+  ServicePatch<S, P>,
+  ServiceQuery<S, P>,
+  ServiceMethods<S, P>
 >
 
 type UseMutatingForSchema<S extends Schema> = (
@@ -184,10 +185,10 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
         new Proxy(feathers, {
           get(target, prop, receiver) {
             if (prop === 'service') {
-              return <N extends ServiceNames<S>>(serviceName: N) =>
+              return <P extends ServicePaths<S>>(servicePath: P) =>
                 target.service(
-                  resolveServicePath(schema, serviceName),
-                ) as unknown as TypedServiceForSchema<S, N>
+                  resolveServicePath(schema, servicePath),
+                ) as unknown as TypedServiceForSchema<S, P>
             }
 
             const value = Reflect.get(target, prop, receiver)

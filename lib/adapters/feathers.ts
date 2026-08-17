@@ -13,7 +13,7 @@ import type {
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type {
   Schema,
-  ServiceNames,
+  ServicePaths,
   ServiceItem,
   ServiceCreate,
   ServiceUpdate,
@@ -275,23 +275,23 @@ export type TypedFeathersService<
 /**
  * Typed Feathers client based on schema.
  * Uses a mapped type that creates a union of call signatures, enabling literal
- * narrowing: when you call service('notes'), only the 'notes' signature matches.
+ * narrowing: when you call service('api/notes'), only that path's signature matches.
  *
  * @example
  * const client: TypedFeathersClient<typeof schema> = ...
- * const note = await client.service('notes').get('1')  // note: Note
- * await client.service('notes').archive(['1'])         // Custom method typed!
+ * const note = await client.service('api/notes').get('1')  // note: Note
+ * await client.service('api/notes').archive(['1'])         // Custom method typed!
  */
 export type TypedFeathersClient<S extends Schema> = {
-  service<N extends ServiceNames<S>>(
-    serviceName: N,
+  service<P extends ServicePaths<S>>(
+    servicePath: P,
   ): TypedFeathersService<
-    ServiceItem<S, N>,
-    ServiceCreate<S, N>,
-    ServiceUpdate<S, N>,
-    ServicePatch<S, N>,
-    ServiceQuery<S, N>,
-    ServiceMethods<S, N>
+    ServiceItem<S, P>,
+    ServiceCreate<S, P>,
+    ServiceUpdate<S, P>,
+    ServicePatch<S, P>,
+    ServiceQuery<S, P>,
+    ServiceMethods<S, P>
   >
 }
 
