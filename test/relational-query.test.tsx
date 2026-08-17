@@ -2159,7 +2159,10 @@ test('suspense: param change inside startTransition keeps previous render commit
 })
 
 test('suspense: first-mount error throws to ErrorBoundary', async t => {
-  const { render, unmount, flush, $, act } = dom()
+  const caughtErrors: unknown[] = []
+  const { render, unmount, flush, $, act } = dom({
+    onCaughtError: error => caughtErrors.push(error),
+  })
   const { App, figbird, feathers } = createApp()
 
   // Make the root fetch reject — this should trigger throw to the ErrorBoundary on
@@ -2176,27 +2179,21 @@ test('suspense: first-mount error throws to ErrorBoundary', async t => {
     return <div className='issue-detail'>{issue.title}</div>
   }
 
-  // swallow React's error-boundary console noise
-  const prevError = console.error
-  console.error = () => {}
-  try {
-    render(
-      <App>
-        <ErrorBoundary fallback={err => <div className='boundary'>{err.message}</div>}>
-          <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
-            <IssueDetail />
-          </React.Suspense>
-        </ErrorBoundary>
-      </App>,
-    )
-    // Let promise rejection propagate.
-    await act(async () => {
-      await flush()
-    })
-  } finally {
-    console.error = prevError
-  }
+  render(
+    <App>
+      <ErrorBoundary fallback={err => <div className='boundary'>{err.message}</div>}>
+        <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
+          <IssueDetail />
+        </React.Suspense>
+      </ErrorBoundary>
+    </App>,
+  )
+  // Let promise rejection propagate.
+  await act(async () => {
+    await flush()
+  })
 
+  t.deepEqual(caughtErrors, [new Error('boom')])
   t.truthy($('.boundary'))
   t.is($('.boundary')!.innerHTML, 'boom')
   t.falsy($('.issue-detail'))
@@ -4127,7 +4124,10 @@ test('figbird.refetch(service): refetches active queries after out-of-band chang
 // ============================================================================
 
 test('suspense: remounting after a cold error refetches and recovers', async t => {
-  const { render, unmount, flush, $, act } = dom()
+  const caughtErrors: unknown[] = []
+  const { render, unmount, flush, $, act } = dom({
+    onCaughtError: error => caughtErrors.push(error),
+  })
   const { App, figbird, feathers } = createApp()
 
   // Cold failure: the root find rejects.
@@ -4159,6 +4159,7 @@ test('suspense: remounting after a cold error refetches and recovers', async t =
     </App>,
   )
   await flush()
+  t.deepEqual(caughtErrors, [new Error('cold failure')])
   t.is($('.boundary')?.innerHTML, 'cold failure')
 
   // The server recovers; the user hits "retry" (boundary remounts its subtree).

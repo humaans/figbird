@@ -144,7 +144,10 @@ test('useQueries: kit-bound variant works and an empty array resolves immediatel
 })
 
 test('useQueries: a cold error on any query throws to the ErrorBoundary', async t => {
-  const { render, unmount, flush, $ } = dom()
+  const caughtErrors: unknown[] = []
+  const { render, unmount, flush, $ } = dom({
+    onCaughtError: error => caughtErrors.push(error),
+  })
   const { App, figbird, feathers } = createApp()
 
   feathers.service('issues').setDelay(20)
@@ -170,6 +173,7 @@ test('useQueries: a cold error on any query throws to the ErrorBoundary', async 
   )
 
   await flush(() => sleep(10))
+  t.deepEqual(caughtErrors, [new Error('users are broken')])
   t.is($('.error')!.innerHTML, 'users are broken')
   t.falsy($('.dashboard'))
 

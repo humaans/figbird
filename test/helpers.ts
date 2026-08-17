@@ -1,7 +1,7 @@
 import { JSDOM } from 'jsdom'
 import type { ReactElement, ReactNode } from 'react'
 import { act, createElement, StrictMode } from 'react'
-import type { Root } from 'react-dom/client'
+import type { Root, RootOptions } from 'react-dom/client'
 import { createRoot } from 'react-dom/client'
 import {
   FeathersAdapter,
@@ -30,7 +30,7 @@ interface DomHelpers {
   act: typeof act
 }
 
-export function dom(): DomHelpers {
+export function dom(options?: RootOptions): DomHelpers {
   const dom = new JSDOM('<!doctype html><div id="root"></div>')
   // JSDOM's DOMWindow interface doesn't perfectly match TypeScript's Window & typeof globalThis.
   // The double assertion pattern (as unknown as T) is the recommended approach when we need
@@ -39,7 +39,7 @@ export function dom(): DomHelpers {
   // from the standard Window interface, but is functionally compatible for testing purposes.
   global.window = dom.window as unknown as Window & typeof globalThis
   const domNode = dom.window.document.getElementById('root')!
-  const root = createRoot(domNode)
+  const root = createRoot(domNode, options)
 
   function onError(event: Event): void {
     // Note: this will swallow reports about unhandled errors!
