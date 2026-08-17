@@ -11,16 +11,7 @@ import type {
   QueryResponse,
 } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
-import type {
-  Schema,
-  ServicePaths,
-  ServiceItem,
-  ServiceCreate,
-  ServiceUpdate,
-  ServicePatch,
-  ServiceQuery,
-  ServiceMethods,
-} from '../core/schema.js'
+import type { Schema, ServiceDefinitionByPath, ServicePaths } from '../core/schema.js'
 
 // Helper types for field extraction
 type IdExtractor = (item: unknown) => string | number | undefined
@@ -286,12 +277,12 @@ export type TypedFeathersClient<S extends Schema> = {
   service<P extends ServicePaths<S>>(
     servicePath: P,
   ): TypedFeathersService<
-    ServiceItem<S, P>,
-    ServiceCreate<S, P>,
-    ServiceUpdate<S, P>,
-    ServicePatch<S, P>,
-    ServiceQuery<S, P>,
-    ServiceMethods<S, P>
+    ServiceDefinitionByPath<S, P>['item'],
+    ServiceDefinitionByPath<S, P>['create'],
+    ServiceDefinitionByPath<S, P>['update'],
+    ServiceDefinitionByPath<S, P>['patch'],
+    ServiceDefinitionByPath<S, P>['query'],
+    ServiceDefinitionByPath<S, P>['methods']
   >
 }
 
