@@ -391,7 +391,8 @@ export class Figbird<
     const hash = builder.hash()
     const cached = this.#relationalQueryCache.get(hash)
     let ref = cached as
-      RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>> | undefined
+      | RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+      | undefined
     if (!ref) {
       const ast = builder.toAST()
       ref = new RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
@@ -449,7 +450,8 @@ export class Figbird<
     const hash = hashObject({ ast, window: config })
     const cached = this.#windowQueryCache.get(hash)
     let ref = cached as
-      WindowQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>> | undefined
+      | WindowQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+      | undefined
     if (ref) {
       // Map insertion order is the LRU order. A Suspense retry therefore protects
       // the ref it is actively trying to commit.

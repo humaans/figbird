@@ -12,8 +12,8 @@ Figbird is a realtime data management library for React + Feathers applications.
 npm run tsc       # Type check
 npm run lint      # ESLint
 npm run ava       # Run tests (AVA)
-npm run test      # Full suite: tsc + eslint + prettier + tests with coverage
-npm run format    # Format code with Prettier
+npm run test      # Full suite: tsc + oxlint + oxfmt + tests with coverage
+npm run format    # Format code with oxfmt
 npm run build     # Build to dist/
 ```
 

@@ -93,12 +93,15 @@ export type ReconnectJitter = number | readonly [number, number]
 export type RetryDelay = number | ((attempt: number, error: Error) => number)
 
 type FetchAttemptOutcome =
-  { kind: 'completed' } | { kind: 'stale' } | { kind: 'failed'; error: Error }
+  | { kind: 'completed' }
+  | { kind: 'stale' }
+  | { kind: 'failed'; error: Error }
 
 const DEFAULT_RETRIES = 3
 
 type StoreResponse<TMeta> =
-  QueryResponse<unknown, TMeta | undefined> | PageResponse<unknown[], TMeta>
+  | QueryResponse<unknown, TMeta | undefined>
+  | PageResponse<unknown[], TMeta>
 
 type MutationTraceCause = Extract<TraceCause, { kind: 'mutation' }> & { mutationId: number }
 
@@ -158,7 +161,8 @@ interface FetchContext {
 }
 
 type LaneAuthoritativeAcceptance =
-  { handled: false } | { handled: true; projection: ProjectionChange | null }
+  | { handled: false }
+  | { handled: true; projection: ProjectionChange | null }
 
 export interface QueryFetchStats {
   fetchCount: number

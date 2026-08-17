@@ -3,7 +3,10 @@ import { buttonStyle, copyText, useDevtoolsTheme } from './ui.js'
 
 type JsonPrimitive = null | boolean | number | string
 type JsonTreeValue =
-  JsonPrimitive | JsonTreeValue[] | { [key: string]: JsonTreeValue } | SpecialValue
+  | JsonPrimitive
+  | JsonTreeValue[]
+  | { [key: string]: JsonTreeValue }
+  | SpecialValue
 
 interface SpecialValue {
   __figbirdJsonSpecial: true

@@ -52,7 +52,9 @@ export interface QueryDefinition<Args, B, Input = Args> extends QueryDefinitionC
  * without reproducing Figbird's input union.
  */
 export type QueryInput<B, Args = unknown> =
-  B | QueryRequest<Args, B> | QueryDefinition<void, B, void>
+  | B
+  | QueryRequest<Args, B>
+  | QueryDefinition<void, B, void>
 
 /** Extract the underlying builder from any supported query input. */
 export type QueryInputBuilder<T> =

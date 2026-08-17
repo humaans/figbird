@@ -64,7 +64,14 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
 
 export function queryStatus(query: QuerySummary): {
   kind:
-    'active' | 'cached' | 'error' | 'pending' | 'prefetched' | 'prepared' | 'retained' | 'skipped'
+    | 'active'
+    | 'cached'
+    | 'error'
+    | 'pending'
+    | 'prefetched'
+    | 'prepared'
+    | 'retained'
+    | 'skipped'
   label: string
 } {
   if (!query.present) {

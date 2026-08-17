@@ -140,7 +140,8 @@ function bytesToBase64(bytes: Uint8Array): string {
   // Use Buffer in Node.js for better performance
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime check for Node.js Buffer
   const B = (globalThis as any).Buffer as
-    { from(input: Uint8Array): { toString(encoding: string): string } } | undefined
+    | { from(input: Uint8Array): { toString(encoding: string): string } }
+    | undefined
   if (typeof B !== 'undefined') {
     return B.from(bytes).toString('base64')
   }

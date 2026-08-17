@@ -21,10 +21,13 @@ export interface MutationSchedule {
 }
 
 export type MutationQueueRetry =
-  number | false | ((error: Error, attempt: number, operation: MutationQueueOperation) => boolean)
+  | number
+  | false
+  | ((error: Error, attempt: number, operation: MutationQueueOperation) => boolean)
 
 export type MutationQueueRetryDelay =
-  number | ((attempt: number, error: Error, operation: MutationQueueOperation) => number)
+  | number
+  | ((attempt: number, error: Error, operation: MutationQueueOperation) => number)
 
 export interface MutationQueueConfig {
   /** Scheduling policy. Omit for an immediate serial queue. */

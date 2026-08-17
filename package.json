@@ -32,15 +32,15 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "test": "tsc --noEmit && oxlint -c oxlintrc.json && prettier --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
+    "test": "tsc --noEmit && oxlint -c oxlintrc.json && oxfmt --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
     "lint": "oxlint -c oxlintrc.json",
     "tsc": "tsc --noEmit",
     "ava": "ava",
-    "format": "prettier --write '**/*.{ts,tsx,js,jsx,css,yml}'",
+    "format": "oxfmt --write '**/*.{ts,tsx,js,jsx,css,yml}'",
     "coverage": "c8 -r html -r text ava",
     "build": "node ./tasks/build.js",
     "devtools:build": "node ./tasks/build-devtools.js",
-    "devtools:check": "npm run tsc && npm run lint && prettier --check '**/*.{ts,tsx,js,jsx,css,yml}' && npm run devtools:test && npm run devtools:lint && npm run devtools:package",
+    "devtools:check": "npm run tsc && npm run lint && oxfmt --check '**/*.{ts,tsx,js,jsx,css,yml}' && npm run devtools:test && npm run devtools:lint && npm run devtools:package",
     "devtools:lint": "npm run devtools:build && node ./tasks/lint-firefox-devtools.js",
     "devtools:package": "npm run devtools:build && node ./tasks/package-devtools.js",
     "devtools:test": "ava test/devtools.test.tsx",
@@ -68,24 +68,24 @@
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
-    "@swc-node/register": "^1.11.1",
+    "@swc-node/register": "^1.12.1",
     "@swc/cli": "^0.8.1",
-    "@swc/core": "^1.15.24",
-    "@types/jsdom": "^28.0.1",
-    "@types/node": "^25.6.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "ava": "^7.0.0",
+    "@swc/core": "^1.16.0",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "ava": "^8.0.1",
     "browserslist-config-baseline": "^0.5.0",
-    "c8": "^11.0.0",
-    "esbuild": "^0.25.9",
-    "execa": "^9.6.1",
+    "c8": "^12.0.0",
+    "esbuild": "^0.28.2",
+    "execa": "^10.0.1",
     "gh-pages": "^6.3.0",
-    "jsdom": "^29.0.2",
-    "oxlint": "^1.60.0",
-    "prettier": "^3.8.2",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
+    "jsdom": "^30.0.1",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "^6.0.2",
     "web-ext": "10.6.0"
   },
@@ -95,11 +95,11 @@
     "files": [
       "test/*.test.{js,ts,tsx}"
     ],
-    "extensions": {
-      "js": true,
-      "ts": "module",
-      "tsx": "module"
-    },
+    "extensions": [
+      "js",
+      "ts",
+      "tsx"
+    ],
     "nodeArguments": [
       "--import=@swc-node/register/esm-register"
     ],

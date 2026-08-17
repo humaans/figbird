@@ -818,7 +818,11 @@ class FigbirdCollector implements Collector {
             FigbirdEvent,
             {
               kind:
-                'mutate:start' | 'mutate:update' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+                | 'mutate:start'
+                | 'mutate:update'
+                | 'mutate:end'
+                | 'mutate:error'
+                | 'mutate:rollback'
             }
           >,
           at,

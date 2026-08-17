@@ -29,7 +29,8 @@ export function useFigbird<S extends Schema = AnySchema, A extends Adapter = Ada
  * observability when a provider exists without requiring one for their core behavior.
  */
 export function useFigbirdMaybe<S extends Schema = AnySchema, A extends Adapter = Adapter>():
-  Figbird<S, A> | undefined {
+  | Figbird<S, A>
+  | undefined {
   return useContext(FigbirdContext as React.Context<Figbird<S, A> | undefined>)
 }
 
