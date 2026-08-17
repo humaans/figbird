@@ -14,21 +14,81 @@ connection:
 
 - selects the newest live Figbird instance;
 - subscribes to `figbird.events`;
-- exposes current `inspect()`, `inspectRelational()`, and `mutating` snapshots;
-- buffers at most 1,000 events between panel polls; and
+- exposes current `inspect()`, `inspectCache()`, and `inspectRelational()` snapshots;
+- buffers at most 5,000 events between panel polls; and
 - expires after five seconds without a poll, removing every event subscription.
 
 The bridge serializes values before they cross the browser DevTools evaluation boundary.
 Errors retain their name and message, bigint values become strings, and circular values
-are marked instead of breaking the panel.
+are marked instead of breaking the panel. Event payloads and current query, cache, and
+relational values are depth-, item-, string-, and node-bounded before serialization.
+
+## Connection diagnostics
+
+Adapters may expose transport lifecycle events through Figbird's adapter-neutral
+connection observer. The Feathers adapter maps Socket.IO `connect`, `disconnect`,
+connection failure, and Manager reconnection state into this observer. A successful
+reconnection remains the single trigger for Figbird's active-query sweep.
+
+The panel retains these lifecycle events in the bounded event log and renders a
+**Connection** timeline lane. Red spans show detected offline intervals; the reconnect
+marker carries the final attempt count and transport so the refetch activity immediately
+after it can be correlated visually. Individual retry attempts are deliberately
+coalesced instead of filling the event buffer. Authentication payloads and tokens are
+never collected.
+
+## Causal traces
+
+Runtime events carry stable, session-local identifiers where one operation causes
+another. Realtime items and reconnections are trace roots. Cache updates retain the
+root identifier, reconciliation decisions record whether work started, coalesced,
+deferred while hidden, or became pending while inactive, and fetch attempts carry
+their reason, retry attempt, and causes. Fetch end/error events share a fetch ID with
+their start event.
+
+The event details pane assembles those events into one causal chain. Timeline fetch,
+realtime, and connection marks link into the same chain. This metadata is emitted only
+while something subscribes to `figbird.events`, and the extension continues to bound
+all retained history.
+
+The Events tab defaults to an **Activity** projection: one summary row per causal trace,
+mutation, or action. Supporting cache, reconciliation, retry, and sweep events remain in
+the row's details. **All events** exposes the complete raw instrumentation stream when a
+forensic view is needed.
+
+The Queries tab separates **Inactive queries** from the live view. These are still
+present in Figbird's cache but currently have no subscribers, so they remain inspectable
+until normal garbage collection removes them. **All queries** also includes bounded
+DevTools history for queries that are no longer present in Figbird.
+
+Read-only JSON values use a shared syntax-highlighted browser. The root is expanded so
+top-level properties are immediately visible, nested containers are individually
+collapsible, and **Expand all** opens the complete value. **Raw** switches to highlighted
+formatted JSON. The cache editor remains a JSON textarea because it accepts replacement
+input rather than only inspecting a value.
+
+## Cache inspection and editing
+
+The page bridge exposes a serialized projection of each service's normalized entities,
+their current query memberships, and complete-set materialization marker. The collector
+adds session-local provenance from cache-update events (fetch, realtime, mutation,
+optimistic projection, or devtools edit).
+
+An attached extension session may replace one existing entity in memory. The edited
+JSON must retain the same entity ID. Figbird reapplies locally decidable query results
+and replaces the value in query results that already contain the entity; it never sends
+a service mutation or server request. The panel labels this behavior explicitly and
+offers a one-step undo. Later fetches or realtime events may overwrite the edit.
 
 ## Extension architecture
 
 ```
 lib/core/devtoolsBridge.ts  weak instance registry and inspected-page session
 lib/devtools/collector.ts   bounded query, event, timeline, and write history
+lib/devtools/timelineTraceStore.ts  Timeline-owned causal summaries independent of Events
+lib/devtools/historicalValue.ts  retained-or-evicted diagnostic value contract
 lib/devtools/Devtools.tsx   shared React panel used only by the extension
-extensions/src/remote.ts    polling transport exposed as a collector-compatible source
+extensions/src/remote.ts    polling transport that publishes decoded collector frames
 extensions/src/protocol.ts  versioned snapshot envelope and wire-to-panel decoding
 extensions/src/inspection.ts  extension-side picker lifecycle and state
 extensions/src/inspectionPage.ts  injected element picker and React query-area scanner
@@ -61,6 +121,6 @@ to expire.
 
 ## Scope
 
-The panel is read-only apart from clearing its local history and starting or stopping the
-element picker. It does not persist history across reloads, edit application state, or
-provide time travel.
+The panel is read-only apart from clearing local history, controlling the element picker,
+and explicitly replacing an existing cached entity in memory. It does not persist history
+across reloads, write cache edits to the server, or provide time travel.

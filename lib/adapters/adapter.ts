@@ -61,6 +61,23 @@ export interface EventHandlers {
   removed: (item: unknown) => void
 }
 
+/** Transport lifecycle facts an adapter can expose for observability. */
+export type AdapterConnectionEvent =
+  | { type: 'connected'; transport?: string; connectionId?: string }
+  | {
+      type: 'disconnected'
+      reason?: string
+      reconnecting: boolean
+    }
+  | {
+      type: 'reconnected'
+      attempt?: number
+      transport?: string
+      connectionId?: string
+    }
+  | { type: 'error'; phase: 'connect' | 'reconnect'; error: Error }
+  | { type: 'reconnect-failed'; error?: Error }
+
 /** Service context supplied when the adapter evaluates a query locally. */
 export interface MatcherContext {
   serviceName: string
@@ -101,6 +118,9 @@ export interface Adapter<
   // Optional reconnect support. Adapters should call the handler when the transport
   // reconnects after a period where realtime events may have been missed.
   subscribeToReconnect?(handler: () => void): () => void
+
+  /** Optional detailed transport lifecycle for devtools and diagnostics. */
+  subscribeToConnectionEvents?(handler: (event: AdapterConnectionEvent) => void): () => void
 
   /**
    * Read an item's id, or `undefined` when absent. Pure extraction — whether a

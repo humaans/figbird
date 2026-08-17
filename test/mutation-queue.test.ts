@@ -29,7 +29,7 @@ test('mutation queue: buffered patches coalesce while every call projects immedi
   const mutationEvents: FigbirdEvent[] = []
   const unsubscribeMutationEvents = figbird.events.subscribe(event => mutationEvents.push(event))
   const unsubscribeEvents = figbird.queryStore.subscribeToProcessedEvents(event => {
-    if (event.origin === 'projection' && event.itemId === '1') projectionEvents += 1
+    if (event.mode === 'optimistic' && event.itemId === '1') projectionEvents += 1
   })
   const unsubscribeSettlements = figbird.queryStore.subscribeToProjectionSettlements(event => {
     if (event.itemId === '1') projectionSettlements += 1

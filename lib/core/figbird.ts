@@ -29,17 +29,31 @@ import {
   type QueryBuilderResult,
 } from './queryBuilder.js'
 import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
-import { explainQuery, type ExplainReport, type QueryNodeClass } from './queryClassification.js'
+import {
+  explainQuery,
+  explainQueryNode,
+  isServerMaintained,
+  type ClassificationReason,
+  type ExplainReport,
+  type QueryNodeClass,
+} from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
 import {
   QueryStore,
+  type DevtoolsCacheEditResult,
+  type QueryFetchHistoryEntry,
   type ReconnectJitter,
   type RetryDelay,
   type VisibilitySource,
 } from './queryStore.js'
 
-export type { ReconnectJitter, RetryDelay, VisibilitySource } from './queryStore.js'
+export type {
+  QueryFetchHistoryEntry,
+  ReconnectJitter,
+  RetryDelay,
+  VisibilitySource,
+} from './queryStore.js'
 import {
   normalizeQueryConfig,
   queryOfParams,
@@ -287,10 +301,10 @@ export class Figbird<
   }
 
   /**
-   * Returns the entire internal state map keyed by service name — including the
-   * cached entities themselves, which `inspect()` deliberately omits. Debug-grade:
-   * internal shapes may change between versions; prefer `inspect()` for anything
-   * built to last.
+   * Returns the entire internal state map keyed by service name — including cached
+   * entities that are not part of a current query result. Debug-grade: internal
+   * shapes may change between versions; prefer `inspect()` for anything built to
+   * last.
    */
   getState(): Map<string, ServiceState<AdapterFindMeta<A>>> {
     return this.queryStore.getState()
@@ -507,7 +521,7 @@ export class Figbird<
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
-    const unsub = ref.subscribe(() => {}, options ?? {})
+    const unsub = ref.subscribe(() => {}, { ...options, source: 'prepare' })
     return {
       key: ref.hash(),
       promise: ref.suspensePromise(),
@@ -558,7 +572,7 @@ export class Figbird<
 
     // The pin also carries the staleTime so a warm-in-store read within the window
     // skips the SWR revalidation instead of re-fetching.
-    const release = ref.subscribe(() => {}, { staleTime })
+    const release = ref.subscribe(() => {}, { staleTime, source: 'prefetch' })
     const timer = setTimeout(() => {
       this.#prefetches.delete(hash)
       release()
@@ -927,6 +941,15 @@ export class Figbird<
         const stats = this.queryStore.getQueryStats(query.queryId)
         const generation = this.queryStore.getQueryGeneration(query.queryId)
         if (generation === undefined) continue
+        const explanation =
+          query.desc.method === 'find'
+            ? explainQueryNode(q, {
+                server: query.config.server,
+                allPages: 'allPages' in query.config && query.config.allPages === true,
+                localOperators: locallySupportedOperators(this.adapter, serviceName),
+                snapshot: query.config.realtime === 'disabled',
+              })
+            : null
         rows.push({
           queryId: query.queryId,
           generation,
@@ -943,8 +966,17 @@ export class Figbird<
               }
             : {}),
           classification: query.classification,
+          classificationReasons: explanation?.reasons ?? [],
+          realtimeStrategy:
+            query.config.realtime === 'disabled'
+              ? 'manual'
+              : query.config.realtime === 'refetch' || isServerMaintained(query.classification)
+                ? 'refetch'
+                : 'merge',
+          skipped: query.config.skip === true,
           status: query.state.status,
           isFetching: query.state.isFetching,
+          data: query.state.data,
           itemCount: Array.isArray(query.state.data)
             ? query.state.data.length
             : query.state.data
@@ -956,10 +988,33 @@ export class Figbird<
           errorCount: stats?.errorCount ?? 0,
           ...(stats?.lastDurationMs !== undefined ? { lastDurationMs: stats.lastDurationMs } : {}),
           totalDurationMs: stats?.totalDurationMs ?? 0,
+          fetchHistory: stats?.history ?? [],
         })
       }
     }
     return rows
+  }
+
+  /** Read-only normalized entity-cache projection for attached devtools. */
+  inspectCache(): InspectedCacheService[] {
+    return [...this.queryStore.getState()].map(([serviceName, service]) => ({
+      serviceName,
+      ...(service.materialized ? { materialized: service.materialized } : {}),
+      entities: [...service.entities].map(([id, value]) => ({
+        id,
+        value,
+        queryIds: [...(service.itemQueryIndex.get(id) ?? [])],
+      })),
+    }))
+  }
+
+  /** @internal Browser-devtools command; changes only the in-memory cache. */
+  editCacheEntity(
+    serviceName: string,
+    itemId: string | number,
+    item: unknown,
+  ): DevtoolsCacheEditResult {
+    return this.queryStore.editCacheEntity(serviceName, itemId, item)
   }
 
   /**
@@ -990,8 +1045,14 @@ export interface InspectedQuery {
   /** Native adapter page details. Offset pages remain visible in `query` as `$skip`/`$limit`. */
   page?: { request: PageRequest; info?: PageInfo }
   classification: QueryNodeClass | 'get'
+  classificationReasons?: ClassificationReason[]
+  realtimeStrategy?: 'merge' | 'refetch' | 'manual'
+  /** True when this entry was materialized with `skip: true`. */
+  skipped?: boolean
   status: 'loading' | 'success' | 'error'
   isFetching: boolean
+  /** Current result for this query. Debug-only and safe to inspect, not mutate. */
+  data?: unknown
   itemCount: number
   fetchedAt: number | undefined
   subscriberCount: number
@@ -999,4 +1060,18 @@ export interface InspectedQuery {
   errorCount: number
   lastDurationMs?: number
   totalDurationMs: number
+  /** Bounded, payload-free latency history used by attached developer tools. */
+  fetchHistory?: readonly QueryFetchHistoryEntry[]
+}
+
+export interface InspectedCacheEntity {
+  id: string
+  value: unknown
+  queryIds: string[]
+}
+
+export interface InspectedCacheService {
+  serviceName: string
+  materialized?: { queryId: string; fetchedAt: number }
+  entities: InspectedCacheEntity[]
 }

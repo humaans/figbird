@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { FigbirdEventEmitter, type FigbirdEvent } from '../core/events.js'
+import { normalizeError } from '../core/errors.js'
 import type { FigbirdEvents } from '../core/figbird.js'
 import { useFigbirdMaybe } from './context.js'
 
@@ -199,7 +200,7 @@ export function useActionImpl<TArgs extends unknown[], TResult>(
             durationMs: Date.now() - startedAt,
           })
         } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err))
+          const error = normalizeError(err)
           if (mountedRef.current) {
             dispatch({ type: 'failure', payload: error })
           }

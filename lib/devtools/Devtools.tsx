@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { CacheTab, type DevtoolsCacheEditor } from './CacheTab.js'
 import { EventsTab } from './EventsTab.js'
-import { QueriesTab } from './QueriesTab.js'
+import { QueriesTab, operationIsInactive, operationIsRetained } from './QueriesTab.js'
 import { TimelineFollowControl, TimelineTab } from './TimelineTab.js'
-import { WritesTab } from './WritesTab.js'
-import type { Collector } from './collector.js'
+import type { TimelineVisibility } from './TimelineActivityTable.js'
+import type { Collector, QuerySpan } from './collector.js'
 import { buildDevtoolsModel } from './model.js'
 import {
   ThemeContext,
+  TooltipLayer,
   buttonStyle,
   darkColors,
   lightColors,
@@ -16,7 +18,9 @@ import {
   type DevtoolsThemeMode,
 } from './ui.js'
 
-type Tab = 'queries' | 'timeline' | 'events' | 'writes'
+type Tab = 'queries' | 'timeline' | 'events' | 'cache'
+export type QueryVisibility = 'active' | 'inactive' | 'retained' | 'all' | 'skipped'
+export type EventVisibility = 'groups' | 'raw'
 
 export type DevtoolsInspectionSnapshot =
   | { kind: 'idle'; version: number }
@@ -40,6 +44,7 @@ export interface DevtoolsInspectionController {
 export interface FigbirdDevtoolsPanelProps {
   collector: Collector
   inspection?: DevtoolsInspectionController
+  cacheEditor?: DevtoolsCacheEditor
   status?: string
   theme?: DevtoolsThemeMode
 }
@@ -52,6 +57,7 @@ const getEmptyInspection = () => EMPTY_INSPECTION
 export function FigbirdDevtoolsPanel({
   collector,
   inspection,
+  cacheEditor,
   status,
   theme = 'system',
 }: FigbirdDevtoolsPanelProps) {
@@ -61,9 +67,57 @@ export function FigbirdDevtoolsPanel({
   const themeValue = useMemo(() => ({ colors, styles }), [colors, styles])
   const [tab, setTab] = useState<Tab>('queries')
   const [queryFilter, setQueryFilter] = useState('')
-  const [queryActiveOnly, setQueryActiveOnly] = useState(true)
+  const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
+  const [eventVisibility, setEventVisibility] = useState<EventVisibility>('groups')
+  const [timelineFilter, setTimelineFilter] = useState('')
+  const [timelineVisibility, setTimelineVisibility] = useState<TimelineVisibility>('all')
+  const [cacheFilter, setCacheFilter] = useState('')
+  const [selectedQueryId, setSelectedQueryId] = useState<string | null>(null)
+  const [selectedTraceId, setSelectedTraceId] = useState<number | null>(null)
+  const [requestedTimelineActivityId, setRequestedTimelineActivityId] = useState<string | null>(
+    null,
+  )
+  const [requestedCacheEntity, setRequestedCacheEntity] = useState<{
+    serviceName: string
+    itemId: string | number
+  } | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
+  const panelRef = useRef<HTMLElement>(null)
+
+  const inspectFetch = useCallback((span: QuerySpan) => {
+    if (span.fetchId !== undefined) {
+      setTimelineFilter('')
+      setTimelineVisibility('all')
+      setTimelineFollow(false)
+      setRequestedTimelineActivityId(`fetch:${span.fetchId}`)
+      setTab('timeline')
+      return
+    }
+
+    const traceId = span.traceIds?.[0]
+    if (traceId !== undefined) {
+      setSelectedTraceId(traceId)
+      setTab('events')
+    }
+  }, [])
+
+  const openQuery = useCallback(
+    (queryId: string) => {
+      inspection?.stop()
+      setQueryFilter('')
+      setQueryVisibility('all')
+      setSelectedQueryId(queryId)
+      setTab('queries')
+    },
+    [inspection],
+  )
+
+  const openCacheEntity = useCallback((serviceName: string, itemId: string | number) => {
+    setCacheFilter('')
+    setRequestedCacheEntity({ serviceName, itemId })
+    setTab('cache')
+  }, [])
 
   useEffect(() => {
     collector.start()
@@ -80,26 +134,34 @@ export function FigbirdDevtoolsPanel({
   )
 
   const model = useMemo(() => buildDevtoolsModel(snapshot), [snapshot])
+  const skippedQueryCount = model.operations.filter(operation => operation.summary.skipped).length
+  const inactiveQueryCount = model.operations.filter(operationIsInactive).length
+  const retainedQueryCount = model.operations.filter(operationIsRetained).length
   const timelineEmpty =
     snapshot.timeline.realtime.length === 0 &&
-    snapshot.queries.every(query => query.spans.length === 0)
+    snapshot.timeline.connection.length === 0 &&
+    snapshot.queries.every(query => query.spans.length === 0) &&
+    snapshot.writes.every(write => write.startedAt < snapshot.timeline.startedAt)
   const clearTimeline = useCallback(() => {
     collector.clearTimeline()
     setTimelineFollow(true)
   }, [collector])
   const clearAction =
     tab === 'events'
-      ? { disabled: snapshot.events.length === 0, run: () => collector.clearEvents() }
+      ? {
+          label: 'Clear events',
+          disabled: snapshot.events.length === 0,
+          run: () => collector.clearEvents(),
+        }
       : tab === 'timeline'
-        ? { disabled: timelineEmpty, run: clearTimeline }
-        : tab === 'writes'
-          ? { disabled: snapshot.writes.length === 0, run: () => collector.clearWrites() }
-          : null
+        ? { label: 'Clear recording', disabled: timelineEmpty, run: clearTimeline }
+        : null
   const inspected = inspectionSnapshot.kind === 'selected' ? inspectionSnapshot : null
 
   return (
     <ThemeContext.Provider value={themeValue}>
       <section
+        ref={panelRef}
         data-figbird-devtools='panel'
         aria-label='Figbird devtools'
         style={{
@@ -111,19 +173,11 @@ export function FigbirdDevtoolsPanel({
           boxShadow: 'none',
         }}
       >
+        <TooltipLayer rootRef={panelRef} />
         <header style={styles.header}>
           <span style={styles.brand}>figbird</span>
-          {(['queries', 'timeline', 'events', 'writes'] as const).map(item => (
-            <TabButton
-              key={item}
-              active={tab === item}
-              onClick={() => setTab(item)}
-              label={
-                item === 'writes' && snapshot.inFlightWrites > 0
-                  ? `writes (${snapshot.inFlightWrites})`
-                  : item
-              }
-            />
+          {(['queries', 'timeline', 'events', 'cache'] as const).map(item => (
+            <TabButton key={item} active={tab === item} onClick={() => setTab(item)} label={item} />
           ))}
           {tab === 'queries' ? (
             <>
@@ -133,22 +187,24 @@ export function FigbirdDevtoolsPanel({
                 onChange={event => setQueryFilter(event.currentTarget.value)}
                 placeholder='Filter service or query'
               />
-              <label
-                style={{
-                  color: colors.muted,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  whiteSpace: 'nowrap',
-                }}
+              <select
+                aria-label='Query visibility'
+                value={queryVisibility}
+                onChange={event => setQueryVisibility(event.currentTarget.value as QueryVisibility)}
+                style={styles.select}
               >
-                <input
-                  type='checkbox'
-                  checked={queryActiveOnly}
-                  onChange={event => setQueryActiveOnly(event.currentTarget.checked)}
-                />
-                active only
-              </label>
+                <option value='active'>Live queries</option>
+                <option value='inactive'>
+                  Inactive cached{inactiveQueryCount > 0 ? ` (${inactiveQueryCount})` : ''}
+                </option>
+                <option value='retained'>
+                  Retained history{retainedQueryCount > 0 ? ` (${retainedQueryCount})` : ''}
+                </option>
+                <option value='skipped'>
+                  Skipped queries{skippedQueryCount > 0 ? ` (${skippedQueryCount})` : ''}
+                </option>
+                <option value='all'>All queries</option>
+              </select>
               {inspection ? (
                 <button
                   type='button'
@@ -156,7 +212,7 @@ export function FigbirdDevtoolsPanel({
                   onClick={
                     inspectionSnapshot.kind === 'picking' ? inspection.stop : inspection.start
                   }
-                  title='Pick an area of the inspected page and show its mounted queries'
+                  data-tooltip='Pick an area of the inspected page and show its mounted queries'
                 >
                   {inspectionSnapshot.kind === 'picking' ? 'Cancel' : 'Inspect'}
                 </button>
@@ -165,7 +221,7 @@ export function FigbirdDevtoolsPanel({
                 <button
                   type='button'
                   onClick={inspection!.stop}
-                  title={inspectionTitle(inspected)}
+                  data-tooltip={inspectionTitle(inspected)}
                   style={{
                     ...buttonStyle(colors, true),
                     color: !inspected.supported
@@ -193,19 +249,79 @@ export function FigbirdDevtoolsPanel({
               ) : null}
             </>
           ) : null}
+          {tab === 'timeline' ? (
+            <>
+              <input
+                aria-label='Filter timeline activity'
+                style={styles.input}
+                value={timelineFilter}
+                onChange={event => setTimelineFilter(event.currentTarget.value)}
+                placeholder='Filter activity'
+              />
+              <select
+                aria-label='Timeline visibility'
+                value={timelineVisibility}
+                onChange={event =>
+                  setTimelineVisibility(event.currentTarget.value as TimelineVisibility)
+                }
+                style={styles.select}
+              >
+                <option value='all'>All activity</option>
+                <option value='fetch'>Fetches</option>
+                <option value='realtime'>Realtime</option>
+                <option value='write'>Writes</option>
+                <option value='connection'>Connection</option>
+                <option value='errors'>Errors</option>
+              </select>
+            </>
+          ) : null}
           {tab === 'events' ? (
+            <>
+              <input
+                style={styles.input}
+                value={eventFilter}
+                onChange={event => setEventFilter(event.currentTarget.value)}
+                placeholder={
+                  eventVisibility === 'groups' ? 'Filter causal groups' : 'Filter raw events'
+                }
+              />
+              <select
+                aria-label='Event visibility'
+                data-tooltip='Causal groups connect related work; Raw events shows the instrumentation stream'
+                value={eventVisibility}
+                onChange={event => setEventVisibility(event.currentTarget.value as EventVisibility)}
+                style={styles.select}
+              >
+                <option value='groups'>Causal groups</option>
+                <option value='raw'>Raw events</option>
+              </select>
+            </>
+          ) : null}
+          {tab === 'cache' ? (
             <input
               style={styles.input}
-              value={eventFilter}
-              onChange={event => setEventFilter(event.currentTarget.value)}
-              placeholder='Filter events'
+              value={cacheFilter}
+              onChange={event => setCacheFilter(event.currentTarget.value)}
+              placeholder='Filter service, entity ID, or value'
             />
+          ) : null}
+          {tab === 'events' ? (
+            <span
+              data-tooltip='The oldest event is discarded when the bounded buffer is full'
+              style={{ color: colors.muted, whiteSpace: 'nowrap' }}
+            >
+              {snapshot.events.length} / {collector.eventLimit} retained
+            </span>
           ) : null}
           {tab === 'timeline' ? (
             <TimelineFollowControl value={timelineFollow} onChange={setTimelineFollow} />
           ) : null}
           {clearAction ? (
-            <ClearButton disabled={clearAction.disabled} onClick={clearAction.run} />
+            <ClearButton
+              label={clearAction.label}
+              disabled={clearAction.disabled}
+              onClick={clearAction.run}
+            />
           ) : null}
           <span style={styles.spacer} />
           {status ? (
@@ -217,27 +333,56 @@ export function FigbirdDevtoolsPanel({
             <QueriesTab
               model={model}
               filter={queryFilter}
-              activeOnly={queryActiveOnly}
+              visibility={queryVisibility}
               inspectedQueryCounts={inspected?.queryCounts ?? null}
+              selectedQueryId={selectedQueryId}
+              onSelectedQueryIdChange={setSelectedQueryId}
+              onFetchSelect={inspectFetch}
             />
           ) : null}
           {tab === 'timeline' ? (
             <TimelineTab
               snapshot={snapshot}
               model={model}
+              filter={timelineFilter}
+              visibility={timelineVisibility}
               follow={timelineFollow}
               onFollowChange={setTimelineFollow}
+              requestedActivityId={requestedTimelineActivityId}
+              onRequestedActivityHandled={() => setRequestedTimelineActivityId(null)}
+              onQuerySelect={openQuery}
+              onCacheEntitySelect={openCacheEntity}
+              onTraceSelect={traceId => {
+                setSelectedTraceId(traceId)
+                setTab('events')
+              }}
             />
           ) : null}
           {tab === 'events' ? (
             <EventsTab
               events={snapshot.events}
               filter={eventFilter}
+              visibility={eventVisibility}
               scopes={model.scopesByQueryId}
+              selectedTraceId={selectedTraceId}
+              onSelectedTraceIdChange={setSelectedTraceId}
+              onViewQuery={openQuery}
             />
           ) : null}
-          {tab === 'writes' ? (
-            <WritesTab writes={snapshot.writes} inFlight={snapshot.inFlightWrites} />
+          {tab === 'cache' ? (
+            <CacheTab
+              services={snapshot.cache ?? []}
+              model={model}
+              filter={cacheFilter}
+              requestedEntity={requestedCacheEntity}
+              onRequestedEntityHandled={() => setRequestedCacheEntity(null)}
+              {...(cacheEditor ? { editor: cacheEditor } : {})}
+              onViewTrace={traceId => {
+                setSelectedTraceId(traceId)
+                setTab('events')
+              }}
+              onViewQuery={openQuery}
+            />
           ) : null}
         </main>
       </section>
@@ -263,7 +408,15 @@ function inspectionTitle({
   return `Clear area filter: ${queryCounts.size} query roots mounted in ${label}`
 }
 
-function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+function ClearButton({
+  label,
+  disabled,
+  onClick,
+}: {
+  label: string
+  disabled: boolean
+  onClick: () => void
+}) {
   const { colors } = useDevtoolsTheme()
   return (
     <button
@@ -272,7 +425,7 @@ function ClearButton({ disabled, onClick }: { disabled: boolean; onClick: () => 
       disabled={disabled}
       onClick={onClick}
     >
-      Clear
+      {label}
     </button>
   )
 }
@@ -299,7 +452,7 @@ function TabButton({
         background: 'transparent',
         color: active ? colors.text : colors.muted,
         font: 'inherit',
-        fontWeight: active ? 650 : 500,
+        fontWeight: 500,
         cursor: 'pointer',
       }}
       onClick={onClick}

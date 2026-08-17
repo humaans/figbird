@@ -2,9 +2,10 @@ import { createQueryId } from './queryIdentity.js'
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryStore } from './queryStore.js'
 import type {
-  ProcessedRealtimeEvent,
+  ProcessedCacheEvent,
   QueryConfig,
   QueryDescriptor,
+  QueryExecutionOptions,
   QueryState,
 } from './queryTypes.js'
 
@@ -64,7 +65,7 @@ export class QueryRef<
    */
   subscribe(
     fn: (state: QueryState<T, TMeta>) => void,
-    options?: { staleTime?: number | undefined },
+    options?: QueryExecutionOptions,
   ): () => void {
     this.#queryStore.materialize(this)
     return this.#queryStore.subscribe<T>(this.#queryId, fn, options)
@@ -74,7 +75,7 @@ export class QueryRef<
    * Re-run the store's subscribe-time freshness check without adding a listener.
    * Relational refs use this when a stricter subscriber joins an already-live tree.
    */
-  ensureFresh(options?: { staleTime?: number | undefined }): void {
+  ensureFresh(options?: QueryExecutionOptions): void {
     this.#queryStore.materialize(this)
     this.#queryStore.ensureFresh(this.#queryId, options)
   }
@@ -86,9 +87,9 @@ export class QueryRef<
   }
 
   /** Triggers a refetch for this query. */
-  refetch(): void {
+  refetch(options?: Omit<QueryExecutionOptions, 'staleTime'>): void {
     this.#queryStore.materialize(this)
-    return this.#queryStore.refetch(this.#queryId)
+    return this.#queryStore.refetch(this.#queryId, undefined, options)
   }
 
   /** Route an event-driven refetch through the store's reconciliation gate. @internal */
@@ -98,7 +99,7 @@ export class QueryRef<
   }
 
   /** Apply a value-only update to an already-visible row. @internal */
-  applyVisibleEvent(event: ProcessedRealtimeEvent): void {
+  applyVisibleEvent(event: ProcessedCacheEvent): void {
     this.#queryStore.materialize(this)
     this.#queryStore.applyVisibleEvent(this.#queryId, event)
   }

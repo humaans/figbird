@@ -3,11 +3,15 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from 'react'
+import { createPortal } from 'react-dom'
 
 const MIN_DETAILS_WIDTH = 280
 const DEFAULT_DETAILS_WIDTH = 360
@@ -32,6 +36,7 @@ export interface DevtoolsColors {
   blue: string
   purple: string
   activeButtonBg: string
+  relatedRowBg: string
   drawerShadow: string
 }
 
@@ -48,14 +53,15 @@ export const lightColors: DevtoolsColors = {
   border: '#d7dde3',
   rowBorder: '#e8edf2',
   text: '#18202a',
-  muted: '#687483',
-  faint: '#8b98a6',
+  muted: '#4f5b69',
+  faint: '#687483',
   green: '#087f4f',
   amber: '#a76500',
   red: '#cf3030',
   blue: '#1d65d8',
   purple: '#8a3ffc',
   activeButtonBg: 'rgba(29,101,216,.1)',
+  relatedRowBg: 'rgba(29,101,216,.045)',
   drawerShadow: '0 -18px 50px rgba(29,42,58,.2)',
 }
 
@@ -67,14 +73,15 @@ export const darkColors: DevtoolsColors = {
   border: '#343b42',
   rowBorder: 'rgba(255,255,255,.06)',
   text: '#f2f4f5',
-  muted: '#9aa3ad',
-  faint: '#65717c',
+  muted: '#b4bcc5',
+  faint: '#8d98a3',
   green: '#63d28f',
   amber: '#e7bd58',
   red: '#ff7777',
   blue: '#74a7ff',
   purple: '#c98cff',
   activeButtonBg: 'rgba(116,167,255,.16)',
+  relatedRowBg: 'rgba(116,167,255,.07)',
   drawerShadow: '0 -18px 50px rgba(0,0,0,.45)',
 }
 
@@ -86,6 +93,19 @@ const defaultTheme: DevtoolsTheme = {
 export const ThemeContext = createContext<DevtoolsTheme>(defaultTheme)
 
 export function makeStyles(colors: DevtoolsColors) {
+  const input: CSSProperties = {
+    width: 210,
+    maxWidth: '44vw',
+    height: 26,
+    boxSizing: 'border-box',
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    background: colors.panel,
+    color: colors.text,
+    padding: '4px 8px',
+    font: 'inherit',
+  }
+  const chevronColor = colors.muted.replace('#', '%23')
   return {
     drawer: {
       position: 'fixed',
@@ -130,15 +150,17 @@ export function makeStyles(colors: DevtoolsColors) {
       flex: 1,
       minHeight: 0,
     },
-    input: {
-      width: 210,
-      maxWidth: '44vw',
-      border: `1px solid ${colors.border}`,
-      borderRadius: 4,
-      background: colors.panel,
-      color: colors.text,
-      padding: '5px 8px',
-      font: 'inherit',
+    input,
+    select: {
+      ...input,
+      width: 'auto',
+      maxWidth: 'none',
+      appearance: 'none',
+      paddingRight: 30,
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='${chevronColor}' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
+      backgroundRepeat: 'no-repeat',
+      backgroundPosition: 'right 10px center',
+      backgroundSize: '10px 6px',
     },
     scroll: {
       height: '100%',
@@ -152,10 +174,11 @@ export function makeStyles(colors: DevtoolsColors) {
     },
     th: {
       textAlign: 'left',
-      color: colors.muted,
-      fontWeight: 600,
+      color: colors.text,
+      fontWeight: 400,
+      cursor: 'default',
       padding: '6px 10px',
-      borderBottom: `1px solid ${colors.border}`,
+      boxShadow: `inset 0 -1px ${colors.border}`,
       position: 'sticky',
       top: 0,
       background: colors.bg,
@@ -165,7 +188,7 @@ export function makeStyles(colors: DevtoolsColors) {
       whiteSpace: 'nowrap',
     },
     td: {
-      padding: '6px 10px',
+      padding: '5px 10px',
       borderBottom: `1px solid ${colors.rowBorder}`,
       verticalAlign: 'middle',
       overflow: 'hidden',
@@ -228,19 +251,195 @@ export function makeStyles(colors: DevtoolsColors) {
       borderBottom: `1px solid ${colors.rowBorder}`,
       alignItems: 'center',
     },
-    writeRow: {
-      display: 'grid',
-      gridTemplateColumns: '96px 1fr 80px 90px',
-      gap: 8,
-      padding: '6px 10px',
-      borderBottom: `1px solid ${colors.rowBorder}`,
-      alignItems: 'center',
-    },
   } satisfies Record<string, CSSProperties>
 }
 
 export function useDevtoolsTheme(): DevtoolsTheme {
   return useContext(ThemeContext)
+}
+
+interface TooltipTarget {
+  anchor: HTMLElement
+  content: string
+}
+
+interface TooltipPosition {
+  left: number
+  top: number
+}
+
+const TOOLTIP_DELAY_MS = 700
+const TOOLTIP_SKIP_DELAY_MS = 400
+
+/** One delegated tooltip surface for the entire devtools panel. */
+export function TooltipLayer({ rootRef }: { rootRef: RefObject<HTMLElement | null> }) {
+  const { colors } = useDevtoolsTheme()
+  const [target, setTarget] = useState<TooltipTarget | null>(null)
+  const [position, setPosition] = useState<TooltipPosition | null>(null)
+  const tooltipRef = useRef<HTMLDivElement>(null)
+  const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const tooltipSessionActive = useRef(false)
+
+  const hide = useCallback((keepSession = false) => {
+    if (showTimer.current) clearTimeout(showTimer.current)
+    if (sessionTimer.current) clearTimeout(sessionTimer.current)
+    showTimer.current = null
+    sessionTimer.current = null
+    setTarget(null)
+    setPosition(null)
+    if (keepSession && tooltipSessionActive.current) {
+      sessionTimer.current = setTimeout(() => {
+        sessionTimer.current = null
+        tooltipSessionActive.current = false
+      }, TOOLTIP_SKIP_DELAY_MS)
+    } else {
+      tooltipSessionActive.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const ownerWindow = root.ownerDocument.defaultView
+    if (!ownerWindow) return
+
+    const tooltipAnchor = (eventTarget: EventTarget | null): HTMLElement | null => {
+      if (!(eventTarget instanceof ownerWindow.Element)) return null
+      let anchor: Element | null = eventTarget.closest('[data-tooltip]')
+      while (anchor instanceof ownerWindow.HTMLElement && root.contains(anchor)) {
+        const overflowOnly = anchor.hasAttribute('data-tooltip-overflow')
+        const clipped =
+          anchor.scrollWidth > anchor.clientWidth || anchor.scrollHeight > anchor.clientHeight
+        if (!overflowOnly || clipped) return anchor
+        anchor = anchor.parentElement?.closest('[data-tooltip]') ?? null
+      }
+      return null
+    }
+    const show = (anchor: HTMLElement, immediate: boolean) => {
+      const content = anchor.dataset.tooltip
+      if (!content) return
+      if (showTimer.current) clearTimeout(showTimer.current)
+      if (sessionTimer.current) clearTimeout(sessionTimer.current)
+      sessionTimer.current = null
+      const reveal = () => {
+        showTimer.current = null
+        if (!anchor.isConnected) return
+        tooltipSessionActive.current = true
+        setTarget({ anchor, content })
+      }
+      if (immediate || tooltipSessionActive.current) reveal()
+      else showTimer.current = setTimeout(reveal, TOOLTIP_DELAY_MS)
+    }
+    const onPointerOver = (event: PointerEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (!anchor || tooltipAnchor(event.relatedTarget) === anchor) return
+      show(anchor, false)
+    }
+    const onPointerOut = (event: PointerEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (!anchor) return
+      const nextAnchor = tooltipAnchor(event.relatedTarget)
+      if (nextAnchor === anchor) return
+      if (nextAnchor) show(nextAnchor, false)
+      else hide(true)
+    }
+    const onFocusIn = (event: FocusEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (anchor) show(anchor, true)
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      const anchor = tooltipAnchor(event.target)
+      if (!anchor) return
+      const related = event.relatedTarget
+      if (related instanceof ownerWindow.Node && anchor.contains(related)) return
+      hide()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') hide()
+    }
+
+    root.addEventListener('pointerover', onPointerOver)
+    root.addEventListener('pointerout', onPointerOut)
+    root.addEventListener('focusin', onFocusIn)
+    root.addEventListener('focusout', onFocusOut)
+    const onPointerDown = () => hide()
+    root.addEventListener('pointerdown', onPointerDown)
+    root.addEventListener('keydown', onKeyDown)
+    return () => {
+      root.removeEventListener('pointerover', onPointerOver)
+      root.removeEventListener('pointerout', onPointerOut)
+      root.removeEventListener('focusin', onFocusIn)
+      root.removeEventListener('focusout', onFocusOut)
+      root.removeEventListener('pointerdown', onPointerDown)
+      root.removeEventListener('keydown', onKeyDown)
+      if (showTimer.current) clearTimeout(showTimer.current)
+      if (sessionTimer.current) clearTimeout(sessionTimer.current)
+    }
+  }, [hide, rootRef])
+
+  const updatePosition = useCallback(() => {
+    if (!target || !tooltipRef.current) return
+    const { ownerDocument } = target.anchor
+    const ownerWindow = ownerDocument.defaultView
+    if (!ownerWindow) return
+    const anchorRect = target.anchor.getBoundingClientRect()
+    const tooltipRect = tooltipRef.current.getBoundingClientRect()
+    const gutter = 8
+    const gap = 7
+    const centered = anchorRect.left + anchorRect.width / 2 - tooltipRect.width / 2
+    const left = Math.max(
+      gutter,
+      Math.min(centered, ownerWindow.innerWidth - tooltipRect.width - gutter),
+    )
+    const below = anchorRect.bottom + gap
+    const top =
+      below + tooltipRect.height <= ownerWindow.innerHeight - gutter
+        ? below
+        : Math.max(gutter, anchorRect.top - tooltipRect.height - gap)
+    setPosition({ left, top })
+  }, [target])
+
+  useLayoutEffect(() => {
+    if (!target) return
+    updatePosition()
+    const ownerDocument = target.anchor.ownerDocument
+    const ownerWindow = ownerDocument.defaultView
+    ownerDocument.addEventListener('scroll', updatePosition, true)
+    ownerWindow?.addEventListener('resize', updatePosition)
+    return () => {
+      ownerDocument.removeEventListener('scroll', updatePosition, true)
+      ownerWindow?.removeEventListener('resize', updatePosition)
+    }
+  }, [target, updatePosition])
+
+  if (!target) return null
+  return createPortal(
+    <div
+      ref={tooltipRef}
+      role='tooltip'
+      style={{
+        position: 'fixed',
+        zIndex: 2147483647,
+        left: position?.left ?? -10_000,
+        top: position?.top ?? -10_000,
+        maxWidth: 'min(360px, calc(100vw - 16px))',
+        padding: '6px 8px',
+        borderRadius: 4,
+        background: colors.text,
+        color: colors.bg,
+        boxShadow: '0 4px 18px rgba(0,0,0,.24)',
+        font: '11px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        letterSpacing: 0,
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
+        pointerEvents: 'none',
+      }}
+    >
+      {target.content}
+    </div>,
+    target.anchor.ownerDocument.body,
+  )
 }
 
 export function usePreferredColorScheme(theme: DevtoolsThemeMode): ColorScheme {
@@ -337,6 +536,7 @@ export function DetailsPane({
   width,
   onResizeStart,
   onClose,
+  contentStyle,
   children,
 }: {
   title: ReactNode
@@ -344,6 +544,7 @@ export function DetailsPane({
   width: number
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   onClose: () => void
+  contentStyle?: CSSProperties
   children: ReactNode
 }) {
   const { colors, styles } = useDevtoolsTheme()
@@ -353,7 +554,6 @@ export function DetailsPane({
         role='separator'
         aria-label='Resize details pane'
         aria-orientation='vertical'
-        title='Resize details pane'
         onMouseDown={onResizeStart}
         style={{
           position: 'absolute',
@@ -408,60 +608,178 @@ export function DetailsPane({
         <button
           type='button'
           aria-label='Close details'
-          title='Close details'
+          data-tooltip='Close details'
           style={iconButtonStyle(colors)}
           onClick={onClose}
         >
           ×
         </button>
       </div>
-      <div style={styles.details}>{children}</div>
+      <div style={{ ...styles.details, ...contentStyle }}>{children}</div>
     </aside>
   )
 }
 
-export function DetailSection({ label, children }: { label: string; children: ReactNode }) {
+export function DetailSection({
+  label,
+  meta,
+  separated = false,
+  children,
+}: {
+  label: string
+  meta?: string
+  separated?: boolean
+  children: ReactNode
+}) {
   const { colors } = useDevtoolsTheme()
   return (
-    <section style={{ marginBottom: 12 }}>
+    <section
+      style={{
+        marginBottom: 14,
+        paddingTop: separated ? 12 : 0,
+        borderTop: separated ? `1px solid ${colors.rowBorder}` : undefined,
+      }}
+    >
       <div
         style={{
-          color: colors.muted,
-          fontSize: 10,
-          fontWeight: 700,
-          textTransform: 'uppercase',
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 8,
           marginBottom: 5,
         }}
       >
-        {label}
+        <strong style={{ color: colors.text, fontWeight: 650 }}>{label}</strong>
+        {meta ? <span style={{ color: colors.muted }}>{meta}</span> : null}
       </div>
       {children}
     </section>
   )
 }
 
-export function DetailStat({ label, value }: { label: string; value: string }) {
-  const { colors } = useDevtoolsTheme()
+export function DetailBlock({ children }: { children: ReactNode }) {
+  return <section style={{ marginBottom: 12 }}>{children}</section>
+}
+
+export function DetailStats({ children }: { children: ReactNode }) {
   return (
-    <span>
-      <span style={{ color: colors.muted }}>{label}</span>{' '}
-      <strong style={{ color: colors.text }}>{value}</strong>
-    </span>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+        gap: '8px 16px',
+        marginBottom: 16,
+      }}
+    >
+      {children}
+    </div>
   )
 }
 
-export function useDetailsPaneWidth(): [number, (event: ReactMouseEvent<HTMLDivElement>) => void] {
-  const [width, setWidth] = useState(DEFAULT_DETAILS_WIDTH)
+export function DetailStat({
+  label,
+  value,
+  copyValue,
+}: {
+  label: string
+  value: string
+  copyValue?: string
+}) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '82px minmax(0, 1fr)',
+        gap: 6,
+        alignItems: 'baseline',
+        minWidth: 0,
+      }}
+    >
+      <span style={{ color: colors.muted }}>{label}</span>
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 5, minWidth: 0 }}>
+        <span style={{ color: colors.text, minWidth: 0, overflowWrap: 'anywhere' }}>{value}</span>
+        {copyValue ? <CopyButton value={copyValue} /> : null}
+      </span>
+    </div>
+  )
+}
+
+export function CopyButton({ value, label = 'value' }: { value: string; label?: string }) {
+  const { colors } = useDevtoolsTheme()
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type='button'
+      aria-label={`Copy ${label}`}
+      data-tooltip={copied ? 'Copied' : `Copy ${label}`}
+      onClick={event => {
+        event.stopPropagation()
+        void copyText(value).then(success => {
+          if (!success) return
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1_200)
+        })
+      }}
+      style={{
+        flex: '0 0 auto',
+        border: 0,
+        padding: 0,
+        background: 'transparent',
+        color: copied ? colors.green : colors.faint,
+        font: 'inherit',
+        fontSize: 11,
+        lineHeight: 1,
+        cursor: 'pointer',
+      }}
+    >
+      {copied ? '✓' : '⧉'}
+    </button>
+  )
+}
+
+export async function copyText(value: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+    if (typeof document === 'undefined') return false
+    const input = document.createElement('textarea')
+    input.value = value
+    input.style.position = 'fixed'
+    input.style.opacity = '0'
+    document.body.append(input)
+    input.select()
+    const copied = document.execCommand('copy')
+    input.remove()
+    return copied
+  } catch {
+    return false
+  }
+}
+
+export interface ResizableColumn {
+  width: number
+  minWidth: number
+}
+
+export function useResizableColumns(
+  columns: readonly ResizableColumn[],
+): [number[], (index: number, event: ReactMouseEvent<HTMLElement>) => void] {
+  const [widths, setWidths] = useState<number[]>(() => columns.map(column => column.width))
   const onResizeStart = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
+    (index: number, event: ReactMouseEvent<HTMLElement>) => {
       event.preventDefault()
+      event.stopPropagation()
       const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
       const startX = event.clientX
-      const startWidth = width
-      const maxWidth = Math.min(MAX_DETAILS_WIDTH, ownerWindow.innerWidth * 0.65)
+      const startWidth = widths[index]!
+      const minWidth = columns[index]!.minWidth
       const onMove = (move: MouseEvent) => {
-        setWidth(
-          Math.max(MIN_DETAILS_WIDTH, Math.min(maxWidth, startWidth + startX - move.clientX)),
+        setWidths(current =>
+          current.map((width, columnIndex) =>
+            columnIndex === index ? Math.max(minWidth, startWidth + move.clientX - startX) : width,
+          ),
         )
       }
       const onUp = () => {
@@ -471,7 +789,90 @@ export function useDetailsPaneWidth(): [number, (event: ReactMouseEvent<HTMLDivE
       ownerWindow.addEventListener('mousemove', onMove)
       ownerWindow.addEventListener('mouseup', onUp)
     },
-    [width],
+    [columns, widths],
+  )
+  return [widths, onResizeStart]
+}
+
+export function ColumnResizeHandle({
+  label,
+  onMouseDown,
+}: {
+  label: string
+  onMouseDown: (event: ReactMouseEvent<HTMLSpanElement>) => void
+}) {
+  const { colors } = useDevtoolsTheme()
+  return (
+    <span
+      role='separator'
+      aria-label={`Resize ${label} column`}
+      aria-orientation='vertical'
+      onMouseDown={onMouseDown}
+      style={{
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 8,
+        cursor: 'col-resize',
+        zIndex: 2,
+      }}
+    >
+      <span
+        aria-hidden='true'
+        style={{
+          position: 'absolute',
+          top: '50%',
+          right: 0,
+          height: 14,
+          transform: 'translateY(-50%)',
+          borderRight: `1px solid ${colors.border}`,
+        }}
+      />
+    </span>
+  )
+}
+
+export function resizableGridTemplate(widths: readonly number[], flexibleIndex: number): string {
+  return widths
+    .map((width, index) => (index === flexibleIndex ? `minmax(${width}px, 1fr)` : `${width}px`))
+    .join(' ')
+}
+
+export function useDetailsPaneWidth({
+  defaultWidth = DEFAULT_DETAILS_WIDTH,
+  maxWidth = MAX_DETAILS_WIDTH,
+}: {
+  defaultWidth?: number
+  maxWidth?: number
+} = {}): [number, (event: ReactMouseEvent<HTMLDivElement>) => void] {
+  const [width, setWidth] = useState(() => {
+    if (typeof window === 'undefined') return defaultWidth
+    return Math.max(MIN_DETAILS_WIDTH, Math.min(defaultWidth, maxWidth, window.innerWidth * 0.65))
+  })
+  const onResizeStart = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      const ownerWindow = event.currentTarget.ownerDocument.defaultView ?? window
+      const startX = event.clientX
+      const startWidth = width
+      const availableMaxWidth = Math.min(maxWidth, ownerWindow.innerWidth * 0.65)
+      const onMove = (move: MouseEvent) => {
+        setWidth(
+          Math.max(
+            MIN_DETAILS_WIDTH,
+            Math.min(availableMaxWidth, startWidth + startX - move.clientX),
+          ),
+        )
+      }
+      const onUp = () => {
+        ownerWindow.removeEventListener('mousemove', onMove)
+        ownerWindow.removeEventListener('mouseup', onUp)
+      }
+      ownerWindow.addEventListener('mousemove', onMove)
+      ownerWindow.addEventListener('mouseup', onUp)
+    },
+    [maxWidth, width],
   )
   return [width, onResizeStart]
 }
@@ -479,31 +880,42 @@ export function useDetailsPaneWidth(): [number, (event: ReactMouseEvent<HTMLDivE
 export function Badge({
   tone,
   children,
-  title,
+  tooltip,
 }: {
   tone: 'green' | 'amber' | 'red' | 'blue' | 'neutral'
   children: string
-  title?: string | undefined
+  tooltip?: string | undefined
 }) {
   const { colors } = useDevtoolsTheme()
   const color = toneColor(colors, tone)
   return (
     <span
-      title={title}
+      data-tooltip={tooltip}
       style={{
-        display: 'inline-block',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
         alignSelf: 'center',
-        flexShrink: 0,
+        minWidth: 0,
+        maxWidth: '100%',
+        flexShrink: 1,
         color,
-        border: `1px solid ${color}`,
-        borderRadius: 999,
-        padding: '1px 6px',
         fontSize: 11,
-        lineHeight: '16px',
+        lineHeight: '14px',
         whiteSpace: 'nowrap',
       }}
     >
-      {children}
+      <span
+        aria-hidden='true'
+        style={{
+          width: 6,
+          height: 6,
+          flexShrink: 0,
+          borderRadius: 999,
+          background: color,
+        }}
+      />
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{children}</span>
     </span>
   )
 }

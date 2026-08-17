@@ -1,7 +1,7 @@
 import test from 'ava'
 import { FeathersAdapter, Figbird, createSchema, service, type RetryDelay } from '../lib'
 import { FetchEventJournal, MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
-import type { ProcessedRealtimeEvent } from '../lib/core/queryTypes'
+import type { ProcessedCacheEvent } from '../lib/core/queryTypes'
 import { mockFeathers, type TestItem } from './helpers'
 
 interface Note extends TestItem {
@@ -157,9 +157,10 @@ function ids(data: unknown): number[] {
   return (data as Note[]).map(note => note.id)
 }
 
-function processedEvent(itemId: number): ProcessedRealtimeEvent {
+function processedEvent(itemId: number): ProcessedCacheEvent {
   return {
-    origin: 'authoritative',
+    mode: 'server',
+    source: 'realtime',
     serviceName: 'notes',
     type: 'patched',
     item: { id: itemId },
@@ -273,7 +274,7 @@ test('a removed event that lands during a find is not resurrected', async t => {
 test('a complete-set refetch does not delete a row created during the fetch', async t => {
   const { figbird, notes } = createApp({ 1: { id: 1, content: 'one', rank: 1 } })
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { allPages: true })
-  const processed: ProcessedRealtimeEvent[] = []
+  const processed: ProcessedCacheEvent[] = []
   const unsubProcessed = figbird.queryStore.subscribeToProcessedEvents(event => {
     processed.push(event)
   })

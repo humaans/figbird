@@ -16,6 +16,33 @@ export function prettyJson(value: unknown): string {
   }
 }
 
+export function estimateSerializedBytes(value: unknown): number | null {
+  let serialized: string | undefined
+  try {
+    serialized = JSON.stringify(value)
+  } catch {
+    return null
+  }
+  if (serialized === undefined) return null
+
+  let bytes = 0
+  for (const character of serialized) {
+    const codePoint = character.codePointAt(0)!
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4
+  }
+  return bytes
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`
+  if (bytes < 1_048_576) return `${formatByteUnit(bytes / 1_024)} KB`
+  return `${formatByteUnit(bytes / 1_048_576)} MB`
+}
+
+function formatByteUnit(value: number): string {
+  return value < 10 ? value.toFixed(1) : Math.round(value).toString()
+}
+
 export function formatMs(ms: number): string {
   return `${Math.round(ms)}ms`
 }

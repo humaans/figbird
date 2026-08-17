@@ -1,6 +1,6 @@
 import type { PageCursor, PageInfo } from '../adapters/adapter.js'
 import type { QueryRef } from './queryRef.js'
-import type { ProcessedRealtimeEvent, QueryState } from './queryTypes.js'
+import type { ProcessedCacheEvent, QueryGraphRef, QueryState } from './queryTypes.js'
 import type { AnySchema, Schema } from './schema.js'
 
 /** The relational engine's adapter-neutral view of its root rows. */
@@ -27,8 +27,8 @@ export interface RootSource {
   snapshot(): RootSnapshot
   metadata(): RootMetadata
   setStaleTime(staleTime: number): void
-  ensureFresh(staleTime?: number): void
-  refetch(): void
+  ensureFresh(staleTime?: number, graph?: QueryGraphRef): void
+  refetch(graph?: QueryGraphRef): void
   teardown(): void
   queryIds(): string[]
 }
@@ -56,7 +56,7 @@ export interface InspectedPagination {
 }
 
 export interface PaginatedRootSource extends RootSource {
-  loadMore(): void
+  loadMore(graph?: QueryGraphRef): void
   pagination(): RelationalPaginationState
   inspectPagination(): InspectedPagination
 }
@@ -84,13 +84,14 @@ export function subscribeAndSeed<
   onSuccess: (data: unknown[]) => void,
   onChange: () => void,
   staleTime = 0,
+  graph?: QueryGraphRef,
 ): () => void {
   const unsub = queryRef.subscribe(
     state => {
       if (state.status === 'success') onSuccess(state.data as unknown[])
       onChange()
     },
-    { staleTime },
+    { staleTime, graph },
   )
   const initial = queryRef.getSnapshot()
   if (initial?.status === 'success') onSuccess(initial.data as unknown[])
@@ -116,12 +117,14 @@ export class SingleQueryRoot<
     onRows,
     onChange,
     staleTime = 0,
+    graph,
   }: {
     queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
     isGet: boolean
     onRows: (rows: unknown[]) => void
     onChange: () => void
     staleTime?: number
+    graph?: QueryGraphRef
   }) {
     this.#queryRef = queryRef
     this.#isGet = isGet
@@ -130,6 +133,7 @@ export class SingleQueryRoot<
       data => onRows(this.#asRows(data)),
       onChange,
       staleTime,
+      graph,
     )
   }
 
@@ -172,14 +176,14 @@ export class SingleQueryRoot<
     }
   }
 
-  ensureFresh(staleTime?: number): void {
-    this.#queryRef.ensureFresh({ staleTime })
+  ensureFresh(staleTime?: number, graph?: QueryGraphRef): void {
+    this.#queryRef.ensureFresh({ staleTime, graph })
   }
 
   setStaleTime(_staleTime: number): void {}
 
-  refetch(): void {
-    this.#queryRef.refetch()
+  refetch(graph?: QueryGraphRef): void {
+    this.#queryRef.refetch({ graph })
   }
 
   teardown(): void {
@@ -253,6 +257,7 @@ export class PagedQueryRoot<
     cursorRealtime,
     realtime,
     staleTime = 0,
+    graph,
   }: {
     pageSize: number
     includeTotal: boolean
@@ -264,11 +269,12 @@ export class PagedQueryRoot<
     onRows: (rows: unknown[]) => void
     onChange: () => void
     cursorRealtime?: {
-      subscribe(fn: (event: ProcessedRealtimeEvent) => void): () => void
-      canKeepPrefix(event: ProcessedRealtimeEvent): boolean
+      subscribe(fn: (event: ProcessedCacheEvent) => void): () => void
+      canKeepPrefix(event: ProcessedCacheEvent): boolean
     }
     realtime: InspectedPagination['realtime']
     staleTime?: number
+    graph?: QueryGraphRef
   }) {
     this.#pageSize = pageSize
     this.#includeTotal = includeTotal
@@ -278,7 +284,7 @@ export class PagedQueryRoot<
     this.#onRows = onRows
     this.#onChange = onChange
     this.#staleTime = staleTime
-    this.#setupPage(0)
+    this.#setupPage(0, undefined, undefined, graph)
     if (cursorRealtime) {
       this.#cursorReconnectUnsub = this.#pageRefs[0]?.registerReconnectReconciliation() ?? null
       this.#cursorEventUnsub = cursorRealtime.subscribe(event => {
@@ -295,6 +301,7 @@ export class PagedQueryRoot<
     pageIndex: number,
     settle?: { onError: (error: Error) => void },
     after?: PageCursor,
+    graph?: QueryGraphRef,
   ): void {
     const queryRef = this.#makePageRef(pageIndex, after)
     this.#pageRefs.push(queryRef)
@@ -357,13 +364,13 @@ export class PagedQueryRoot<
         onState(state)
         this.#onChange()
       },
-      { staleTime: reconcile.phase === 'running' ? 0 : this.#staleTime },
+      { staleTime: reconcile.phase === 'running' ? 0 : this.#staleTime, graph },
     )
     this.#pageUnsubs.push(unsub)
     onState(queryRef.getSnapshot())
   }
 
-  loadMore(): void {
+  loadMore(graph?: QueryGraphRef): void {
     if (this.#reconcile.phase !== 'idle') return
     if (this.#isLoadingMore || !this.#hasMoreSticky || this.#pageRefs.length === 0) return
 
@@ -390,6 +397,7 @@ export class PagedQueryRoot<
         },
       },
       after,
+      graph,
     )
     this.#onChange()
   }
@@ -427,12 +435,12 @@ export class PagedQueryRoot<
     }
   }
 
-  ensureFresh(staleTime?: number): void {
+  ensureFresh(staleTime?: number, graph?: QueryGraphRef): void {
     if (this.#sequential) {
-      this.#pageRefs[0]?.ensureFresh({ staleTime })
+      this.#pageRefs[0]?.ensureFresh({ staleTime, graph })
       return
     }
-    for (const ref of this.#pageRefs) ref.ensureFresh({ staleTime })
+    for (const ref of this.#pageRefs) ref.ensureFresh({ staleTime, graph })
   }
 
   setStaleTime(staleTime: number): void {
@@ -474,13 +482,13 @@ export class PagedQueryRoot<
   }
 
   /** Manual refetch deliberately resets the cursor chain to page zero. */
-  refetch(): void {
+  refetch(graph?: QueryGraphRef): void {
     this.#reconcile = { phase: 'idle' }
     this.#dropFollowupPages()
     this.#hasMoreSticky = true
     this.#isLoadingMore = false
     this.#loadMoreError = null
-    this.#pageRefs[0]?.refetch()
+    this.#pageRefs[0]?.refetch({ graph })
     this.#onChange()
   }
 

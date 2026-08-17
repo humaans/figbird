@@ -1,4 +1,5 @@
 import type { QueryAST } from '../core/queryBuilder.js'
+import { QUERY_FETCH_HISTORY_LIMIT } from '../core/queryStore.js'
 import type { InspectedRelationalQuery } from '../core/relationalQuery.js'
 import type { DevtoolsSnapshot, QueryRecord } from './collector.js'
 import { compactJson } from './format.js'
@@ -9,13 +10,17 @@ export interface UnderlyingFetch {
   query: QueryRecord
 }
 
-export type QuerySummary = Omit<QueryRecord, 'generation' | 'page' | 'queryId'>
+export type QuerySummary = Omit<QueryRecord, 'generation' | 'page' | 'queryId'> & {
+  prefetchCount?: number
+  prepareCount?: number
+}
 
 export type OperationPagination = NonNullable<InspectedRelationalQuery['pagination']>
 
 export interface QueryComposition {
   detail: string
   operation: string
+  plan: string
   planDetail: string
   title: string
 }
@@ -87,9 +92,22 @@ export function buildDevtoolsModel(snapshot: DevtoolsSnapshot): DevtoolsModel {
       })
     }
 
+    const summary = {
+      ...summarizeRootFetches(rootFetches),
+      subscriberCount: group.subscriberCount ?? summarySubscriberCount(rootFetches),
+      prefetchCount: group.prefetchCount ?? 0,
+      prepareCount: group.prepareCount ?? 0,
+    }
     operations.push({
       key: group.key,
-      summary: summarizeRootFetches(rootFetches),
+      summary:
+        group.data === undefined
+          ? summary
+          : {
+              ...summary,
+              data: group.data,
+              itemCount: Array.isArray(group.data) ? group.data.length : 1,
+            },
       rootFetches,
       underlying: [...underlyingByPath.values()],
       composition: describeComposition(group.ast, group.name, group.pagination),
@@ -132,7 +150,23 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
     method: latest.method,
     ...(latest.resourceId !== undefined ? { resourceId: latest.resourceId } : {}),
     query: latest.query,
+    ...(roots.some(query => query.data !== undefined)
+      ? {
+          data: roots.flatMap(query =>
+            Array.isArray(query.data)
+              ? query.data
+              : query.data === undefined || query.data === null
+                ? []
+                : [query.data],
+          ),
+        }
+      : {}),
     classification: latest.classification,
+    ...(latest.classificationReasons
+      ? { classificationReasons: latest.classificationReasons }
+      : {}),
+    ...(latest.realtimeStrategy ? { realtimeStrategy: latest.realtimeStrategy } : {}),
+    skipped: roots.every(query => query.skipped === true),
     status: roots.some(query => query.status === 'error')
       ? 'error'
       : roots.some(query => query.status === 'loading')
@@ -145,12 +179,20 @@ function summarizeRootFetches(roots: QueryRecord[]): QuerySummary {
     fetchCount: roots.reduce((count, query) => count + query.fetchCount, 0),
     errorCount: roots.reduce((count, query) => count + query.errorCount, 0),
     totalDurationMs: roots.reduce((duration, query) => duration + query.totalDurationMs, 0),
+    fetchHistory: roots
+      .flatMap(query => query.fetchHistory ?? [])
+      .sort((a, b) => a.startedAt - b.startedAt)
+      .slice(-QUERY_FETCH_HISTORY_LIMIT),
     spans: roots.flatMap(query => query.spans).sort((a, b) => a.startAt - b.startAt),
     realtimeSeen: Math.max(...roots.map(query => query.realtimeSeen)),
     reconciles: roots.reduce((count, query) => count + query.reconciles, 0),
     ...(latest.lastDurationMs !== undefined ? { lastDurationMs: latest.lastDurationMs } : {}),
     ...(lastError ? { lastError } : {}),
   }
+}
+
+function summarySubscriberCount(roots: QueryRecord[]): number {
+  return Math.max(...roots.map(query => query.subscriberCount))
 }
 
 function querySummary({
@@ -204,6 +246,7 @@ function describeComposition(
   return {
     detail: parts.join(' · '),
     operation: `${ast.service}.${head}`,
+    plan: formatAstPlan(ast),
     planDetail: [
       pagination ? describePagination(pagination) : '',
       rootQuery || 'all',
@@ -213,6 +256,19 @@ function describeComposition(
       .join(' · '),
     title: [name, astToTitle(ast)].filter(Boolean).join('\n'),
   }
+}
+
+function formatAstPlan(ast: QueryAST): string {
+  const query = compactAstQuery(ast.query)
+  const args =
+    ast.kind === 'get'
+      ? [formatAstValue(ast.resourceId), query]
+      : ast.kind === 'paginate'
+        ? [String(ast.pageSize ?? '?'), query]
+        : [query]
+  const call = `${ast.kind}(${args.filter(Boolean).join(', ')})`
+  const related = relationPaths(ast)
+  return related.length > 0 ? `${call} → ${formatList(related)}` : call
 }
 
 function describePagination(pagination: OperationPagination): string {

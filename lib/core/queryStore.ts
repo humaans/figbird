@@ -7,7 +7,8 @@ import {
 import type { AnySchema, Schema } from './schema.js'
 import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
-import { FigbirdEventEmitter } from './events.js'
+import { type FigbirdEventEmitter, type FetchReason, type TraceCause } from './events.js'
+import { QueryTelemetry } from './queryTelemetry.js'
 import { MutationTracker } from './mutationTracker.js'
 import { GatedMutationAttempt } from './gatedMutationAttempt.js'
 import {
@@ -62,15 +63,18 @@ import {
   type ItemMatcher,
   type MutationDescriptor,
   type ProcessedProjectionEvent,
-  type ProcessedRealtimeEvent,
+  type ProcessedCacheEvent,
   type Query,
   type QueryConfig,
   type QueryDescriptor,
+  type QueryExecutionOptions,
+  type QueryGraphRef,
   type QueryState,
   type QueuedEvent,
   type ServiceState,
 } from './queryTypes.js'
 import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
+import { normalizeError } from './errors.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -96,6 +100,13 @@ const DEFAULT_RETRIES = 3
 type StoreResponse<TMeta> =
   QueryResponse<unknown, TMeta | undefined> | PageResponse<unknown[], TMeta>
 
+type MutationTraceCause = Extract<TraceCause, { kind: 'mutation' }> & { mutationId: number }
+
+interface MutationTrackingContext {
+  mutationId: number
+  cause?: MutationTraceCause
+}
+
 function resolveCreateOptimisticItem(desc: CreateMutationDescriptor): unknown {
   const { optimistic } = desc
   return optimistic == null || typeof optimistic === 'boolean' ? desc.data : optimistic
@@ -110,12 +121,13 @@ interface MutationTrackingEntry {
 }
 
 interface MutationTrackingHooks<T> {
-  onSuccess?: (result: T) => void
-  onError?: (error: Error, mutationId: number) => void
+  onSuccess?: (result: T, context: MutationTrackingContext) => void
+  onError?: (error: Error, context: MutationTrackingContext) => void
 }
 
 interface TrackedMutation<T> {
   mutationId: number
+  cause?: MutationTraceCause
   promise: Promise<T>
 }
 
@@ -124,16 +136,25 @@ interface QueuedMutation {
   args: unknown[]
   optimistic: boolean
   attempt: GatedMutationAttempt
+  cause?: MutationTraceCause
 }
 
 interface AppliedEventEffect {
-  event: ProcessedRealtimeEvent
+  event: ProcessedCacheEvent
   reconcileQueryIds: Set<string>
+  queryEffects?: Map<string, 'merged' | 'reconcile'>
+  observabilityOnly?: boolean
 }
 
 interface PublishedEventEffects {
   reconcileQueryIds: Set<string>
-  refetchService: boolean
+  reconcileCauses: Map<string, TraceCause[]>
+}
+
+interface FetchContext {
+  reason: Exclude<FetchReason, 'retry'>
+  causes?: TraceCause[]
+  graph?: QueryGraphRef[]
 }
 
 type LaneAuthoritativeAcceptance =
@@ -144,6 +165,23 @@ export interface QueryFetchStats {
   errorCount: number
   lastDurationMs?: number
   totalDurationMs: number
+  history: QueryFetchHistoryEntry[]
+}
+
+export interface QueryFetchHistoryEntry {
+  fetchId: number
+  startedAt: number
+  durationMs: number
+  ok: boolean
+  reason: FetchReason
+}
+
+export const QUERY_FETCH_HISTORY_LIMIT = 50
+
+export interface DevtoolsCacheEditResult {
+  ok: boolean
+  error?: string
+  traceId?: number
 }
 
 function documentVisibility(): VisibilitySource {
@@ -167,13 +205,13 @@ export class QueryStore<
   TQuery = Record<string, unknown>,
 > {
   #adapter: Adapter<TParams, TMeta, TQuery>
-  #events: FigbirdEventEmitter
+  #telemetry: QueryTelemetry
   #mutations: MutationTracker
 
   #realtime: Set<string> = new Set()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
-  #processedEventListeners: Set<(event: ProcessedRealtimeEvent) => void> = new Set()
+  #processedEventListeners: Set<(event: ProcessedCacheEvent) => void> = new Set()
   #projectionSettlementListeners: Set<(event: ProcessedProjectionEvent) => void> = new Set()
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
@@ -181,6 +219,7 @@ export class QueryStore<
   #queryGenerations: Map<string, number> = new Map()
   #queryStats: Map<string, QueryFetchStats> = new Map()
   #nextQueryGeneration = 1
+  #followupFetchContexts = new Map<string, FetchContext>()
 
   #fetchEventJournal = new FetchEventJournal()
   #mutationLanes: MutationLanes<QueuedMutation>
@@ -191,9 +230,9 @@ export class QueryStore<
   #visibility: VisibilitySource
   #reconcileWindows: Map<
     string,
-    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null }
+    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null; causes?: TraceCause[] }
   > = new Map()
-  #deferredWhileHidden: Set<string> = new Set()
+  #deferredWhileHidden: Map<string, TraceCause[] | undefined> = new Map()
 
   #defaultSort: Record<string, number> | undefined
   #retry: number | false
@@ -251,7 +290,7 @@ export class QueryStore<
     this.#mutationLanes = new MutationLanes(item => this.#peekId(item))
     this.#defaultSort = defaultSort
     this.#eventBatchInterval = eventBatchInterval
-    this.#events = new FigbirdEventEmitter()
+    this.#telemetry = new QueryTelemetry()
     this.#mutations = new MutationTracker()
     this.#reconcileCooldown = reconcileCooldown
     this.#retry = this.#normalizeRetry(retry)
@@ -259,18 +298,74 @@ export class QueryStore<
     this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
     this.#visibility.onChange(() => this.#drainDeferredReconciles())
-    this.#adapter.subscribeToReconnect?.(() => this.#scheduleReconnectSweep())
+    if (this.#adapter.subscribeToConnectionEvents) {
+      this.#adapter.subscribeToConnectionEvents(event => {
+        const traceId = this.#telemetry.nextTraceId()
+        switch (event.type) {
+          case 'connected':
+            this.#telemetry.emit({
+              kind: 'connection:connected',
+              ...(traceId === undefined ? {} : { traceId }),
+              ...(event.transport ? { transport: event.transport } : {}),
+              ...(event.connectionId ? { connectionId: event.connectionId } : {}),
+            })
+            break
+          case 'disconnected':
+            this.#telemetry.emit({
+              kind: 'connection:disconnected',
+              ...(traceId === undefined ? {} : { traceId }),
+              ...(event.reason ? { reason: event.reason } : {}),
+              reconnecting: event.reconnecting,
+            })
+            break
+          case 'reconnected':
+            this.#telemetry.emit({
+              kind: 'connection:reconnected',
+              ...(traceId === undefined ? {} : { traceId }),
+              ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
+              ...(event.transport ? { transport: event.transport } : {}),
+              ...(event.connectionId ? { connectionId: event.connectionId } : {}),
+            })
+            this.#scheduleReconnectSweep(traceId)
+            break
+          case 'error':
+            this.#telemetry.emit({
+              kind: 'connection:error',
+              ...(traceId === undefined ? {} : { traceId }),
+              phase: event.phase,
+              error: event.error,
+            })
+            break
+          case 'reconnect-failed':
+            this.#telemetry.emit({
+              kind: 'connection:reconnect-failed',
+              ...(traceId === undefined ? {} : { traceId }),
+              ...(event.error ? { error: event.error } : {}),
+            })
+            break
+        }
+      })
+    } else {
+      this.#adapter.subscribeToReconnect?.(() =>
+        this.#scheduleReconnectSweep(this.#telemetry.nextTraceId()),
+      )
+    }
   }
 
   // Public store API
   /** The instance's observability event emitter — the store is its single owner. */
   get events(): FigbirdEventEmitter {
-    return this.#events
+    return this.#telemetry.events
   }
 
   /** The instance's active mutation tracker — the store is its single owner. */
   get mutations(): MutationTracker {
     return this.#mutations
+  }
+
+  /** Whether an observability consumer is currently attached. @internal */
+  isObservabilityActive(): boolean {
+    return this.#telemetry.active
   }
 
   /** Returns the entire store state map keyed by service name. */
@@ -283,6 +378,84 @@ export class QueryStore<
     return this.#state.get(serviceName)
   }
 
+  /** Apply an in-memory entity edit from an attached devtool without touching the server. */
+  editCacheEntity(serviceName: string, itemId: ItemId, item: unknown): DevtoolsCacheEditResult {
+    const service = this.#state.get(serviceName)
+    const key = entityKey(itemId)
+    const previousItem = service?.entities.get(key)
+    if (!service || previousItem === undefined) {
+      return { ok: false, error: `Entity ${serviceName} #${String(itemId)} is not cached` }
+    }
+    const nextId = this.#peekId(item)
+    if (nextId === undefined || entityKey(nextId) !== key) {
+      return { ok: false, error: 'Edited JSON must retain the entity ID' }
+    }
+
+    const cause = this.#telemetry.cause('manual')
+    const traceId = cause?.traceId
+    const queryEffects = this.#telemetry.active
+      ? new Map<string, 'merged' | 'reconcile'>()
+      : undefined
+    const event: ProcessedCacheEvent = {
+      mode: 'local',
+      ...(cause === undefined ? {} : { cause }),
+      serviceName,
+      type: 'patched',
+      item,
+      previousItem,
+      itemId: key,
+    }
+    const touched = this.#transactOverServiceByName(serviceName, (current, touch) => {
+      current.entities.set(key, item)
+      const getId = this.#getIdReader(serviceName)
+      for (const queryId of current.queries.keys()) {
+        const result = reapplyQueryFromEntities({
+          service: current,
+          queryId,
+          touch,
+          getId,
+          itemAdded: meta => this.#adapter.itemAdded(meta),
+          itemRemoved: meta => this.#adapter.itemRemoved(meta),
+          defaultSort: this.#defaultSort,
+        })
+        if (result === 'applied') {
+          queryEffects?.set(queryId, 'merged')
+          continue
+        }
+        if (
+          applyVisibleEventToQuery({
+            service: current,
+            queryId,
+            event,
+            touch,
+            getId,
+            itemRemoved: meta => this.#adapter.itemRemoved(meta),
+          })
+        ) {
+          queryEffects?.set(queryId, 'merged')
+        }
+      }
+    })
+    if (touched.size > 0) this.#notify(touched)
+    else this.#invokeGlobalListeners()
+    // Let relational queries recompute filters and assembled values from the edit.
+    // Consumers distinguish this source from authoritative server events, so this
+    // remains a purely local operation and never schedules a reconciliation fetch.
+    this.#emitProcessedEvent(event)
+    this.#telemetry.emit({
+      kind: 'cache:updated',
+      ...(traceId === undefined ? {} : { traceId }),
+      source: 'devtools',
+      serviceName,
+      type: 'patched',
+      itemId,
+      item,
+      previousItem,
+      queryEffects: [...(queryEffects ?? [])].map(([queryId, outcome]) => ({ queryId, outcome })),
+    })
+    return { ok: true, ...(traceId === undefined ? {} : { traceId }) }
+  }
+
   /** Returns the current state for a query by id, if present. */
   getQueryState<T>(queryId: string): QueryState<T, TMeta> | undefined {
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
@@ -291,7 +464,7 @@ export class QueryStore<
   getQueryStats(queryId: string): QueryFetchStats | undefined {
     const stats = this.#queryStats.get(queryId)
     if (!stats) return undefined
-    return { ...stats }
+    return { ...stats, history: [...stats.history] }
   }
 
   getQueryGeneration(queryId: string): number | undefined {
@@ -347,7 +520,7 @@ export class QueryStore<
   subscribe<T>(
     queryId: string,
     fn: (state: QueryState<T, TMeta>) => void,
-    options: { staleTime?: number | undefined } = {},
+    options: QueryExecutionOptions = {},
   ): () => void {
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
@@ -377,7 +550,7 @@ export class QueryStore<
    * Used internally for relational-filter invalidation; each event carries the
    * previous entity so listeners can detect which fields changed.
    */
-  subscribeToProcessedEvents(fn: (event: ProcessedRealtimeEvent) => void): () => void {
+  subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void {
     this.#processedEventListeners.add(fn)
     return () => {
       this.#processedEventListeners.delete(fn)
@@ -438,9 +611,13 @@ export class QueryStore<
    * `staleTime` is not part of query identity: a later, stricter subscriber must be
    * able to revalidate an already-live query without rebuilding its subscription.
    */
-  ensureFresh(queryId: string, options: { staleTime?: number | undefined } = {}): void {
+  ensureFresh(queryId: string, options: QueryExecutionOptions = {}): void {
     const q = this.#getQuery(queryId)
     if (!q) return
+
+    if (q.state.isFetching && options.graph) {
+      this.#telemetry.attachGraph(queryId, options.graph)
+    }
 
     const staleTime = options.staleTime ?? 0
     const isFresh =
@@ -453,17 +630,30 @@ export class QueryStore<
         !isFresh) ||
       (q.state.status === 'error' && !q.state.isFetching)
     ) {
-      this.#queue(queryId)
+      this.#queue(queryId, {
+        reason: 'subscription',
+        ...this.#causeContext('subscription'),
+        ...(options.graph ? { graph: [options.graph] } : {}),
+      })
     }
   }
 
   /** Refetch a specific query by id. */
-  refetch(queryId: string): void {
+  refetch(
+    queryId: string,
+    context?: FetchContext,
+    options: Omit<QueryExecutionOptions, 'staleTime'> = {},
+  ): void {
     const q = this.#getQuery(queryId)
     if (!q) return
+    const fetchContext = context ?? {
+      reason: 'manual' as const,
+      ...this.#causeContext('manual'),
+      ...(options.graph ? { graph: [options.graph] } : {}),
+    }
 
     if (!q.state.isFetching) {
-      this.#queue(queryId)
+      this.#queue(queryId, fetchContext)
     } else {
       // Mark as dirty to refetch after current fetch completes
       this.#transactOverService(queryId, (service, query) => {
@@ -472,6 +662,7 @@ export class QueryStore<
           dirty: true,
         })
       })
+      this.#followupFetchContexts.set(queryId, fetchContext)
     }
   }
 
@@ -481,7 +672,7 @@ export class QueryStore<
   }
 
   /** Replace/remove a row already visible in one query without changing membership. @internal */
-  applyVisibleEvent(queryId: string, event: ProcessedRealtimeEvent): void {
+  applyVisibleEvent(queryId: string, event: ProcessedCacheEvent): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (!serviceName) return
     const getId = this.#getIdReader(serviceName)
@@ -529,8 +720,8 @@ export class QueryStore<
       control: undefined,
       run: () => this.#adapter.mutate(serviceName, method, [...args]),
       hooks: {
-        onSuccess: item =>
-          this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item }),
+        onSuccess: (item, { cause }) =>
+          this.#processEvent(serviceName, { type: MUTATION_EVENT_TYPE[method], item }, cause),
       },
     })
     return registration.promise as Promise<InferMutationData<S, D>>
@@ -599,21 +790,27 @@ export class QueryStore<
       control,
       ...(optimistic
         ? {
-            project: () =>
-              this.#processEvent(desc.serviceName, { type: 'created', item: optimisticItem }),
+            project: (cause?: MutationTraceCause) =>
+              this.#processEvent(
+                desc.serviceName,
+                { type: 'created', item: optimisticItem },
+                cause,
+              ),
           }
         : {}),
       run: () => this.#adapter.mutate(desc.serviceName, desc.method, [...args]),
       hooks: {
         // Apply the cache update before ending the tracker entry, so by the time a
         // `useMutating` subscriber sees "not busy" the data is already in the cache.
-        onSuccess: item => this.#processEvent(desc.serviceName, { type: 'created', item }),
-        onError: (_error, mutationId) => {
+        onSuccess: (item, { cause }) =>
+          this.#processEvent(desc.serviceName, { type: 'created', item }, cause),
+        onError: (_error, { mutationId, cause }) => {
           if (!optimistic) return
-          this.#processEvent(desc.serviceName, { type: 'removed', item: optimisticItem })
-          this.#events.emit({
+          this.#processEvent(desc.serviceName, { type: 'removed', item: optimisticItem }, cause)
+          this.#telemetry.emit({
             kind: 'mutate:rollback',
             mutationId,
+            ...(cause ? { traceId: cause.traceId } : {}),
             serviceName: desc.serviceName,
             method: desc.method,
           })
@@ -638,11 +835,15 @@ export class QueryStore<
       control,
       run: () => this.#adapter.mutate(desc.serviceName, desc.method, [...args]),
       hooks: {
-        onSuccess: item =>
-          this.#processEvent(desc.serviceName, {
-            type: MUTATION_EVENT_TYPE[desc.method],
-            item,
-          }),
+        onSuccess: (item, { cause }) =>
+          this.#processEvent(
+            desc.serviceName,
+            {
+              type: MUTATION_EVENT_TYPE[desc.method],
+              item,
+            },
+            cause,
+          ),
       },
     })
   }
@@ -678,13 +879,15 @@ export class QueryStore<
       },
       () => entry.attempt.promise,
       {
-        onSuccess: item => this.#settleQueuedMutation(lane, entry, { ok: true, item }),
-        onError: (error, mutationId) => {
-          this.#settleQueuedMutation(lane, entry, { ok: false, error })
+        onSuccess: (item, { cause }) =>
+          this.#settleQueuedMutation(lane, entry, { ok: true, item }, cause),
+        onError: (error, { mutationId, cause }) => {
+          this.#settleQueuedMutation(lane, entry, { ok: false, error }, cause)
           if (optimistic) {
-            this.#events.emit({
+            this.#telemetry.emit({
               kind: 'mutate:rollback',
               mutationId,
+              ...(cause ? { traceId: cause.traceId } : {}),
               serviceName: desc.serviceName,
               method: desc.method,
               id,
@@ -694,7 +897,8 @@ export class QueryStore<
       },
     )
 
-    this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true)
+    if (tracked.cause) entry.cause = tracked.cause
+    this.#applyProjection(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
     entry.attempt.whenReady(() => {
       this.#expediteMutationPredecessors(lane, entry)
       this.#drainMutationLane(lane)
@@ -707,10 +911,11 @@ export class QueryStore<
         const projection = this.#mutationLanes.replaceTail(lane, entry, next)
         if (!projection) return false
         entry.args = this.#buildMutationArgs(next)
-        this.#applyProjection(projection, true)
-        this.#events.emit({
+        this.#applyProjection(projection, true, tracked.cause)
+        this.#telemetry.emit({
           kind: 'mutate:update',
           mutationId: tracked.mutationId,
+          ...(tracked.cause ? { traceId: tracked.cause.traceId } : {}),
           serviceName: next.serviceName,
           method: next.method,
           id,
@@ -719,7 +924,7 @@ export class QueryStore<
         })
         return true
       },
-      cancel: error => this.#cancelQueuedMutation(lane, entry, error),
+      cancel: error => this.#cancelQueuedMutation(lane, entry, error, tracked.cause),
     }
   }
 
@@ -757,7 +962,7 @@ export class QueryStore<
       try {
         return await run()
       } catch (error) {
-        const normalized = error instanceof Error ? error : new Error(String(error))
+        const normalized = normalizeError(error)
         if (!control || (await control.onAttemptFailure(normalized, attempt)) === 'discard') {
           throw normalized
         }
@@ -765,10 +970,15 @@ export class QueryStore<
     }
   }
 
-  #cancelQueuedMutation(lane: MutationLane, entry: QueuedMutation, error: Error): void {
+  #cancelQueuedMutation(
+    lane: MutationLane,
+    entry: QueuedMutation,
+    error: Error,
+    cause?: TraceCause,
+  ): void {
     if (!entry.attempt.cancel(error)) return
     const projection = this.#mutationLanes.cancel(lane, entry)
-    if (projection) this.#applyProjection(projection, true)
+    if (projection) this.#applyProjection(projection, true, cause)
     this.#drainMutationLane(lane)
   }
 
@@ -776,6 +986,7 @@ export class QueryStore<
     lane: MutationLane,
     entry: QueuedMutation,
     outcome: { ok: true; item: unknown } | { ok: false; error: Error },
+    cause?: TraceCause,
   ): void {
     const settlement = this.#mutationLanes.settle(lane, entry, outcome)
     if (!settlement) return
@@ -787,7 +998,7 @@ export class QueryStore<
       this.#fetchEventJournal.record([settlement.authoritativeEvent])
     }
 
-    const projected = this.#applyProjection(settlement.projection, true)
+    const projected = this.#applyProjection(settlement.projection, true, cause)
     if (!projected && settlement.authoritativeEvent && !this.#mutationLanes.peekNext(lane)) {
       this.#publishAppliedEvent(settlement.authoritativeEvent)
     }
@@ -810,8 +1021,8 @@ export class QueryStore<
     this.#drainMutationLane(lane)
   }
 
-  #applyProjection(change: ProjectionChange, immediate: boolean): boolean {
-    const event = this.#queuedProjectionEvent(change)
+  #applyProjection(change: ProjectionChange, immediate: boolean, cause?: TraceCause): boolean {
+    const event = this.#queuedProjectionEvent(change, cause)
     if (!event) return false
     this.#eventQueue.push(event)
     if (immediate) this.#processQueuedEvents()
@@ -876,15 +1087,15 @@ export class QueryStore<
   }: {
     tracking: MutationTrackingEntry
     control: ScheduledMutationControl | undefined
-    project?: () => void
+    project?: (cause?: MutationTraceCause) => void
     run: () => Promise<unknown>
     hooks?: MutationTrackingHooks<unknown>
   }): RegisteredMutation {
     const attempt = new GatedMutationAttempt(control)
     const tracked = this.#trackMutation(
       tracking,
-      () => {
-        project?.()
+      ({ cause }) => {
+        project?.(cause)
         return attempt.promise
       },
       hooks,
@@ -915,29 +1126,33 @@ export class QueryStore<
    */
   #trackMutation<T>(
     entry: MutationTrackingEntry,
-    run: () => Promise<T>,
+    run: (context: MutationTrackingContext) => Promise<T>,
     hooks?: MutationTrackingHooks<T>,
   ): TrackedMutation<T> {
     const { serviceName, method, id, optimistic, args } = entry
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
     const mutationId = this.#mutations.start({ serviceName, method, ...idField })
-    this.#events.emit({
+    const cause = this.#telemetry.mutationCause(mutationId) as MutationTraceCause | undefined
+    const context: MutationTrackingContext = { mutationId, ...(cause ? { cause } : {}) }
+    this.#telemetry.emit({
       kind: 'mutate:start',
       mutationId,
+      ...(cause ? { traceId: cause.traceId } : {}),
       serviceName,
       method,
       ...idField,
       optimistic,
       args,
     })
-    const promise = run().then(
+    const promise = run(context).then(
       result => {
-        hooks?.onSuccess?.(result)
+        hooks?.onSuccess?.(result, context)
         this.#mutations.end(mutationId)
-        this.#events.emit({
+        this.#telemetry.emit({
           kind: 'mutate:end',
           mutationId,
+          ...(cause ? { traceId: cause.traceId } : {}),
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
@@ -947,12 +1162,13 @@ export class QueryStore<
         return result
       },
       (err: unknown) => {
-        const error = err instanceof Error ? err : new Error(String(err))
-        hooks?.onError?.(error, mutationId)
+        const error = normalizeError(err)
+        hooks?.onError?.(error, context)
         this.#mutations.end(mutationId)
-        this.#events.emit({
+        this.#telemetry.emit({
           kind: 'mutate:error',
           mutationId,
+          ...(cause ? { traceId: cause.traceId } : {}),
           serviceName,
           method,
           durationMs: Date.now() - startedAt,
@@ -963,53 +1179,80 @@ export class QueryStore<
         throw error
       },
     )
-    return { mutationId, promise }
+    return { mutationId, ...(cause ? { cause } : {}), promise }
   }
 
   // Query lifecycle
-  async #queue(queryId: string): Promise<void> {
+  async #queue(queryId: string, context?: FetchContext): Promise<void> {
+    const fetchContext = context ?? {
+      reason: 'subscription' as const,
+      ...this.#causeContext('subscription'),
+    }
+    const graph = this.#telemetry.beginGraph(queryId, fetchContext.graph)
     this.#fetching({ queryId })
     const generation = this.#queryGenerations.get(queryId)
-    if (generation === undefined) return
+    if (generation === undefined) {
+      this.#telemetry.finishGraph(queryId, graph)
+      return
+    }
 
-    let retryAttempt = 0
-    while (true) {
-      const outcome = await this.#runFetchAttempt(queryId, generation)
-      if (outcome.kind !== 'failed') return
+    try {
+      let retryAttempt = 0
+      while (true) {
+        const outcome = await this.#runFetchAttempt(
+          queryId,
+          generation,
+          {
+            reason: retryAttempt === 0 ? fetchContext.reason : 'retry',
+            attempt: retryAttempt,
+            ...(fetchContext.causes ? { causes: fetchContext.causes } : {}),
+          },
+          graph,
+        )
+        if (outcome.kind !== 'failed') return
 
-      const query = this.#getQuery(queryId)
-      if (
-        !query ||
-        this.#queryGenerations.get(queryId) !== generation ||
-        !this.#hasRetryOwner(queryId) ||
-        !this.#shouldRetry(query, retryAttempt, outcome.error)
-      ) {
-        if (query && this.#queryGenerations.get(queryId) === generation) {
-          this.#fetchFailed({ queryId, error: outcome.error })
+        const query = this.#getQuery(queryId)
+        if (
+          !query ||
+          this.#queryGenerations.get(queryId) !== generation ||
+          !this.#hasRetryOwner(queryId) ||
+          !this.#shouldRetry(query, retryAttempt, outcome.error)
+        ) {
+          if (query && this.#queryGenerations.get(queryId) === generation) {
+            this.#fetchFailed({ queryId, error: outcome.error })
+          }
+          return
         }
-        return
-      }
 
-      retryAttempt++
-      const configuredDelay = query.config.retryDelay ?? this.#retryDelay
-      const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
-      await new Promise<void>(resolve => setTimeout(resolve, delay))
+        retryAttempt++
+        const configuredDelay = query.config.retryDelay ?? this.#retryDelay
+        const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
+        await new Promise<void>(resolve => setTimeout(resolve, delay))
 
-      if (this.#queryGenerations.get(queryId) !== generation) return
-      if (!this.#hasRetryOwner(queryId)) {
-        this.#fetchFailed({ queryId, error: outcome.error })
-        return
+        if (this.#queryGenerations.get(queryId) !== generation) return
+        if (!this.#hasRetryOwner(queryId)) {
+          this.#fetchFailed({ queryId, error: outcome.error })
+          return
+        }
       }
+    } finally {
+      this.#telemetry.finishGraph(queryId, graph)
     }
   }
 
-  async #runFetchAttempt(queryId: string, generation: number): Promise<FetchAttemptOutcome> {
+  async #runFetchAttempt(
+    queryId: string,
+    generation: number,
+    context: { reason: FetchReason; attempt: number; causes?: TraceCause[] },
+    graphRefs: ReadonlyMap<string, QueryGraphRef>,
+  ): Promise<FetchAttemptOutcome> {
     const query = this.#getQuery(queryId)
     if (!query || this.#queryGenerations.get(queryId) !== generation) {
       return { kind: 'stale' }
     }
 
     const startedAt = Date.now()
+    const fetchId = this.#telemetry.nextFetchId()
     const trace = {
       generation,
       serviceName: query.desc.serviceName,
@@ -1018,59 +1261,92 @@ export class QueryStore<
       params: query.desc.params,
     }
     const journalCursor = this.#fetchEventJournal.begin(trace.serviceName)
-    this.#events.emit({
+    const graph = [...graphRefs.values()]
+    this.#telemetry.emit({
       kind: 'fetch:start',
+      timestamp: startedAt,
       serviceName: trace.serviceName,
       method: trace.method,
       queryId,
       generation,
+      fetchId,
+      reason: context.reason,
+      attempt: context.attempt,
+      ...(context.causes ? { causes: context.causes } : {}),
+      ...(graph.length > 0 ? { graph } : {}),
       ...('resourceId' in trace ? { resourceId: trace.resourceId } : {}),
       params: trace.params,
     })
 
     try {
       const result = await this.#fetch(queryId)
-      const durationMs = Date.now() - startedAt
+      const endedAt = Date.now()
+      const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
       if (current && this.#queryGenerations.get(queryId) === generation) {
         const journal = this.#fetchEventJournal.read(journalCursor)
         if (journal.overflowed) {
           this.#discardFetchedResponse(queryId)
         } else {
-          this.#fetched({ queryId, result, journalEvents: journal.events })
+          const cacheCause = context.causes?.[0]
+          this.#fetched({
+            queryId,
+            result,
+            journalEvents: journal.events,
+            ...(cacheCause === undefined ? {} : { cause: cacheCause }),
+          })
         }
-        this.#recordFetchStats(queryId, { ok: true, durationMs })
+        this.#recordFetchStats(queryId, {
+          fetchId,
+          startedAt,
+          durationMs,
+          ok: true,
+          reason: context.reason,
+        })
       }
 
       const data = result.data
       const itemCount = Array.isArray(data) ? data.length : data ? 1 : 0
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'fetch:end',
+        timestamp: endedAt,
         serviceName: trace.serviceName,
         method: trace.method,
         queryId,
         generation,
+        fetchId,
         durationMs,
         itemCount,
+        ...(graphRefs.size > 0 ? { graph: [...graphRefs.values()] } : {}),
       })
       return { kind: 'completed' }
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err))
-      const durationMs = Date.now() - startedAt
+      const error = normalizeError(err)
+      const endedAt = Date.now()
+      const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
       const isCurrent = Boolean(current && this.#queryGenerations.get(queryId) === generation)
       if (isCurrent) {
-        this.#recordFetchStats(queryId, { ok: false, durationMs })
+        this.#recordFetchStats(queryId, {
+          fetchId,
+          startedAt,
+          durationMs,
+          ok: false,
+          reason: context.reason,
+        })
       }
 
-      this.#events.emit({
+      this.#telemetry.emit({
         kind: 'fetch:error',
+        timestamp: endedAt,
         serviceName: trace.serviceName,
         method: trace.method,
         queryId,
         generation,
+        fetchId,
         durationMs,
         error,
+        ...(graphRefs.size > 0 ? { graph: [...graphRefs.values()] } : {}),
       })
       return isCurrent ? { kind: 'failed', error } : { kind: 'stale' }
     } finally {
@@ -1096,6 +1372,15 @@ export class QueryStore<
     return (
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     )
+  }
+
+  #takeFollowupFetchContext(queryId: string): FetchContext {
+    const context = this.#followupFetchContexts.get(queryId) ?? {
+      reason: 'follow-up' as const,
+      ...this.#causeContext('fetch-rebase'),
+    }
+    this.#followupFetchContexts.delete(queryId)
+    return context
   }
 
   #resolveRetryDelay(delay: RetryDelay, attempt: number, error: Error): number {
@@ -1261,10 +1546,12 @@ export class QueryStore<
     queryId,
     result,
     journalEvents,
+    cause,
   }: {
     queryId: string
     result: StoreResponse<TMeta>
-    journalEvents: readonly ProcessedRealtimeEvent[]
+    journalEvents: readonly ProcessedCacheEvent[]
+    cause?: TraceCause
   }): void {
     let shouldRefetch = false
     let hadEffectiveJournalEvents = false
@@ -1293,9 +1580,15 @@ export class QueryStore<
         for (const item of responseItems) {
           const itemId = getId(item)
           if (itemId === undefined || rebasePlan.itemIds.has(entityKey(itemId))) continue
-          const accepted = this.#acceptLaneAuthoritative(query.desc.serviceName, 'updated', item)
+          const accepted = this.#acceptLaneAuthoritative(
+            query.desc.serviceName,
+            'updated',
+            item,
+            'fetch',
+            cause,
+          )
           if (!accepted.handled || !accepted.projection) continue
-          const projectionEvent = this.#queuedProjectionEvent(accepted.projection)
+          const projectionEvent = this.#queuedProjectionEvent(accepted.projection, cause)
           if (projectionEvent) fetchedProjectionEvents.push(projectionEvent)
         }
       }
@@ -1372,6 +1665,23 @@ export class QueryStore<
             const currentItem = service.entities.get(key)
             if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
               service.entities.set(key, item)
+              if (!isCompleteSet && currentItem !== item && this.#telemetry.active) {
+                eventEffects.push({
+                  event: {
+                    mode: 'server',
+                    source: 'fetch',
+                    serviceName: query.desc.serviceName,
+                    type: currentItem === undefined ? 'created' : 'updated',
+                    item,
+                    previousItem: currentItem ?? null,
+                    itemId: key,
+                    ...(cause === undefined ? {} : { cause }),
+                  },
+                  reconcileQueryIds: new Set(),
+                  queryEffects: new Map([[queryId, 'merged']]),
+                  observabilityOnly: true,
+                })
+              }
             }
           }
           addQueryToItemIndex(service, itemId, queryId)
@@ -1430,7 +1740,9 @@ export class QueryStore<
           ...this.#updateQueriesForEvents({
             service,
             serviceName: query.desc.serviceName,
-            processedEvents: diffEvents,
+            processedEvents: diffEvents.map(event =>
+              cause === undefined ? event : { ...event, cause },
+            ),
             touch,
             excludeQueryId: queryId,
           }),
@@ -1468,7 +1780,7 @@ export class QueryStore<
 
     if (shouldRefetch && shouldRunFollowup) {
       serverMaintainedQueriesToRefetch.delete(queryId)
-      this.#queue(queryId)
+      this.#queue(queryId, this.#takeFollowupFetchContext(queryId))
     } else if (hadEffectiveJournalEvents && query?.config.realtime !== 'disabled') {
       // Even exact replay cannot prove every server-maintained membership/order
       // edge. One gated trailing reconciliation guarantees convergence.
@@ -1478,6 +1790,9 @@ export class QueryStore<
     for (const id of serverMaintainedQueriesToRefetch) {
       this.#requestReconcile(id, {
         force: id === service?.materialized?.queryId,
+        ...(publishedEffects.reconcileCauses.has(id)
+          ? { causes: publishedEffects.reconcileCauses.get(id)! }
+          : {}),
       })
     }
   }
@@ -1507,7 +1822,7 @@ export class QueryStore<
     const isMaterializedRoot =
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     if (shouldRefetch && (this.#listenerCount(queryId) > 0 || isMaterializedRoot)) {
-      this.#queue(queryId)
+      this.#queue(queryId, this.#takeFollowupFetchContext(queryId))
     }
   }
 
@@ -1524,26 +1839,29 @@ export class QueryStore<
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     const isMaterializedRoot =
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
-    this.#requestReconcile(queryId, { force: isMaterializedRoot })
+    this.#requestReconcile(queryId, {
+      force: isMaterializedRoot,
+      ...this.#causeContext('fetch-rebase'),
+    })
     // An immediate reconciliation has already restored isFetching=true; hidden
     // or inactive queries expose the settled state and remain pending instead.
     this.#notify(touched)
   }
 
-  #recordFetchStats(
-    queryId: string,
-    { ok, durationMs }: { ok: boolean; durationMs: number },
-  ): void {
+  #recordFetchStats(queryId: string, entry: QueryFetchHistoryEntry): void {
+    const { ok, durationMs } = entry
     const current = this.#queryStats.get(queryId) ?? {
       fetchCount: 0,
       errorCount: 0,
       totalDurationMs: 0,
+      history: [],
     }
     this.#queryStats.set(queryId, {
       fetchCount: current.fetchCount + 1,
       errorCount: current.errorCount + (ok ? 0 : 1),
       totalDurationMs: current.totalDurationMs + durationMs,
       lastDurationMs: durationMs,
+      history: [...current.history.slice(-(QUERY_FETCH_HISTORY_LIMIT - 1)), entry],
     })
   }
 
@@ -1574,65 +1892,102 @@ export class QueryStore<
     this.#realtime.add(serviceName)
   }
 
-  #emitRealtimeForItems(serviceName: string, type: Event['type'], items: unknown[]): void {
-    for (const item of items) {
-      this.#events.emit({
-        kind: 'realtime',
-        serviceName,
-        type,
-        itemId: this.#getIdWarn(serviceName, item),
-      })
-    }
+  #emitRealtime(serviceName: string, type: Event['type'], item: unknown): TraceCause | undefined {
+    if (!this.#telemetry.active) return undefined
+    const cause = this.#telemetry.cause('realtime')
+    this.#telemetry.emit({
+      kind: 'realtime',
+      ...(cause ? { traceId: cause.traceId } : {}),
+      serviceName,
+      type,
+      itemId: this.#getIdWarn(serviceName, item),
+      item,
+    })
+    return cause
   }
 
   /** Push an authoritative event onto the atomic queue. */
-  #enqueueAuthoritativeEvent(serviceName: string, event: Event): void {
-    const items = Array.isArray(event.item) ? event.item : [event.item]
+  #enqueueAuthoritativeEvent(
+    serviceName: string,
+    event: Event,
+    source: 'realtime' | 'mutation',
+    cause?: TraceCause,
+  ): void {
     this.#eventQueue.push({
-      origin: 'authoritative',
+      mode: 'server',
+      source,
       serviceName,
       type: event.type,
-      items,
+      item: event.item,
+      ...(cause ? { cause } : {}),
     })
   }
 
-  #queuedProjectionEvent(change: ProjectionChange): QueuedEvent | null {
+  #queuedProjectionEvent(change: ProjectionChange, cause?: TraceCause): QueuedEvent | null {
     const event = this.#projectionEvent(change)
     if (!event) return null
     return {
-      origin: 'projection',
+      mode: 'optimistic',
       serviceName: change.lane.serviceName,
       type: event.type,
-      items: Array.isArray(event.item) ? event.item : [event.item],
+      item: event.item,
       mutationLaneKey: change.lane.key,
+      ...(cause === undefined ? {} : { cause }),
     }
   }
 
   /** Apply an event immediately — used for mutation results and optimistic writes. */
-  #processEvent(serviceName: string, event: Event): void {
-    this.#ingestAuthoritativeEvent(serviceName, event, true)
+  #processEvent(serviceName: string, event: Event, cause?: TraceCause): void {
+    this.#ingestAuthoritativeEvent(serviceName, event, {
+      immediate: true,
+      source: 'mutation',
+      ...(cause ? { cause } : {}),
+    })
   }
 
   /** Queue a realtime event for batched processing. */
   #queueEvent(serviceName: string, event: Event): void {
-    this.#ingestAuthoritativeEvent(serviceName, event, false)
+    this.#ingestAuthoritativeEvent(serviceName, event, {
+      immediate: false,
+      source: 'realtime',
+    })
   }
 
-  #ingestAuthoritativeEvent(serviceName: string, event: Event, immediate: boolean): void {
+  #ingestAuthoritativeEvent(
+    serviceName: string,
+    event: Event,
+    context:
+      | { immediate: false; source: 'realtime' }
+      | { immediate: true; source: 'mutation'; cause?: TraceCause },
+  ): void {
     const items = Array.isArray(event.item) ? event.item : [event.item]
-    this.#emitRealtimeForItems(serviceName, event.type, items)
     for (const item of items) {
-      const accepted = this.#acceptLaneAuthoritative(serviceName, event.type, item)
+      const cause =
+        context.source === 'realtime'
+          ? this.#emitRealtime(serviceName, event.type, item)
+          : context.cause
+      const accepted = this.#acceptLaneAuthoritative(
+        serviceName,
+        event.type,
+        item,
+        context.source,
+        cause,
+      )
       if (!accepted.handled) {
-        this.#enqueueAuthoritativeEvent(serviceName, { type: event.type, item })
+        this.#enqueueAuthoritativeEvent(
+          serviceName,
+          { type: event.type, item },
+          context.source,
+          cause,
+        )
         continue
       }
-      if (accepted.projection) this.#applyProjection(accepted.projection, false)
+      if (accepted.projection) this.#applyProjection(accepted.projection, false, cause)
     }
 
     if (this.#eventQueue.length === 0) return
 
-    if (immediate) {
+    if (context.immediate) {
       this.#processQueuedEvents()
       return
     }
@@ -1655,6 +2010,8 @@ export class QueryStore<
     serviceName: string,
     type: Event['type'],
     item: unknown,
+    source: 'realtime' | 'mutation' | 'fetch',
+    cause?: TraceCause,
   ): LaneAuthoritativeAcceptance {
     const id = this.#peekId(item)
     const lane = id === undefined ? undefined : this.#mutationLanes.get(serviceName, id)
@@ -1663,7 +2020,13 @@ export class QueryStore<
       this.#adapter.isItemStale(current, next),
     )
     if (!transition) return { handled: true, projection: null }
-    this.#fetchEventJournal.record([transition.event])
+    this.#fetchEventJournal.record([
+      {
+        ...transition.event,
+        source,
+        ...(cause === undefined ? {} : { cause }),
+      },
+    ])
     return { handled: true, projection: transition.projection }
   }
 
@@ -1681,7 +2044,7 @@ export class QueryStore<
     excludeQueryId?: string
   }): AppliedEventEffect[] {
     const getId = this.#getIdReader(serviceName)
-    const processedEvents: ProcessedRealtimeEvent[] = []
+    const processedEvents: ProcessedCacheEvent[] = []
     applyEventsToService({
       service,
       serviceName,
@@ -1708,13 +2071,16 @@ export class QueryStore<
   }: {
     service: ServiceState<TMeta>
     serviceName: string
-    processedEvents: readonly ProcessedRealtimeEvent[]
+    processedEvents: readonly ProcessedCacheEvent[]
     touch: (queryId: string) => void
     excludeQueryId?: string
   }): AppliedEventEffect[] {
     const getId = this.#getIdReader(serviceName)
     return processedEvents.map(event => {
       const reconcileQueryIds = new Set<string>()
+      const queryEffects = this.#telemetry.active
+        ? new Map<string, 'merged' | 'reconcile'>()
+        : undefined
       updateQueriesFromEvents({
         service,
         appliedItems: [event],
@@ -1723,10 +2089,16 @@ export class QueryStore<
         itemAdded: meta => this.#adapter.itemAdded(meta),
         itemRemoved: meta => this.#adapter.itemRemoved(meta),
         serverMaintainedQueriesToRefetch: reconcileQueryIds,
+        ...(queryEffects
+          ? {
+              onEffect: (queryId: string, effect: 'merged' | 'reconcile') =>
+                queryEffects.set(queryId, effect),
+            }
+          : {}),
         ...(excludeQueryId ? { excludeQueryId } : {}),
         defaultSort: this.#defaultSort,
       })
-      return { event, reconcileQueryIds }
+      return { event, reconcileQueryIds, ...(queryEffects ? { queryEffects } : {}) }
     })
   }
 
@@ -1736,46 +2108,102 @@ export class QueryStore<
     refetchPolicy: 'realtime' | 'none',
   ): PublishedEventEffects {
     const immediateReconciles = new Set<string>()
-    for (const { event, reconcileQueryIds } of effects) {
+    const reconcileCauses = new Map<string, TraceCause[]>()
+    const fallbackCauses = this.#telemetry.active
+      ? new Map<ProcessedCacheEvent, TraceCause | undefined>()
+      : undefined
+    const causeFor = (event: ProcessedCacheEvent): TraceCause | undefined => {
+      if (event.cause) return event.cause
+      if (!fallbackCauses) return undefined
+      if (!fallbackCauses.has(event)) {
+        fallbackCauses.set(event, this.#telemetry.fallbackCause(event))
+      }
+      return fallbackCauses.get(event)
+    }
+    const hasAuthoritative =
+      refetchPolicy === 'realtime' && effects.some(effect => effect.event.mode === 'server')
+    const addReconcile = (queryId: string, cause?: TraceCause) => {
+      immediateReconciles.add(queryId)
+      if (!cause) return
+      const merged = this.#telemetry.merge(reconcileCauses.get(queryId), [cause])
+      if (merged) reconcileCauses.set(queryId, merged)
+    }
+
+    for (const { event, reconcileQueryIds, queryEffects, observabilityOnly } of effects) {
+      if (observabilityOnly) continue
+      const cause = causeFor(event)
       const deferred =
-        event.origin === 'projection' &&
+        event.mode === 'optimistic' &&
         this.#mutationLanes.deferQueryIds(event.mutationLaneKey, reconcileQueryIds)
       if (!deferred) {
-        for (const queryId of reconcileQueryIds) immediateReconciles.add(queryId)
+        for (const queryId of reconcileQueryIds) addReconcile(queryId, cause)
       }
 
       // Relational filters need projected dependency changes immediately so
       // they can recompute locally. Their listener distinguishes projections
       // from authoritative events and only the latter may trigger a refetch.
       const projectionSettled =
-        event.origin === 'projection' &&
+        event.mode === 'optimistic' &&
         !this.#mutationLanes.deferProjection(event.mutationLaneKey, event)
       this.#emitProcessedEvent(event)
       if (projectionSettled) this.#emitProjectionSettlement(event)
-    }
 
-    const refetchService =
-      refetchPolicy === 'realtime' && effects.some(({ event }) => event.origin === 'authoritative')
-    if (refetchPolicy === 'realtime' && effects.length > 0 && !refetchService) {
-      const refetchableQueryIds = this.#refetchableQueryIds(serviceName)
-      for (const { event } of effects) {
-        if (event.origin === 'projection') {
+      if (refetchPolicy === 'realtime') {
+        const refetchableQueryIds = this.#refetchableQueryIds(serviceName)
+        if (event.mode === 'server') {
+          for (const queryId of refetchableQueryIds) {
+            queryEffects?.set(queryId, 'reconcile')
+            addReconcile(queryId, cause)
+          }
+        } else if (event.mode === 'optimistic' && !hasAuthoritative) {
           const deferred = this.#mutationLanes.deferQueryIds(
             event.mutationLaneKey,
             refetchableQueryIds,
           )
           if (!deferred) {
-            for (const queryId of refetchableQueryIds) immediateReconciles.add(queryId)
+            for (const queryId of refetchableQueryIds) {
+              queryEffects?.set(queryId, 'reconcile')
+              addReconcile(queryId, cause)
+            }
           }
         }
       }
     }
 
-    return { reconcileQueryIds: immediateReconciles, refetchService }
+    for (const { event, queryEffects } of effects) {
+      if (!this.#telemetry.active) break
+      const cause = causeFor(event)
+      this.#telemetry.emit({
+        kind: 'cache:updated',
+        ...(cause ? { traceId: cause.traceId } : {}),
+        source: this.#cacheEventSource(event),
+        serviceName: event.serviceName,
+        type: event.type,
+        itemId: event.itemId,
+        item: event.item,
+        previousItem: event.previousItem,
+        queryEffects: [...(queryEffects ?? [])].map(([queryId, outcome]) => ({ queryId, outcome })),
+      })
+    }
+
+    return { reconcileQueryIds: immediateReconciles, reconcileCauses }
+  }
+
+  #cacheEventSource(
+    event: ProcessedCacheEvent,
+  ): 'realtime' | 'mutation' | 'fetch' | 'optimistic' | 'devtools' {
+    if (event.mode === 'optimistic') return 'optimistic'
+    if (event.mode === 'local') return 'devtools'
+    return event.source
+  }
+
+  #causeContext(kind: TraceCause['kind']): { causes?: TraceCause[] } {
+    const cause = this.#telemetry.cause(kind)
+    return cause ? { causes: [cause] } : {}
   }
 
   /** Publish an authoritative transition whose entity-cache effect already happened. */
-  #publishAppliedEvent(event: ProcessedRealtimeEvent): void {
+  #publishAppliedEvent(event: ProcessedCacheEvent): void {
     let effects: AppliedEventEffect[] = []
     const touched = this.#transactOverServiceByName(event.serviceName, (service, touch) => {
       effects = this.#updateQueriesForEvents({
@@ -1787,8 +2215,13 @@ export class QueryStore<
     })
     this.#notify(touched)
     const published = this.#publishServiceEventEffects(event.serviceName, effects, 'realtime')
-    for (const queryId of published.reconcileQueryIds) this.#requestReconcile(queryId)
-    if (published.refetchService) this.#refetchRefetchableQueries(event.serviceName)
+    for (const queryId of published.reconcileQueryIds) {
+      this.#requestReconcile(queryId, {
+        ...(published.reconcileCauses.has(queryId)
+          ? { causes: published.reconcileCauses.get(queryId)! }
+          : {}),
+      })
+    }
   }
 
   #processQueuedEvents(): void {
@@ -1853,9 +2286,12 @@ export class QueryStore<
           // ones through the gate (cooldown + hidden-tab deferral); the gate marks
           // inactive cached ones pending so their next subscription reconciles.
           for (const queryId of publishedEffects.reconcileQueryIds) {
-            this.#requestReconcile(queryId)
+            this.#requestReconcile(queryId, {
+              ...(publishedEffects.reconcileCauses.has(queryId)
+                ? { causes: publishedEffects.reconcileCauses.get(queryId)! }
+                : {}),
+            })
           }
-          if (publishedEffects.refetchService) this.#refetchRefetchableQueries(serviceName)
         }
       }
     } finally {
@@ -1863,7 +2299,7 @@ export class QueryStore<
     }
   }
 
-  #emitProcessedEvent(event: ProcessedRealtimeEvent): void {
+  #emitProcessedEvent(event: ProcessedCacheEvent): void {
     for (const listener of this.#processedEventListeners) {
       try {
         listener(event)
@@ -1881,10 +2317,6 @@ export class QueryStore<
         // Internal invalidation listeners should not break mutation settlement.
       }
     }
-  }
-
-  #refetchRefetchableQueries(serviceName: string): void {
-    for (const queryId of this.#refetchableQueryIds(serviceName)) this.#requestReconcile(queryId)
   }
 
   #refetchableQueryIds(serviceName: string): string[] {
@@ -1914,21 +2346,34 @@ export class QueryStore<
    *   edge — isolated changes stay as fast as today); further events within
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
-  #requestReconcile(queryId: string, { force = false }: { force?: boolean } = {}): void {
+  #requestReconcile(
+    queryId: string,
+    { force = false, causes }: { force?: boolean; causes?: readonly TraceCause[] } = {},
+  ): void {
+    const mergedCauses = this.#telemetry.merge(undefined, causes)
     if (!force && this.#listenerCount(queryId) === 0) {
+      this.#emitReconcileDecision(queryId, 'inactive', mergedCauses)
       this.#markQueryPending(queryId)
       return
     }
 
     if (this.#visibility.isHidden()) {
-      this.#deferredWhileHidden.add(queryId)
+      this.#deferredWhileHidden.set(
+        queryId,
+        this.#telemetry.merge(this.#deferredWhileHidden.get(queryId), mergedCauses),
+      )
+      this.#emitReconcileDecision(queryId, 'deferred-hidden', mergedCauses)
       this.#markQueryPending(queryId)
       return
     }
 
     if (this.#reconcileCooldown <= 0) {
-      this.#emitReconcileStarted(queryId)
-      this.refetch(queryId)
+      this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
+      this.#emitReconcileStarted(queryId, mergedCauses)
+      this.refetch(queryId, {
+        reason: 'reconcile',
+        ...(mergedCauses ? { causes: mergedCauses } : {}),
+      })
       return
     }
 
@@ -1936,25 +2381,39 @@ export class QueryStore<
     const window = this.#reconcileWindows.get(queryId)
 
     if (!window || now - window.lastAt >= this.#reconcileCooldown) {
-      this.#reconcileWindows.set(queryId, { lastAt: now, trailing: window?.trailing ?? null })
-      this.#emitReconcileStarted(queryId)
-      this.refetch(queryId)
+      this.#reconcileWindows.set(queryId, {
+        lastAt: now,
+        trailing: window?.trailing ?? null,
+      })
+      this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
+      this.#emitReconcileStarted(queryId, mergedCauses)
+      this.refetch(queryId, {
+        reason: 'reconcile',
+        ...(mergedCauses ? { causes: mergedCauses } : {}),
+      })
       return
     }
 
+    const coalescedCauses = this.#telemetry.merge(window.causes, mergedCauses)
+    if (coalescedCauses) window.causes = coalescedCauses
+    this.#emitReconcileDecision(queryId, 'coalesced', mergedCauses)
     if (window.trailing) return // the pending trailing refetch already covers this
 
     const timer = setTimeout(
       () => {
         const current = this.#reconcileWindows.get(queryId)
-        if (current) current.trailing = null
+        const trailingCauses = current?.causes
+        if (current) {
+          current.trailing = null
+          delete current.causes
+        }
         if (!this.#getQuery(queryId)) {
           this.#reconcileWindows.delete(queryId)
           return
         }
         // Re-enter the gate after the window expires unless the tab went hidden or
         // the last subscriber left in the meantime.
-        this.#requestReconcile(queryId)
+        this.#requestReconcile(queryId, trailingCauses ? { causes: trailingCauses } : {})
       },
       window.lastAt + this.#reconcileCooldown - now,
     )
@@ -1963,10 +2422,32 @@ export class QueryStore<
     window.trailing = timer
   }
 
-  #emitReconcileStarted(queryId: string): void {
+  #emitReconcileDecision(
+    queryId: string,
+    decision: 'fetch-now' | 'coalesced' | 'deferred-hidden' | 'inactive',
+    causes: readonly TraceCause[] | undefined,
+  ): void {
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     if (serviceName !== undefined) {
-      this.#events.emit({ kind: 'reconcile:started', queryId, serviceName })
+      this.#telemetry.emit({
+        kind: 'reconcile:decision',
+        queryId,
+        serviceName,
+        decision,
+        ...(causes ? { causes } : {}),
+      })
+    }
+  }
+
+  #emitReconcileStarted(queryId: string, causes: readonly TraceCause[] | undefined): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    if (serviceName !== undefined) {
+      this.#telemetry.emit({
+        kind: 'reconcile:started',
+        queryId,
+        serviceName,
+        ...(causes ? { causes } : {}),
+      })
     }
   }
 
@@ -1975,9 +2456,9 @@ export class QueryStore<
     if (this.#visibility.isHidden() || this.#deferredWhileHidden.size === 0) return
     const deferred = Array.from(this.#deferredWhileHidden)
     this.#deferredWhileHidden.clear()
-    for (const queryId of deferred) {
+    for (const [queryId, causes] of deferred) {
       if (!this.#getQuery(queryId)) continue
-      this.#requestReconcile(queryId)
+      this.#requestReconcile(queryId, causes ? { causes } : {})
     }
   }
 
@@ -2017,12 +2498,13 @@ export class QueryStore<
     }
   }
 
-  #refetchActiveQueries(): void {
+  #activeReconnectQueries(): Array<{ queryId: string; force: boolean }> {
+    const queryIds = new Map<string, boolean>()
     for (const service of this.getState().values()) {
       // Materialization roots reconcile even with no subscribers — every local read
       // depends on their completeness, and events may have been missed while offline.
       if (service.materialized) {
-        this.#requestReconcile(service.materialized.queryId, { force: true })
+        queryIds.set(service.materialized.queryId, true)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
@@ -2031,24 +2513,60 @@ export class QueryStore<
           (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId)) &&
           this.#listenerCount(query.queryId) > 0
         ) {
-          this.#requestReconcile(query.queryId)
+          queryIds.set(query.queryId, false)
         }
       }
     }
+    return [...queryIds].map(([queryId, force]) => ({ queryId, force }))
   }
 
-  #scheduleReconnectSweep(): void {
+  #refetchActiveQueries(
+    traceId: number | undefined,
+    queries: readonly { queryId: string; force: boolean }[],
+  ): void {
+    for (const query of queries) {
+      this.#requestReconcile(query.queryId, {
+        force: query.force,
+        ...(traceId === undefined ? {} : { causes: [{ kind: 'reconnect' as const, traceId }] }),
+      })
+    }
+  }
+
+  #scheduleReconnectSweep(traceId: number | undefined): void {
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
     if (delay === 0) {
-      this.#refetchActiveQueries()
+      const queries = this.#activeReconnectQueries()
+      this.#telemetry.emit({
+        kind: 'reconnect:sweep',
+        ...(traceId === undefined ? {} : { traceId }),
+        phase: 'started',
+        delayMs: 0,
+        queryCount: queries.length,
+      })
+      this.#refetchActiveQueries(traceId, queries)
       return
     }
 
+    this.#telemetry.emit({
+      kind: 'reconnect:sweep',
+      ...(traceId === undefined ? {} : { traceId }),
+      phase: 'scheduled',
+      delayMs: delay,
+    })
+
     const timer = setTimeout(() => {
       this.#reconnectSweepTimer = null
-      this.#refetchActiveQueries()
+      const queries = this.#activeReconnectQueries()
+      this.#telemetry.emit({
+        kind: 'reconnect:sweep',
+        ...(traceId === undefined ? {} : { traceId }),
+        phase: 'started',
+        delayMs: delay,
+        queryCount: queries.length,
+      })
+      this.#refetchActiveQueries(traceId, queries)
     }, delay)
     ;(timer as { unref?: () => void }).unref?.()
     this.#reconnectSweepTimer = timer

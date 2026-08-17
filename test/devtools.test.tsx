@@ -16,6 +16,8 @@ import { ExtensionInspectionSession } from '../extensions/src/inspection.js'
 import { inspectQueryArea } from '../extensions/src/inspectionPage.js'
 import { ExtensionSession } from '../extensions/src/remote.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
+import { buildActivities, buildTraceIndex, eventPayload } from '../lib/devtools/eventModel.js'
+import { buildTimelineActivities } from '../lib/devtools/timelineModel.js'
 import { createTestApp, dom } from './helpers.js'
 
 interface Note {
@@ -152,19 +154,42 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.truthy(row)
   t.is(row?.fetchCount, 1)
   t.is(row?.spans.length, 1)
+  t.is(row?.fetchHistory?.length, 1)
   t.true(row?.lastDurationMs !== undefined)
   t.true(snapshot.events.length > 0)
   t.true(snapshot.events.every(event => event.wallAt !== undefined))
+  t.true(snapshot.events.every(event => event.wallAt === event.event.timestamp))
   t.true(snapshot.timeline.startedAt > 0)
   t.true(snapshot.timeline.realtime.length > 0)
-  t.true(snapshot.timeline.laneOrder.includes(`query:${row?.queryId}`))
-  t.true(snapshot.timeline.laneOrder.includes('realtime:notes'))
+  t.deepEqual(snapshot.timeline.laneOrder, [])
   t.is(collector.getSnapshot(), snapshot)
+  const realtimeBeforeClear = buildTimelineActivities(
+    snapshot,
+    buildDevtoolsModel(snapshot),
+    performance.now(),
+  ).find(activity => activity.kind === 'realtime')
 
   collector.clearEvents()
   const clearedEvents = collector.getSnapshot()
   t.is(clearedEvents.events.length, 0)
   t.is(clearedEvents.timeline.realtime.length, snapshot.timeline.realtime.length)
+  const realtimeAfterClear = buildTimelineActivities(
+    clearedEvents,
+    buildDevtoolsModel(clearedEvents),
+    performance.now(),
+  ).find(activity => activity.kind === 'realtime')
+  t.deepEqual(
+    realtimeAfterClear && {
+      effect: realtimeAfterClear.effect,
+      queryIds: realtimeAfterClear.queryIds,
+      result: realtimeAfterClear.result,
+    },
+    realtimeBeforeClear && {
+      effect: realtimeBeforeClear.effect,
+      queryIds: realtimeBeforeClear.queryIds,
+      result: realtimeBeforeClear.result,
+    },
+  )
 
   feathers.service('notes').emit('patched', { id: 1, content: 'changed again' })
   await sleep(70)
@@ -182,6 +207,7 @@ test('collector records fetch spans and keeps event and timeline history indepen
   t.deepEqual(clearedTimeline.timeline.laneOrder, [])
   t.is(clearedTimeline.timeline.realtime.length, 0)
   t.is(clearedRow?.spans.length, 0)
+  t.is(clearedRow?.fetchHistory?.length, beforeTimelineClearRow?.fetchHistory?.length)
   t.is(clearedRow?.realtimeSeen, beforeTimelineClearRow?.realtimeSeen)
   t.is(clearedRow?.reconciles, beforeTimelineClearRow?.reconciles)
 
@@ -309,17 +335,56 @@ test('collector marks optimistic mutation failures as rolled back writes', async
   const collector = createCollector(figbird)
   collector.start()
 
-  feathers.service('notes').patch = () => Promise.reject(new Error('nope'))
+  const validationError = Object.assign(new Error('Validation Error'), {
+    name: 'ValidationError',
+    code: 422,
+    issues: [{ name: 'content', reason: 'required' }],
+  })
+  feathers.service('notes').patch = () => Promise.reject(validationError)
 
   await t.throwsAsync(figbird.m.notes.patch(1, { content: 'bad' }))
   await sleep(70)
 
-  const mutation = collector.getSnapshot().writes.find(write => write.type === 'mutation')
+  const snapshot = collector.getSnapshot()
+  const mutation = snapshot.writes.find(write => write.type === 'mutation')
   t.truthy(mutation)
   t.is(mutation?.status, 'error')
   t.true(mutation?.rolledBack)
-  t.is(mutation?.error, 'nope')
-  t.deepEqual(mutation?.args, [1, { content: 'bad' }])
+  t.is(mutation?.error, 'Validation Error')
+  t.deepEqual(mutation?.errorDetails, {
+    state: 'retained',
+    value: {
+      name: 'ValidationError',
+      message: 'Validation Error',
+      code: 422,
+      issues: [{ name: 'content', reason: 'required' }],
+    },
+  })
+  t.deepEqual(mutation?.args, {
+    state: 'retained',
+    value: [1, { content: 'bad' }],
+  })
+
+  const writeActivity = buildTimelineActivities(
+    snapshot,
+    buildDevtoolsModel(snapshot),
+    performance.now(),
+  ).find(activity => activity.kind === 'write')
+  t.is(writeActivity?.status, 'error')
+  t.is(writeActivity?.effect, 'rolled back')
+  t.deepEqual(writeActivity?.errorDetails, mutation?.errorDetails)
+
+  const mutationError = snapshot.events.find(item => item.event.kind === 'mutate:error')
+  t.deepEqual(
+    mutationError ? eventPayload(mutationError.event) : undefined,
+    mutation?.errorDetails?.state === 'retained' ? mutation.errorDetails.value : undefined,
+  )
+
+  const mutationGroup = buildActivities(snapshot.events, buildTraceIndex(snapshot.events)).find(
+    activity => activity.kind === 'mutation',
+  )
+  t.is(mutationGroup?.status, 'error')
+  t.is(mutationGroup?.tone, 'red')
 
   collector.stop()
 })
@@ -441,6 +506,11 @@ test('collector bounds inactive query and settled write history', t => {
   t.false(retainedGeneration?.present ?? true)
   t.is(retainedGeneration?.subscriberCount, 0)
 
+  const staleValidationError = Object.assign(new Error('old generation failed'), {
+    name: 'ValidationError',
+    code: 422,
+    issues: [{ name: 'title', reason: 'required' }],
+  })
   listeners.event?.({
     kind: 'realtime',
     serviceName: 'notes',
@@ -489,12 +559,22 @@ test('collector bounds inactive query and settled write history', t => {
     serviceName: 'notes',
     method: 'find',
     durationMs: 11,
-    error: new Error('old generation failed'),
+    error: staleValidationError,
   })
   const afterStaleError = collector.getSnapshot().queries.find(query => query.queryId === 'live-3')
   t.is(afterStaleError?.generation, 2)
   t.is(afterStaleError?.status, 'success')
   t.is(afterStaleError?.lastError?.generation, 1)
+  t.deepEqual(afterStaleError?.lastError?.details, {
+    state: 'retained',
+    value: {
+      name: 'ValidationError',
+      message: 'old generation failed',
+      code: 422,
+      issues: [{ name: 'title', reason: 'required' }],
+    },
+  })
+  t.deepEqual(afterStaleError?.spans.at(-1)?.errorDetails, afterStaleError?.lastError?.details)
 
   for (let mutationId = 1; mutationId <= 3; mutationId++) {
     listeners.event?.({
@@ -516,7 +596,7 @@ test('collector bounds inactive query and settled write history', t => {
   }
   t.is(collector.getSnapshot().writes.length, 2)
 
-  collector.clearWrites()
+  collector.clearTimeline()
   t.is(collector.getSnapshot().writes.length, 0)
 
   for (let mutationId = 4; mutationId <= 6; mutationId++) {
@@ -563,7 +643,10 @@ test('collector bounds inactive query and settled write history', t => {
   })
   retainedPayload.content = 'changed later'
   const retainedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
-  t.deepEqual(retainedWrite?.args, [7, { content: 'captured' }])
+  t.deepEqual(retainedWrite?.args, {
+    state: 'retained',
+    value: [7, { content: 'captured' }],
+  })
   const retainedEvent = collector
     .getSnapshot()
     .events.find(item => item.event.kind === 'mutate:start' && item.event.mutationId === 7)
@@ -580,7 +663,10 @@ test('collector bounds inactive query and settled write history', t => {
   })
   updatedPayload.content = 'changed later'
   const updatedWrite = collector.getSnapshot().writes.find(write => write.id === 'mutation:7')
-  t.deepEqual(updatedWrite?.args, [7, { content: 'coalesced' }])
+  t.deepEqual(updatedWrite?.args, {
+    state: 'retained',
+    value: [7, { content: 'coalesced' }],
+  })
 
   listeners.event?.({
     kind: 'fetch:start',
@@ -588,7 +674,16 @@ test('collector bounds inactive query and settled write history', t => {
     generation: 2,
     serviceName: 'notes',
     method: 'find',
+    fetchId: 99,
+    reason: 'retry',
   })
+  const activeSpan = collector
+    .getSnapshot()
+    .queries.find(query => query.queryId === 'live-3')
+    ?.spans.at(-1)
+  t.is(activeSpan?.fetchId, 99)
+  t.is(activeSpan?.endAt, undefined)
+  t.is(activeSpan?.reason, 'retry')
   const timelineClearStartedAt = performance.now()
   collector.clearTimeline()
   listeners.event?.({
@@ -597,6 +692,7 @@ test('collector bounds inactive query and settled write history', t => {
     generation: 2,
     serviceName: 'notes',
     method: 'find',
+    fetchId: 99,
     durationMs: 100,
     itemCount: 1,
   })
@@ -605,13 +701,85 @@ test('collector bounds inactive query and settled write history', t => {
     .queries.find(query => query.queryId === 'live-3')
     ?.spans.at(-1)
   t.true((postClearSpan?.startAt ?? 0) >= timelineClearStartedAt)
+  t.is(postClearSpan?.ok, true)
+
+  const sourceTime = Date.now() + 1_000
+  listeners.event?.({
+    kind: 'fetch:start',
+    queryId: 'timing-root',
+    generation: 1,
+    serviceName: 'teams',
+    method: 'find',
+    fetchId: 100,
+    timestamp: sourceTime,
+  })
+  listeners.event?.({
+    kind: 'fetch:start',
+    queryId: 'timing-child',
+    generation: 1,
+    serviceName: 'users',
+    method: 'find',
+    fetchId: 101,
+    timestamp: sourceTime + 25,
+  })
+  listeners.event?.({
+    kind: 'fetch:end',
+    queryId: 'timing-child',
+    generation: 1,
+    serviceName: 'users',
+    method: 'find',
+    fetchId: 101,
+    durationMs: 50,
+    itemCount: 1,
+    timestamp: sourceTime + 75,
+  })
+  listeners.event?.({
+    kind: 'fetch:end',
+    queryId: 'timing-root',
+    generation: 1,
+    serviceName: 'teams',
+    method: 'find',
+    fetchId: 100,
+    durationMs: 100,
+    itemCount: 1,
+    timestamp: sourceTime + 100,
+  })
+  const timedActivities = buildTimelineActivities(
+    collector.getSnapshot(),
+    buildDevtoolsModel(collector.getSnapshot()),
+    performance.now(),
+  )
+  const timedRoot = timedActivities.find(activity => activity.queryId === 'timing-root')
+  const timedChild = timedActivities.find(activity => activity.queryId === 'timing-child')
+  t.true(Math.abs((timedChild?.startAt ?? 0) - (timedRoot?.startAt ?? 0) - 25) < 1)
+  t.true(Math.abs((timedRoot?.endAt ?? 0) - (timedRoot?.startAt ?? 0) - 100) < 1)
 
   collector.stop()
 })
 
 test('devtools model keeps operation identity separate from shared fetch identity', t => {
-  const root = queryRecord('root', 'issues')
-  const team = queryRecord('team', 'teams')
+  const root = queryRecord('root', 'issues', {
+    spans: [
+      {
+        fetchId: 20,
+        startAt: 10.4,
+        endAt: 15,
+        ok: true,
+        graph: [{ operationId: 'rq/team', runId: 'rq/team:1', path: '(root)' }],
+      },
+    ],
+  })
+  const team = queryRecord('team', 'teams', {
+    spans: [
+      {
+        fetchId: 10,
+        startAt: 10.2,
+        endAt: 14,
+        ok: true,
+        graph: [{ operationId: 'rq/team', runId: 'rq/team:1', path: 'team' }],
+      },
+    ],
+  })
   const labels = queryRecord('labels', 'labels')
   const page1 = queryRecord('page-1', 'issues', {
     itemCount: 25,
@@ -664,9 +832,8 @@ test('devtools model keeps operation identity separate from shared fetch identit
       },
     ],
     events: [],
-    timeline: { startedAt: 0, laneOrder: [], realtime: [] },
+    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [], traces: [] },
     writes: [],
-    inFlightWrites: 0,
   }
 
   const model = buildDevtoolsModel(snapshot)
@@ -688,6 +855,17 @@ test('devtools model keeps operation identity separate from shared fetch identit
   t.is(pages?.rootFetches[1]?.page?.request.after, 'cursor:25')
   t.false(pages ? 'queryId' in pages.summary : true)
   t.is(model.scopesByQueryId.get(root.queryId)?.length, 2)
+  const rootActivity = buildTimelineActivities(snapshot, model, 20).find(
+    activity => activity.queryId === root.queryId,
+  )
+  t.is(rootActivity?.detail, 'root')
+  t.true(rootActivity?.detailTooltip?.includes('Shared by 2 query operations') ?? false)
+  t.deepEqual(
+    buildTimelineActivities(snapshot, model, 20)
+      .filter(activity => activity.kind === 'fetch')
+      .map(activity => activity.queryId),
+    [root.queryId, team.queryId],
+  )
 })
 
 test('query details show a cursor operation as one inspectable page chain', t => {
@@ -740,36 +918,43 @@ test('query details show a cursor operation as one inspectable page chain', t =>
       },
     ],
     events: [],
-    timeline: { startedAt: 0, laneOrder: [], realtime: [] },
+    timeline: { startedAt: 0, laneOrder: [], realtime: [], connection: [], traces: [] },
     writes: [],
-    inFlightWrites: 0,
   }
   const collector: Collector = {
+    eventLimit: 500,
     start() {},
     stop() {},
     subscribe: () => () => {},
     getSnapshot: () => snapshot,
     clearEvents() {},
     clearTimeline() {},
-    clearWrites() {},
+    reset() {},
   }
 
   render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
   const row = $all('tbody tr')[0]
   t.truthy(row)
-  t.true((row?.textContent ?? '').includes('paginate(25) · cursor · 2 pages'))
+  t.is(row?.querySelectorAll('td')[1]?.textContent, 'paginate')
+  t.is(
+    row?.querySelectorAll('td')[2]?.textContent,
+    '25, {"status":"open","$sort":{"createdAt":-1}}',
+  )
   click(row!)
 
   const details = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
-  t.true(details.includes('Cursor page chain'))
-  t.true(details.includes('merges stable updates'))
+  t.true(details.includes('issues.paginate(25)'))
+  t.true(details.includes('find request'))
+  t.true(details.includes('Pagination'))
+  t.true(details.includes('35 of 35 rows loaded · 2 pages · complete'))
+  t.true(details.includes('Page chain'))
   t.true(details.includes('after start · next "cursor:25"'))
   t.true(details.includes('after "cursor:25" · end'))
-  t.true(details.includes('35 total'))
+  t.false(details.includes('merges stable updates'))
   unmount()
 })
 
-test('extension bridge starts debug collection only while connected', t => {
+test('extension bridge starts debug collection only while connected', async t => {
   dom()
   const { figbird } = app()
   const inspect = figbird.inspect.bind(figbird)
@@ -778,6 +963,18 @@ test('extension bridge starts debug collection only while connected', t => {
     inspectCalls++
     return inspect()
   }
+  figbird.inspectCache = () => [
+    {
+      serviceName: 'notes',
+      entities: [
+        {
+          id: 'large',
+          queryIds: [],
+          value: { items: Array.from({ length: 50_000 }, (_, index) => index) },
+        },
+      ],
+    },
+  ]
   const subscribe = figbird.events.subscribe.bind(figbird.events)
   let eventSubscriptions = 0
   figbird.events.subscribe = listener => {
@@ -807,19 +1004,87 @@ test('extension bridge starts debug collection only while connected', t => {
   const read = bridgeState.readJson(connection!.sessionId, null)
   t.truthy(read)
   const envelope = JSON.parse(read!)
-  t.is(envelope.protocol, 2)
+  t.is(envelope.protocol, 3)
   t.true(Array.isArray(envelope.read.queries))
+  t.is(envelope.read.cache[0].entities[0].value.items.length, 201)
+  t.is(envelope.read.cache[0].entities[0].value.items.at(-1), '[49800 more items]')
   t.is(inspectCalls, 1)
   const unchanged = JSON.parse(bridgeState.readJson(connection!.sessionId, envelope.version)!)
   t.is(unchanged.version, envelope.version)
   t.is(unchanged.read, null)
   t.is(inspectCalls, 1)
+  const queryUnsubscribe = figbird
+    .queryDesc({ serviceName: 'notes', method: 'find' })
+    .subscribe(() => {})
+  await sleep(10)
+  const changed = JSON.parse(bridgeState.readJson(connection!.sessionId, envelope.version)!)
+  t.is(typeof changed.read.events[0].timestamp, 'number')
+
+  const syntheticEvent: Record<string, unknown> = {
+    type: 'click',
+    nativeEvent: new window.MouseEvent('click'),
+    target: window.document.createElement('button'),
+  }
+  syntheticEvent.self = syntheticEvent
+  const unsafePayload: Record<string, unknown> = {
+    circular: null,
+    items: Array.from({ length: 50_000 }, (_, index) => index),
+  }
+  unsafePayload.circular = unsafePayload
+  Object.defineProperty(unsafePayload, 'throwing', {
+    enumerable: true,
+    get: () => {
+      throw new Error('getter failed')
+    },
+  })
+  ;(figbird.events as FigbirdEventEmitter).emit({
+    kind: 'action:start',
+    actionId: 1,
+    name: 'unsafe click',
+    args: [syntheticEvent, unsafePayload],
+  })
+  await sleep(10)
+  const safeReadJson = bridgeState.readJson(connection!.sessionId, changed.version)
+  t.truthy(safeReadJson)
+  t.true(safeReadJson!.length < 10_000)
+  const safeRead = JSON.parse(safeReadJson!)
+  const action = safeRead.read.events.find(
+    (event: { kind: string }) => event.kind === 'action:start',
+  )
+  t.is(action.args[0], '[SyntheticEvent click]')
+  t.is(action.args[1].circular, '[Circular]')
+  t.is(action.args[1].items.length, 201)
+  t.is(action.args[1].items.at(-1), '[49800 more items]')
+  t.is(action.args[1].throwing, '[Property threw: getter failed]')
+  ;(figbird.events as FigbirdEventEmitter).emit({
+    kind: 'action:error',
+    actionId: 2,
+    name: 'validate',
+    durationMs: 12,
+    error: Object.assign(new Error('Validation Error'), {
+      name: 'ValidationError',
+      code: 422,
+      issues: [{ name: 'email', reason: 'required' }],
+    }),
+  })
+  await sleep(10)
+  const errorRead = JSON.parse(bridgeState.readJson(connection!.sessionId, safeRead.version)!)
+  const actionError = errorRead.read.events.find(
+    (event: { kind: string }) => event.kind === 'action:error',
+  )
+  t.deepEqual(actionError.error.details, {
+    name: 'ValidationError',
+    message: 'Validation Error',
+    code: 422,
+    issues: [{ name: 'email', reason: 'required' }],
+  })
+  queryUnsubscribe()
   bridgeState.disconnect(connection!.sessionId)
   t.is(eventSubscriptions, 0)
   t.is(bridgeState.readJson(connection!.sessionId, envelope.version), null)
 })
 
-test('extension session disconnects when connection finishes after stop', async t => {
+test('extension session disconnects after stop and preserves state across transient reads', async t => {
   let resolveConnect!: (connection: unknown) => void
   const connect = new Promise<unknown>(resolve => {
     resolveConnect = resolve
@@ -846,6 +1111,40 @@ test('extension session disconnects when connection finishes after stop', async 
 
   t.true(expressions.some(expression => expression.includes('?.disconnect("late")')))
   t.false(expressions.some(expression => expression.includes('?.readJson(')))
+
+  let connects = 0
+  let reads = 0
+  let resets = 0
+  let publishedFrames = 0
+  const transientSession = new ExtensionSession(async expression => {
+    if (expression.endsWith('?.connect()')) {
+      connects++
+      return { instanceCount: 1, instanceId: 1, protocol: 3, sessionId: 'stable' }
+    }
+    if (expression.includes('?.readJson(')) {
+      reads++
+      if (reads === 1) throw new Error('temporary evaluation failure')
+      return '{"protocol":3,"version":1,"read":{"events":[]}}'
+    }
+    if (expression.includes('?.disconnect(')) return undefined
+    if (expression.endsWith('?.protocol')) return null
+    throw new Error(`Unexpected expression: ${expression}`)
+  })
+  transientSession.subscribeReset(() => resets++)
+  transientSession.subscribeRead(frame => {
+    publishedFrames++
+    t.deepEqual(frame.events, [])
+  })
+  transientSession.start()
+  await sleep(1_100)
+  transientSession.stop()
+
+  t.is(connects, 1)
+  t.true(reads >= 2)
+  t.true(publishedFrames >= 1)
+  t.is(resets, 0)
+  transientSession.resetForNavigation()
+  t.is(resets, 1)
 })
 
 test('extension inspection waits for picker startup before refreshing', async t => {
@@ -950,6 +1249,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
         spans: [{ startAt: timelineAt - 20, endAt: timelineAt - 10, ok: true }],
         realtimeSeen: 0,
         reconciles: 0,
+        data: [{ id: 76, title: 'Visible issue' }],
       },
       {
         queryId: 'labels',
@@ -971,6 +1271,10 @@ test('panel shows root queries and nests relation fetches in details', async t =
         spans: [{ startAt: timelineAt - 15, endAt: timelineAt - 5, ok: true }],
         realtimeSeen: 0,
         reconciles: 0,
+        data: [
+          { id: 1, issueId: 76, name: 'bug' },
+          { id: 2, issueId: 76, name: 'urgent' },
+        ],
       },
     ],
     relational: [
@@ -996,6 +1300,16 @@ test('panel shows root queries and nests relation fetches in details', async t =
           { path: '(root)', queryId: 'root' },
           { path: 'labels', queryId: 'labels' },
         ],
+        data: [
+          {
+            id: 76,
+            title: 'Visible issue',
+            labels: [
+              { id: 1, issueId: 76, name: 'bug' },
+              { id: 2, issueId: 76, name: 'urgent' },
+            ],
+          },
+        ],
       },
     ],
     events: [],
@@ -1003,9 +1317,10 @@ test('panel shows root queries and nests relation fetches in details', async t =
       startedAt: timelineAt - 25,
       laneOrder: ['query:root', 'query:labels', 'realtime:issues'],
       realtime: [{ at: timelineAt - 3, serviceName: 'issues' }],
+      connection: [],
+      traces: [],
     },
     writes: [],
-    inFlightWrites: 0,
   }
   const events = new FigbirdEventEmitter()
   const inspectedRows = snapshot.queries.map(inspectedRow)
@@ -1032,12 +1347,19 @@ test('panel shows root queries and nests relation fetches in details', async t =
 
   render(<FigbirdDevtoolsPanel collector={collector} inspection={inspection} />)
   await act(async () => {
+    const graph = {
+      operationId: inspectedRef.hash(),
+      runId: `${inspectedRef.hash()}:1`,
+    }
     events.emit({
       kind: 'fetch:start',
       queryId: 'root',
       generation: 1,
       serviceName: 'issues',
       method: 'find',
+      fetchId: 10,
+      reason: 'subscription',
+      graph: [{ ...graph, path: '(root)' }],
     })
     events.emit({
       kind: 'fetch:end',
@@ -1045,8 +1367,10 @@ test('panel shows root queries and nests relation fetches in details', async t =
       generation: 1,
       serviceName: 'issues',
       method: 'find',
+      fetchId: 10,
       durationMs: 8,
       itemCount: 1,
+      graph: [{ ...graph, path: '(root)' }],
     })
     events.emit({
       kind: 'fetch:start',
@@ -1054,6 +1378,9 @@ test('panel shows root queries and nests relation fetches in details', async t =
       generation: 1,
       serviceName: 'issueLabels',
       method: 'find',
+      fetchId: 11,
+      reason: 'subscription',
+      graph: [{ ...graph, path: 'labels' }],
     })
     events.emit({
       kind: 'fetch:end',
@@ -1061,14 +1388,28 @@ test('panel shows root queries and nests relation fetches in details', async t =
       generation: 1,
       serviceName: 'issueLabels',
       method: 'find',
+      fetchId: 11,
       durationMs: 5,
       itemCount: 2,
+      graph: [{ ...graph, path: 'labels' }],
     })
     events.emit({
       kind: 'realtime',
       serviceName: 'issues',
       type: 'patched',
       itemId: 76,
+      item: { id: 76, title: 'Updated issue' },
+    })
+    events.emit({
+      kind: 'connection:disconnected',
+      reason: 'transport close',
+      reconnecting: true,
+    })
+    events.emit({
+      kind: 'connection:reconnected',
+      attempt: 1,
+      transport: 'websocket',
+      connectionId: 'socket-2',
     })
     await Promise.resolve()
     await Promise.resolve()
@@ -1103,15 +1444,27 @@ test('panel shows root queries and nests relation fetches in details', async t =
   t.true(($all('tbody tr')[0]?.textContent ?? '').includes('1 here'))
 
   const rowText = $all('tbody tr').map(row => row.textContent ?? '')
+  const queryHeaders = $all('th').map(header => header.textContent ?? '')
+  t.deepEqual(queryHeaders, [
+    'service',
+    'operation',
+    'definition',
+    'maintenance',
+    'rows',
+    'fetch activity',
+    'last fetch',
+    'fetched',
+  ])
   t.is(rowText.length, 1)
   t.true(rowText[0]!.includes('issues'))
-  t.true(rowText[0]!.includes('find · with labels'))
+  t.true(rowText[0]!.includes('→ labels'))
+  t.false(rowText[0]!.includes('find()'))
   t.false(rowText[0]!.includes('issueLabels'))
 
-  const classHeader = $all('th').find(header => header.textContent === 'class')
-  t.true(classHeader?.getAttribute('title')?.includes('local-exact'))
+  const classHeader = $all('th').find(header => header.textContent === 'maintenance')
+  t.true(classHeader?.getAttribute('data-tooltip')?.includes('local-exact'))
   const classBadge = $all('span').find(element => element.textContent === 'local-exact')
-  t.true(classBadge?.getAttribute('title')?.includes('merge directly'))
+  t.true(classBadge?.getAttribute('data-tooltip')?.includes('merge directly'))
 
   const issuesRow = $all('tbody tr')[0]
   t.truthy(issuesRow)
@@ -1119,14 +1472,19 @@ test('panel shows root queries and nests relation fetches in details', async t =
 
   const devtoolsText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
   t.true(devtoolsText.includes('Query plan'))
+  t.true(devtoolsText.includes('Query data'))
+  t.truthy($('[aria-label="Copy Query data"]'))
+  t.true(devtoolsText.includes('Visible issue'))
   t.true(devtoolsText.includes('Parameters'))
+  t.false(devtoolsText.includes('Realtime Updates'))
+  t.false(devtoolsText.includes('Merges matching events locally'))
   t.true(devtoolsText.includes('issueLabels'))
   t.false(devtoolsText.includes('Composition'))
   t.false(devtoolsText.includes('Underlying fetches'))
   t.truthy($('[role="separator"][aria-label="Resize details pane"]'))
 
-  const rootQueryId = $all('code').find(element => element.textContent === 'root')
-  t.true(rootQueryId?.getAttribute('title')?.includes('Cache identity'))
+  const rootQueryId = $all('code').find(element => element.textContent?.includes('root'))
+  t.true(rootQueryId?.getAttribute('data-tooltip')?.includes('Cache identity'))
 
   const nestedQuery = $('[aria-label="Inspect nested query labels"]')
   t.truthy(nestedQuery)
@@ -1135,7 +1493,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   const nestedText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
   t.true(nestedText.includes('issues.find›labels'))
   t.true(nestedText.includes('issueLabels.find · labels'))
-  t.true(nestedText.includes('2rows'))
+  t.true(nestedText.includes('2 rows'))
   t.false(nestedText.includes('issues root'))
 
   const rootBreadcrumb = $('[aria-label="Back to root query"]')
@@ -1143,13 +1501,64 @@ test('panel shows root queries and nests relation fetches in details', async t =
   click(rootBreadcrumb!)
   t.true(($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes('Query plan'))
 
+  const fetchHistoryBar = $('[aria-label="8ms, success, subscription"]')
+  t.truthy(fetchHistoryBar)
+  t.true(fetchHistoryBar?.getAttribute('data-tooltip')?.includes('Trigger: subscription'))
+  click(fetchHistoryBar!)
+  const selectedFetch = $all('[data-timeline-activity="fetch"]').find(
+    row => row.getAttribute('aria-selected') === 'true',
+  )
+  t.true(selectedFetch?.textContent?.includes('issues'))
+  t.true(selectedFetch?.textContent?.includes('success'))
+  t.true(
+    ($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes(
+      'Response data at fetch time',
+    ),
+  )
+  t.truthy($all('button').find(button => button.textContent?.includes('Open query root')))
+  t.true(($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes('Query graph'))
+  t.true(($('[aria-label="Figbird devtools"]')?.textContent ?? '').includes('2 fetches'))
+  const nestedGraphRow = $all('button').find(
+    button =>
+      button.textContent?.includes('nested: labels') && button.textContent.includes('issueLabels'),
+  )
+  t.truthy(nestedGraphRow)
+  click(nestedGraphRow!)
+  t.true(
+    $all('[data-timeline-activity="fetch"]')
+      .find(row => row.getAttribute('aria-selected') === 'true')
+      ?.textContent?.includes('issueLabels'),
+  )
+  const showOnlyRelated = $all('button').find(button =>
+    button.textContent?.includes('Show only related'),
+  )
+  t.truthy(showOnlyRelated)
+  click(showOnlyRelated!)
+  t.is($all('[data-timeline-activity]').length, 2)
+  const showAll = $all('button').find(button => button.textContent?.includes('Show all'))
+  t.truthy(showAll)
+  click(showAll!)
+  const resumeAfterFetchNavigation = $('[aria-label="Resume live timeline"]')
+  t.truthy(resumeAfterFetchNavigation)
+  click(resumeAfterFetchNavigation!)
+
   const timelineButton = $all('button').find(button => button.textContent === 'timeline')
   t.truthy(timelineButton)
   click(timelineButton!)
   const timelineText = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
-  t.true(timelineText.includes('issues.find'))
-  t.true(timelineText.includes('issueLabels.find'))
-  t.is(timelineText.match(/issues realtime/g)?.length, 1)
+  const timelineRows = $all('[data-timeline-activity]')
+  const timelineRowText = timelineRows.map(row => row.textContent ?? '')
+  t.true(timelineRowText.some(text => text.includes('issues') && text.includes('find')))
+  t.true(timelineRowText.some(text => text.includes('issueLabels') && text.includes('find')))
+  t.is(
+    timelineRows.filter(
+      row =>
+        row.getAttribute('data-timeline-activity') === 'realtime' &&
+        row.textContent?.includes('issues') &&
+        row.textContent.includes('patch'),
+    ).length,
+    1,
+  )
   t.falsy($all('button').find(button => button.textContent === '30s'))
   t.truthy($('[aria-label="Timeline overview"]'))
   t.truthy($('[aria-label="Timeline overview"] canvas'))
@@ -1161,10 +1570,30 @@ test('panel shows root queries and nests relation fetches in details', async t =
   click(liveTimelineButton!)
   t.truthy($('[aria-label="Resume live timeline"]'))
 
-  const timelineLanes = $all('[data-timeline-lane]').map(lane =>
-    lane.getAttribute('data-timeline-lane'),
+  const timelineActivities = timelineRows.map(row => row.getAttribute('data-timeline-activity'))
+  t.deepEqual(timelineActivities, ['fetch', 'fetch', 'realtime', 'connection', 'connection'])
+  t.is($all('[data-timeline-outage="offline"]').length, 1)
+  t.true(timelineText.includes('websocket'))
+
+  const eventsButton = $all('button').find(button => button.textContent === 'events')
+  t.truthy(eventsButton)
+  click(eventsButton!)
+  t.deepEqual(
+    $all('[aria-label="Event visibility"] option').map(option => option.textContent ?? ''),
+    ['Causal groups', 'Raw events'],
   )
-  t.deepEqual(timelineLanes, ['issues.find', 'issueLabels.find', 'issues realtime'])
+  const eventHeaders = $all('[aria-label="Figbird devtools"] [style*="position: sticky"]').at(
+    -1,
+  )?.textContent
+  t.true(eventHeaders?.includes('groupserviceoperationscopestatusdetails'))
+  const realtimeEventRow = $all('[data-event-row]').find(row =>
+    row.textContent?.includes('realtime'),
+  )
+  t.truthy(realtimeEventRow)
+  click(realtimeEventRow!)
+  const eventDetails = $('[aria-label="Figbird devtools"]')?.textContent ?? ''
+  t.true(eventDetails.includes('Realtime payload'))
+  t.true(eventDetails.includes('Updated issue'))
 
   const largeElement = window.document.createElement('div')
   const largeHostFiber: Record<string, unknown> = { stateNode: largeElement }

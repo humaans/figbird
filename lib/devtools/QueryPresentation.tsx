@@ -21,7 +21,7 @@ export function ClassBadge({ value }: { value: string }) {
           ? 'neutral'
           : 'red'
   return (
-    <Badge tone={tone} title={QUERY_CLASS_DESCRIPTIONS[value]}>
+    <Badge tone={tone} tooltip={QUERY_CLASS_DESCRIPTIONS[value]}>
       {value}
     </Badge>
   )
@@ -33,16 +33,22 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
   const color =
     status.kind === 'error'
       ? colors.red
-      : status.kind === 'fetching'
+      : status.kind === 'pending'
         ? colors.blue
-        : status.kind === 'retained'
-          ? colors.faint
-          : status.kind === 'cached'
-            ? colors.amber
-            : colors.green
+        : status.kind === 'prefetched'
+          ? colors.blue
+          : status.kind === 'prepared'
+            ? colors.purple
+            : status.kind === 'skipped'
+              ? colors.faint
+              : status.kind === 'retained'
+                ? colors.faint
+                : status.kind === 'cached'
+                  ? colors.amber
+                  : colors.green
   return (
     <span
-      title={status.label}
+      data-tooltip={status.label}
       aria-label={status.label}
       style={{
         width: 8,
@@ -57,19 +63,29 @@ export function QueryStatusDot({ query }: { query: QuerySummary }) {
 }
 
 export function queryStatus(query: QuerySummary): {
-  kind: 'active' | 'cached' | 'error' | 'fetching' | 'retained'
+  kind:
+    'active' | 'cached' | 'error' | 'pending' | 'prefetched' | 'prepared' | 'retained' | 'skipped'
   label: string
 } {
   if (!query.present) {
     return { kind: 'retained', label: statusLabel(query, 'retained history') }
   }
+  if (query.skipped) {
+    return { kind: 'skipped', label: statusLabel(query, 'skipped intentionally') }
+  }
   if (query.status === 'error') {
     return { kind: 'error', label: statusLabel(query, 'error') }
   }
   if (query.isFetching || query.status === 'loading') {
-    return { kind: 'fetching', label: statusLabel(query, 'fetching') }
+    return { kind: 'pending', label: statusLabel(query, 'pending') }
   }
   if (query.subscriberCount === 0) {
+    if ((query.prefetchCount ?? 0) > 0) {
+      return { kind: 'prefetched', label: `prefetched · ${query.status}` }
+    }
+    if ((query.prepareCount ?? 0) > 0) {
+      return { kind: 'prepared', label: `prepared · ${query.status}` }
+    }
     return { kind: 'cached', label: statusLabel(query, 'cached') }
   }
   return { kind: 'active', label: statusLabel(query, 'active') }

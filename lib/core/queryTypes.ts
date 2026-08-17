@@ -23,19 +23,44 @@ export interface Event {
   item: unknown
 }
 
+export type TraceCause =
+  | { kind: 'realtime'; traceId: number }
+  | { kind: 'reconnect'; traceId: number }
+  | { kind: 'mutation'; traceId: number; mutationId?: number }
+  | { kind: 'fetch-rebase'; traceId: number }
+  | { kind: 'manual'; traceId: number }
+  | { kind: 'subscription'; traceId: number }
+
+/**
+ * Identifies the relational operation run and structural node that owns a fetch.
+ * This is execution metadata only: it must never participate in query identity.
+ */
+export interface QueryGraphRef {
+  operationId: string
+  runId: string
+  path: string
+  role?: 'junction'
+}
+
+export interface QueryExecutionOptions {
+  staleTime?: number | undefined
+  graph?: QueryGraphRef | undefined
+}
+
 /**
  * Queued event for batch processing
  */
 interface QueuedEventBase {
   serviceName: string
   type: EventType
-  items: unknown[]
+  item: unknown
+  cause?: TraceCause
 }
 
 /** Internal entity changes waiting at the store's atomic event boundary. */
 export type QueuedEvent =
-  | (QueuedEventBase & { origin: 'authoritative' })
-  | (QueuedEventBase & { origin: 'projection'; mutationLaneKey: string })
+  | (QueuedEventBase & { mode: 'server'; source: 'realtime' | 'mutation' })
+  | (QueuedEventBase & { mode: 'optimistic'; mutationLaneKey: string })
 
 /**
  * A realtime event after it has been applied to the entity cache. Carries the
@@ -49,17 +74,23 @@ interface ProcessedEventBase {
   previousItem: unknown | null
   /** Always defined — events whose item has no resolvable id are never applied. */
   itemId: EntityKey
+  cause?: TraceCause
 }
 
 /** An optimistic entity change after cache application. */
 export type ProcessedProjectionEvent = ProcessedEventBase & {
-  origin: 'projection'
+  mode: 'optimistic'
   mutationLaneKey: string
 }
 
-/** An authoritative or optimistic entity change after cache application. */
-export type ProcessedRealtimeEvent =
-  (ProcessedEventBase & { origin: 'authoritative' }) | ProcessedProjectionEvent
+/** A server, optimistic, or explicitly local entity change after cache application. */
+export type ProcessedServerEvent = ProcessedEventBase & {
+  mode: 'server'
+  source: 'realtime' | 'mutation' | 'fetch'
+}
+
+export type ProcessedCacheEvent =
+  ProcessedServerEvent | ProcessedProjectionEvent | (ProcessedEventBase & { mode: 'local' })
 
 export type QueryStatus = 'loading' | 'success' | 'error'
 
