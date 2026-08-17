@@ -46,7 +46,7 @@ interface TaskService {
 
 export const schema = createSchema({
   services: {
-    notes: service<NotesService>(),
+    notes: service<NotesService, 'api/notes'>({ path: 'api/notes' }),
     tasks: service<TaskService>(),
   },
 })
@@ -59,7 +59,7 @@ const typedFeathers = useFeathers()
 
 // Get notes service
 // oxlint-disable-next-line @typescript-eslint/no-unused-vars
-const _notesService = typedFeathers.service('notes')
+const _notesService = typedFeathers.service('api/notes')
 
 // Get tasks service
 // oxlint-disable-next-line @typescript-eslint/no-unused-vars
