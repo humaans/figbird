@@ -18,7 +18,6 @@ import {
   type QueryBuilderProxy,
 } from '../core/queryBuilder.js'
 import type { Schema, ServiceDefinitionByPath, ServiceNames, ServicePaths } from '../core/schema.js'
-import { resolveServicePath } from '../core/schema.js'
 import { useFigbird as useContextFigbird } from './context.js'
 import { useAction, type UseActionHook } from './useAction.js'
 import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
@@ -180,9 +179,7 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
           get(target, prop, receiver) {
             if (prop === 'service') {
               return <P extends ServicePaths<S>>(servicePath: P) =>
-                target.service(
-                  resolveServicePath(schema, servicePath),
-                ) as unknown as TypedServiceForSchema<S, P>
+                target.service(servicePath) as unknown as TypedServiceForSchema<S, P>
             }
 
             const value = Reflect.get(target, prop, receiver)

@@ -69,12 +69,9 @@ export type { InspectedRelationalQuery } from './relationalQuery.js'
 import type {
   AnySchema,
   Schema,
-  ServiceCreate,
-  ServiceItem,
+  ServiceDefinitionByPath,
   ServiceNames,
-  ServicePatch,
-  ServiceQuery,
-  ServiceUpdate,
+  ServicePaths,
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
 
@@ -157,10 +154,10 @@ export { RelationalQueryRef } from './relationalQuery.js'
 export type { RelationalPaginationState, RelationalQueryState } from './relationalQuery.js'
 
 // Helper to specialize adapter params' `query` by service-level domain query
-type ParamsWithServiceQuery<S extends Schema, N extends ServiceNames<S>, A extends Adapter> = Omit<
+type ParamsWithServiceQuery<S extends Schema, P extends ServicePaths<S>, A extends Adapter> = Omit<
   AdapterParams<A>,
   'query'
-> & { query?: ServiceQuery<S, N> }
+> & { query?: ServiceDefinitionByPath<S, P>['query'] }
 
 const KEYED_MUTATION_QUEUE_RETENTION_MS = 5 * 60_000
 
@@ -586,34 +583,40 @@ export class Figbird<
 
   // Descriptor layer — the primitive the relational engine (and the deprecated
   // useFind/useGet path) is built on. Speaks plain `{ serviceName, method }`
-  // descriptors, requires no schema, and resolves service path aliases centrally.
+  // descriptors in the transport-path namespace and requires no schema.
   // Prefer `figbird.query(builder)` in app code.
 
   // Strongly-typed overloads for inference from serviceName and method
   /** Create a typed `find` query reference from a descriptor. */
-  queryDesc<N extends ServiceNames<S>>(
-    desc: { serviceName: N; method: 'find'; params?: ParamsWithServiceQuery<S, N, A> },
-    config?: QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>,
+  queryDesc<P extends ServicePaths<S>>(
+    desc: { serviceName: P; method: 'find'; params?: ParamsWithServiceQuery<S, P, A> },
+    config?: QueryConfig<
+      ServiceDefinitionByPath<S, P>['item'][],
+      ServiceDefinitionByPath<S, P>['query']
+    >,
   ): QueryRef<
-    ServiceItem<S, N>[],
-    ServiceQuery<S, N>,
+    ServiceDefinitionByPath<S, P>['item'][],
+    ServiceDefinitionByPath<S, P>['query'],
     S,
     AdapterParams<A>,
     AdapterFindMeta<A>,
     AdapterQuery<A>
   >
   /** Create a typed `get` query reference from a descriptor. */
-  queryDesc<N extends ServiceNames<S>>(
+  queryDesc<P extends ServicePaths<S>>(
     desc: {
-      serviceName: N
+      serviceName: P
       method: 'get'
       resourceId: string | number
-      params?: ParamsWithServiceQuery<S, N, A>
+      params?: ParamsWithServiceQuery<S, P, A>
     },
-    config?: QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>,
+    config?: QueryConfig<
+      ServiceDefinitionByPath<S, P>['item'],
+      ServiceDefinitionByPath<S, P>['query']
+    >,
   ): QueryRef<
-    ServiceItem<S, N>,
-    ServiceQuery<S, N>,
+    ServiceDefinitionByPath<S, P>['item'],
+    ServiceDefinitionByPath<S, P>['query'],
     S,
     AdapterParams<A>,
     AdapterFindMeta<A>,
@@ -642,14 +645,9 @@ export class Figbird<
     config?: QueryConfig<unknown, unknown>,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   ): any {
-    const resolvedDesc = {
-      ...desc,
-      serviceName: resolveServicePath(this.schema, desc.serviceName),
-    }
-
     return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
       {
-        desc: resolvedDesc as QueryDescriptor,
+        desc: desc as QueryDescriptor,
         config: normalizeQueryConfig(config),
         queryStore: this.queryStore,
       },
@@ -663,61 +661,58 @@ export class Figbird<
   // Strongly-typed mutation overloads
 
   /** Create a single new item. */
-  mutateDesc<N extends ServiceNames<S>>(desc: {
-    serviceName: N
+  mutateDesc<P extends ServicePaths<S>>(desc: {
+    serviceName: P
     method: 'create'
-    data: ServiceCreate<S, N>
+    data: ServiceDefinitionByPath<S, P>['create']
     params?: AdapterParams<A>
-    optimistic?: boolean | ServiceItem<S, N>
-  }): Promise<ServiceItem<S, N>>
+    optimistic?: boolean | ServiceDefinitionByPath<S, P>['item']
+  }): Promise<ServiceDefinitionByPath<S, P>['item']>
 
   /** Create multiple new items (batch). */
-  mutateDesc<N extends ServiceNames<S>>(desc: {
-    serviceName: N
+  mutateDesc<P extends ServicePaths<S>>(desc: {
+    serviceName: P
     method: 'create'
-    data: ServiceCreate<S, N>[]
+    data: ServiceDefinitionByPath<S, P>['create'][]
     params?: AdapterParams<A>
-    optimistic?: boolean | ServiceItem<S, N>[]
-  }): Promise<ServiceItem<S, N>[]>
+    optimistic?: boolean | ServiceDefinitionByPath<S, P>['item'][]
+  }): Promise<ServiceDefinitionByPath<S, P>['item'][]>
 
   /** Update an existing item by ID (full replacement). */
-  mutateDesc<N extends ServiceNames<S>>(
+  mutateDesc<P extends ServicePaths<S>>(
     desc: {
-      serviceName: N
+      serviceName: P
       method: 'update'
       id: string | number
-      data: ServiceUpdate<S, N>
+      data: ServiceDefinitionByPath<S, P>['update']
       params?: AdapterParams<A>
-    } & DescriptorWriteProjection<ServiceItem<S, N>>,
-  ): Promise<ServiceItem<S, N>>
+    } & DescriptorWriteProjection<ServiceDefinitionByPath<S, P>['item']>,
+  ): Promise<ServiceDefinitionByPath<S, P>['item']>
 
   /** Patch an existing item by ID (partial update). */
-  mutateDesc<N extends ServiceNames<S>>(
+  mutateDesc<P extends ServicePaths<S>>(
     desc: {
-      serviceName: N
+      serviceName: P
       method: 'patch'
       id: string | number
-      data: ServicePatch<S, N>
+      data: ServiceDefinitionByPath<S, P>['patch']
       params?: AdapterParams<A>
-    } & DescriptorWriteProjection<ServiceItem<S, N>>,
-  ): Promise<ServiceItem<S, N>>
+    } & DescriptorWriteProjection<ServiceDefinitionByPath<S, P>['item']>,
+  ): Promise<ServiceDefinitionByPath<S, P>['item']>
 
   /** Remove an item by ID. */
-  mutateDesc<N extends ServiceNames<S>>(desc: {
-    serviceName: N
+  mutateDesc<P extends ServicePaths<S>>(desc: {
+    serviceName: P
     method: 'remove'
     id: string | number
     params?: AdapterParams<A>
     optimistic?: boolean
-  }): Promise<ServiceItem<S, N>>
+  }): Promise<ServiceDefinitionByPath<S, P>['item']>
 
   // Implementation
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   mutateDesc(desc: MutationDescriptor): Promise<any> {
-    return this.queryStore.mutate({
-      ...desc,
-      serviceName: resolveServicePath(this.schema, desc.serviceName),
-    })
+    return this.queryStore.mutate(desc)
   }
 
   /**
@@ -729,8 +724,8 @@ export class Figbird<
    * Prefer the typed methods on an `m` handle in app code; this is the
    * underlying primitive.
    */
-  call(serviceName: string, method: string, ...args: unknown[]): Promise<unknown> {
-    return this.queryStore.call(resolveServicePath(this.schema, serviceName), method, args)
+  call(servicePath: string, method: string, ...args: unknown[]): Promise<unknown> {
+    return this.queryStore.call(servicePath, method, args)
   }
 
   #mutationsProxy: MutationsProxy<S> | null = null

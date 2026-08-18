@@ -311,7 +311,7 @@ test('legacy useFind and builder useQuery share scoped matching and classificati
   let builderIds: number[] = []
 
   function Probe() {
-    const legacy = useFind('jobRoles', { query: { $asOf: 'current' } })
+    const legacy = useFind('api/job-roles', { query: { $asOf: 'current' } })
     const builder = useQuery(figbird.q.jobRoles.where({ $asOf: 'current' }), {
       suspense: false,
     })

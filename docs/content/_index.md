@@ -1261,9 +1261,9 @@ await figbird.m.tasks.confirmed.patch(id, { done: true }) // waits for the ack
 await figbird.m.tasks.archive([id]) // custom schema methods, typed
 ```
 
-Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects, no
-schema required. It's the primitive the relational engine itself is built on, and the
-only surface a schema-less instance can use.
+Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects using
+transport service paths, with no schema required. It's the primitive the relational engine
+itself is built on, and the only surface a schema-less instance can use.
 
 ```ts
 const query = figbird.queryDesc({
@@ -1748,8 +1748,8 @@ const figbird = new Figbird({
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
 | `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |
 | `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts a bound request or argumentless definition. See [Using outside React](#using-outside-react).               |
-| `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                                |
-| `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                                             |
+| `queryDesc(desc, config?)`                        | Transport-path descriptor query — no schema required.                                                                                                       |
+| `mutateDesc(desc)` / `call(service, method, ...)` | Transport-path descriptor mutation / custom-method call.                                                                                                    |
 | `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.                   |
 
 ## FeathersAdapter
