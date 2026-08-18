@@ -3,6 +3,7 @@ import {
   createHooks,
   createSchema,
   FeathersAdapter,
+  Figbird,
   service,
   type ServiceByIdentifier,
   type ServiceItem,
@@ -116,16 +117,32 @@ const collisionSchema = createSchema({
 const collisionHooks = createHooks(collisionSchema)
 export const collisionPathResult = collisionHooks.useFind('users')
 const collisionFeathersService = collisionHooks.useFeathers().service('users')
+const collisionFigbird = new Figbird({ schema: collisionSchema, adapter })
+const collisionFind = collisionFigbird.queryDesc({ serviceName: 'users', method: 'find' })
+const collisionCreate = collisionFigbird.mutateDesc({
+  serviceName: 'users',
+  method: 'create',
+  data: { kind: 'transport-path' },
+})
 
 export type CollisionPathItem = NonNullable<typeof collisionPathResult.data>[number]
 export type CollisionFeathersItem = Awaited<ReturnType<typeof collisionFeathersService.get>>
 export type CollisionIdentifierItem = ServiceItem<typeof collisionSchema, 'users'>
+type CollisionFindState = NonNullable<ReturnType<typeof collisionFind.getSnapshot>>
+type CollisionDescriptorItem = NonNullable<CollisionFindState['data']>[number]
+type CollisionMutationItem = Awaited<typeof collisionCreate>
 
 export type PathHookUsesTransportNamespace = Assert<
   Equal<CollisionPathItem, PathCollisionService['item']>
 >
 export type FeathersUsesTransportNamespace = Assert<
   Equal<CollisionFeathersItem, PathCollisionService['item']>
+>
+export type DescriptorUsesTransportNamespace = Assert<
+  Equal<CollisionDescriptorItem, PathCollisionService['item']>
+>
+export type DescriptorMutationUsesTransportNamespace = Assert<
+  Equal<CollisionMutationItem, PathCollisionService['item']>
 >
 export type AmbiguousUtilityReturnsUnion = Assert<
   Equal<CollisionIdentifierItem, NameCollisionService['item'] | PathCollisionService['item']>

@@ -365,6 +365,61 @@ test('schema with array of services', t => {
   })
 })
 
+test('path APIs do not reinterpret transport paths as schema names', async t => {
+  const { render, unmount, flush, $ } = dom()
+
+  interface NamedUser {
+    id: string
+    kind: 'schema-name'
+  }
+
+  interface LegacyUser {
+    id: string
+    kind: 'transport-path' | 'transport-patched'
+  }
+
+  const collisionSchema = createSchema({
+    services: {
+      users: service<{ item: NamedUser }, 'api/users'>({ path: 'api/users' }),
+      legacy: service<{ item: LegacyUser }, 'users'>({ path: 'users' }),
+    },
+  })
+  const feathers = mockFeathers({
+    'api/users': { data: { '1': { id: '1', kind: 'schema-name' } } },
+    users: { data: { '1': { id: '1', kind: 'transport-path' } } },
+  })
+  const adapter = new FeathersAdapter(feathers)
+  const figbird = new Figbird({ adapter, schema: collisionSchema })
+  const { useFeathers, useFind, useMutation } = createHooks(collisionSchema)
+
+  let directService!: { get(id: string | number): Promise<LegacyUser> }
+  let patch!: (id: string | number, data: Partial<LegacyUser>) => Promise<LegacyUser>
+
+  function App() {
+    const result = useFind('users')
+    directService = useFeathers().service('users')
+    patch = useMutation('users').patch
+
+    return <div className='kind'>{result.data?.[0]?.kind ?? 'Loading...'}</div>
+  }
+
+  render(
+    <FigbirdProvider figbird={figbird}>
+      <App />
+    </FigbirdProvider>,
+  )
+
+  await flush()
+  t.is($('.kind')?.textContent, 'transport-path')
+  t.is((await directService.get('1')).kind, 'transport-path')
+  let patched!: LegacyUser
+  await flush(async () => {
+    patched = await patch('1', { kind: 'transport-patched' })
+  })
+  t.is(patched.kind, 'transport-patched')
+  unmount()
+})
+
 test('backward compatibility - untyped usage still works', t => {
   const { render, unmount, flush, $ } = dom()
 

@@ -1,4 +1,4 @@
-import type { AnySchema, Schema, ServiceItem, ServiceNames } from './schema.js'
+import type { AnySchema, Schema, ServiceDefinitionByPath, ServicePaths } from './schema.js'
 import type { StoredQueryClass } from './queryClassification.js'
 import type { PageInfo, PageRequest } from '../adapters/adapter.js'
 
@@ -351,12 +351,12 @@ export type ItemMatcher<T> = (item: T) => boolean
  */
 export type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema
   ? UntypedData
-  : D extends { serviceName: infer N extends string; method: infer M }
-    ? N extends ServiceNames<S>
+  : D extends { serviceName: infer P extends string; method: infer M }
+    ? P extends ServicePaths<S>
       ? M extends 'find'
-        ? ServiceItem<S, N>[]
+        ? ServiceDefinitionByPath<S, P>['item'][]
         : M extends 'get'
-          ? ServiceItem<S, N>
+          ? ServiceDefinitionByPath<S, P>['item']
           : UntypedData
       : UntypedData
     : UntypedData
@@ -431,13 +431,13 @@ export type MutationDescriptor =
  */
 export type InferMutationData<S extends Schema, D extends MutationDescriptor> = S extends AnySchema
   ? UntypedData
-  : D extends { serviceName: infer N extends string; data: readonly unknown[] }
-    ? N extends ServiceNames<S>
-      ? ServiceItem<S, N>[]
+  : D extends { serviceName: infer P extends string; data: readonly unknown[] }
+    ? P extends ServicePaths<S>
+      ? ServiceDefinitionByPath<S, P>['item'][]
       : UntypedData
-    : D extends { serviceName: infer N extends string }
-      ? N extends ServiceNames<S>
-        ? ServiceItem<S, N>
+    : D extends { serviceName: infer P extends string }
+      ? P extends ServicePaths<S>
+        ? ServiceDefinitionByPath<S, P>['item']
         : UntypedData
       : UntypedData
 
