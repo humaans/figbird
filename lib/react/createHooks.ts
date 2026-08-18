@@ -17,17 +17,7 @@ import {
   type AnyQueryBuilder,
   type QueryBuilderProxy,
 } from '../core/queryBuilder.js'
-import type {
-  Schema,
-  ServiceCreate,
-  ServiceItem,
-  ServiceMethods,
-  ServiceNames,
-  ServicePatch,
-  ServiceQuery,
-  ServiceUpdate,
-} from '../core/schema.js'
-import { resolveServicePath } from '../core/schema.js'
+import type { Schema, ServiceDefinitionByPath, ServiceNames, ServicePaths } from '../core/schema.js'
 import { useFigbird as useContextFigbird } from './context.js'
 import { useAction, type UseActionHook } from './useAction.js'
 import { useMutatingImpl, type UseMutatingFilter } from './useMutating.js'
@@ -40,48 +30,52 @@ import { useQuery, type UseQueryHook } from './useQuery.js'
 import { useWindowQuery, type UseWindowQueryHook } from './useWindowQuery.js'
 
 /**
- * Strongly-typed call signatures per service name.
+ * Strongly-typed legacy call signatures per transport path.
  * Using a union of call signatures (one per service) gives the best inference:
- * passing a literal service name narrows the return type to that service.
+ * passing a literal service path narrows the return type to that service.
  */
-type WithServiceQuery<S extends Schema, N extends ServiceNames<S>, TParams> = Omit<
+type WithServiceQuery<S extends Schema, P extends ServicePaths<S>, TParams> = Omit<
   TParams,
   'query'
-> & { query?: ServiceQuery<S, N> }
+> & { query?: ServiceDefinitionByPath<S, P>['query'] }
 
-type UseGetForSchema<S extends Schema, TParams = unknown> = <N extends ServiceNames<S>>(
-  serviceName: N,
+type UseGetForSchema<S extends Schema, TParams = unknown> = <P extends ServicePaths<S>>(
+  servicePath: P,
   resourceId: string | number,
-  params?: WithServiceQuery<S, N, TParams> &
-    Partial<QueryConfig<ServiceItem<S, N>, ServiceQuery<S, N>>>,
-) => QueryResult<ServiceItem<S, N>>
+  params?: WithServiceQuery<S, P, TParams> &
+    Partial<
+      QueryConfig<ServiceDefinitionByPath<S, P>['item'], ServiceDefinitionByPath<S, P>['query']>
+    >,
+) => QueryResult<ServiceDefinitionByPath<S, P>['item']>
 
 type UseFindForSchema<
   S extends Schema,
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
-> = <N extends ServiceNames<S>>(
-  serviceName: N,
-  params?: WithServiceQuery<S, N, TParams> &
-    Partial<QueryConfig<ServiceItem<S, N>[], ServiceQuery<S, N>>>,
-) => QueryResult<ServiceItem<S, N>[], TMeta>
+> = <P extends ServicePaths<S>>(
+  servicePath: P,
+  params?: WithServiceQuery<S, P, TParams> &
+    Partial<
+      QueryConfig<ServiceDefinitionByPath<S, P>['item'][], ServiceDefinitionByPath<S, P>['query']>
+    >,
+) => QueryResult<ServiceDefinitionByPath<S, P>['item'][], TMeta>
 
-type UseMutationForSchema<S extends Schema> = <N extends ServiceNames<S>>(
-  serviceName: N,
+type UseMutationForSchema<S extends Schema> = <P extends ServicePaths<S>>(
+  servicePath: P,
 ) => UseMutationResult<
-  ServiceItem<S, N>,
-  ServiceCreate<S, N>,
-  ServiceUpdate<S, N>,
-  ServicePatch<S, N>
+  ServiceDefinitionByPath<S, P>['item'],
+  ServiceDefinitionByPath<S, P>['create'],
+  ServiceDefinitionByPath<S, P>['update'],
+  ServiceDefinitionByPath<S, P>['patch']
 >
 
-type TypedServiceForSchema<S extends Schema, N extends ServiceNames<S>> = TypedFeathersService<
-  ServiceItem<S, N>,
-  ServiceCreate<S, N>,
-  ServiceUpdate<S, N>,
-  ServicePatch<S, N>,
-  ServiceQuery<S, N>,
-  ServiceMethods<S, N>
+type TypedServiceForSchema<S extends Schema, P extends ServicePaths<S>> = TypedFeathersService<
+  ServiceDefinitionByPath<S, P>['item'],
+  ServiceDefinitionByPath<S, P>['create'],
+  ServiceDefinitionByPath<S, P>['update'],
+  ServiceDefinitionByPath<S, P>['patch'],
+  ServiceDefinitionByPath<S, P>['query'],
+  ServiceDefinitionByPath<S, P>['methods']
 >
 
 type UseMutatingForSchema<S extends Schema> = (
@@ -184,10 +178,8 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
         new Proxy(feathers, {
           get(target, prop, receiver) {
             if (prop === 'service') {
-              return <N extends ServiceNames<S>>(serviceName: N) =>
-                target.service(
-                  resolveServicePath(schema, serviceName),
-                ) as unknown as TypedServiceForSchema<S, N>
+              return <P extends ServicePaths<S>>(servicePath: P) =>
+                target.service(servicePath) as unknown as TypedServiceForSchema<S, P>
             }
 
             const value = Reflect.get(target, prop, receiver)

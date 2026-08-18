@@ -201,9 +201,11 @@ interface ScopedItem {
 
 const scopedSchema = createSchema({
   services: {
-    people: service<{ item: ScopedItem }>({ path: 'api/people' }),
-    jobRoles: service<{ item: ScopedItem }>({ path: 'api/job-roles' }),
-    compensations: service<{ item: ScopedItem }>({ path: 'api/compensations' }),
+    people: service<{ item: ScopedItem }, 'api/people'>({ path: 'api/people' }),
+    jobRoles: service<{ item: ScopedItem }, 'api/job-roles'>({ path: 'api/job-roles' }),
+    compensations: service<{ item: ScopedItem }, 'api/compensations'>({
+      path: 'api/compensations',
+    }),
   },
   relationships: {
     people: ({ many }) => ({
@@ -309,7 +311,7 @@ test('legacy useFind and builder useQuery share scoped matching and classificati
   let builderIds: number[] = []
 
   function Probe() {
-    const legacy = useFind('jobRoles', { query: { $asOf: 'current' } })
+    const legacy = useFind('api/job-roles', { query: { $asOf: 'current' } })
     const builder = useQuery(figbird.q.jobRoles.where({ $asOf: 'current' }), {
       suspense: false,
     })
@@ -457,9 +459,11 @@ test('relations use the destination service registration at runtime and in expla
 test('explain classifies junction and destination services independently', t => {
   const junctionSchema = createSchema({
     services: {
-      roles: service<{ item: ScopedItem }>({ path: 'api/roles' }),
-      memberships: service<{ item: ScopedItem }>({ path: 'api/memberships' }),
-      users: service<{ item: ScopedItem }>({ path: 'api/users' }),
+      roles: service<{ item: ScopedItem }, 'api/roles'>({ path: 'api/roles' }),
+      memberships: service<{ item: ScopedItem }, 'api/memberships'>({
+        path: 'api/memberships',
+      }),
+      users: service<{ item: ScopedItem }, 'api/users'>({ path: 'api/users' }),
     },
     relationships: {
       roles: ({ many }) => ({

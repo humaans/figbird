@@ -147,7 +147,7 @@ interface TaskService {
 const schema = createSchema({
   services: {
     tasks: service<TaskService>(),
-    people: service<PersonService>({ path: 'api/people' }),
+    people: service<PersonService, 'api/people'>({ path: 'api/people' }),
   },
   relationships: {/* per-service factories — see Relations */},
 })
@@ -1261,9 +1261,9 @@ await figbird.m.tasks.confirmed.patch(id, { done: true }) // waits for the ack
 await figbird.m.tasks.archive([id]) // custom schema methods, typed
 ```
 
-Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects, no
-schema required. It's the primitive the relational engine itself is built on, and the
-only surface a schema-less instance can use.
+Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects using
+transport service paths, with no schema required. It's the primitive the relational engine
+itself is built on, and the only surface a schema-less instance can use.
 
 ```ts
 const query = figbird.queryDesc({
@@ -1668,12 +1668,17 @@ type-check against the actual items, including both hops of a junction `many`.
 ## service
 
 ```ts
-service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>(options?)
+service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>()
+service<
+  { item: Note; query?: NoteQuery; create?; update?; patch?; methods? },
+  'api/notes'
+>({ path: 'api/notes' })
 ```
 
 Declares one service's types. Only `item` is required; omitted payloads default to
 `Partial<item>` for create/patch and `item` for update. `options.path` maps an ergonomic
-schema key to the transport-level service path. `methods` types custom Feathers methods.
+schema key to the transport-level service path; its literal type argument is required so
+path-based APIs remain narrow. `methods` types custom Feathers methods.
 
 ## one
 
@@ -1743,8 +1748,8 @@ const figbird = new Figbird({
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
 | `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |
 | `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts a bound request or argumentless definition. See [Using outside React](#using-outside-react).               |
-| `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                                |
-| `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                                             |
+| `queryDesc(desc, config?)`                        | Transport-path descriptor query — no schema required.                                                                                                       |
+| `mutateDesc(desc)` / `call(service, method, ...)` | Transport-path descriptor mutation / custom-method call.                                                                                                    |
 | `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.                   |
 
 ## FeathersAdapter
