@@ -153,7 +153,7 @@ const schema = createSchema({
 })
 ```
 
-Omitted payload types default sensibly: `Partial<item>` for create and patch, `item` for update. Service keys are preserved as literal types, so every API narrows on the service name. `.at(path)` separates an ergonomic schema key from its transport-level service path.
+Omitted payload types default sensibly: `Partial<item>` for create and patch, `item` for update. Schema names and transport paths stay separate literal types. Builders, relationships, and current mutation APIs use schema names, while raw and compatibility APIs use transport paths. `.at(path)` connects the two.
 
 For a generated, path-keyed backend catalog, bind it once and select each contract by path:
 

@@ -8,7 +8,7 @@ import { useFigbird } from './context.js'
  * filter on it. Omit the whole filter to ask "is anything mutating at all".
  */
 export interface UseMutatingFilter {
-  /** Schema key or service path — aliases resolve like everywhere else. */
+  /** Figbird service name. Schemaless instances use transport paths as their names. */
   service?: string
   /**
    * Target entity id. Note: `create` calls without a client-generated id and
