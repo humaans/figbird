@@ -547,9 +547,11 @@ export type ServicePaths<S extends Schema> = {
   [N in ServiceNames<S>]: ServicePath<ServiceByName<S, N>>
 }[ServiceNames<S>]
 
-export type ServiceByPath<S extends Schema, P extends ServicePaths<S>> = {
-  [N in ServiceNames<S>]: P extends ServicePath<ServiceByName<S, N>> ? ServiceByName<S, N> : never
-}[ServiceNames<S>]
+type ServicesByPath<S extends Schema> = {
+  [N in ServiceNames<S> as ServicePath<ServiceByName<S, N>>]: ServiceByName<S, N>
+}
+
+export type ServiceByPath<S extends Schema, P extends ServicePaths<S>> = ServicesByPath<S>[P]
 
 /** The resolved service definition selected specifically through its transport path. */
 export type ServiceDefinitionByPath<
