@@ -67,6 +67,10 @@ Breaking:
 
 - `defineSchema` service-definition maps are replaced by `createSchema` + `service` +
   relationship helpers.
+- Services now separate schema names from transport paths. Builders, relationships, `m`, and
+  `useMutating` take names; descriptor APIs, `useFeathers`, and deprecated hooks take paths.
+  `service<T>({ path })` becomes `service<T>().at(path)`; generated catalogs use
+  `service.from<TCatalog>()`.
 - `figbird.query(desc)` → `figbird.queryDesc(desc)`
 - `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
 - `figbird.query(builder | request)` is now the non-React mirror of `useQuery`

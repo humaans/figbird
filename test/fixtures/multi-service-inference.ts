@@ -1,5 +1,17 @@
 import type { FeathersClient } from '../../lib'
-import { createHooks, createSchema, FeathersAdapter, service, type ServiceItem } from '../../lib'
+import {
+  createHooks,
+  createSchema,
+  FeathersAdapter,
+  Figbird,
+  service,
+  type ServiceByName,
+  type ServiceByPath,
+  type ServiceDefinitionByPath,
+  type ServiceItem,
+  type ServiceNames,
+  type ServicePaths,
+} from '../../lib'
 
 // Test multi-service schema type inference with distinct types
 interface Person {
@@ -25,26 +37,135 @@ interface TaskService {
   item: Task
 }
 
+interface ApiSchemaTypes {
+  'api/people': PersonService
+  'api/tasks': TaskService
+}
+
+const apiService = service.from<ApiSchemaTypes>()
+
 export const schema = createSchema({
   services: {
-    'api/people': service<PersonService>(),
-    'api/tasks': service<TaskService>(),
+    people: apiService('api/people'),
+    tasks: apiService('api/tasks'),
   },
 })
 
+service<PersonService>().at('api/people')
+// @ts-expect-error A declaration's transport path can only be bound once.
+service<PersonService>().at('api/people').at('api/other-people')
+// @ts-expect-error Explicit transport paths must be non-empty literals.
+service<PersonService>().at('')
+declare const dynamicPath: string
+// @ts-expect-error A broad string would erase the finite transport-path namespace.
+service<PersonService>().at(dynamicPath)
+// @ts-expect-error Catalog factories only accept paths present in the catalog.
+apiService('api/missing')
+
 type AppSchema = typeof schema
+
+type Equal<TLeft, TRight> =
+  (<T>() => T extends TLeft ? 1 : 2) extends <T>() => T extends TRight ? 1 : 2 ? true : false
+type Assert<T extends true> = T
 
 const feathers = {} as FeathersClient
 const adapter = new FeathersAdapter(feathers)
 
-const { useFind } = createHooks<typeof schema, typeof adapter>(schema)
+const { q, useFeathers, useFind, useGet, useMutation, useMutations } = createHooks<
+  typeof schema,
+  typeof adapter
+>(schema)
+
+export const peopleQuery = q.people.all()
+export const person = useGet('api/people', 'person-id')
+export const peopleMutation = useMutation('api/people')
+export const namedMutations = useMutations().people
+export const peopleFeathersService = useFeathers().service('api/people')
+
+// @ts-expect-error Builder APIs use schema names, not transport paths.
+q['api/people'].all()
+// @ts-expect-error Legacy descriptor hooks use transport paths, not schema names.
+useFind('people')
+// @ts-expect-error Legacy mutation hooks use transport paths, not schema names.
+useMutation('people')
+// @ts-expect-error The current mutation proxy uses schema names, not transport paths.
+void useMutations()['api/people']
+// @ts-expect-error Direct Feathers access uses transport paths, not schema names.
+useFeathers().service('people')
 
 // Debug types - these will be inspected by the test
-export type PersonServiceByName = AppSchema['services']['api/people']
-export type TaskServiceByName = AppSchema['services']['api/tasks']
-export type PersonServiceItem = ServiceItem<AppSchema, 'api/people'>
-export type TaskServiceItem = ServiceItem<AppSchema, 'api/tasks'>
+export type SchemaServiceNames = ServiceNames<AppSchema>
+export type SchemaServicePaths = ServicePaths<AppSchema>
+export type ServiceNamesArePreserved = Assert<Equal<SchemaServiceNames, 'people' | 'tasks'>>
+export type ServicePathsArePreserved = Assert<Equal<SchemaServicePaths, 'api/people' | 'api/tasks'>>
+export type ServiceLookupByName = Assert<
+  Equal<ServiceByName<AppSchema, 'people'>, AppSchema['services']['people']>
+>
+export type ServiceLookupByPath = Assert<
+  Equal<ServiceByPath<AppSchema, 'api/people'>, AppSchema['services']['people']>
+>
+export type PersonServiceByName = AppSchema['services']['people']
+export type TaskServiceByName = AppSchema['services']['tasks']
+export type PersonServiceItemByName = ServiceItem<AppSchema, 'people'>
+export type PersonServiceItem = ServiceDefinitionByPath<AppSchema, 'api/people'>['item']
+export type TaskServiceItem = ServiceDefinitionByPath<AppSchema, 'api/tasks'>['item']
 
 // Test the actual hooks - these types will be checked by the test
 export const people = useFind('api/people')
 export const tasks = useFind('api/tasks')
+
+interface NameCollisionService {
+  item: { kind: 'schema-name' }
+}
+
+interface PathCollisionService {
+  item: { kind: 'transport-path' }
+}
+
+const collisionSchema = createSchema({
+  services: {
+    users: service<NameCollisionService>().at('api/users'),
+    legacy: service<PathCollisionService>().at('users'),
+  },
+})
+
+const collisionHooks = createHooks(collisionSchema)
+export const collisionPathResult = collisionHooks.useFind('users')
+const collisionFeathersService = collisionHooks.useFeathers().service('users')
+const collisionFigbird = new Figbird({ schema: collisionSchema, adapter })
+const collisionFind = collisionFigbird.queryDesc({ serviceName: 'users', method: 'find' })
+const collisionCreate = collisionFigbird.mutateDesc({
+  serviceName: 'users',
+  method: 'create',
+  data: { kind: 'transport-path' },
+})
+
+export type CollisionPathItem = NonNullable<typeof collisionPathResult.data>[number]
+export type CollisionFeathersItem = Awaited<ReturnType<typeof collisionFeathersService.get>>
+export type CollisionNameItem = ServiceItem<typeof collisionSchema, 'users'>
+export type CollisionPathItemFromUtility = ServiceDefinitionByPath<
+  typeof collisionSchema,
+  'users'
+>['item']
+type CollisionFindState = NonNullable<ReturnType<typeof collisionFind.getSnapshot>>
+type CollisionDescriptorItem = NonNullable<CollisionFindState['data']>[number]
+type CollisionMutationItem = Awaited<typeof collisionCreate>
+
+export type PathHookUsesTransportNamespace = Assert<
+  Equal<CollisionPathItem, PathCollisionService['item']>
+>
+export type FeathersUsesTransportNamespace = Assert<
+  Equal<CollisionFeathersItem, PathCollisionService['item']>
+>
+export type DescriptorUsesTransportNamespace = Assert<
+  Equal<CollisionDescriptorItem, PathCollisionService['item']>
+>
+export type DescriptorMutationUsesTransportNamespace = Assert<
+  Equal<CollisionMutationItem, PathCollisionService['item']>
+>
+export type NameUtilityUsesNameNamespace = Assert<
+  Equal<CollisionNameItem, NameCollisionService['item']>
+>
+export type PathUtilityUsesPathNamespace = Assert<
+  Equal<CollisionPathItemFromUtility, PathCollisionService['item']>
+>

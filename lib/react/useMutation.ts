@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
-import { resolveServicePath, type Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
 
 // Public untyped mutation hook intentionally returns `any` for backwards compatibility.
@@ -66,7 +65,6 @@ export function useMutation(
 
 /** The slice of a Figbird instance the mutation hook needs. @internal */
 interface MutatingFigbird {
-  schema: Schema | undefined
   queryStore: {
     mutateConfirmedDirect(desc: UntypedData): Promise<UntypedData>
   }
@@ -117,7 +115,7 @@ export function useMutationImpl(
     (desc: UntypedData) =>
       figbird.queryStore.mutateConfirmedDirect({
         ...desc,
-        serviceName: resolveServicePath(figbird.schema, serviceName),
+        serviceName,
       }),
     [figbird, serviceName],
   )

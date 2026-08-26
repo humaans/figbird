@@ -89,6 +89,7 @@ test('type narrowing works correctly with multiple services', t => {
   // Check Person service types
   const personServiceType = getTypeAtPosition(fixturePath, 'PersonServiceByName')
   const personItemType = getTypeAtPosition(fixturePath, 'PersonServiceItem')
+  const personItemByNameType = getTypeAtPosition(fixturePath, 'PersonServiceItemByName')
   const peopleType = getTypeAtPosition(fixturePath, 'people')
 
   // Check Task service types
@@ -96,20 +97,21 @@ test('type narrowing works correctly with multiple services', t => {
   const taskItemType = getTypeAtPosition(fixturePath, 'TaskServiceItem')
   const tasksType = getTypeAtPosition(fixturePath, 'tasks')
 
-  // Service<TDef, TName>: the resolved definition in one slot, keyed by the schema name
+  // Service<TDef, TName, TPath>: both schema name and transport path stay literal.
   t.true(
     personServiceType.startsWith('import("figbird").Service<{ item: Person;') &&
-      personServiceType.includes('"api/people"'),
-    `Expected personServiceType to be Service<{ item: Person; ... }, "api/people">, got: ${personServiceType}`,
+      personServiceType.includes('"people", "api/people"'),
+    `Expected personServiceType to retain name "people" and path "api/people", got: ${personServiceType}`,
   )
   t.true(
     taskServiceType.startsWith('import("figbird").Service<{ item: Task;') &&
-      taskServiceType.includes('"api/tasks"'),
-    `Expected taskServiceType to be Service<{ item: Task; ... }, "api/tasks">, got: ${taskServiceType}`,
+      taskServiceType.includes('"tasks", "api/tasks"'),
+    `Expected taskServiceType to retain name "tasks" and path "api/tasks", got: ${taskServiceType}`,
   )
 
-  // Test that ServiceItem extraction is working
+  // Names and paths remain separate projections with explicit utility types.
   t.is(personItemType, 'Person')
+  t.is(personItemByNameType, 'Person')
   t.is(taskItemType, 'Task')
 
   // Test that useFind correctly narrows to specific types (no more unions!)

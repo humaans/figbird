@@ -27,7 +27,7 @@ interface NoteService {
 export const schema = createSchema({
   services: {
     notes: service<NoteService>(),
-    people: service<{ item: { id: number; name: string } }>({ path: 'api/people' }),
+    people: service<{ item: { id: number; name: string } }>().at('api/people'),
   },
 })
 

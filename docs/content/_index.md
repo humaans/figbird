@@ -147,13 +147,33 @@ interface TaskService {
 const schema = createSchema({
   services: {
     tasks: service<TaskService>(),
-    people: service<PersonService>({ path: 'api/people' }),
+    people: service<PersonService>().at('api/people'),
   },
   relationships: {/* per-service factories — see Relations */},
 })
 ```
 
-Omitted payload types default sensibly: `Partial<item>` for create and patch, `item` for update. Service keys are preserved as literal types, so every API narrows on the service name. The `path` option separates ergonomic schema keys from transport-level service paths.
+Omitted payload types default sensibly: `Partial<item>` for create and patch, `item` for update. Schema names and transport paths stay separate literal types. Builders, relationships, and current mutation APIs use schema names, while raw and compatibility APIs use transport paths. `.at(path)` connects the two.
+
+For a generated, path-keyed backend catalog, bind it once and select each contract by path:
+
+```ts
+interface ApiSchemaTypes {
+  'api/people': PersonService
+  'api/tasks': TaskService
+}
+
+const apiService = service.from<ApiSchemaTypes>()
+
+const schema = createSchema({
+  services: {
+    people: apiService('api/people'),
+    tasks: apiService('api/tasks'),
+  },
+})
+```
+
+The object key supplies the Figbird name, while the factory argument supplies both the transport path and the matching service definition. Unknown catalog paths are TypeScript errors.
 
 ### What flows where
 
@@ -1261,9 +1281,9 @@ await figbird.m.tasks.confirmed.patch(id, { done: true }) // waits for the ack
 await figbird.m.tasks.archive([id]) // custom schema methods, typed
 ```
 
-Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects, no
-schema required. It's the primitive the relational engine itself is built on, and the
-only surface a schema-less instance can use.
+Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects using
+transport service paths, with no schema required. It's the primitive the relational engine
+itself is built on, and the only surface a schema-less instance can use.
 
 ```ts
 const query = figbird.queryDesc({
@@ -1668,12 +1688,23 @@ type-check against the actual items, including both hops of a junction `many`.
 ## service
 
 ```ts
-service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>(options?)
+service<NoteService>()
+service<NoteService>().at('api/notes')
+
+const apiService = service.from<ApiSchemaTypes>()
+apiService('api/notes')
 ```
 
 Declares one service's types. Only `item` is required; omitted payloads default to
-`Partial<item>` for create/patch and `item` for update. `options.path` maps an ergonomic
-schema key to the transport-level service path. `methods` types custom Feathers methods.
+`Partial<item>` for create/patch and `item` for update. `.at(path)` maps an ergonomic
+schema key to a non-empty literal transport path. `service.from<TCatalog>()` is the
+generated-schema form: its path argument selects the matching service definition from a
+path-keyed catalog. `methods` types custom Feathers methods.
+
+The namespaces are deliberately separate. Builder APIs (`q`, `m`, relationships, and
+`useMutating`) use schema names. Raw and compatibility APIs (`queryDesc`, `mutateDesc`,
+`call`, `useFeathers`, `useFind`, `useGet`, and `useMutation`) use transport paths. A schema
+name may equal another service's transport path without becoming ambiguous.
 
 ## one
 
@@ -1743,8 +1774,8 @@ const figbird = new Figbird({
 | `inspect()`                                       | Live-query snapshot — see [figbird.inspect](#figbirdinspect).                                                                                               |
 | `events`                                          | Observability channel — see [figbird.events](#figbirdevents).                                                                                               |
 | `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts a bound request or argumentless definition. See [Using outside React](#using-outside-react).               |
-| `queryDesc(desc, config?)`                        | Descriptor-layer query — no schema required.                                                                                                                |
-| `mutateDesc(desc)` / `call(service, method, ...)` | Descriptor-layer mutation / custom-method call.                                                                                                             |
+| `queryDesc(desc, config?)`                        | Transport-path descriptor query — no schema required.                                                                                                       |
+| `mutateDesc(desc)` / `call(service, method, ...)` | Transport-path descriptor mutation / custom-method call.                                                                                                    |
 | `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.                   |
 
 ## FeathersAdapter
