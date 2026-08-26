@@ -81,35 +81,31 @@ type ExplicitServicePath<TPath extends string> = string extends TPath
     ? never
     : TPath
 
-/**
- * A service definition waiting to be named by `createSchema`.
- *
- * Calling `service<T>()` creates an unbound declaration whose transport path
- * defaults to its schema key. `.at(path)` binds a distinct transport path once.
- */
-export type ServiceDeclaration<
+/** A path-bound service definition waiting to be named by `createSchema`. */
+export interface ServiceDeclaration<
   TDef extends ResolvedServiceDef = ResolvedServiceDef,
-  TPath extends string | undefined = string | undefined,
-> = {
+  TPath extends string = string,
+> {
   readonly path: TPath
   readonly [$phantom]?: TDef
-} & (TPath extends undefined
-  ? {
-      at<const TExplicitPath extends string>(
-        path: ExplicitServicePath<TExplicitPath>,
-      ): ServiceDeclaration<TDef, TExplicitPath>
-    }
-  : {})
+}
+
+/** A service definition whose transport path will default to its schema name. */
+export interface DefaultServiceDeclaration<TDef extends ResolvedServiceDef> {
+  readonly [$phantom]?: TDef
+  at<const TPath extends string>(path: ExplicitServicePath<TPath>): ServiceDeclaration<TDef, TPath>
+}
+
+type AnyServiceDeclaration =
+  | ServiceDeclaration<ResolvedServiceDef, string>
+  | DefaultServiceDeclaration<ResolvedServiceDef>
 
 type ServiceDefinitionCatalog<TDefinitions> = {
   [TPath in keyof TDefinitions]: ServiceTypeDefinition
 }
 
 interface ServiceFactory {
-  <TServiceDef extends ServiceTypeDefinition>(): ServiceDeclaration<
-    ResolveDef<TServiceDef>,
-    undefined
-  >
+  <TServiceDef extends ServiceTypeDefinition>(): DefaultServiceDeclaration<ResolveDef<TServiceDef>>
 
   /**
    * Create a path-bound service declaration factory from a path-keyed service catalog.
@@ -122,31 +118,23 @@ interface ServiceFactory {
   ) => ServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath>
 }
 
-function createServiceDeclaration<
-  TDef extends ResolvedServiceDef,
-  TPath extends string | undefined,
->(path: TPath): ServiceDeclaration<TDef, TPath> {
-  if (path === undefined) {
-    return {
-      path,
-      at: <const TExplicitPath extends string>(explicitPath: ExplicitServicePath<TExplicitPath>) =>
-        createServiceDeclaration<TDef, TExplicitPath>(explicitPath),
-    } as ServiceDeclaration<TDef, TPath>
+function declareService<TServiceDef extends ServiceTypeDefinition>(): DefaultServiceDeclaration<
+  ResolveDef<TServiceDef>
+> {
+  return {
+    at: path => ({ path }),
   }
-
-  return { path } as ServiceDeclaration<TDef, TPath>
 }
 
-export const service: ServiceFactory = Object.assign(
-  <TServiceDef extends ServiceTypeDefinition>() =>
-    createServiceDeclaration<ResolveDef<TServiceDef>, undefined>(undefined),
-  {
-    from:
-      <TDefinitions extends ServiceDefinitionCatalog<TDefinitions>>() =>
-      <const TPath extends keyof TDefinitions & string>(path: ExplicitServicePath<TPath>) =>
-        createServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath>(path),
-  },
-)
+function serviceFromCatalog<TDefinitions extends ServiceDefinitionCatalog<TDefinitions>>() {
+  return <const TPath extends keyof TDefinitions & string>(
+    path: ExplicitServicePath<TPath>,
+  ): ServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath> => ({ path })
+}
+
+export const service: ServiceFactory = Object.assign(declareService, {
+  from: serviceFromCatalog,
+})
 
 // Base schema interface - flexible to preserve specific service types
 export interface Schema {
@@ -402,9 +390,11 @@ function embed<TDest extends string>(
 type ServiceDefinitionOf<TService> =
   TService extends Service<infer TDef, string, string>
     ? TDef
-    : TService extends ServiceDeclaration<infer TDef, string | undefined>
+    : TService extends ServiceDeclaration<infer TDef, string>
       ? TDef
-      : never
+      : TService extends DefaultServiceDeclaration<infer TDef>
+        ? TDef
+        : never
 
 /** Extract the item type carried by a Service value's phantom slot. */
 type ServiceItemOf<TService> = ServiceDefinitionOf<TService>['item']
@@ -469,12 +459,13 @@ export type RelationshipsConfig<TServiceMap> = {
   ) => Record<string, RelationshipDef<any, any>>
 }
 
-// Materialize a declaration with its literal schema name and transport path. Until
-// this point, an omitted path is `undefined` because the schema key is not yet known.
+// Materialize a declaration with its literal schema name and transport path.
 type MaterializeService<TDeclaration, TName extends string> =
   TDeclaration extends ServiceDeclaration<infer TDef, infer TPath>
-    ? Service<TDef, TName, TPath extends string ? TPath : TName>
-    : never
+    ? Service<TDef, TName, TPath>
+    : TDeclaration extends DefaultServiceDeclaration<infer TDef>
+      ? Service<TDef, TName, TName>
+      : never
 
 // Phase 2: Create a schema with services object map (preserves literal keys + typed
 // relationships so downstream hooks can infer related item types at call sites).
@@ -489,10 +480,7 @@ type ResolvedRelationships<TServiceMap, TRelFactories> = {
 }
 
 export function createSchema<
-  const TServiceMap extends Record<
-    string,
-    ServiceDeclaration<ResolvedServiceDef, string | undefined>
-  >,
+  const TServiceMap extends Record<string, AnyServiceDeclaration>,
   const TRelFactories extends RelationshipsConfig<TServiceMap> = {},
 >(config: {
   services: TServiceMap
@@ -510,7 +498,7 @@ export function createSchema<
   const paths = new Map<string, string>()
   const serviceMap = Object.fromEntries(
     Object.entries(config.services).map(([name, declaration]) => {
-      const path = declaration.path ?? name
+      const path = 'path' in declaration ? declaration.path : name
       if (path === '') {
         throw new Error(`Service "${name}" has an empty transport path`)
       }

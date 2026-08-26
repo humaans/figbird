@@ -429,12 +429,15 @@ test('path APIs do not reinterpret transport paths as schema names', async t => 
   const figbird = new Figbird({ adapter, schema: collisionSchema })
   const { useFeathers, useFind, useMutation } = createHooks(collisionSchema)
 
+  let directClient: unknown
   let directService!: { get(id: string | number): Promise<LegacyUser> }
   let patch!: (id: string | number, data: Partial<LegacyUser>) => Promise<LegacyUser>
 
   function App() {
     const result = useFind('users')
-    directService = useFeathers().service('users')
+    const client = useFeathers()
+    directClient = client
+    directService = client.service('users')
     patch = useMutation('users').patch
 
     return <div className='kind'>{result.data?.[0]?.kind ?? 'Loading...'}</div>
@@ -447,6 +450,7 @@ test('path APIs do not reinterpret transport paths as schema names', async t => 
   )
 
   await flush()
+  t.is(directClient, feathers)
   t.is($('.kind')?.textContent, 'transport-path')
   t.is((await directService.get('1')).kind, 'transport-path')
   let patched!: LegacyUser

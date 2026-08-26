@@ -1,10 +1,5 @@
-import { useMemo } from 'react'
 import type { Adapter, AdapterFindMeta, AdapterParams } from '../adapters/adapter.js'
-import type {
-  FeathersClient,
-  TypedFeathersClient,
-  TypedFeathersService,
-} from '../adapters/feathers.js'
+import type { FeathersClient, TypedFeathersClient } from '../adapters/feathers.js'
 import {
   defineQuery as baseDefineQuery,
   type DefineQuery,
@@ -67,15 +62,6 @@ type UseMutationForSchema<S extends Schema> = <P extends ServicePaths<S>>(
   ServiceDefinitionByPath<S, P>['create'],
   ServiceDefinitionByPath<S, P>['update'],
   ServiceDefinitionByPath<S, P>['patch']
->
-
-type TypedServiceForSchema<S extends Schema, P extends ServicePaths<S>> = TypedFeathersService<
-  ServiceDefinitionByPath<S, P>['item'],
-  ServiceDefinitionByPath<S, P>['create'],
-  ServiceDefinitionByPath<S, P>['update'],
-  ServiceDefinitionByPath<S, P>['patch'],
-  ServiceDefinitionByPath<S, P>['query'],
-  ServiceDefinitionByPath<S, P>['methods']
 >
 
 type UseMutatingForSchema<S extends Schema> = (
@@ -166,35 +152,20 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
   function useTypedMutationQueue(definition?: MutationQueueDefinition, key?: string) {
     return useMutationQueueImpl(useBoundFigbird(), definition, key)
   }
-  function useTypedFeathers() {
+  function useTypedFeathers(): TypedFeathersClient<S> {
     const adapter = useBoundFigbird().adapter as { feathers?: FeathersClient }
     if (!adapter.feathers) {
       throw new Error('useFeathers must be used with a Feathers adapter')
     }
-    const { feathers } = adapter
 
-    return useMemo(
-      () =>
-        new Proxy(feathers, {
-          get(target, prop, receiver) {
-            if (prop === 'service') {
-              return <P extends ServicePaths<S>>(servicePath: P) =>
-                target.service(servicePath) as unknown as TypedServiceForSchema<S, P>
-            }
-
-            const value = Reflect.get(target, prop, receiver)
-            return typeof value === 'function' ? value.bind(target) : value
-          },
-        }) as unknown as TypedFeathersClient<S>,
-      [feathers],
-    )
+    return adapter.feathers as unknown as TypedFeathersClient<S>
   }
 
   return {
     useGet: useGet as unknown as UseGetForSchema<S, TParams>,
     useFind: useFind as unknown as UseFindForSchema<S, TParams, TMeta>,
     useMutation: useMutation as unknown as UseMutationForSchema<S>,
-    useFeathers: useTypedFeathers as UseFeathersForSchema<S>,
+    useFeathers: useTypedFeathers,
     useFigbird: useBoundFigbird,
     useQuery: useQuery as UseQueryHook<S>,
     useWindowQuery: useWindowQuery as UseWindowQueryHook<S>,
