@@ -48,6 +48,21 @@ Add these secrets to the protected `extension-release` GitHub environment:
 
 Mozilla exposes the secret only when it is created. Store it directly in GitHub Actions and rotate it if it is ever copied elsewhere.
 
+For a local macOS fallback, store the same values in Keychain under the `humaans` account and
+these service names:
+
+- `figbird-amo-jwt-issuer`
+- `figbird-amo-jwt-secret`
+
+Build the release inputs, then run the Keychain-backed signer:
+
+```sh
+npm run devtools:package
+npm run devtools:sign:firefox:local
+```
+
+The signed XPI is written to `extensions/build/firefox-signed`.
+
 ## Release both extensions
 
 After merging the extension changes, run:
