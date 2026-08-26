@@ -46,7 +46,7 @@ interface TaskService {
 
 export const schema = createSchema({
   services: {
-    notes: service<NotesService, 'api/notes'>({ path: 'api/notes' }),
+    notes: service<NotesService>().at('api/notes'),
     tasks: service<TaskService>(),
   },
 })

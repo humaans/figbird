@@ -147,13 +147,33 @@ interface TaskService {
 const schema = createSchema({
   services: {
     tasks: service<TaskService>(),
-    people: service<PersonService, 'api/people'>({ path: 'api/people' }),
+    people: service<PersonService>().at('api/people'),
   },
   relationships: {/* per-service factories — see Relations */},
 })
 ```
 
-Omitted payload types default sensibly: `Partial<item>` for create and patch, `item` for update. Service keys are preserved as literal types, so every API narrows on the service name. The `path` option separates ergonomic schema keys from transport-level service paths.
+Omitted payload types default sensibly: `Partial<item>` for create and patch, `item` for update. Service keys are preserved as literal types, so every API narrows on the service name. `.at(path)` separates an ergonomic schema key from its transport-level service path.
+
+For a generated, path-keyed backend catalog, bind it once and select each contract by path:
+
+```ts
+interface ApiSchemaTypes {
+  'api/people': PersonService
+  'api/tasks': TaskService
+}
+
+const apiService = service.from<ApiSchemaTypes>()
+
+const schema = createSchema({
+  services: {
+    people: apiService('api/people'),
+    tasks: apiService('api/tasks'),
+  },
+})
+```
+
+The object key supplies the Figbird name, while the factory argument supplies both the transport path and the matching service definition. Unknown catalog paths are TypeScript errors.
 
 ### What flows where
 
@@ -1668,17 +1688,23 @@ type-check against the actual items, including both hops of a junction `many`.
 ## service
 
 ```ts
-service<{ item: Note; query?: NoteQuery; create?; update?; patch?; methods? }>()
-service<
-  { item: Note; query?: NoteQuery; create?; update?; patch?; methods? },
-  'api/notes'
->({ path: 'api/notes' })
+service<NoteService>()
+service<NoteService>().at('api/notes')
+
+const apiService = service.from<ApiSchemaTypes>()
+apiService('api/notes')
 ```
 
 Declares one service's types. Only `item` is required; omitted payloads default to
-`Partial<item>` for create/patch and `item` for update. `options.path` maps an ergonomic
-schema key to the transport-level service path; its literal type argument is required so
-path-based APIs remain narrow. `methods` types custom Feathers methods.
+`Partial<item>` for create/patch and `item` for update. `.at(path)` maps an ergonomic
+schema key to a non-empty literal transport path. `service.from<TCatalog>()` is the
+generated-schema form: its path argument selects the matching service definition from a
+path-keyed catalog. `methods` types custom Feathers methods.
+
+The namespaces are deliberately separate. Builder APIs (`q`, `m`, relationships, and
+`useMutating`) use schema names. Raw and compatibility APIs (`queryDesc`, `mutateDesc`,
+`call`, `useFeathers`, `useFind`, `useGet`, and `useMutation`) use transport paths. A schema
+name may equal another service's transport path without becoming ambiguous.
 
 ## one
 

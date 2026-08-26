@@ -5,7 +5,9 @@ import {
   FeathersAdapter,
   Figbird,
   service,
-  type ServiceByIdentifier,
+  type ServiceByName,
+  type ServiceByPath,
+  type ServiceDefinitionByPath,
   type ServiceItem,
   type ServiceNames,
   type ServicePaths,
@@ -35,17 +37,30 @@ interface TaskService {
   item: Task
 }
 
+interface ApiSchemaTypes {
+  'api/people': PersonService
+  'api/tasks': TaskService
+}
+
+const apiService = service.from<ApiSchemaTypes>()
+
 export const schema = createSchema({
   services: {
-    people: service<PersonService, 'api/people'>({ path: 'api/people' }),
-    tasks: service<TaskService, 'api/tasks'>({ path: 'api/tasks' }),
+    people: apiService('api/people'),
+    tasks: apiService('api/tasks'),
   },
 })
 
-// @ts-expect-error Explicit transport paths must be preserved with a literal path type.
-service<PersonService>({ path: 'api/people' })
-// @ts-expect-error A literal transport path type must have the matching runtime path.
-service<PersonService, 'api/people'>({})
+service<PersonService>().at('api/people')
+// @ts-expect-error A declaration's transport path can only be bound once.
+service<PersonService>().at('api/people').at('api/other-people')
+// @ts-expect-error Explicit transport paths must be non-empty literals.
+service<PersonService>().at('')
+declare const dynamicPath: string
+// @ts-expect-error A broad string would erase the finite transport-path namespace.
+service<PersonService>().at(dynamicPath)
+// @ts-expect-error Catalog factories only accept paths present in the catalog.
+apiService('api/missing')
 
 type AppSchema = typeof schema
 
@@ -84,16 +99,16 @@ export type SchemaServicePaths = ServicePaths<AppSchema>
 export type ServiceNamesArePreserved = Assert<Equal<SchemaServiceNames, 'people' | 'tasks'>>
 export type ServicePathsArePreserved = Assert<Equal<SchemaServicePaths, 'api/people' | 'api/tasks'>>
 export type ServiceLookupByName = Assert<
-  Equal<ServiceByIdentifier<AppSchema, 'people'>, AppSchema['services']['people']>
+  Equal<ServiceByName<AppSchema, 'people'>, AppSchema['services']['people']>
 >
 export type ServiceLookupByPath = Assert<
-  Equal<ServiceByIdentifier<AppSchema, 'api/people'>, AppSchema['services']['people']>
+  Equal<ServiceByPath<AppSchema, 'api/people'>, AppSchema['services']['people']>
 >
 export type PersonServiceByName = AppSchema['services']['people']
 export type TaskServiceByName = AppSchema['services']['tasks']
 export type PersonServiceItemByName = ServiceItem<AppSchema, 'people'>
-export type PersonServiceItem = ServiceItem<AppSchema, 'api/people'>
-export type TaskServiceItem = ServiceItem<AppSchema, 'api/tasks'>
+export type PersonServiceItem = ServiceDefinitionByPath<AppSchema, 'api/people'>['item']
+export type TaskServiceItem = ServiceDefinitionByPath<AppSchema, 'api/tasks'>['item']
 
 // Test the actual hooks - these types will be checked by the test
 export const people = useFind('api/people')
@@ -109,8 +124,8 @@ interface PathCollisionService {
 
 const collisionSchema = createSchema({
   services: {
-    users: service<NameCollisionService, 'api/users'>({ path: 'api/users' }),
-    legacy: service<PathCollisionService, 'users'>({ path: 'users' }),
+    users: service<NameCollisionService>().at('api/users'),
+    legacy: service<PathCollisionService>().at('users'),
   },
 })
 
@@ -127,7 +142,11 @@ const collisionCreate = collisionFigbird.mutateDesc({
 
 export type CollisionPathItem = NonNullable<typeof collisionPathResult.data>[number]
 export type CollisionFeathersItem = Awaited<ReturnType<typeof collisionFeathersService.get>>
-export type CollisionIdentifierItem = ServiceItem<typeof collisionSchema, 'users'>
+export type CollisionNameItem = ServiceItem<typeof collisionSchema, 'users'>
+export type CollisionPathItemFromUtility = ServiceDefinitionByPath<
+  typeof collisionSchema,
+  'users'
+>['item']
 type CollisionFindState = NonNullable<ReturnType<typeof collisionFind.getSnapshot>>
 type CollisionDescriptorItem = NonNullable<CollisionFindState['data']>[number]
 type CollisionMutationItem = Awaited<typeof collisionCreate>
@@ -144,6 +163,9 @@ export type DescriptorUsesTransportNamespace = Assert<
 export type DescriptorMutationUsesTransportNamespace = Assert<
   Equal<CollisionMutationItem, PathCollisionService['item']>
 >
-export type AmbiguousUtilityReturnsUnion = Assert<
-  Equal<CollisionIdentifierItem, NameCollisionService['item'] | PathCollisionService['item']>
+export type NameUtilityUsesNameNamespace = Assert<
+  Equal<CollisionNameItem, NameCollisionService['item']>
+>
+export type PathUtilityUsesPathNamespace = Assert<
+  Equal<CollisionPathItemFromUtility, PathCollisionService['item']>
 >

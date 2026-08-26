@@ -365,6 +365,41 @@ test('schema with array of services', t => {
   })
 })
 
+test('schema validates transport paths while materializing declarations', t => {
+  const apiService = service.from<{
+    'api/people': PersonService
+  }>()
+  const generatedSchema = createSchema({
+    services: {
+      people: apiService('api/people'),
+    },
+  })
+  t.deepEqual(generatedSchema.services.people, { name: 'people', path: 'api/people' })
+
+  t.throws(
+    () =>
+      createSchema({
+        services: {
+          people: service<PersonService>().at('api/people'),
+          archivedPeople: service<PersonService>().at('api/people'),
+        },
+      }),
+    {
+      message: 'Services "people" and "archivedPeople" use the same transport path "api/people"',
+    },
+  )
+
+  t.throws(
+    () =>
+      createSchema({
+        services: {
+          '': service<PersonService>(),
+        },
+      }),
+    { message: 'Service "" has an empty transport path' },
+  )
+})
+
 test('path APIs do not reinterpret transport paths as schema names', async t => {
   const { render, unmount, flush, $ } = dom()
 
@@ -380,10 +415,12 @@ test('path APIs do not reinterpret transport paths as schema names', async t => 
 
   const collisionSchema = createSchema({
     services: {
-      users: service<{ item: NamedUser }, 'api/users'>({ path: 'api/users' }),
-      legacy: service<{ item: LegacyUser }, 'users'>({ path: 'users' }),
+      users: service<{ item: NamedUser }>().at('api/users'),
+      legacy: service<{ item: LegacyUser }>().at('users'),
     },
   })
+  t.deepEqual(collisionSchema.services.users, { name: 'users', path: 'api/users' })
+  t.deepEqual(collisionSchema.services.legacy, { name: 'legacy', path: 'users' })
   const feathers = mockFeathers({
     'api/users': { data: { '1': { id: '1', kind: 'schema-name' } } },
     users: { data: { '1': { id: '1', kind: 'transport-path' } } },

@@ -45,16 +45,6 @@ export interface Service<
   readonly [$phantom]?: TDef
 }
 
-export interface ServiceOptions<TPath extends string = string> {
-  /**
-   * Transport-level service name. When omitted, the schema key is used.
-   *
-   * This lets app code use ergonomic schema keys (`people`) while adapters still
-   * call the real backend service path (`api/people`).
-   */
-  path?: TPath
-}
-
 // Helper types to derive payload types from service definition
 type DeriveCreate<TServiceDef extends ServiceTypeDefinition> =
   TServiceDef['create'] extends undefined ? Partial<TServiceDef['item']> : TServiceDef['create']
@@ -85,23 +75,78 @@ type ResolveDef<TServiceDef extends ServiceTypeDefinition> = {
   methods: DeriveMethods<TServiceDef>
 }
 
-// Phase 1: Create a service definition (no name yet). The overloads distinguish
-// an omitted path from an explicitly typed path so createSchema can use the schema
-// key as the literal default without widening every service path to `string`.
-export function service<TServiceDef extends ServiceTypeDefinition>(): Service<
-  ResolveDef<TServiceDef>,
-  string,
-  ''
->
-export function service<
-  TServiceDef extends ServiceTypeDefinition,
-  const TPath extends string,
->(options: { path: TPath }): Service<ResolveDef<TServiceDef>, string, TPath>
-export function service<TServiceDef extends ServiceTypeDefinition>(
-  options: ServiceOptions = {},
-): Service<ResolveDef<TServiceDef>, string, string> {
-  return { name: '', path: options.path ?? '' } as Service<ResolveDef<TServiceDef>, string, string>
+type ExplicitServicePath<TPath extends string> = string extends TPath
+  ? never
+  : '' extends TPath
+    ? never
+    : TPath
+
+/**
+ * A service definition waiting to be named by `createSchema`.
+ *
+ * Calling `service<T>()` creates an unbound declaration whose transport path
+ * defaults to its schema key. `.at(path)` binds a distinct transport path once.
+ */
+export type ServiceDeclaration<
+  TDef extends ResolvedServiceDef = ResolvedServiceDef,
+  TPath extends string | undefined = string | undefined,
+> = {
+  readonly path: TPath
+  readonly [$phantom]?: TDef
+} & (TPath extends undefined
+  ? {
+      at<const TExplicitPath extends string>(
+        path: ExplicitServicePath<TExplicitPath>,
+      ): ServiceDeclaration<TDef, TExplicitPath>
+    }
+  : {})
+
+type ServiceDefinitionCatalog<TDefinitions> = {
+  [TPath in keyof TDefinitions]: ServiceTypeDefinition
 }
+
+interface ServiceFactory {
+  <TServiceDef extends ServiceTypeDefinition>(): ServiceDeclaration<
+    ResolveDef<TServiceDef>,
+    undefined
+  >
+
+  /**
+   * Create a path-bound service declaration factory from a path-keyed service catalog.
+   * The selected path determines both the runtime transport path and its service type.
+   */
+  from<TDefinitions extends ServiceDefinitionCatalog<TDefinitions>>(): <
+    const TPath extends keyof TDefinitions & string,
+  >(
+    path: ExplicitServicePath<TPath>,
+  ) => ServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath>
+}
+
+function createServiceDeclaration<
+  TDef extends ResolvedServiceDef,
+  TPath extends string | undefined,
+>(path: TPath): ServiceDeclaration<TDef, TPath> {
+  if (path === undefined) {
+    return {
+      path,
+      at: <const TExplicitPath extends string>(explicitPath: ExplicitServicePath<TExplicitPath>) =>
+        createServiceDeclaration<TDef, TExplicitPath>(explicitPath),
+    } as ServiceDeclaration<TDef, TPath>
+  }
+
+  return { path } as ServiceDeclaration<TDef, TPath>
+}
+
+export const service: ServiceFactory = Object.assign(
+  <TServiceDef extends ServiceTypeDefinition>() =>
+    createServiceDeclaration<ResolveDef<TServiceDef>, undefined>(undefined),
+  {
+    from:
+      <TDefinitions extends ServiceDefinitionCatalog<TDefinitions>>() =>
+      <const TPath extends keyof TDefinitions & string>(path: ExplicitServicePath<TPath>) =>
+        createServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath>(path),
+  },
+)
 
 // Base schema interface - flexible to preserve specific service types
 export interface Schema {
@@ -355,7 +400,11 @@ function embed<TDest extends string>(
 
 /** Extract the resolved definition carried by a Service value's phantom slot. */
 type ServiceDefinitionOf<TService> =
-  TService extends Service<infer TDef, string, string> ? TDef : never
+  TService extends Service<infer TDef, string, string>
+    ? TDef
+    : TService extends ServiceDeclaration<infer TDef, string | undefined>
+      ? TDef
+      : never
 
 /** Extract the item type carried by a Service value's phantom slot. */
 type ServiceItemOf<TService> = ServiceDefinitionOf<TService>['item']
@@ -420,11 +469,11 @@ export type RelationshipsConfig<TServiceMap> = {
   ) => Record<string, RelationshipDef<any, any>>
 }
 
-// Helper type to re-key a service with its literal schema name while retaining its
-// transport path. An omitted path is represented by '' until the schema key is known.
-type ExtractServiceWithName<S, N extends string> =
-  S extends Service<infer TDef, string, infer TPath>
-    ? Service<TDef, N, TPath extends '' ? N : TPath>
+// Materialize a declaration with its literal schema name and transport path. Until
+// this point, an omitted path is `undefined` because the schema key is not yet known.
+type MaterializeService<TDeclaration, TName extends string> =
+  TDeclaration extends ServiceDeclaration<infer TDef, infer TPath>
+    ? Service<TDef, TName, TPath extends string ? TPath : TName>
     : never
 
 // Phase 2: Create a schema with services object map (preserves literal keys + typed
@@ -440,7 +489,10 @@ type ResolvedRelationships<TServiceMap, TRelFactories> = {
 }
 
 export function createSchema<
-  const TServiceMap extends Record<string, Service>,
+  const TServiceMap extends Record<
+    string,
+    ServiceDeclaration<ResolvedServiceDef, string | undefined>
+  >,
   const TRelFactories extends RelationshipsConfig<TServiceMap> = {},
 >(config: {
   services: TServiceMap
@@ -451,18 +503,30 @@ export function createSchema<
   relationships?: TRelFactories & RelationshipsConfig<TServiceMap>
 }): {
   services: {
-    readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
+    readonly [K in keyof TServiceMap]: MaterializeService<TServiceMap[K], K & string>
   }
   relationships: ResolvedRelationships<TServiceMap, TRelFactories>
 } {
-  // Assign names to services based on their keys in the map
+  const paths = new Map<string, string>()
   const serviceMap = Object.fromEntries(
-    Object.entries(config.services).map(([name, service]) => [
-      name,
-      { ...service, name, path: service.path || name },
-    ]),
+    Object.entries(config.services).map(([name, declaration]) => {
+      const path = declaration.path ?? name
+      if (path === '') {
+        throw new Error(`Service "${name}" has an empty transport path`)
+      }
+
+      const existingName = paths.get(path)
+      if (existingName !== undefined) {
+        throw new Error(
+          `Services "${existingName}" and "${name}" use the same transport path "${path}"`,
+        )
+      }
+      paths.set(path, name)
+
+      return [name, { name, path }]
+    }),
   ) as {
-    readonly [K in keyof TServiceMap]: ExtractServiceWithName<TServiceMap[K], K & string>
+    readonly [K in keyof TServiceMap]: MaterializeService<TServiceMap[K], K & string>
   }
 
   // Invoke each per-service factory with the (runtime-identical) helpers
@@ -499,45 +563,35 @@ export type ServiceByPath<S extends Schema, P extends ServicePaths<S>> = {
   [N in ServiceNames<S>]: P extends ServicePath<ServiceByName<S, N>> ? ServiceByName<S, N> : never
 }[ServiceNames<S>]
 
-export type ServiceByIdentifier<S extends Schema, I extends ServiceNames<S> | ServicePaths<S>> =
-  | (I extends ServiceNames<S> ? ServiceByName<S, I> : never)
-  | (I extends ServicePaths<S> ? ServiceByPath<S, I> : never)
-
-/** The resolved service definition selected specifically through its transport path. @internal */
+/** The resolved service definition selected specifically through its transport path. */
 export type ServiceDefinitionByPath<
   S extends Schema,
   P extends ServicePaths<S>,
 > = ServiceDefinitionOf<ServiceByPath<S, P>>
 
-export type ServiceItem<
-  S extends Schema,
-  I extends ServiceNames<S> | ServicePaths<S>,
-> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['item']
+export type ServiceItem<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
+  ServiceByName<S, N>
+>['item']
 
-export type ServiceCreate<
-  S extends Schema,
-  I extends ServiceNames<S> | ServicePaths<S>,
-> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['create']
+export type ServiceCreate<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
+  ServiceByName<S, N>
+>['create']
 
-export type ServiceUpdate<
-  S extends Schema,
-  I extends ServiceNames<S> | ServicePaths<S>,
-> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['update']
+export type ServiceUpdate<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
+  ServiceByName<S, N>
+>['update']
 
-export type ServicePatch<
-  S extends Schema,
-  I extends ServiceNames<S> | ServicePaths<S>,
-> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['patch']
+export type ServicePatch<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
+  ServiceByName<S, N>
+>['patch']
 
-export type ServiceQuery<
-  S extends Schema,
-  I extends ServiceNames<S> | ServicePaths<S>,
-> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['query']
+export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
+  ServiceByName<S, N>
+>['query']
 
-export type ServiceMethods<
-  S extends Schema,
-  I extends ServiceNames<S> | ServicePaths<S>,
-> = ServiceDefinitionOf<ServiceByIdentifier<S, I>>['methods']
+export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
+  ServiceByName<S, N>
+>['methods']
 
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(

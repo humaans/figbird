@@ -109,7 +109,7 @@ test('type narrowing works correctly with multiple services', t => {
     `Expected taskServiceType to retain name "tasks" and path "api/tasks", got: ${taskServiceType}`,
   )
 
-  // Names and paths remain separate projections; utility extraction accepts either.
+  // Names and paths remain separate projections with explicit utility types.
   t.is(personItemType, 'Person')
   t.is(personItemByNameType, 'Person')
   t.is(taskItemType, 'Task')
