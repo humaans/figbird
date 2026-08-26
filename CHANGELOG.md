@@ -40,10 +40,6 @@ return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
 
 Also included:
 
-- One schema can now carry both ergonomic Figbird service names and literal transport paths.
-  Use `service<T>().at(path)` for handwritten aliases or `service.from<TCatalog>()` for a
-  generated, path-keyed service catalog. Builders, relationships, `m`, and `useMutating` use
-  schema names. Descriptor APIs, raw Feathers access, and deprecated hooks use transport paths.
 - Import-safe schema bindings through `createHooks(schema)`. The generated hooks resolve their
   runtime from `FigbirdProvider`, and `useMutations()` returns that instance's typed write proxy.
   Imperative code uses `figbird.m`, `figbird.prepare`, and other instance methods directly, so
@@ -71,10 +67,10 @@ Breaking:
 
 - `defineSchema` service-definition maps are replaced by `createSchema` + `service` +
   relationship helpers.
-- `service<T>({ path })` → `service<T>().at(path)` for handwritten service aliases. Generated,
-  path-keyed service catalogs use `service.from<TCatalog>()`.
-- `queryDesc`, `mutateDesc`, `call`, `useFeathers`, `useFind`, `useGet`, and `useMutation` take
-  transport paths. Builders, relationships, `m`, and `useMutating` take schema names.
+- Services now separate schema names from transport paths. Builders, relationships, `m`, and
+  `useMutating` take names; descriptor APIs, `useFeathers`, and deprecated hooks take paths.
+  `service<T>({ path })` becomes `service<T>().at(path)`; generated catalogs use
+  `service.from<TCatalog>()`.
 - `figbird.query(desc)` → `figbird.queryDesc(desc)`
 - `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
 - `figbird.query(builder | request)` is now the non-React mirror of `useQuery`
