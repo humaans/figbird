@@ -1473,7 +1473,7 @@ The full builder surface:
 Builders are immutable values identified by a stable content hash, so constructing them
 inline in render needs no dependency arrays. Also available as `figbird.q`.
 
-## useQuery
+## useQuery and useQueryResult
 
 ```ts
 // Suspense data (default)

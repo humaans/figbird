@@ -458,9 +458,9 @@ Backend/manual responsibilities:
 
 Figbird's strategic read hook has one contract: `useQuery` returns data only for the exact query key
 passed in the current render. If that key is cold, it suspends. If that same key already has data,
-refetches keep returning that data with `isFetching: true`. The common product path should not
-contain an `isLoading` branch. `<Suspense>` and `<ErrorBoundary>` own loading and first-read errors
-because that is where they compose properly with the rest of the React tree.
+refetches keep returning that data while `useQueryResult` reports `isFetching: true`. The common
+product path should not contain an `isLoading` branch. `<Suspense>` and `<ErrorBoundary>` own loading
+and first-read errors because that is where they compose properly with the rest of the React tree.
 
 `useQueryResult(query, { suspense: false })` returns the explicit
 `{ status, data, error, isFetching, refetch }` union and never suspends or throws. The default
