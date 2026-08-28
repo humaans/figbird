@@ -65,9 +65,6 @@ See the [docs](https://humaans.github.io/figbird) for the full story. The old ho
 
 Breaking:
 
-- `useQuery` now returns inferred query data directly, and `useQueries` returns a data tuple.
-  Use `useQueryResult` or `useQueryResults` for metadata, manual refetching, pagination controls,
-  and non-Suspense reads.
 - `defineSchema` service-definition maps are replaced by `createSchema` + `service` +
   relationship helpers.
 - Services now separate schema names from transport paths. Builders, relationships, `m`, and
