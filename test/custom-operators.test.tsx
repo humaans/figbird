@@ -10,7 +10,7 @@ import {
   createSchema,
   service,
   useFind,
-  useQuery,
+  useQueryResult,
   type Adapter,
   type CustomOperatorRegistration,
   type FeathersFindMeta,
@@ -310,7 +310,7 @@ test('legacy useFind and builder useQuery share scoped matching and classificati
 
   function Probe() {
     const legacy = useFind('api/job-roles', { query: { $asOf: 'current' } })
-    const builder = useQuery(figbird.q.jobRoles.where({ $asOf: 'current' }), {
+    const builder = useQueryResult(figbird.q.jobRoles.where({ $asOf: 'current' }), {
       suspense: false,
     })
     if (legacy.status === 'success') {

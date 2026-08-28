@@ -180,8 +180,10 @@ export const figbird = new Figbird({ schema, adapter })
 // useMutations returns its typed write proxy inside components.
 export const {
   useQuery,
+  useQueryResult,
   useWindowQuery,
   useQueries,
+  useQueryResults,
   q,
   useMutations,
   defineQuery,

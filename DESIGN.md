@@ -239,8 +239,8 @@ Without first-class support, this is three `useQuery`s and a client-side combine
 
 ```ts
 const me = useCurrentUser()
-const { data: teammates } = useQuery(q.people.where({ teamId: me.teamId, status: 'active' }))
-const { data: issues } = useQuery(q.issues.where({ severity: 'critical', state: 'open' }))
+const teammates = useQuery(q.people.where({ teamId: me.teamId, status: 'active' }))
+const issues = useQuery(q.issues.where({ severity: 'critical', state: 'open' }))
 const teammateIds = new Set(teammates.map(t => t.id))
 const filtered = issues.filter(i => teammateIds.has(i.assigneeId))
 ```
@@ -462,10 +462,10 @@ refetches keep returning that data with `isFetching: true`. The common product p
 contain an `isLoading` branch. `<Suspense>` and `<ErrorBoundary>` own loading and first-read errors
 because that is where they compose properly with the rest of the React tree.
 
-The explicit tagged-union mode exists as an option on the same hook — `useQuery(query,
-{ suspense: false })` returns `{ status, data, error, isFetching, refetch }` and never suspends or
-throws. It is the right tool for components that render their own inline loading/error UI, but it is
-not the north-star: documentation and product code lead with Suspense.
+`useQueryResult(query, { suspense: false })` returns the explicit
+`{ status, data, error, isFetching, refetch }` union and never suspends or throws. The default
+`useQueryResult(query)` keeps Suspense but exposes metadata and controls. Both hooks call the same
+subscription implementation; their names make the return contract visible at the call site.
 
 ### Cache Entries As Tagged Unions
 
@@ -552,7 +552,7 @@ function changeFilter(next: string) {
   startTransition(() => setFilter(next))
 }
 
-const { data } = useQuery(peopleList, { filter })
+const data = useQuery(peopleList, { filter })
 ```
 
 If `{ filter: next }` is cold and suspends, React can keep the previous committed render on screen:
@@ -564,7 +564,7 @@ For text input, split urgent input state from deferred query state:
 ```ts
 const [draftSearch, setDraftSearch] = useState('')
 const search = useDeferredValue(draftSearch)
-const { data } = useQuery(peopleSearch, { search })
+const data = useQuery(peopleSearch, { search })
 ```
 
 The input can show `draftSearch` immediately. The results are explicitly for `search`. If the UI
@@ -574,13 +574,13 @@ The core API should work with plain `useQuery`, route preparation, `startTransit
 `useDeferredValue`, and keyed Suspense boundaries. Do not add a Figbird-specific deferred-query
 hook until repeated product code proves that the React primitives are too verbose.
 
-### Why There Is No Second Hook
+### Data And Result Hooks
 
-A non-Suspense `{ status, data, error }` shape has to exist because some components legitimately
-own their loading/error rendering. But it must not become a second mental model — so it is an
-_option_ on the one hook (`{ suspense: false }`), not a separately named hook, and both modes run
-the same query machinery underneath. The legacy `useFind` / `useGet` shims exist for older
-codebases only; they are deprecated and also call into the same machinery.
+Most components need query data and nothing else, so `useQuery` returns that data directly.
+Components that own background state, manual refetching, pagination controls, or inline
+loading/error rendering use `useQueryResult`. The result hook defaults to Suspense and accepts
+`{ suspense: false }` for the tagged union. The names differ, but both projections run through one
+subscription and Suspense implementation. The legacy `useFind` / `useGet` shims remain deprecated.
 
 ## Mutations And Optimism
 
@@ -766,7 +766,7 @@ const issueDetail = defineQuery(({ id }: { id: number }) =>
 const prepared = prepare(issueDetail, { id: 42 })
 
 // Inside the component:
-const { data } = useQuery(issueDetail, { id: 42 })
+const data = useQuery(issueDetail, { id: 42 })
 ```
 
 Properties:
@@ -1660,7 +1660,7 @@ const myTeamCriticalIssues = figbird.deriveQuery(
 )
 
 // Component:
-const { data } = useQuery(myTeamCriticalIssues, { currentUserId })
+const data = useQuery(myTeamCriticalIssues, { currentUserId })
 ```
 
 Properties:
@@ -1778,7 +1778,7 @@ There is no way to ask "how many open issues?" without fetching rows — the onl
 tab counters, and dashboard tiles all want a number, not a window.
 
 ```ts
-const { data: count } = useQuery(q.issues.where({ status: 'open' }).count()) // number
+const count = useQuery(q.issues.where({ status: 'open' }).count()) // number
 ```
 
 Transport: `$limit: 0` plus the find meta's `total` — cheap for any Feathers-compatible

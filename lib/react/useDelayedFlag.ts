@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react'
  * and once it shows, don't let it flash off":
  *
  * ```tsx
- * const { data, isFetching } = useQuery(...)
+ * const { data, isFetching } = useQueryResult(...)
  * const showSpinner = useDelayedFlag(isFetching, 250, 800)
  * return (
  *   <div>

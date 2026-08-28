@@ -1,23 +1,4 @@
-/**
- * useQuery — the query hook for relational builders and definitions.
- *
- * Suspense-native by default; pass `{ suspense: false }` for an explicit
- * tagged-union result:
- *
- * @example
- * ```tsx
- * function IssueView({ issueId }: { issueId: number }) {
- *   const issue = useQuery(
- *     figbird.q.issues.get(issueId).related('comments'),
- *     { suspense: false },
- *   )
- *
- *   if (issue.status === 'loading') return <Loading />
- *   if (issue.status === 'error') return <Error error={issue.error} />
- *   return <IssueDetails issue={issue.data} />
- * }
- * ```
- */
+/** Query hooks for relational builders and definitions. */
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
@@ -50,7 +31,7 @@ export interface PaginationControls {
  * `error` status only occurs for cold failures (no data was ever produced).
  *
  * For paginated builders the success arm widens with the `loadMore` family, exactly
- * like the suspense result — the two modes carry the same query contract.
+ * like the Suspense result. The two modes carry the same query contract.
  */
 export type RelationalQueryResult<T, TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find'> =
   | {
@@ -106,10 +87,9 @@ const idleState: RelationalQueryState<null> = {
 }
 
 /**
- * Result shape for `useQuery`. Data is guaranteed to belong to the exact query key the
- * caller passed in: the hook suspends on cold reads (throwing a Promise for the nearest
- * Suspense boundary) and throws cold errors to the nearest ErrorBoundary. There is no
- * "previous data" — params changes re-suspend.
+ * Result shape for `useQueryResult`. Data is guaranteed to belong to the exact query key
+ * the caller passed in. The hook suspends on cold reads and throws cold errors to the
+ * nearest ErrorBoundary. There is no "previous data". Parameter changes re-suspend.
  *
  * `error` is non-null when a *refetch* failed while previous data is still being served
  * (a background revalidation, realtime-triggered refetch, or manual `refetch()` that
@@ -141,7 +121,7 @@ export type SuspenseQueryResult<T, TKind extends 'find' | 'get' | 'paginate' | '
 } & (TKind extends 'paginate' ? PaginationControls : unknown)
 
 /**
- * Options for `useQuery`.
+ * Options shared by the data and result hooks.
  */
 export interface UseQueryOptions {
   /**
@@ -151,19 +131,21 @@ export interface UseQueryOptions {
    */
   skip?: boolean
   /**
-   * `suspense: false` opts this call site out of Suspense: the hook never suspends or
-   * throws, returning the tagged union `{ status, data, error, isFetching, refetch }`
-   * instead — branch on `status` yourself. Must be static for the lifetime of the
-   * call site. Defaults to `true`.
-   */
-  suspense?: boolean
-  /**
    * Freshness tolerance in ms: if the query's data is younger than this on mount, the
    * background SWR revalidation is skipped. `0` (default) revalidates on every mount;
    * `Infinity` is cache-first. Not part of query identity — readers with different
    * tolerances share the cache entry, and the most demanding one keeps it freshest.
    */
   staleTime?: number
+}
+
+/** Options for `useQueryResult`. */
+export interface UseQueryResultOptions extends UseQueryOptions {
+  /**
+   * Opt out of Suspense and return the tagged result union. This option must remain
+   * static for the lifetime of the call site. Defaults to `true`.
+   */
+  suspense?: boolean
 }
 
 /**
@@ -177,38 +159,52 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
     : T
 
 /**
- * The `useQuery` call surface — query input × suspense/non-suspense. Declared
- * once and shared by the root export (schema-agnostic) and the `createHooks` kit
- * (bound to a schema), so the two can never drift.
+ * The data-only `useQuery` call surface. Declared once and shared by the root export
+ * and the schema-bound `createHooks` result.
  */
+// The unbound root hook accepts builders from every schema. `any` is required here
+// because QueryBuilder is intentionally invariant in its schema parameter.
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueryHook<S extends Schema = any> {
-  <Args, B extends AnyQueryBuilder<S>>(
-    query: QueryInput<B, Args>,
-    options: UseQueryOptions & { suspense: false },
-  ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
   <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
     query: QueryInput<B, Args>,
     options?: O,
-  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
+  ): SkipAware<QueryBuilderResult<B>, O>
   // A nullable bound request is the conditional-query form: `useQuery(id ? detail({ id }) : null)`.
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+    request: QueryRequest<Args, B> | null,
+    options?: O,
+  ): QueryBuilderResult<B> | undefined
+}
+
+/** The metadata-bearing query hook, including its explicit non-Suspense mode. */
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export interface UseQueryResultHook<S extends Schema = any> {
+  <Args, B extends AnyQueryBuilder<S>>(
+    query: QueryInput<B, Args>,
+    options: UseQueryResultOptions & { suspense: false },
+  ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryResultOptions = Record<string, never>>(
+    query: QueryInput<B, Args>,
+    options?: O,
+  ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
   <Args, B extends AnyQueryBuilder<S>>(
     request: QueryRequest<Args, B> | null,
-    options: UseQueryOptions & { suspense: false },
+    options: UseQueryResultOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
-  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryResultOptions = Record<string, never>>(
     request: QueryRequest<Args, B> | null,
     options?: O,
   ): SuspenseQueryResult<QueryBuilderResult<B> | undefined, QueryBuilderKind<B>>
 }
 
 /**
- * Suspense-native query hook for relational queries.
+ * Suspense-native data hook for relational queries.
  *
  * ```tsx
  * function IssueDetail({ id }: { id: number }) {
- *   const { data } = useQuery(figbird.q.issues.get(id).related('comments'))
- *   return <div>{data.title} ({data.comments.length})</div>
+ *   const issue = useQuery(figbird.q.issues.get(id).related('comments'))
+ *   return <div>{issue.title} ({issue.comments.length})</div>
  * }
  * ```
  *
@@ -220,6 +216,15 @@ export const useQuery: UseQueryHook = ((query: unknown, options?: UseQueryOption
   useQueryImpl(useFigbird(), query, options)) as UseQueryHook
 
 /**
+ * Suspense-native result hook for metadata, refetching, and pagination controls.
+ * Pass `{ suspense: false }` to receive the explicit tagged union instead.
+ */
+export const useQueryResult: UseQueryResultHook = ((
+  query: unknown,
+  options?: UseQueryResultOptions,
+): unknown => useQueryResultImpl(useFigbird(), query, options)) as UseQueryResultHook
+
+/**
  * Instance-taking dispatch behind the context-bound `useQuery`. Resolves the
  * interned RelationalQueryRef (or null for skips) and hands it to the shared hook
  * body. @internal
@@ -229,13 +234,23 @@ export function useQueryImpl(
   query: unknown,
   options: UseQueryOptions = {},
 ): unknown {
+  const result = useQueryResultImpl(figbird, query, options)
+  return result.data
+}
+
+/** Instance-taking implementation behind `useQueryResult`. @internal */
+export function useQueryResultImpl(
+  figbird: FigbirdLike,
+  query: unknown,
+  options: UseQueryResultOptions = {},
+): RelationalQueryResult<unknown> | SuspenseQueryResult<unknown> {
   let qRef: QueryRefLike<unknown> | null = null
   if (!options.skip && query !== null) {
     qRef = figbird.query(query as QueryInput<AnyQueryBuilder>)
   }
   // Every input shape ends at the same single hook call, so the hook sequence is stable
   // when a request flips null <-> real or `skip` toggles.
-  return useQueryForRef(qRef, options)
+  return useQueryResultForRef(qRef, options)
 }
 
 /** Inert pagination fields for skipped or not-yet-settled paginated queries. @internal */
@@ -249,14 +264,19 @@ export const idlePagination: RelationalPaginationState = {
 /**
  * Project a query state onto the suspense result shape — `{ data, error, isFetching,
  * refetch }`, widened with the `loadMore` family when the ref is paginated. Shared by
- * `useQuery` and `useQueries` so the two projections can't drift. @internal
+ * `useQueryResult` and `useQueryResults` so the projections cannot drift. @internal
  */
-export function projectSuspenseResult<T>(
-  state: RelationalQueryState<T>,
+export function projectSuspenseResult<TData>(
+  state: {
+    data: TData
+    error: Error | null
+    isFetching: boolean
+    pagination?: RelationalPaginationState
+  },
   isPaginated: boolean,
   refetch: () => void,
   loadMore: () => void,
-): object {
+): SuspenseQueryResult<TData> & Partial<PaginationControls> {
   const base = { data: state.data, error: state.error, isFetching: state.isFetching, refetch }
   return isPaginated ? { ...base, loadMore, ...(state.pagination ?? idlePagination) } : base
 }
@@ -268,7 +288,10 @@ export function projectSuspenseResult<T>(
  * instead of pinning the stale one.) A null `qRef` is a skipped query: either
  * `skip: true` or a nullable request whose factory was never called.
  */
-function useQueryForRef<T>(qRef: QueryRefLike<T> | null, options: UseQueryOptions): unknown {
+function useQueryResultForRef<T>(
+  qRef: QueryRefLike<T> | null,
+  options: UseQueryResultOptions,
+): RelationalQueryResult<T> | SuspenseQueryResult<T> {
   const { suspense = true, staleTime } = options
 
   const subscribe = useCallback(
@@ -329,7 +352,7 @@ function useQueryForRef<T>(qRef: QueryRefLike<T> | null, options: UseQueryOption
     // Always the widened shape: a null-args skip can't know the definition's kind
     // (build never ran), and inert pagination fields on a non-paginated result are
     // hidden by the static type.
-    return {
+    const skippedResult = {
       data: undefined as unknown as T,
       error: null,
       isFetching: false,
@@ -337,6 +360,7 @@ function useQueryForRef<T>(qRef: QueryRefLike<T> | null, options: UseQueryOption
       loadMore,
       ...idlePagination,
     }
+    return skippedResult
   }
 
   // `status: 'error'` only occurs for cold failures (no data was ever produced) —

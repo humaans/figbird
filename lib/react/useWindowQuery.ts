@@ -9,6 +9,8 @@ import type { UseQueryOptions } from './useQuery.js'
 export type { WindowRange }
 
 export interface UseWindowQueryOptions extends UseQueryOptions {
+  /** Opt out of Suspense and return the tagged result union. Defaults to `true`. */
+  suspense?: boolean
   /** Visible row indexes; `start` is inclusive and `end` is exclusive. */
   range: WindowRange
   /** Number of server rows in one retained block. */

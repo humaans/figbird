@@ -14,7 +14,7 @@
  */
 
 import { useNavigate, useRoute } from 'react-space-router'
-import { q, useAction, useMutating, useMutations, useQueries, useQuery } from '../../figbird'
+import { q, useAction, useMutating, useMutations, useQueries, useQueryResult } from '../../figbird'
 import { Explain } from '../../components/Explain'
 import { StatusDot } from '../../components/ui'
 import { CommentsPanel } from './Comments'
@@ -54,15 +54,16 @@ function IssueDetailLoaded({ issueId }: { issueId: number }) {
   const navigate = useNavigate()
   // The route's queries declaration warmed this exact query before the chunk arrived. The Suspense
   // boundary above (keyed by issueId) renders its skeleton if we're still cold.
-  const { data: issue, error, isFetching, refetch } = useQuery(issueDetailQuery({ id: issueId }))
+  const {
+    data: issue,
+    error,
+    isFetching,
+    refetch,
+  } = useQueryResult(issueDetailQuery({ id: issueId }))
 
   // Cycled through by the toolbar actions — queried rather than mirrored from the
   // server seed, so they can't silently drift when the seed changes.
-  const [{ data: users }, { data: teams }, { data: labels }] = useQueries([
-    q.users,
-    q.teams,
-    q.labels,
-  ])
+  const [users, teams, labels] = useQueries([q.users, q.teams, q.labels])
 
   // One action per button: each owns its pending label; the bodies close over
   // the current issue, so no arguments need threading. Writes go through `m` —

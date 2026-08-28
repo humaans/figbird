@@ -1,6 +1,6 @@
 import test from 'ava'
 import React from 'react'
-import { createSchema, service, useQuery } from '../lib'
+import { createSchema, service, useQuery, useQueryResult } from '../lib'
 import { createTestApp, dom } from './helpers'
 
 // ============================================================================
@@ -143,12 +143,12 @@ test('QueryBuilder.paginate: hash differs by pageSize and includeTotal', t => {
 // Hook integration tests
 // ============================================================================
 
-test('useQuery + paginate: first page renders, hasMore reflects whether the server returned a full page', async t => {
+test('useQueryResult + paginate: first page renders, hasMore reflects whether the server returned a full page', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 7 })
 
   function IssueList() {
-    const { data, hasMore, isLoadingMore } = useQuery(
+    const { data, hasMore, isLoadingMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
     return (
@@ -178,14 +178,14 @@ test('useQuery + paginate: first page renders, hasMore reflects whether the serv
   unmount()
 })
 
-test('useQuery + paginate: loadMore appends the next page and flips hasMore false on partial page', async t => {
+test('useQueryResult + paginate: loadMore appends the next page and flips hasMore false on partial page', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 7 })
 
   let loadMoreFn: (() => void) | null = null
 
   function IssueList() {
-    const { data, hasMore, loadMore } = useQuery(
+    const { data, hasMore, loadMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
     loadMoreFn = loadMore
@@ -233,12 +233,12 @@ test('useQuery + paginate: loadMore appends the next page and flips hasMore fals
   unmount()
 })
 
-test('useQuery + paginate: includeTotal exposes total from the first page meta', async t => {
+test('useQueryResult + paginate: includeTotal exposes total from the first page meta', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 12 })
 
   function IssueList() {
-    const { total } = useQuery(
+    const { total } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 4, includeTotal: true }),
     )
     return <div className='issues' data-total={String(total ?? 'unset')} />
@@ -258,12 +258,12 @@ test('useQuery + paginate: includeTotal exposes total from the first page meta',
   unmount()
 })
 
-test('useQuery + paginate: total is undefined when adapter omits it', async t => {
+test('useQueryResult + paginate: total is undefined when adapter omits it', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 12, skipTotal: true })
 
   function IssueList() {
-    const { total } = useQuery(
+    const { total } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 4, includeTotal: true }),
     )
     return <div className='issues' data-total={String(total ?? 'unset')} />
@@ -283,7 +283,7 @@ test('useQuery + paginate: total is undefined when adapter omits it', async t =>
   unmount()
 })
 
-test('useQuery + paginate: refetch drops follow-up pages and re-fetches page 0 in place', async t => {
+test('useQueryResult + paginate: refetch drops follow-up pages and re-fetches page 0 in place', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, issuesService } = createPaginateApp({ totalIssues: 9 })
 
@@ -291,7 +291,7 @@ test('useQuery + paginate: refetch drops follow-up pages and re-fetches page 0 i
   let refetchFn: (() => void) | null = null
 
   function IssueList() {
-    const { data, loadMore, refetch, hasMore } = useQuery(
+    const { data, loadMore, refetch, hasMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
     loadMoreFn = loadMore
@@ -327,14 +327,14 @@ test('useQuery + paginate: refetch drops follow-up pages and re-fetches page 0 i
   unmount()
 })
 
-test('useQuery + paginate: composes with .related() — relations attach to every page', async t => {
+test('useQueryResult + paginate: composes with .related() — relations attach to every page', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 4 })
 
   let loadMoreFn: (() => void) | null = null
 
   function IssueList() {
-    const { data, loadMore } = useQuery(
+    const { data, loadMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 2 }).related('comments'),
     )
     loadMoreFn = loadMore
@@ -364,12 +364,12 @@ test('useQuery + paginate: composes with .related() — relations attach to ever
   unmount()
 })
 
-test('useQuery + paginate: realtime create that provably sorts into a page merges locally', async t => {
+test('useQueryResult + paginate: realtime create that provably sorts into a page merges locally', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 5 })
 
   function IssueList() {
-    const { data, hasMore } = useQuery(
+    const { data, hasMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
     return (
@@ -428,7 +428,7 @@ test('useQuery + paginate: .server() makes an offset page refetch on realtime', 
   const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 5 })
 
   function IssueList() {
-    const { data } = useQuery(
+    const data = useQuery(
       figbird.q.issues.orderBy('rank', 'asc').server().paginate({ pageSize: 3 }),
     )
     return <div className='issues' data-titles={data.map(issue => issue.title).join(',')} />

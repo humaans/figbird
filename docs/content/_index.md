@@ -12,7 +12,7 @@ Figbird gives you one query hook that fetches an entity graph (a record together
 
 ```tsx
 function IssueDetail({ id }: { id: number }) {
-  const { data: issue } = useQuery(
+  const issue = useQuery(
     q.issues.get(id).related('creator').related('comments').related('labels'),
   )
 
@@ -89,8 +89,17 @@ export const figbird = new Figbird({
 })
 
 // Pure, schema-bound React bindings.
-export const { useQuery, q, useMutations, defineQuery, useAction, useMutating } =
-  createHooks(schema)
+export const {
+  useQuery,
+  useQueryResult,
+  useQueries,
+  useQueryResults,
+  q,
+  useMutations,
+  defineQuery,
+  useAction,
+  useMutating,
+} = createHooks(schema)
 ```
 
 ```tsx
@@ -99,7 +108,7 @@ import { figbird, q, useMutations, useQuery } from './figbird'
 
 function OpenIssues() {
   const m = useMutations()
-  const { data: issues } = useQuery(
+  const issues = useQuery(
     q.issues.where({ status: 'open' }).orderBy('id', 'desc').related('creator'),
   )
 
@@ -204,7 +213,7 @@ Builders are immutable (every method returns a new one) and identified by a stab
 
 ```tsx
 function IssueList({ status }: { status: string }) {
-  const { data } = useQuery(q.issues.where({ status }))
+  const data = useQuery(q.issues.where({ status }))
   // a new builder every render, but the same query identity while `status` is stable
 }
 ```
@@ -223,7 +232,7 @@ if any", use `.where(...).limit(1)` and destructure the array.
 Relations are declared once in the schema, then attached per query with `.related()`:
 
 ```ts
-const { data: issue } = useQuery(
+const issue = useQuery(
   q.issues
     .get(id)
     .related('creator') // one — Issue.creator: User | null
@@ -307,8 +316,8 @@ The server resolves the join; on the client, Figbird's matcher evaluates the pat
 
 ```tsx
 function IssueDetail({ id }: { id: number }) {
-  const { data, isFetching, refetch, error } = useQuery(q.issues.get(id).related('comments'))
-  // data is guaranteed here — no null checks, no status branches
+  const issue = useQuery(q.issues.get(id).related('comments'))
+  // issue is the inferred query data. No wrapper or status branch.
 }
 ```
 
@@ -319,14 +328,20 @@ The exact contract:
 3. **Refetch with data present** (background revalidation, realtime-triggered, manual) → never suspends; current data stays up with `isFetching: true`.
 4. **Params change** → that's a _different query_ with a cold cache entry, so it suspends. The hook never shows old data labeled with new params. Keeping the previous UI on screen during the switch is one `startTransition` away; see [the no-flash checklist](#no-flash-checklist).
 
-**Errors after success don't unmount the screen.** If a refetch fails while data is showing, the hook keeps returning the last good `data` with `error` set. Show a toast or a banner; the next successful fetch clears it. Only a cold read with no data ever produced throws to the error boundary.
+**Errors after success don't unmount the screen.** If a refetch fails while data is showing, `useQuery` keeps returning the last good data. Call `useQueryResult` when the component needs the background `error`, `isFetching`, or `refetch` state. The next successful fetch clears the error. Only a cold read with no data ever produced throws to the error boundary.
+
+```tsx
+const { data: issue, error, isFetching, refetch } = useQueryResult(
+  q.issues.get(id).related('comments'),
+)
+```
 
 ### Opting out of Suspense
 
 Pass `{ suspense: false }` to get an explicit tagged union that never suspends or throws:
 
 ```tsx
-const issues = useQuery(q.issues.related('creator'), { suspense: false })
+const issues = useQueryResult(q.issues.related('creator'), { suspense: false })
 
 if (issues.status === 'error') return <ErrorNote error={issues.error} />
 if (issues.status !== 'success') return <Spinner /> // 'idle' | 'loading'
@@ -336,7 +351,7 @@ return <List items={issues.data} />
 ### Skipping
 
 ```ts
-const { data } = useQuery(q.issues.get(id), { skip: id == null })
+const data = useQuery(q.issues.get(id), { skip: id == null })
 // data: Issue | undefined — the type reflects that a skipped query has no data
 ```
 
@@ -344,7 +359,7 @@ With definitions, conditionally bind the request — `null` skips the query with
 invoking the definition's build function, so no non-null assertion is needed:
 
 ```ts
-const { data } = useQuery(id ? issueDetail({ id }) : null)
+const data = useQuery(id ? issueDetail({ id }) : null)
 ```
 
 ### Several queries at once
@@ -361,24 +376,38 @@ const [people, announcements] = useQueries([
 ])
 ```
 
-Each element carries the same contract as the `useQuery` suspense result for its
-builder — `data`, `error`, `isFetching`, `refetch`, and the same semantics: a cold
-error on any query throws to the error boundary, while a failed refetch surfaces on
-that element's `error` with its last good `data` still rendering. A `.paginate()`
-element widens with its own `loadMore`/`hasMore`/… family, exactly like the single
-hook; calling `loadMore()` appends that element's next page without disturbing the
-others.
+Each element is the inferred data for its query. Use `useQueryResults` when a component
+needs metadata or pagination controls from one or more elements:
+
+```tsx
+const [{ data: people }, { data: announcements, isFetching }] = useQueryResults([
+  q.people,
+  q.announcements.orderBy('createdAt', 'desc').limit(5),
+])
+```
+
+A cold error on either parallel hook throws to the error boundary. A failed refetch
+keeps the last good data available through both hooks and appears in the matching
+`useQueryResults` element's `error`.
 
 Reach for this only when the roots are genuinely independent — connected data belongs
 in a single builder with `.related()`. Without Suspense there is no waterfall to
-avoid: multiple `{ suspense: false }` `useQuery` calls already run in parallel.
+avoid: multiple `{ suspense: false }` `useQueryResult` calls already run in parallel.
 
 ## Pagination
 
 `.paginate()` turns a query into an infinite-scroll accumulator. Each loaded page is its own window on the server, and `data` is the concatenation of all loaded pages:
 
 ```tsx
-const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQuery(
+const issues = useQuery(
+  q.issues.orderBy('updatedAt', 'desc').paginate({ pageSize: 25 }),
+)
+```
+
+Use the result hook when the component needs pagination controls:
+
+```tsx
+const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQueryResult(
   q.issues
     .where({ status: 'open' })
     .orderBy('updatedAt', 'desc')
@@ -881,7 +910,7 @@ export const issueDetail = defineQuery(({ id }: { id: number }) =>
 const request = issueDetail({ id: 42 })
 
 // component
-const { data } = useQuery(request)
+const data = useQuery(request)
 ```
 
 Without a schema, args are typed from the build function. When args arrive from an untrusted source like URL params or storage, pass a [Standard Schema](https://github.com/standard-schema/standard-schema) validator (zod, valibot, arktype…) as the middle argument. The callable definition accepts the schema's input type and the build function receives its validated output type. Calling the definition validates and normalizes immediately, turning silent cache-splits (`{ id: "42" }` vs `{ id: 42 }`) into loud failures:
@@ -1249,7 +1278,7 @@ export const issueDetail = defineQuery(({ id }: { id: number }) =>
 <Row onMouseEnter={() => prefetch(issueDetail({ id }))} />
 
 // 4. The screen just reads — warm visits render synchronously, no fallback
-const { data } = useQuery(issueDetail({ id }))
+const data = useQuery(issueDetail({ id }))
 ```
 
 Because all three paths resolve to the same builder AST hash, there is no coordination to do.
@@ -1447,25 +1476,30 @@ inline in render needs no dependency arrays. Also available as `figbird.q`.
 ## useQuery
 
 ```ts
-// Suspense (default)
-const { data, error, isFetching, refetch } = useQuery(builder)
-const { data } = useQuery(definition(args))
+// Suspense data (default)
+const data = useQuery(builder)
+const definedData = useQuery(definition(args))
+
+// Suspense result object for metadata and manual refetching
+const { data, error, isFetching, refetch } = useQueryResult(builder)
 
 // Paginated builders widen the result
-const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQuery(
+const { data, loadMore, hasMore, isLoadingMore, loadMoreError, total } = useQueryResult(
   q.issues.paginate({ pageSize: 25, includeTotal: true }),
 )
 
 // Tagged union, never suspends or throws
-const result = useQuery(builder, { suspense: false })
+const result = useQueryResult(builder, { suspense: false })
 // result: { status: 'idle' | 'loading' | 'success' | 'error', data, error, isFetching, refetch }
 // Paginated builders widen the success arm with the same loadMore family as above
 
 // Conditional fetching
-const { data } = useQuery(builder, { skip: id == null }) // data: T | undefined
+const data = useQuery(builder, { skip: id == null }) // T | undefined
 ```
 
-Options: `skip?: boolean`, `suspense?: boolean` (must be static per call site), `staleTime?: number` (freshness tolerance — see [Realtime](#realtime)).
+`useQuery` options: `skip?: boolean`, `staleTime?: number` (freshness tolerance — see [Realtime](#realtime)).
+
+`useQueryResult` accepts the same options plus `suspense?: boolean`, which must be static per call site.
 
 Result fields (suspense form): `data` (guaranteed for the exact query passed), `error`
 (non-null when a refetch failed while data is showing; cold errors throw instead),
@@ -1479,9 +1513,19 @@ const [issues, users] = useQueries([q.issues.where({ status: 'open' }), q.users]
 
 Suspends on every cold query in the array at once — all fetches in parallel, one
 suspension for the set (see [Several queries at once](#several-queries-at-once)).
-Each element has the `useQuery` suspense result shape for its builder (`data`,
-`error`, `isFetching`, `refetch`, plus the `loadMore`/`hasMore`/… family on a
-`.paginate()` element). Suspense-only. Options: `staleTime?: number`.
+Each element is the inferred data for its builder. Suspense-only. Options: `staleTime?: number`.
+
+## useQueryResults
+
+```ts
+const [{ data: issues }, { data: users, isFetching }] = useQueryResults([
+  q.issues.where({ status: 'open' }),
+  q.users,
+])
+```
+
+Returns the corresponding heterogeneous tuple of Suspense result objects. Paginated
+elements include `loadMore`, `hasMore`, `isLoadingMore`, `loadMoreError`, and `total`.
 
 ## useWindowQuery
 

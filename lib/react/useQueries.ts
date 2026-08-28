@@ -13,12 +13,12 @@
  *     q.people.find(),
  *     q.announcements.orderBy('createdAt', 'desc').limit(5),
  *   ])
- *   return <Overview people={people.data} announcements={announcements.data} />
+ *   return <Overview people={people} announcements={announcements} />
  * }
  * ```
  *
- * Suspense-only by design: `{ suspense: false }` `useQuery` calls never throw, so
- * N of them already run in parallel — compose those for the tagged-union style.
+ * Suspense-only by design. Multiple `{ suspense: false }` `useQueryResult` calls
+ * already run in parallel, so compose those for the tagged-union style.
  * Reach for `useQueries` when one boundary needs several *unrelated* roots; when
  * the data is connected, prefer a single builder with `.related()`.
  */
@@ -50,16 +50,24 @@ type SchemaQueryInput<S extends Schema> = QueryInput<AnyQueryBuilder<S>>
  * The `useQueries` call surface — declared once and shared by the root export
  * (schema-agnostic) and the `createHooks` kit (bound to a schema), like `UseQueryHook`.
  *
- * Each element of the result carries the same contract as the `useQuery` suspense
- * result for that builder: cold reads suspend (all of them at once), cold errors
- * throw to the ErrorBoundary (the first one, after every errored query is released
- * for retry), and a refetch failure with data present surfaces on that element's
- * `error` while its last good `data` keeps rendering. A `.paginate()` element widens
- * exactly like single-hook pagination — its own `loadMore`/`hasMore`/... family, keyed
- * off that builder's `TKind`.
+ * `useQueries` maps each input to its data. Cold reads suspend together and cold errors
+ * throw to the ErrorBoundary.
  */
+// The unbound root hook accepts builders from every schema. `any` is required here
+// because QueryBuilder is intentionally invariant in its schema parameter.
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueriesHook<S extends Schema = any> {
+  <Queries extends readonly SchemaQueryInput<S>[]>(
+    queries: readonly [...Queries],
+    options?: UseQueriesOptions,
+  ): {
+    [K in keyof Queries]: QueryBuilderResult<QueryInputBuilder<Queries[K]>>
+  }
+}
+
+/** Metadata-bearing counterpart to `UseQueriesHook`. */
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+export interface UseQueryResultsHook<S extends Schema = any> {
   <Queries extends readonly SchemaQueryInput<S>[]>(
     queries: readonly [...Queries],
     options?: UseQueriesOptions,
@@ -86,6 +94,12 @@ export const useQueries: UseQueriesHook = ((
   options?: UseQueriesOptions,
 ): unknown => useQueriesImpl(useFigbird(), queries, options)) as UseQueriesHook
 
+/** Suspense-native parallel query hook that retains each query's result object. */
+export const useQueryResults: UseQueryResultsHook = ((
+  queries: readonly SchemaQueryInput<Schema>[],
+  options?: UseQueriesOptions,
+): unknown => useQueryResultsImpl(useFigbird(), queries, options)) as UseQueryResultsHook
+
 /**
  * Instance-taking implementation behind the context-bound `useQueries`. @internal
  */
@@ -94,6 +108,16 @@ export function useQueriesImpl(
   queries: readonly SchemaQueryInput<Schema>[],
   options: UseQueriesOptions = {},
 ): unknown {
+  const results = useQueryResultsImpl(figbird, queries, options)
+  return useMemo(() => results.map(result => result.data), [results])
+}
+
+/** Instance-taking implementation behind `useQueryResults`. @internal */
+export function useQueryResultsImpl(
+  figbird: FigbirdLike,
+  queries: readonly SchemaQueryInput<Schema>[],
+  options: UseQueriesOptions = {},
+): SuspenseQueryResult<unknown>[] {
   const { staleTime } = options
 
   // figbird.query() interns refs by AST hash, so each element is reference-stable

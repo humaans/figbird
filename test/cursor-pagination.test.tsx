@@ -8,7 +8,7 @@ import {
   FigbirdProvider,
   offsetPagination,
   service,
-  useQuery,
+  useQueryResult,
   type FeathersClient,
   type FeathersParams,
   type FeathersService,
@@ -190,7 +190,7 @@ test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full fi
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(
+    const result = useQueryResult(
       figbird.q.items.where({ rank: { $gte: 1 } }).paginate({ pageSize: 3, includeTotal: true }),
     )
     loadMore = result.loadMore
@@ -343,7 +343,7 @@ test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor c
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
     loadMore = result.loadMore
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
@@ -379,7 +379,7 @@ test('cursor paginate: stable visible updates merge locally; ordering changes re
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(
+    const result = useQueryResult(
       cursorApp.figbird.q.items.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
     loadMore = result.loadMore
@@ -428,7 +428,7 @@ test('cursor paginate: without a cursor stability contract, visible updates rebu
   const cursorApp = createCursorApp(initialRows, 3, { cursorStability: false })
 
   function List() {
-    useQuery(cursorApp.figbird.q.items.orderBy('rank', 'asc').paginate({ pageSize: 3 }))
+    useQueryResult(cursorApp.figbird.q.items.orderBy('rank', 'asc').paginate({ pageSize: 3 }))
     return null
   }
 
@@ -459,7 +459,7 @@ test('cursor paginate: missing server-only inputs make a visible update rebuild'
   const cursorApp = createCursorApp(initialRows)
 
   function List() {
-    useQuery(
+    useQueryResult(
       cursorApp.figbird.q.items
         .where({ virtualStatus: 'visible' })
         .orderBy('rank', 'asc')
@@ -495,7 +495,7 @@ test('cursor paginate: an old in-flight page never leaks into a rebuilt prefix',
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
     loadMore = result.loadMore
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
@@ -548,7 +548,7 @@ test('cursor paginate: reconnect rebuilds every loaded page from page zero', asy
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
     loadMore = result.loadMore
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
@@ -584,7 +584,7 @@ test('cursor paginate: hidden reconnect waits, then rebuilds on visibility', asy
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
     loadMore = result.loadMore
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
@@ -624,7 +624,7 @@ test('cursor paginate: failed prefix rebuild stays atomic and retries its depth'
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
     loadMore = result.loadMore
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
@@ -670,7 +670,7 @@ test('cursor paginate: automatic fetch retry stays inside the frozen rebuild', a
   let loadMore: (() => void) | undefined
 
   function List() {
-    const result = useQuery(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
     loadMore = result.loadMore
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }

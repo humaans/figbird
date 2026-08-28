@@ -11,7 +11,7 @@ import { useMemo, useState } from 'react'
 import {
   useAction,
   useMutations,
-  useQuery,
+  useQueryResult,
   type Comment,
   type Reaction,
   type User,
@@ -34,7 +34,7 @@ interface CommentThread {
 }
 
 export function CommentsPanel({ issueId }: { issueId: number }) {
-  const { data: comments, isFetching } = useQuery(issueCommentsQuery({ id: issueId }))
+  const { data: comments, isFetching } = useQueryResult(issueCommentsQuery({ id: issueId }))
   const [replyTo, setReplyTo] = useState<number | null>(null)
 
   const threads = useMemo<CommentThread[]>(() => {
