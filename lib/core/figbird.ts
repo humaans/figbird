@@ -320,7 +320,7 @@ export class Figbird<
    *   .related('comments')
    *   .limit(50)
    *
-   * const result = useQuery(issues)
+   * const data = useQuery(issues)
    * ```
    */
   #qProxy: QueryBuilderProxy<S> | null = null

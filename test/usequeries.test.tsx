@@ -1,6 +1,13 @@
 import test from 'ava'
 import React from 'react'
-import { createSchema, createHooks, defineQuery, service, useQueries } from '../lib'
+import {
+  createSchema,
+  createHooks,
+  defineQuery,
+  service,
+  useQueries,
+  useQueryResults,
+} from '../lib'
 import { createTestApp, dom } from './helpers'
 
 interface Issue {
@@ -79,8 +86,8 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
   function Dashboard() {
     const [issues, users] = useQueries([openIssues({ status: 'open' }), allUsers])
     // Type-inference assertions — the tuple element types flow from each builder.
-    const issueRows: Issue[] = issues.data
-    const userRows: User[] = users.data
+    const issueRows: Issue[] = issues
+    const userRows: User[] = users
     return (
       <div className='dashboard'>
         <div className='issues'>{issueRows.map(i => i.title).join(',')}</div>
@@ -119,10 +126,12 @@ test('useQueries: kit-bound variant works and an empty array resolves immediatel
 
   function Dashboard() {
     const [issues] = hooks.useQueries([hooks.q.issues])
+    const [issueResult] = hooks.useQueryResults([hooks.q.issues])
     const none = hooks.useQueries([])
     return (
       <div className='dashboard'>
-        <div className='issues'>{issues.data.map(i => i.title).join(',')}</div>
+        <div className='issues'>{issues.map(i => i.title).join(',')}</div>
+        <div className='issue-results'>{issueResult.data.map(i => i.title).join(',')}</div>
         <div className='none'>{none.length}</div>
       </div>
     )
@@ -138,6 +147,7 @@ test('useQueries: kit-bound variant works and an empty array resolves immediatel
 
   await flush(() => sleep(5))
   t.is($('.issues')!.innerHTML, 'First issue,Second issue')
+  t.is($('.issue-results')!.innerHTML, 'First issue,Second issue')
   t.is($('.none')!.innerHTML, '0', 'an empty set never suspends')
 
   unmount()
@@ -157,7 +167,7 @@ test('useQueries: a cold error on any query throws to the ErrorBoundary', async 
     const [issues, users] = useQueries([figbird.q.issues, figbird.q.users])
     return (
       <div className='dashboard'>
-        {issues.data.length},{users.data.length}
+        {issues.length},{users.length}
       </div>
     )
   }
@@ -186,14 +196,14 @@ test('useQueries: a cold error on any query throws to the ErrorBoundary', async 
   unmount()
 })
 
-test('useQueries: refetch on one element refetches only that query', async t => {
+test('useQueryResults: refetch on one element refetches only that query', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
   let refetchUsers: (() => void) | null = null
 
   function Dashboard() {
-    const [issues, users] = useQueries([figbird.q.issues, figbird.q.users])
+    const [issues, users] = useQueryResults([figbird.q.issues, figbird.q.users])
     refetchUsers = users.refetch
     return (
       <div className='dashboard'>
@@ -240,7 +250,7 @@ test('useQueries: warm cache renders synchronously without re-suspending', async
     const [issues, users] = useQueries([figbird.q.issues, figbird.q.users])
     return (
       <div className='dashboard'>
-        {issues.data.length},{users.data.length}
+        {issues.length},{users.length}
       </div>
     )
   }
@@ -267,7 +277,7 @@ test('useQueries: warm cache renders synchronously without re-suspending', async
   unmount()
 })
 
-test('useQueries: a paginated element widens with loadMore; siblings stay plain', async t => {
+test('useQueryResults: a paginated element widens with loadMore; siblings stay plain', async t => {
   const { render, unmount, flush, $ } = dom()
   // Inline index signature so the rows satisfy the mock's TestItem shape without
   // loosening the shared `Issue` interface the other tests type-assert against.
@@ -288,7 +298,7 @@ test('useQueries: a paginated element widens with loadMore; siblings stay plain'
   let userHasLoadMore = true
 
   function Dashboard() {
-    const [issues, users] = useQueries([
+    const [issues, users] = useQueryResults([
       figbird.q.issues.orderBy('id', 'asc').paginate({ pageSize: 2 }),
       figbird.q.users,
     ])

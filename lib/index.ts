@@ -145,23 +145,24 @@ export { useFeathers } from './react/useFeathers.js'
 // Legacy generation (deprecated): descriptor-based reads. Fully functional, but new
 // code should use useQuery + builders.
 export { useFind, useGet } from './react/useQueryByDesc.js'
-// useQuery is the unified, Suspense-by-default builder hook; pass { suspense: false }
-// for the explicit tagged-union variant.
-export { useQuery } from './react/useQuery.js'
+// Data-first reads and the explicit result-object counterpart.
+export { useQuery, useQueryResult } from './react/useQuery.js'
 // useWindowQuery keeps a bounded set of relational pages around a visible index range.
 export { useWindowQuery } from './react/useWindowQuery.js'
-// useQueries suspends on several independent queries at once — one boundary, all
-// fetches in parallel, no sequential waterfall.
-export { useQueries } from './react/useQueries.js'
+// Parallel data and result-object reads.
+export { useQueries, useQueryResults } from './react/useQueries.js'
 export { useDelayedFlag } from './react/useDelayedFlag.js'
 // The rest of the no-flash kit (see the "no-flash checklist" docs section):
 export { useDebouncedTransition } from './react/useDebouncedTransition.js'
 export { DelayedFallback } from './react/DelayedFallback.js'
 export type {
+  PaginationControls,
   RelationalQueryResult,
   SuspenseQueryResult,
   UseQueryHook,
   UseQueryOptions,
+  UseQueryResultHook,
+  UseQueryResultOptions,
 } from './react/useQuery.js'
 export type {
   SuspenseWindowQueryResult,
@@ -171,7 +172,7 @@ export type {
   WindowRange,
 } from './react/useWindowQuery.js'
 export type { WindowQueryConfig, WindowQueryState } from './core/windowQuery.js'
-export type { UseQueriesHook, UseQueriesOptions } from './react/useQueries.js'
+export type { UseQueriesHook, UseQueriesOptions, UseQueryResultsHook } from './react/useQueries.js'
 
 // Query-related types for advanced usage
 export type {

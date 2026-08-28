@@ -5,7 +5,7 @@
 
 import { useMemo, type ReactNode } from 'react'
 import { Link } from 'react-space-router'
-import { q, useQueries } from '../figbird'
+import { q, useQueryResults } from '../figbird'
 import { Explain } from './Explain'
 import { StatusDot } from './ui'
 
@@ -16,7 +16,7 @@ interface ActivityEntry {
 }
 
 export function ActivityPanel() {
-  const [{ data: comments }, { data: reactions }, { data: issues, isFetching }] = useQueries([
+  const [{ data: comments }, { data: reactions }, { data: issues, isFetching }] = useQueryResults([
     q.comments.orderBy('id', 'desc').limit(10).related('author'),
     q.reactions.orderBy('id', 'desc').limit(6).related('user'),
     q.issues.orderBy('updatedAt', 'desc').limit(6),
@@ -80,8 +80,9 @@ export function ActivityPanel() {
         <StatusDot active={isFetching} />
         <Explain
           label='Parallel cross-service feed'
-          query={`const [comments, reactions, issues] =
-  useQueries([
+          query={`const [{ data: comments }, { data: reactions },
+       { data: issues, isFetching }] =
+  useQueryResults([
     q.comments.orderBy('id', 'desc').limit(10)
       .related('author'),
     q.reactions.orderBy('id', 'desc').limit(6)
@@ -89,7 +90,7 @@ export function ActivityPanel() {
     q.issues.orderBy('updatedAt', 'desc').limit(6),
   ])`}
         >
-          <code>useQueries</code> starts all three independent roots before suspending, so this
+          <code>useQueryResults</code> starts all three independent roots before suspending, so this
           boundary waits once instead of fetching comments, reactions, and issues serially. The
           results are merged by timestamp in the component. Each stays realtime on its own service;
           a teammate's comment lands here, in the list's comment count, and in the open issue

@@ -39,10 +39,10 @@ const figbird = new Figbird({
   schema,
 })
 
-export const { useQuery, useMutations, useAction, q } = createHooks(schema)
+export const { useQuery, useQueryResult, useMutations, useAction, q } = createHooks(schema)
 
 function Notes() {
-  const { data: notes } = useQuery(q.notes.where({ read: false }).related('author'))
+  const notes = useQuery(q.notes.where({ read: false }).related('author'))
 
   return notes.map(note => <NoteRow key={note.id} note={note} />)
 }

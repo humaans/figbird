@@ -6,7 +6,15 @@
 import { Suspense, useState, useTransition } from 'react'
 import { Link, useRoute } from 'react-space-router'
 import { useDebouncedTransition } from 'figbird'
-import { q, useQuery, type Issue, type Label, type Team, type User } from '../figbird'
+import {
+  q,
+  useQuery,
+  useQueryResult,
+  type Issue,
+  type Label,
+  type Team,
+  type User,
+} from '../figbird'
 import { Explain } from './Explain'
 import { StatusDot, SkeletonRows, escapeRegExp } from './ui'
 
@@ -29,7 +37,7 @@ export function IssueListPane() {
   const [teamId, setTeamId] = useState<number | null>(null)
   const [isPending, filterTransition] = useTransition()
 
-  const { data: teams } = useQuery(q.teams)
+  const teams = useQuery(q.teams)
 
   const setStatusFilter = (next: StatusFilter) => filterTransition(() => setStatus(next))
   const setTeamFilter = (next: number | null) => filterTransition(() => setTeamId(next))
@@ -134,7 +142,7 @@ function PaginatedIssueRows({ status, teamId }: { status: StatusFilter; teamId: 
     hasMore,
     isLoadingMore,
     total,
-  } = useQuery(
+  } = useQueryResult(
     q.issues
       .where(where)
       .orderBy('updatedAt', 'desc')
@@ -192,7 +200,7 @@ function SearchResults({ term, typing }: { term: string; typing: boolean }) {
   const escaped = escapeRegExp(term)
   // No `.server()` needed: `$regex` is an operator figbird's local matcher can't
   // evaluate, so the query classifies server-authoritative automatically.
-  const { data: issues, isFetching } = useQuery(
+  const { data: issues, isFetching } = useQueryResult(
     q.issues
       .where({ title: { $regex: escaped, $options: 'i' } })
       .orderBy('updatedAt', 'desc')

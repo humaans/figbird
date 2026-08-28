@@ -20,8 +20,13 @@ import { useMutation, type UseMutationResult } from './useMutation.js'
 import { useMutationQueueImpl, type UseMutationQueueHook } from './useMutationQueue.js'
 import type { MutationQueueDefinition } from '../core/mutationQueue.js'
 import { useFind, useGet, type QueryResult } from './useQueryByDesc.js'
-import { useQueries, type UseQueriesHook } from './useQueries.js'
-import { useQuery, type UseQueryHook } from './useQuery.js'
+import {
+  useQueries,
+  useQueryResults,
+  type UseQueriesHook,
+  type UseQueryResultsHook,
+} from './useQueries.js'
+import { useQuery, useQueryResult, type UseQueryHook, type UseQueryResultHook } from './useQuery.js'
 import { useWindowQuery, type UseWindowQueryHook } from './useWindowQuery.js'
 
 /**
@@ -86,9 +91,11 @@ export interface FigbirdHooks<S extends Schema, A extends Adapter = Adapter> {
   /** Return the Figbird instance supplied by the nearest provider. */
   useFigbird: () => Figbird<S, A>
   useQuery: UseQueryHook<S>
+  useQueryResult: UseQueryResultHook<S>
   /** Query a bounded, viewport-indexed relational list. */
   useWindowQuery: UseWindowQueryHook<S>
   useQueries: UseQueriesHook<S>
+  useQueryResults: UseQueryResultsHook<S>
   q: QueryBuilderProxy<S>
   defineQuery: DefineQueryForSchema<S>
   /** Return the mutation commands for the Figbird instance supplied by the provider. */
@@ -112,7 +119,7 @@ export interface FigbirdHooks<S extends Schema, A extends Adapter = Adapter> {
  *
  * function People() {
  *   const m = useMutations()
- *   const { data: people } = useQuery(q.people)
+ *   const people = useQuery(q.people)
  * }
  * ```
  *
@@ -168,8 +175,10 @@ export function createHooks<S extends Schema, A extends Adapter = Adapter>(
     useFeathers: useTypedFeathers,
     useFigbird: useBoundFigbird,
     useQuery: useQuery as UseQueryHook<S>,
+    useQueryResult: useQueryResult as UseQueryResultHook<S>,
     useWindowQuery: useWindowQuery as UseWindowQueryHook<S>,
     useQueries: useQueries as UseQueriesHook<S>,
+    useQueryResults: useQueryResults as UseQueryResultsHook<S>,
     q,
     defineQuery: baseDefineQuery as DefineQueryForSchema<S>,
     useMutations: useTypedMutations,
