@@ -68,11 +68,7 @@ export function FigbirdDevtoolsPanel({
   const colors = colorScheme === 'dark' ? darkColors : lightColors
   const styles = useMemo(() => makeStyles(colors), [colors])
   const themeValue = useMemo(() => ({ colors, styles }), [colors, styles])
-  const [tab, setTabState] = useState<Tab>(readStoredTab)
-  const setTab = useCallback((nextTab: Tab) => {
-    setTabState(nextTab)
-    storeTab(nextTab)
-  }, [])
+  const [tab, setTab] = useState<Tab>(readStoredTab)
   const [queryFilter, setQueryFilter] = useState('')
   const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
@@ -92,25 +88,24 @@ export function FigbirdDevtoolsPanel({
   const [timelineFollow, setTimelineFollow] = useState(true)
   const panelRef = useRef<HTMLElement>(null)
 
-  const inspectFetch = useCallback(
-    (span: QuerySpan) => {
-      if (span.fetchId !== undefined) {
-        setTimelineFilter('')
-        setTimelineVisibility('all')
-        setTimelineFollow(false)
-        setRequestedTimelineActivityId(`fetch:${span.fetchId}`)
-        setTab('timeline')
-        return
-      }
+  useEffect(() => storeTab(tab), [tab])
 
-      const traceId = span.traceIds?.[0]
-      if (traceId !== undefined) {
-        setSelectedTraceId(traceId)
-        setTab('events')
-      }
-    },
-    [setTab],
-  )
+  const inspectFetch = useCallback((span: QuerySpan) => {
+    if (span.fetchId !== undefined) {
+      setTimelineFilter('')
+      setTimelineVisibility('all')
+      setTimelineFollow(false)
+      setRequestedTimelineActivityId(`fetch:${span.fetchId}`)
+      setTab('timeline')
+      return
+    }
+
+    const traceId = span.traceIds?.[0]
+    if (traceId !== undefined) {
+      setSelectedTraceId(traceId)
+      setTab('events')
+    }
+  }, [])
 
   const openQuery = useCallback(
     (queryId: string) => {
@@ -120,17 +115,14 @@ export function FigbirdDevtoolsPanel({
       setSelectedQueryId(queryId)
       setTab('queries')
     },
-    [inspection, setTab],
+    [inspection],
   )
 
-  const openCacheEntity = useCallback(
-    (serviceName: string, itemId: string | number) => {
-      setCacheFilter('')
-      setRequestedCacheEntity({ serviceName, itemId })
-      setTab('cache')
-    },
-    [setTab],
-  )
+  const openCacheEntity = useCallback((serviceName: string, itemId: string | number) => {
+    setCacheFilter('')
+    setRequestedCacheEntity({ serviceName, itemId })
+    setTab('cache')
+  }, [])
 
   useEffect(() => {
     collector.start()
