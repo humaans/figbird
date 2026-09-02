@@ -36,7 +36,7 @@ export function operationIsRetained(operation: DevtoolsOperation): boolean {
 const QUERY_COLUMNS = [
   {
     label: 'service',
-    width: 185,
+    width: 370,
     minWidth: 120,
     description:
       'Query service. The dot shows its state: green active, amber inactive cached, blue pending, red error, or gray skipped/retained history.',

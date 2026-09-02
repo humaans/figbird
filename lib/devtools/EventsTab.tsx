@@ -36,7 +36,7 @@ import {
 const EVENT_COLUMNS = [
   { label: 'time', width: 108, minWidth: 84 },
   { label: 'group', width: 112, minWidth: 84 },
-  { label: 'service', width: 130, minWidth: 92 },
+  { label: 'service', width: 260, minWidth: 92 },
   { label: 'operation', width: 92, minWidth: 72 },
   { label: 'scope', width: 135, minWidth: 92 },
   { label: 'status', width: 94, minWidth: 74 },

@@ -18,7 +18,10 @@ import {
   type DevtoolsThemeMode,
 } from './ui.js'
 
-type Tab = 'queries' | 'timeline' | 'events' | 'cache'
+const TABS = ['queries', 'timeline', 'events', 'cache'] as const
+const DEVTOOLS_TAB_STORAGE_KEY = 'figbird.devtools.tab'
+
+type Tab = (typeof TABS)[number]
 export type QueryVisibility = 'active' | 'inactive' | 'retained' | 'all' | 'skipped'
 export type EventVisibility = 'groups' | 'raw'
 
@@ -65,7 +68,11 @@ export function FigbirdDevtoolsPanel({
   const colors = colorScheme === 'dark' ? darkColors : lightColors
   const styles = useMemo(() => makeStyles(colors), [colors])
   const themeValue = useMemo(() => ({ colors, styles }), [colors, styles])
-  const [tab, setTab] = useState<Tab>('queries')
+  const [tab, setTabState] = useState<Tab>(readStoredTab)
+  const setTab = useCallback((nextTab: Tab) => {
+    setTabState(nextTab)
+    storeTab(nextTab)
+  }, [])
   const [queryFilter, setQueryFilter] = useState('')
   const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
@@ -85,22 +92,25 @@ export function FigbirdDevtoolsPanel({
   const [timelineFollow, setTimelineFollow] = useState(true)
   const panelRef = useRef<HTMLElement>(null)
 
-  const inspectFetch = useCallback((span: QuerySpan) => {
-    if (span.fetchId !== undefined) {
-      setTimelineFilter('')
-      setTimelineVisibility('all')
-      setTimelineFollow(false)
-      setRequestedTimelineActivityId(`fetch:${span.fetchId}`)
-      setTab('timeline')
-      return
-    }
+  const inspectFetch = useCallback(
+    (span: QuerySpan) => {
+      if (span.fetchId !== undefined) {
+        setTimelineFilter('')
+        setTimelineVisibility('all')
+        setTimelineFollow(false)
+        setRequestedTimelineActivityId(`fetch:${span.fetchId}`)
+        setTab('timeline')
+        return
+      }
 
-    const traceId = span.traceIds?.[0]
-    if (traceId !== undefined) {
-      setSelectedTraceId(traceId)
-      setTab('events')
-    }
-  }, [])
+      const traceId = span.traceIds?.[0]
+      if (traceId !== undefined) {
+        setSelectedTraceId(traceId)
+        setTab('events')
+      }
+    },
+    [setTab],
+  )
 
   const openQuery = useCallback(
     (queryId: string) => {
@@ -110,14 +120,17 @@ export function FigbirdDevtoolsPanel({
       setSelectedQueryId(queryId)
       setTab('queries')
     },
-    [inspection],
+    [inspection, setTab],
   )
 
-  const openCacheEntity = useCallback((serviceName: string, itemId: string | number) => {
-    setCacheFilter('')
-    setRequestedCacheEntity({ serviceName, itemId })
-    setTab('cache')
-  }, [])
+  const openCacheEntity = useCallback(
+    (serviceName: string, itemId: string | number) => {
+      setCacheFilter('')
+      setRequestedCacheEntity({ serviceName, itemId })
+      setTab('cache')
+    },
+    [setTab],
+  )
 
   useEffect(() => {
     collector.start()
@@ -176,7 +189,7 @@ export function FigbirdDevtoolsPanel({
         <TooltipLayer rootRef={panelRef} />
         <header style={styles.header}>
           <span style={styles.brand}>figbird</span>
-          {(['queries', 'timeline', 'events', 'cache'] as const).map(item => (
+          {TABS.map(item => (
             <TabButton key={item} active={tab === item} onClick={() => setTab(item)} label={item} />
           ))}
           {tab === 'queries' ? (
@@ -388,6 +401,27 @@ export function FigbirdDevtoolsPanel({
       </section>
     </ThemeContext.Provider>
   )
+}
+
+function readStoredTab(): Tab {
+  if (typeof window === 'undefined') return 'timeline'
+
+  try {
+    const storedTab = window.localStorage.getItem(DEVTOOLS_TAB_STORAGE_KEY)
+    return TABS.find(tab => tab === storedTab) ?? 'timeline'
+  } catch {
+    return 'timeline'
+  }
+}
+
+function storeTab(tab: Tab): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(DEVTOOLS_TAB_STORAGE_KEY, tab)
+  } catch {
+    // Devtools still work when storage is unavailable.
+  }
 }
 
 function inspectionTitle({

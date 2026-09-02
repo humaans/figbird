@@ -933,6 +933,8 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   }
 
   render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
+  t.truthy($('[aria-label="Timeline visibility"]'))
+  click($all('button').find(button => button.textContent === 'queries')!)
   const row = $all('tbody tr')[0]
   t.truthy(row)
   t.is(row?.querySelectorAll('td')[1]?.textContent, 'paginate')
@@ -951,6 +953,10 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   t.true(details.includes('after start · next "cursor:25"'))
   t.true(details.includes('after "cursor:25" · end'))
   t.false(details.includes('merges stable updates'))
+
+  render(<></>)
+  render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
+  t.is($all('th')[0]?.textContent, 'service')
   unmount()
 })
 
@@ -1346,6 +1352,7 @@ test('panel shows root queries and nests relation fetches in details', async t =
   }
 
   render(<FigbirdDevtoolsPanel collector={collector} inspection={inspection} />)
+  click($all('button').find(button => button.textContent === 'queries')!)
   await act(async () => {
     const graph = {
       operationId: inspectedRef.hash(),

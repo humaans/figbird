@@ -31,7 +31,7 @@ interface DomHelpers {
 }
 
 export function dom(options?: RootOptions): DomHelpers {
-  const dom = new JSDOM('<!doctype html><div id="root"></div>')
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'https://figbird.test' })
   // JSDOM's DOMWindow interface doesn't perfectly match TypeScript's Window & typeof globalThis.
   // The double assertion pattern (as unknown as T) is the recommended approach when we need
   // to bridge incompatible types that we know are safe to use in our context.
