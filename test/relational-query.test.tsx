@@ -3245,6 +3245,55 @@ test('staleTime: the five-minute default skips SWR revalidation and explicit zer
   unsub3()
 })
 
+test('staleTime: public entry points reject invalid durations', t => {
+  const { adapter } = createApp()
+  t.throws(() => new Figbird({ schema, adapter, staleTime: Number.NaN }), {
+    instanceOf: RangeError,
+    message: /Figbird\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.notThrows(() => new Figbird({ schema, adapter, staleTime: Infinity }))
+
+  const { App, figbird } = createApp()
+  const builder = figbird.q.issues.related('creator')
+
+  function InvalidReader() {
+    useQuery(builder, { staleTime: Number.NaN })
+    return null
+  }
+
+  t.throws(
+    () =>
+      renderToString(
+        <App>
+          <InvalidReader />
+        </App>,
+      ),
+    {
+      instanceOf: RangeError,
+      message: /useQuery\(\): staleTime must be a non-negative number or Infinity/,
+    },
+  )
+
+  t.throws(() => figbird.query(builder).subscribe(() => {}, { staleTime: -1 }), {
+    instanceOf: RangeError,
+    message: /query\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.throws(() =>
+    figbird
+      .queryDesc({ serviceName: 'issues', method: 'find' })
+      .subscribe(() => {}, { staleTime: Number.NaN }),
+  )
+  t.throws(() => figbird.prepare(builder, { staleTime: -1 }), {
+    instanceOf: RangeError,
+    message: /prepare\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.throws(() => figbird.prefetch(builder, { staleTime: Infinity }), {
+    instanceOf: RangeError,
+    message: /prefetch\(\): staleTime must be between 0 and 2147483647/,
+  })
+  t.throws(() => figbird.prefetch(builder, { staleTime: Number.MAX_SAFE_INTEGER }))
+})
+
 test('prefetch, prepare, and mount share one request while the preparation lease is active', async t => {
   const { figbird, feathers } = createApp()
   const { q } = createHooks(schema)
@@ -3264,6 +3313,22 @@ test('prefetch, prepare, and mount share one request while the preparation lease
   t.is(feathers.service('users').counts.find, 1, 'the relation is fetched once')
   prepared.release()
   mounted()
+})
+
+test('prepare: an abort signal releases the route preparation lease', async t => {
+  const { figbird } = createApp()
+  const request = figbird.q.issues.get(1).related('creator')
+  const controller = new AbortController()
+  const prepared = figbird.prepare(request, { signal: controller.signal })
+  const ref = figbird.query(request)
+
+  t.is(ref.inspect().prepareCount, 1)
+  controller.abort()
+  t.is(ref.inspect().prepareCount, 0)
+  await t.throwsAsync(prepared.promise, { name: 'AbortError' })
+
+  // Explicit cleanup remains safe for routers that release in a finally block.
+  prepared.release()
 })
 
 test('staleTime: stricter subscriber revalidates an already-live relational query', async t => {

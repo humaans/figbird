@@ -937,7 +937,8 @@ queries: ({ params }) => [issueDetail({ id: Number(params.id) })]
 queries: [customFieldsQuery, rolesQuery]
 
 const data = {
-  prepare: (request: AnyQueryInput<typeof schema>) => figbird.prepare(request),
+  prepare: (request: AnyQueryInput<typeof schema>, signal: AbortSignal) =>
+    figbird.prepare(request, { signal }),
   prefetch: (request: AnyQueryInput<typeof schema>) => figbird.prefetch(request),
 }
 ```
@@ -946,7 +947,10 @@ Preparation is an _earlier read_, not a different one. The component calls
 `useQuery(request)` and converges on the same cache key. Keep the preparation handle active
 until the destination commits. Subscribers that mount while that lease is active adopt its
 result without another freshness check, even when other queries or code took longer to load.
-Later mounts use the ordinary `staleTime` policy again.
+Later mounts use the ordinary `staleTime` policy again. Pass the navigation's `AbortSignal`
+to release the lease automatically when navigation is cancelled. This releases Figbird's
+ownership of the query. If readiness is still pending, `promise` rejects with the signal's
+reason. A request shared with another subscriber is not cancelled.
 
 ### prefetch
 
@@ -961,6 +965,10 @@ Safe to call at any frequency: if the query was prefetched within `staleTime` (d
 ```ts
 prefetch(issueDetail({ id }), { staleTime: 60_000 })
 ```
+
+Prefetch `staleTime` must fit JavaScript's timer range, from `0` through `2_147_483_647`
+milliseconds, because it also controls automatic release. Ordinary query readers and
+`prepare()` accept `Infinity` for cache-first data.
 
 Rule of thumb: `prepare()` when you need to _await_ readiness or control the lease; `prefetch()` when you just want things warm.
 
@@ -1093,8 +1101,11 @@ is no per-query throttle config) via two built-in guards on event-driven refetch
   through network blips stops replaying refetch storms. Local-exact merges keep flowing
   while hidden (they're free); only network reconciliation pauses. Returning after a
   hidden interval at least as long as the instance `staleTime` also reconciles active
-  queries and marks inactive cached queries pending as a safety check. Inject a custom
-  `visibility` source in the constructor for non-browser environments.
+  queries and marks inactive cached queries pending as a safety check. That safety sweep
+  leaves queries fetched within the freshness window alone; a known deferred event still
+  wins. Safety-sweep fetches carry a `visibility` trace cause in `figbird.events` and
+  devtools. Inject a custom `visibility` source in the constructor for non-browser
+  environments.
 - **Reconnects are staggered.** Visible clients wait a random `reconnectJitter`
   before sweeping active queries, defaulting to `[0, 3000]` ms. Inactive cached queries
   are marked pending and refresh when they are next read. Reconnects during the wait
@@ -1122,6 +1133,8 @@ A reader can override the instance policy. Use `0` to revalidate on every mount 
 useQuery(q.currencies, { staleTime: 60_000 }) // revalidate at most once a minute
 useQuery(q.currencies, { staleTime: Infinity }) // cache-first
 ```
+
+Values must be non-negative numbers. `NaN` and negative values throw at the API boundary.
 
 `staleTime` is measured from the last successful response. It does not poll an already-mounted
 query. Explicit refetches, pending reconciliation, and errors always win over the timer.
@@ -1692,7 +1705,7 @@ The `createHooks` kit returns a schema-typed version; the standalone export from
 ## figbird.prepare
 
 ```ts
-const { key, promise, release } = figbird.prepare(definition(args), { staleTime? })
+const { key, promise, release } = figbird.prepare(definition(args), { staleTime?, signal? })
 ```
 
 Starts a query and returns an awaitable lease, the router-grade primitive. Argumentless

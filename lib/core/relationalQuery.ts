@@ -41,6 +41,7 @@ import {
 } from './relationalFilters.js'
 import type { AnySchema, RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { validateStaleTime } from './staleTime.js'
 
 export type { RelationalPaginationState } from './queryRoots.js'
 
@@ -404,7 +405,10 @@ export class RelationalQueryRef<
     },
   ): () => void {
     const source = options?.source ?? 'subscriber'
-    const staleTime = options?.staleTime ?? this.#defaultStaleTime
+    const staleTime =
+      options?.staleTime === undefined
+        ? this.#defaultStaleTime
+        : validateStaleTime(options.staleTime, 'query(): staleTime')
     // The active route preparation already made this query's freshness decision.
     // Its lease covers the handoff to mounted readers, regardless of their normal policy.
     const adoptsPreparation =

@@ -3,6 +3,7 @@ import type { QueryAST } from './queryBuilder.js'
 import { RelationalQueryRef, type RelationalQueryHost } from './relationalQuery.js'
 import type { AnySchema, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { validateStaleTime } from './staleTime.js'
 import {
   CursorWindowPager,
   OffsetWindowPager,
@@ -206,10 +207,14 @@ export class WindowQueryRef<
     options: { range: WindowRange; staleTime?: number },
   ): () => void {
     const range = normalizeRange(options.range)
+    const staleTime =
+      options.staleTime === undefined
+        ? this.#defaultStaleTime
+        : validateStaleTime(options.staleTime, 'useWindowQuery(): staleTime')
     this.#subscribers.set(listener, {
       listener,
       range,
-      staleTime: options.staleTime ?? this.#defaultStaleTime,
+      staleTime,
     })
     const coldRead = this.#coldReads.get(rangeKey(range))
     if (coldRead?.status === 'settled') {

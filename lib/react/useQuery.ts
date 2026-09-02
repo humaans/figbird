@@ -9,6 +9,7 @@ import {
   type RelationalQueryState,
 } from '../core/figbird.js'
 import type { Schema } from '../core/schema.js'
+import { validateStaleTime } from '../core/staleTime.js'
 import { useFigbird } from './context.js'
 
 /**
@@ -292,7 +293,11 @@ function useQueryResultForRef<T>(
   qRef: QueryRefLike<T> | null,
   options: UseQueryResultOptions,
 ): RelationalQueryResult<T> | SuspenseQueryResult<T> {
-  const { suspense = true, staleTime } = options
+  const { suspense = true } = options
+  const staleTime =
+    options.staleTime === undefined
+      ? undefined
+      : validateStaleTime(options.staleTime, 'useQuery(): staleTime')
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {

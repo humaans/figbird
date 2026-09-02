@@ -2471,15 +2471,18 @@ export class QueryStore<
 
     const hiddenAt = this.#hiddenAt
     this.#hiddenAt = null
-    const sleptPastStaleTime = hiddenAt !== null && Date.now() - hiddenAt >= this.#staleTime
-    if (sleptPastStaleTime) this.#markReconciliationPending()
+    const now = Date.now()
+    const sleptPastStaleTime = hiddenAt !== null && now - hiddenAt >= this.#staleTime
+    if (sleptPastStaleTime) {
+      this.#markReconciliationPending(query => !this.#isFresh(query.fetchedAt, now))
+    }
     const reconciled = this.#drainDeferredReconciles()
     if (!sleptPastStaleTime) return
 
     const queries = this.#activePendingReconciliationQueries().filter(
       query => !reconciled.has(query.queryId),
     )
-    this.#refetchActiveQueries(undefined, queries)
+    this.#refetchActiveQueries(queries, this.#telemetry.cause('visibility'))
   }
 
   /** On becoming visible, reconcile everything that deferred while hidden. */
@@ -2532,14 +2535,25 @@ export class QueryStore<
     }
   }
 
-  #markReconciliationPending(): void {
+  #markReconciliationPending(
+    shouldMark: (query: Query<unknown, TMeta, unknown>) => boolean = () => true,
+  ): void {
     for (const service of this.getState().values()) {
-      if (service.materialized) this.#markQueryPending(service.materialized.queryId)
+      if (service.materialized) {
+        const root = service.queries.get(service.materialized.queryId)
+        if (root && shouldMark(root)) this.#markQueryPending(root.queryId)
+      }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
-        if (this.#reconcilesAfterMissedEvents(query)) this.#markQueryPending(query.queryId)
+        if (this.#reconcilesAfterMissedEvents(query) && shouldMark(query)) {
+          this.#markQueryPending(query.queryId)
+        }
       }
     }
+  }
+
+  #isFresh(fetchedAt: number | undefined, now: number): boolean {
+    return fetchedAt !== undefined && now - fetchedAt < this.#staleTime
   }
 
   #reconcilesAfterMissedEvents(query: Query<unknown, TMeta, unknown>): boolean {
@@ -2573,13 +2587,13 @@ export class QueryStore<
   }
 
   #refetchActiveQueries(
-    traceId: number | undefined,
     queries: readonly { queryId: string; force: boolean }[],
+    cause?: TraceCause,
   ): void {
     for (const query of queries) {
       this.#requestReconcile(query.queryId, {
         force: query.force,
-        ...(traceId === undefined ? {} : { causes: [{ kind: 'reconnect' as const, traceId }] }),
+        ...(cause === undefined ? {} : { causes: [cause] }),
       })
     }
   }
@@ -2598,7 +2612,10 @@ export class QueryStore<
         delayMs: 0,
         queryCount: queries.length,
       })
-      this.#refetchActiveQueries(traceId, queries)
+      this.#refetchActiveQueries(
+        queries,
+        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
+      )
       return
     }
 
@@ -2619,7 +2636,10 @@ export class QueryStore<
         delayMs: delay,
         queryCount: queries.length,
       })
-      this.#refetchActiveQueries(traceId, queries)
+      this.#refetchActiveQueries(
+        queries,
+        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
+      )
     }, delay)
     ;(timer as { unref?: () => void }).unref?.()
     this.#reconnectSweepTimer = timer

@@ -8,6 +8,17 @@ import type {
   QueryExecutionOptions,
   QueryState,
 } from './queryTypes.js'
+import { validateStaleTime } from './staleTime.js'
+
+function validateExecutionOptions(
+  options: QueryExecutionOptions | undefined,
+): QueryExecutionOptions {
+  if (options?.staleTime === undefined) return options ?? {}
+  return {
+    ...options,
+    staleTime: validateStaleTime(options.staleTime, 'query(): staleTime'),
+  }
+}
 
 // a lightweight query reference object to make it easy
 // subscribe to state changes and read query data
@@ -67,8 +78,9 @@ export class QueryRef<
     fn: (state: QueryState<T, TMeta>) => void,
     options?: QueryExecutionOptions,
   ): () => void {
+    const validatedOptions = validateExecutionOptions(options)
     this.#queryStore.materialize(this)
-    return this.#queryStore.subscribe<T>(this.#queryId, fn, options)
+    return this.#queryStore.subscribe<T>(this.#queryId, fn, validatedOptions)
   }
 
   /**
@@ -76,8 +88,9 @@ export class QueryRef<
    * Relational refs use this when a stricter subscriber joins an already-live tree.
    */
   ensureFresh(options?: QueryExecutionOptions): void {
+    const validatedOptions = validateExecutionOptions(options)
     this.#queryStore.materialize(this)
-    this.#queryStore.ensureFresh(this.#queryId, options)
+    this.#queryStore.ensureFresh(this.#queryId, validatedOptions)
   }
 
   /** Returns the latest known state for this query, if available. */

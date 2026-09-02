@@ -283,6 +283,7 @@ export const defineQuery: DefineQuery = ((
  * query. `promise` resolves when the data is ready (rejects with what a Suspense read
  * would throw); `release()` drops the pin that keeps the underlying ref alive — when
  * no other subscriber remains, the ref tears down and the cache entry is evicted.
+ * Passing a signal to `prepare()` also releases the lease when navigation is aborted.
  *
  * Routers commonly attach their own metadata (e.g. a blocking/deferred priority) by
  * spreading: `{ ...figbird.prepare(def(args)), priority: 'route' }` — that vocabulary

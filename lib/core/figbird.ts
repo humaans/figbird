@@ -75,8 +75,16 @@ import type {
   ServicePaths,
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
 
 const MAX_WINDOW_QUERY_CACHE_SIZE = 20
+
+function preparationAbortReason(signal: AbortSignal): unknown {
+  if (signal.reason !== undefined) return signal.reason
+  const error = new Error('Query preparation was aborted')
+  error.name = 'AbortError'
+  return error
+}
 
 type DescriptorWriteProjection<TItem> =
   | {
@@ -272,6 +280,7 @@ export class Figbird<
     visibility?: VisibilitySource
     defaultSort?: Record<string, 1 | -1>
   }) {
+    staleTime = validateStaleTime(staleTime, 'Figbird(): staleTime')
     this.adapter = adapter
     this.schema = schema
     this.#staleTime = staleTime
@@ -509,6 +518,9 @@ export class Figbird<
    * earlier than the child itself. The component still reads via `useQuery(request)` —
    * preparation is an earlier read, not a different read. Keep the handle active until
    * the destination commits so its subscribers adopt the prepared result without revalidation.
+   * Pass the navigation's `AbortSignal` to release the lease automatically when navigation
+   * is cancelled. Aborting releases ownership; if readiness is still pending, the returned
+   * promise rejects with the signal's reason. Shared network work is not cancelled.
    *
    * @example
    * ```ts
@@ -524,18 +536,51 @@ export class Figbird<
    */
   prepare<Args, B extends AnyQueryBuilder<S>>(
     query: QueryInput<B, Args>,
-    options?: { staleTime?: number },
+    options?: { staleTime?: number; signal?: AbortSignal },
   ): PreparedQuery {
+    const staleTime =
+      options?.staleTime === undefined
+        ? undefined
+        : validateStaleTime(options.staleTime, 'prepare(): staleTime')
     const ref = this.query(query)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
-    const unsub = ref.subscribe(() => {}, { ...options, source: 'prepare' })
+    const unsubscribe = ref.subscribe(() => {}, {
+      ...(staleTime === undefined ? {} : { staleTime }),
+      source: 'prepare',
+    })
+    const readiness = ref.suspensePromise()
+    const signal = options?.signal
+    let rejectAbort: ((reason?: unknown) => void) | undefined
+    const promise =
+      signal === undefined
+        ? readiness
+        : Promise.race([
+            readiness,
+            new Promise<void>((_resolve, reject) => {
+              rejectAbort = reject
+            }),
+          ])
+    let released = false
+    function release() {
+      if (released) return
+      released = true
+      signal?.removeEventListener('abort', abort)
+      unsubscribe()
+    }
+    function abort() {
+      if (!signal) return
+      release()
+      rejectAbort?.(preparationAbortReason(signal))
+    }
+    if (signal?.aborted) abort()
+    else signal?.addEventListener('abort', abort, { once: true })
     return {
       key: ref.hash(),
-      promise: ref.suspensePromise(),
-      release: unsub,
+      promise,
+      release,
     }
   }
 
@@ -554,6 +599,7 @@ export class Figbird<
    * `staleTime` — the fetched data stays in the QueryStore either way, so a later
    * `useQuery` gets a warm synchronous read. If a component subscribes in the
    * meantime, its own subscription keeps the query alive past the pin.
+   * Because the pin must release itself, `staleTime` must be finite for prefetches.
    *
    * Use `prepare()` instead when you need to await readiness or control the lease
    * explicitly (router navigation).
@@ -567,8 +613,8 @@ export class Figbird<
     query: QueryInput<B, Args>,
     options?: { staleTime?: number },
   ): void {
+    const staleTime = validatePrefetchStaleTime(options?.staleTime ?? 30_000)
     const ref = this.query(query)
-    const staleTime = options?.staleTime ?? 30_000
     const hash = ref.hash()
 
     const now = Date.now()

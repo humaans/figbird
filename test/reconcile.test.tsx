@@ -277,6 +277,12 @@ test('visibility: returning after staleTime reconciles active queries once', asy
     visibility: visibility.source,
   })
   const notes = feathers.service('notes')
+  const reconcileCauses: string[][] = []
+  const unsubscribeEvents = figbird.events.subscribe(event => {
+    if (event.kind === 'fetch:start' && event.reason === 'reconcile') {
+      reconcileCauses.push(event.causes?.map(cause => cause.kind) ?? [])
+    }
+  })
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsub = ref.subscribe(() => {})
   await sleep(20)
@@ -289,12 +295,27 @@ test('visibility: returning after staleTime reconciles active queries once', asy
   t.is(notes.counts.find, baseline, 'a short background visit keeps the live result')
 
   visibility.set(true)
+  now += 15
+  ref.refetch()
+  await sleep(10)
+  now += 5
+  visibility.set(false)
+  await sleep(10)
+  t.is(
+    notes.counts.find,
+    baseline + 1,
+    'a query refreshed while hidden is not immediately fetched again',
+  )
+
+  visibility.set(true)
   now += 20
   visibility.set(false)
   await sleep(20)
-  t.is(notes.counts.find, baseline + 1, 'a meaningful sleep gets one safety refetch')
+  t.is(notes.counts.find, baseline + 2, 'a meaningful sleep gets one safety refetch')
+  t.deepEqual(reconcileCauses, [['visibility']])
 
   unsub()
+  unsubscribeEvents()
 })
 
 test('reconnect: inactive cached queries become pending for their next subscriber', async t => {
