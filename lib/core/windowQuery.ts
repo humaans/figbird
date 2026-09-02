@@ -77,7 +77,8 @@ interface SettledColdRead {
 
 type ColdRead = PendingColdRead | SettledColdRead
 
-interface WindowQueryLifecycle {
+interface WindowQueryOptions {
+  defaultStaleTime?: number
   onEvict?: () => void
   onIdle?: () => void
 }
@@ -123,6 +124,7 @@ export class WindowQueryRef<
   #pager: WindowPager
   #key: string
   #name: string | undefined
+  #defaultStaleTime: number
   #onEvict: (() => void) | null
   #onIdle: (() => void) | null
 
@@ -143,7 +145,7 @@ export class WindowQueryRef<
     ast: QueryAST,
     schema: S,
     config: WindowQueryConfig,
-    lifecycle?: WindowQueryLifecycle,
+    options?: WindowQueryOptions,
   ) {
     if (!Number.isInteger(config.pageSize) || config.pageSize <= 0) {
       throw new Error(
@@ -165,8 +167,9 @@ export class WindowQueryRef<
     this.#schema = schema
     this.#config = config
     this.#key = `wq/${hashObject({ ast, config })}`
-    this.#onEvict = lifecycle?.onEvict ?? null
-    this.#onIdle = lifecycle?.onIdle ?? null
+    this.#defaultStaleTime = options?.defaultStaleTime ?? 0
+    this.#onEvict = options?.onEvict ?? null
+    this.#onIdle = options?.onIdle ?? null
 
     const serviceName = resolveServicePath(schema, ast.service)
     const context = {
@@ -206,7 +209,7 @@ export class WindowQueryRef<
     this.#subscribers.set(listener, {
       listener,
       range,
-      staleTime: options.staleTime ?? 0,
+      staleTime: options.staleTime ?? this.#defaultStaleTime,
     })
     const coldRead = this.#coldReads.get(rangeKey(range))
     if (coldRead?.status === 'settled') {
@@ -364,7 +367,10 @@ export class WindowQueryRef<
       this.#ast,
       this.#schema,
       undefined,
-      { root: this.#pager.rootOverride(start) },
+      {
+        defaultStaleTime: this.#defaultStaleTime,
+        root: this.#pager.rootOverride(start),
+      },
     )
     ref.setDisplayName(this.#name ? `${this.#name} [${start}]` : undefined)
     const staleTime = this.#currentStaleTime()

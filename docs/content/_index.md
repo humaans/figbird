@@ -943,7 +943,10 @@ const data = {
 ```
 
 Preparation is an _earlier read_, not a different one. The component calls
-`useQuery(request)` and converges on the same cache key.
+`useQuery(request)` and converges on the same cache key. Keep the preparation handle active
+until the destination commits. Subscribers that mount while that lease is active adopt its
+result without another freshness check, even when other queries or code took longer to load.
+Later mounts use the ordinary `staleTime` policy again.
 
 ### prefetch
 
@@ -1088,11 +1091,14 @@ is no per-query throttle config) via two built-in guards on event-driven refetch
   deferred (queries show as `pending` in `inspect()`) and reconcile once on
   `visibilitychange`. The reconnect sweep is gated too, so a background tab riding
   through network blips stops replaying refetch storms. Local-exact merges keep flowing
-  while hidden (they're free); only network reconciliation pauses. Inject a custom
+  while hidden (they're free); only network reconciliation pauses. Returning after a
+  hidden interval at least as long as the instance `staleTime` also reconciles active
+  queries and marks inactive cached queries pending as a safety check. Inject a custom
   `visibility` source in the constructor for non-browser environments.
 - **Reconnects are staggered.** Visible clients wait a random `reconnectJitter`
-  before sweeping active queries, defaulting to `[0, 3000]` ms. Reconnects during
-  the wait coalesce into one sweep. Set `reconnectJitter: 0` for immediate sweeps.
+  before sweeping active queries, defaulting to `[0, 3000]` ms. Inactive cached queries
+  are marked pending and refresh when they are next read. Reconnects during the wait
+  coalesce into one sweep. Set `reconnectJitter: 0` for immediate sweeps.
 
 Manual `refetch()`, first fetches, and SWR revalidation are user/loader intent and are
 never gated.
@@ -1101,16 +1107,29 @@ One practical consequence: an **unwindowed** relation like `.related('comments')
 
 ### Freshness tolerance: staleTime
 
-By default every mount revalidates cached data in the background (SWR). `staleTime` is the
-reader's tolerance: data younger than it skips the revalidation.
+Successful data stays fresh for five minutes by default. A mount within that window reuses
+the cached result without a request; after it, the cached result renders immediately while
+Figbird revalidates in the background. Set the app-wide policy on the instance:
+
+```ts
+const figbird = new Figbird({ adapter, schema, staleTime: 5 * 60_000 })
+```
+
+A reader can override the instance policy. Use `0` to revalidate on every mount or
+`Infinity` for cache-first data:
 
 ```ts
 useQuery(q.currencies, { staleTime: 60_000 }) // revalidate at most once a minute
 useQuery(q.currencies, { staleTime: Infinity }) // cache-first
 ```
 
-It is a read-site option, not query identity: readers with different tolerances share one cache
-entry, and the most demanding one keeps it freshest. `prepare()` and `prefetch()` accept it too.
+`staleTime` is measured from the last successful response. It does not poll an already-mounted
+query. Explicit refetches, pending reconciliation, and errors always win over the timer.
+
+The value is not query identity: readers with different tolerances share one cache entry, and
+the most demanding one keeps it freshest. `prepare()` inherits the instance default and accepts
+an override. `prefetch()` keeps a separate 30-second default because its timer also controls the
+speculative pin's lifetime.
 
 ### Fetch retries
 
@@ -1798,6 +1817,7 @@ The core instance holding the adapter, schema, and shared query state.
 const figbird = new Figbird({
   adapter,
   schema,
+  staleTime?,
   eventBatchInterval?,
   retry?,
   retryDelay?,

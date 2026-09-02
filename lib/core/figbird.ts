@@ -40,6 +40,7 @@ import {
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
 import {
+  DEFAULT_STALE_TIME,
   QueryStore,
   type DevtoolsCacheEditResult,
   type QueryFetchHistoryEntry,
@@ -199,6 +200,7 @@ export class Figbird<
   adapter: A
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
+  #staleTime: number
 
   // Cache of active RelationalQueryRef instances, keyed by AST hash. This is critical for
   // React 18 Suspense interop: on suspense retries React discards render-state (including
@@ -227,6 +229,8 @@ export class Figbird<
    * @param adapter Data adapter (e.g. FeathersAdapter)
    * @param eventBatchInterval Optional interval (ms) for batching realtime events
    * @param schema Optional schema to enable full TypeScript inference
+   * @param staleTime Default age (ms) for reusing successful data without a
+   *   mount-time revalidation. Defaults to 5 minutes; readers can override it.
    * @param reconcileCooldown Burst safety: minimum interval (ms) between event-driven
    *   refetches of one query. First event refetches immediately; further events within
    *   the window coalesce into one guaranteed trailing refetch. Default 2000; 0 disables.
@@ -249,6 +253,7 @@ export class Figbird<
     adapter,
     eventBatchInterval,
     schema,
+    staleTime = DEFAULT_STALE_TIME,
     reconcileCooldown,
     retry,
     retryDelay,
@@ -259,6 +264,7 @@ export class Figbird<
     adapter: A
     eventBatchInterval?: number
     schema?: S
+    staleTime?: number
     reconcileCooldown?: number
     retry?: number | false
     retryDelay?: RetryDelay
@@ -268,9 +274,11 @@ export class Figbird<
   }) {
     this.adapter = adapter
     this.schema = schema
+    this.#staleTime = staleTime
     this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
       eventBatchInterval,
+      staleTime,
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
       ...(retry !== undefined ? { retry } : {}),
       ...(retryDelay !== undefined ? { retryDelay } : {}),
@@ -407,6 +415,7 @@ export class Figbird<
             this.#relationalQueryCache.delete(hash)
           }
         },
+        { defaultStaleTime: this.#staleTime },
       )
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
@@ -463,6 +472,7 @@ export class Figbird<
         this.schema,
         config,
         {
+          defaultStaleTime: this.#staleTime,
           onEvict: () => {
             if (this.#windowQueryCache.get(hash) === ref) this.#windowQueryCache.delete(hash)
           },
@@ -497,7 +507,8 @@ export class Figbird<
    *
    * Designed for router preparation, hover prefetch, and parents that can see child needs
    * earlier than the child itself. The component still reads via `useQuery(request)` —
-   * preparation is an earlier read, not a different read.
+   * preparation is an earlier read, not a different read. Keep the handle active until
+   * the destination commits so its subscribers adopt the prepared result without revalidation.
    *
    * @example
    * ```ts

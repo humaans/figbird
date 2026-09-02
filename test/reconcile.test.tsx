@@ -47,9 +47,11 @@ function fakeVisibility(initiallyHidden = false) {
 
 function createApp({
   reconcileCooldown,
+  staleTime,
   visibility,
 }: {
   reconcileCooldown?: number
+  staleTime?: number
   visibility?: VisibilitySource
 } = {}) {
   const feathers = mockFeathers({
@@ -61,6 +63,7 @@ function createApp({
     adapter,
     eventBatchInterval: 0,
     ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
+    ...(staleTime !== undefined ? { staleTime } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
   })
   return { figbird, feathers }
@@ -258,6 +261,72 @@ test('hidden tabs: a reconnect while hidden defers the refetch-all until visible
   t.is(notes.counts.find, baseline + 2)
 
   unsub()
+})
+
+test('visibility: returning after staleTime reconciles active queries once', async t => {
+  const realNow = Date.now
+  let now = realNow()
+  Date.now = () => now
+  t.teardown(() => {
+    Date.now = realNow
+  })
+  const visibility = fakeVisibility(false)
+  const { figbird, feathers } = createApp({
+    reconcileCooldown: 0,
+    staleTime: 20,
+    visibility: visibility.source,
+  })
+  const notes = feathers.service('notes')
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsub = ref.subscribe(() => {})
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  visibility.set(true)
+  now += 19
+  visibility.set(false)
+  await sleep(10)
+  t.is(notes.counts.find, baseline, 'a short background visit keeps the live result')
+
+  visibility.set(true)
+  now += 20
+  visibility.set(false)
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1, 'a meaningful sleep gets one safety refetch')
+
+  unsub()
+})
+
+test('reconnect: inactive cached queries become pending for their next subscriber', async t => {
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'hello' } } },
+  })
+  const io = new EventEmitter()
+  ;(feathers as unknown as { io: EventEmitter }).io = io
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+    reconnectJitter: [40, 40],
+  })
+  const notes = feathers.service('notes')
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsub = ref.subscribe(() => {})
+  await sleep(20)
+  const baseline = notes.counts.find
+  unsub()
+
+  io.emit('reconnect')
+  t.is(notes.counts.find, baseline, 'reconnect does not fetch an inactive query')
+
+  const resubscribe = ref.subscribe(() => {})
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1, 'pending overrides the five-minute default')
+
+  await sleep(40)
+  t.is(notes.counts.find, baseline + 1, 'the delayed sweep does not repeat that fetch')
+  resubscribe()
 })
 
 test('reconnect jitter delays and coalesces a visible-tab sweep', async t => {

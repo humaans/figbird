@@ -64,14 +64,22 @@ interface AppOptions {
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   figbird?: Figbird<AppSchema, any>
   config?: Record<string, unknown>
+  staleTime?: number
 }
 
-function app({ feathers, figbird, config }: AppOptions = {}) {
+function app({ feathers, figbird, config, staleTime }: AppOptions = {}) {
   feathers = feathers || createFeathers()
   const adapter = new FeathersAdapter(feathers, config)
   // Create a properly typed figbird instance
   const figbirdInstance: Figbird<AppSchema, typeof adapter> =
-    figbird || new Figbird({ schema, adapter, eventBatchInterval: 0, retry: false })
+    figbird ||
+    new Figbird({
+      schema,
+      adapter,
+      eventBatchInterval: 0,
+      retry: false,
+      ...(staleTime === undefined ? {} : { staleTime }),
+    })
 
   // Create typed hooks from the schema. The provider selects the runtime instance.
   const { useGet, useFind, useMutation } = createHooks<typeof schema, typeof adapter>(schema)
@@ -945,7 +953,7 @@ test('useFind with refetch while already fetching', async t => {
 })
 
 test('refetch only works with active listeners', async t => {
-  const { App, useFind, feathers } = app()
+  const { App, useFind, feathers } = app({ staleTime: 0 })
   let refetch: () => void
   let calls = 0
 
@@ -1214,7 +1222,7 @@ test('useFind - realtime refetch', async t => {
 })
 
 test('useFind - realtime refetch only with active listeners', async t => {
-  const { App, useFind, feathers } = app()
+  const { App, useFind, feathers } = app({ staleTime: 0 })
   let findCallCount = 0
 
   function Note() {
@@ -1341,7 +1349,7 @@ test('useFind - realtime disabled', async t => {
 
 test('useFind - fetchPolicy swr', async t => {
   const { render, flush, unmount, $all } = dom()
-  const { App, useFind, feathers } = app()
+  const { App, useFind, feathers } = app({ staleTime: 0 })
 
   let renderNote: React.Dispatch<React.SetStateAction<boolean>>
 

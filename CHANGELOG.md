@@ -40,6 +40,11 @@ return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
 
 Also included:
 
+- Successful query results now remain fresh for five minutes by default. Configure
+  `staleTime` once on `new Figbird(...)` or override it per reader. Active route
+  preparations hand their result to mounting subscribers without another revalidation;
+  reconnects mark inactive cache entries pending, and returning from a hidden tab after
+  `staleTime` reconciles active queries.
 - Import-safe schema bindings through `createHooks(schema)`. The generated hooks resolve their
   runtime from `FigbirdProvider`, and `useMutations()` returns that instance's typed write proxy.
   Imperative code uses `figbird.m`, `figbird.prepare`, and other instance methods directly, so

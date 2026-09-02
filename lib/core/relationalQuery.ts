@@ -189,6 +189,7 @@ export interface RelationalRootOverride {
 }
 
 interface RelationalQueryOptions {
+  defaultStaleTime?: number
   root?: RelationalRootOverride
 }
 
@@ -274,6 +275,7 @@ export class RelationalQueryRef<
   #fanOutWarnedKeys: Set<string> = new Set()
 
   #onEvict: (() => void) | null = null
+  #defaultStaleTime: number
   #name: string | undefined
   #rootOverride: RelationalRootOverride | null
 
@@ -289,6 +291,7 @@ export class RelationalQueryRef<
     this.#schema = schema
     this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
     this.#onEvict = onEvict ?? null
+    this.#defaultStaleTime = options?.defaultStaleTime ?? 0
     this.#rootOverride = options?.root ?? null
   }
 
@@ -400,9 +403,15 @@ export class RelationalQueryRef<
       source?: 'subscriber' | 'prepare' | 'prefetch'
     },
   ): () => void {
-    const staleTime = options?.staleTime ?? 0
+    const source = options?.source ?? 'subscriber'
+    const staleTime = options?.staleTime ?? this.#defaultStaleTime
+    // The active route preparation already made this query's freshness decision.
+    // Its lease covers the handoff to mounted readers, regardless of their normal policy.
+    const adoptsPreparation =
+      source === 'subscriber' &&
+      Array.from(this.#listeners.values()).some(listener => listener.source === 'prepare')
     const claimsColdStart = this.#coldStartAwaitingSubscriber
-    this.#listeners.set(fn, { staleTime, source: options?.source ?? 'subscriber' })
+    this.#listeners.set(fn, { staleTime, source })
     this.#staleTime = this.#currentStaleTime()
 
     if (!this.#root) {
@@ -416,7 +425,7 @@ export class RelationalQueryRef<
         queueMicrotask(() => {
           this.#coldStartAwaitingSubscriber = false
         })
-      } else {
+      } else if (!adoptsPreparation) {
         this.#ensureFresh(staleTime)
       }
     }
