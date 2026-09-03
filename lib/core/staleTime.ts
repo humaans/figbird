@@ -1,5 +1,13 @@
 const MAX_TIMER_DELAY = 2_147_483_647
 
+export function isWithinStaleTime(
+  fetchedAt: number | undefined,
+  staleTime: number,
+  now = Date.now(),
+): boolean {
+  return staleTime > 0 && fetchedAt !== undefined && now - fetchedAt < staleTime
+}
+
 export function validateStaleTime(value: unknown, context: string): number {
   if (typeof value !== 'number' || Number.isNaN(value) || value < 0) {
     throw new RangeError(

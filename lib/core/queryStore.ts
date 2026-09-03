@@ -75,6 +75,7 @@ import {
 } from './queryTypes.js'
 import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
 import { normalizeError } from './errors.js'
+import { isWithinStaleTime } from './staleTime.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -632,8 +633,7 @@ export class QueryStore<
     }
 
     const staleTime = options.staleTime ?? this.#staleTime
-    const isFresh =
-      staleTime > 0 && q.fetchedAt !== undefined && Date.now() - q.fetchedAt < staleTime
+    const isFresh = isWithinStaleTime(q.fetchedAt, staleTime)
     if (
       q.pending ||
       (q.state.status === 'success' &&
@@ -2474,7 +2474,9 @@ export class QueryStore<
     const now = Date.now()
     const sleptPastStaleTime = hiddenAt !== null && now - hiddenAt >= this.#staleTime
     if (sleptPastStaleTime) {
-      this.#markReconciliationPending(query => !this.#isFresh(query.fetchedAt, now))
+      this.#markReconciliationPending(
+        query => !isWithinStaleTime(query.fetchedAt, this.#staleTime, now),
+      )
     }
     const reconciled = this.#drainDeferredReconciles()
     if (!sleptPastStaleTime) return
@@ -2550,10 +2552,6 @@ export class QueryStore<
         }
       }
     }
-  }
-
-  #isFresh(fetchedAt: number | undefined, now: number): boolean {
-    return fetchedAt !== undefined && now - fetchedAt < this.#staleTime
   }
 
   #reconcilesAfterMissedEvents(query: Query<unknown, TMeta, unknown>): boolean {

@@ -75,7 +75,7 @@ import type {
   ServicePaths,
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
-import { validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
+import { isWithinStaleTime, validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
 
 const MAX_WINDOW_QUERY_CACHE_SIZE = 20
 
@@ -619,7 +619,7 @@ export class Figbird<
 
     const now = Date.now()
     const existing = this.#prefetches.get(hash)
-    if (existing && now - existing.at < staleTime) return
+    if (existing && isWithinStaleTime(existing.at, staleTime, now)) return
     if (existing) {
       clearTimeout(existing.timer)
       existing.release()
