@@ -1,5 +1,5 @@
 baseURL = "https://humaans.github.io/figbird"
-languageCode = "en-us"
+locale = "en-us"
 title = "Figbird"
 description = "Effortless realtime data management for React + Feathers applications."
 
