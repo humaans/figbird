@@ -75,6 +75,7 @@ import type {
   ServicePaths,
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { isWithinStaleTime, validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
 
 const MAX_WINDOW_QUERY_CACHE_SIZE = 20
 
@@ -272,6 +273,7 @@ export class Figbird<
     visibility?: VisibilitySource
     defaultSort?: Record<string, 1 | -1>
   }) {
+    staleTime = validateStaleTime(staleTime, 'Figbird(): staleTime')
     this.adapter = adapter
     this.schema = schema
     this.#staleTime = staleTime
@@ -507,8 +509,9 @@ export class Figbird<
    *
    * Designed for router preparation, hover prefetch, and parents that can see child needs
    * earlier than the child itself. The component still reads via `useQuery(request)` —
-   * preparation is an earlier read, not a different read. Keep the handle active until
-   * the destination commits so its subscribers adopt the prepared result without revalidation.
+   * preparation is an earlier read, not a different read. Keep the handle active through
+   * the destination's first subscriber commit. That subscriber wave adopts the prepared
+   * result without revalidation; retaining the handle longer only keeps the query pinned.
    *
    * @example
    * ```ts
@@ -526,16 +529,23 @@ export class Figbird<
     query: QueryInput<B, Args>,
     options?: { staleTime?: number },
   ): PreparedQuery {
+    const staleTime =
+      options?.staleTime === undefined
+        ? undefined
+        : validateStaleTime(options.staleTime, 'prepare(): staleTime')
     const ref = this.query(query)
     // No-op listener — purely a pin. The promise drives readiness; release() drops the pin.
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
-    const unsub = ref.subscribe(() => {}, { ...options, source: 'prepare' })
+    const release = ref.subscribe(() => {}, {
+      ...(staleTime === undefined ? {} : { staleTime }),
+      source: 'prepare',
+    })
     return {
       key: ref.hash(),
       promise: ref.suspensePromise(),
-      release: unsub,
+      release,
     }
   }
 
@@ -554,6 +564,7 @@ export class Figbird<
    * `staleTime` — the fetched data stays in the QueryStore either way, so a later
    * `useQuery` gets a warm synchronous read. If a component subscribes in the
    * meantime, its own subscription keeps the query alive past the pin.
+   * Because the pin must release itself, `staleTime` must be finite for prefetches.
    *
    * Use `prepare()` instead when you need to await readiness or control the lease
    * explicitly (router navigation).
@@ -567,13 +578,13 @@ export class Figbird<
     query: QueryInput<B, Args>,
     options?: { staleTime?: number },
   ): void {
+    const staleTime = validatePrefetchStaleTime(options?.staleTime ?? 30_000)
     const ref = this.query(query)
-    const staleTime = options?.staleTime ?? 30_000
     const hash = ref.hash()
 
     const now = Date.now()
     const existing = this.#prefetches.get(hash)
-    if (existing && now - existing.at < staleTime) return
+    if (existing && isWithinStaleTime(existing.at, staleTime, now)) return
     if (existing) {
       clearTimeout(existing.timer)
       existing.release()

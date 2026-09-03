@@ -3245,25 +3245,139 @@ test('staleTime: the five-minute default skips SWR revalidation and explicit zer
   unsub3()
 })
 
-test('prefetch, prepare, and mount share one request while the preparation lease is active', async t => {
+test('staleTime: public entry points reject invalid durations', t => {
+  const { adapter } = createApp()
+  t.throws(() => new Figbird({ schema, adapter, staleTime: Number.NaN }), {
+    instanceOf: RangeError,
+    message: /Figbird\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.notThrows(() => new Figbird({ schema, adapter, staleTime: Infinity }))
+
+  const { App, figbird } = createApp()
+  const builder = figbird.q.issues.related('creator')
+
+  function InvalidReader() {
+    useQuery(builder, { staleTime: Number.NaN })
+    return null
+  }
+
+  t.throws(
+    () =>
+      renderToString(
+        <App>
+          <InvalidReader />
+        </App>,
+      ),
+    {
+      instanceOf: RangeError,
+      message: /useQuery\(\): staleTime must be a non-negative number or Infinity/,
+    },
+  )
+
+  t.throws(() => figbird.query(builder).subscribe(() => {}, { staleTime: -1 }), {
+    instanceOf: RangeError,
+    message: /query\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.throws(() =>
+    figbird
+      .queryDesc({ serviceName: 'issues', method: 'find' })
+      .subscribe(() => {}, { staleTime: Number.NaN }),
+  )
+  t.throws(() => figbird.prepare(builder, { staleTime: -1 }), {
+    instanceOf: RangeError,
+    message: /prepare\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.throws(() => figbird.prefetch(builder, { staleTime: Infinity }), {
+    instanceOf: RangeError,
+    message: /prefetch\(\): staleTime must be between 0 and 2147483647/,
+  })
+  t.throws(() => figbird.prefetch(builder, { staleTime: Number.MAX_SAFE_INTEGER }))
+})
+
+test('prepared result adoption covers one subscriber wave, not the retained pin lifetime', async t => {
   const { figbird, feathers } = createApp()
   const { q } = createHooks(schema)
   const issueDetail = defineQuery('preparedIssueStaleTime', ({ id }: { id: number }) =>
     q.issues.get(id).related('creator'),
   )
+  const request = issueDetail({ id: 1 })
 
-  figbird.prefetch(issueDetail({ id: 1 }))
-  await new Promise(resolve => setTimeout(resolve, 10))
-
-  const prepared = figbird.prepare(issueDetail({ id: 1 }))
+  figbird.prefetch(request)
+  const prepared = figbird.prepare(request)
   await prepared.promise
-  const mounted = figbird.query(issueDetail({ id: 1 })).subscribe(() => {}, { staleTime: 0 })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  const ref = figbird.query(request)
+  const first = ref.subscribe(() => {}, { staleTime: 0 })
+  const sibling = ref.subscribe(() => {}, { staleTime: 0 })
+  first()
+  sibling()
+  const strictModeReplay = ref.subscribe(() => {}, { staleTime: 0 })
+  await new Promise<void>(resolve => queueMicrotask(resolve))
 
-  t.is(feathers.service('issues').counts.get, 1, 'the root is fetched once')
-  t.is(feathers.service('users').counts.find, 1, 'the relation is fetched once')
+  t.is(feathers.service('issues').counts.get, 1, 'the initial subscriber wave adopts the root')
+  t.is(feathers.service('users').counts.find, 1, 'the initial subscriber wave adopts the relation')
+
+  strictModeReplay()
+  let releaseLaterMount = () => {}
+  await new Promise<void>(resolve => {
+    releaseLaterMount = ref.subscribe(
+      state => {
+        if (state.status === 'success' && !state.isFetching) resolve()
+      },
+      { staleTime: 0 },
+    )
+  })
+
+  t.is(feathers.service('issues').counts.get, 2, 'a later mount revalidates the root')
+  t.is(feathers.service('users').counts.find, 2, 'a later mount revalidates the relation')
   prepared.release()
-  mounted()
+  releaseLaterMount()
+})
+
+test('prepared result adoption orders overlapping and cancelled generations', async t => {
+  const { figbird, feathers } = createApp()
+  const { q } = createHooks(schema)
+  const issueDetail = defineQuery('preparedIssueGeneration', ({ id }: { id: number }) =>
+    q.issues.get(id).related('creator'),
+  )
+  const request = issueDetail({ id: 1 })
+
+  const older = figbird.prepare(request)
+  const cancelledBeforeClaim = figbird.prepare(request, { staleTime: Infinity })
+  cancelledBeforeClaim.release()
+  await older.promise
+
+  const ref = figbird.query(request)
+  const firstMount = ref.subscribe(() => {}, { staleTime: 0 })
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  t.is(feathers.service('issues').counts.get, 1, 'the surviving older generation is adopted')
+  t.is(feathers.service('users').counts.find, 1)
+  firstMount()
+
+  const newer = figbird.prepare(request, { staleTime: Infinity })
+  await newer.promise
+  const secondMount = ref.subscribe(() => {}, { staleTime: 0 })
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  t.is(feathers.service('issues').counts.get, 1, 'a newer generation gets its own adoption wave')
+  t.is(feathers.service('users').counts.find, 1)
+  secondMount()
+  newer.release()
+
+  const cancelledAfterClaim = figbird.prepare(request, { staleTime: Infinity })
+  cancelledAfterClaim.release()
+  let releaseLaterMount = () => {}
+  await new Promise<void>(resolve => {
+    releaseLaterMount = ref.subscribe(
+      state => {
+        if (state.status === 'success' && !state.isFetching) resolve()
+      },
+      { staleTime: 0 },
+    )
+  })
+
+  t.is(feathers.service('issues').counts.get, 2, 'the consumed older generation stays closed')
+  t.is(feathers.service('users').counts.find, 2)
+  older.release()
+  releaseLaterMount()
 })
 
 test('staleTime: stricter subscriber revalidates an already-live relational query', async t => {
