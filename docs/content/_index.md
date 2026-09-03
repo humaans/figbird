@@ -937,8 +937,7 @@ queries: ({ params }) => [issueDetail({ id: Number(params.id) })]
 queries: [customFieldsQuery, rolesQuery]
 
 const data = {
-  prepare: (request: AnyQueryInput<typeof schema>, signal: AbortSignal) =>
-    figbird.prepare(request, { signal }),
+  prepare: (request: AnyQueryInput<typeof schema>) => figbird.prepare(request),
   prefetch: (request: AnyQueryInput<typeof schema>) => figbird.prefetch(request),
 }
 ```
@@ -947,10 +946,7 @@ Preparation is an _earlier read_, not a different one. The component calls
 `useQuery(request)` and converges on the same cache key. Keep the preparation handle active
 until the destination commits. Subscribers that mount while that lease is active adopt its
 result without another freshness check, even when other queries or code took longer to load.
-Later mounts use the ordinary `staleTime` policy again. Pass the navigation's `AbortSignal`
-to release the lease automatically when navigation is cancelled. This releases Figbird's
-ownership of the query. If readiness is still pending, `promise` rejects with the signal's
-reason. A request shared with another subscriber is not cancelled.
+Later mounts use the ordinary `staleTime` policy again.
 
 ### prefetch
 
@@ -1705,7 +1701,7 @@ The `createHooks` kit returns a schema-typed version; the standalone export from
 ## figbird.prepare
 
 ```ts
-const { key, promise, release } = figbird.prepare(definition(args), { staleTime?, signal? })
+const { key, promise, release } = figbird.prepare(definition(args), { staleTime? })
 ```
 
 Starts a query and returns an awaitable lease, the router-grade primitive. Argumentless

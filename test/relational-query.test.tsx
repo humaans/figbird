@@ -3315,22 +3315,6 @@ test('prefetch, prepare, and mount share one request while the preparation lease
   mounted()
 })
 
-test('prepare: an abort signal releases the route preparation lease', async t => {
-  const { figbird } = createApp()
-  const request = figbird.q.issues.get(1).related('creator')
-  const controller = new AbortController()
-  const prepared = figbird.prepare(request, { signal: controller.signal })
-  const ref = figbird.query(request)
-
-  t.is(ref.inspect().prepareCount, 1)
-  controller.abort()
-  t.is(ref.inspect().prepareCount, 0)
-  await t.throwsAsync(prepared.promise, { name: 'AbortError' })
-
-  // Explicit cleanup remains safe for routers that release in a finally block.
-  prepared.release()
-})
-
 test('staleTime: stricter subscriber revalidates an already-live relational query', async t => {
   const { figbird, feathers } = createApp()
   const issueDetail = defineQuery('issueDetailStaleTime', ({ id }: { id: number }) =>

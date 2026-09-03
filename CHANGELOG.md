@@ -45,8 +45,8 @@ Also included:
   preparations hand their result to mounting subscribers without another revalidation;
   reconnects mark inactive cache entries pending, and returning from a hidden tab after
   `staleTime` reconciles active queries. Invalid durations now fail at the API boundary,
-  route preparations can release automatically from an `AbortSignal`, and visibility
-  recovery skips queries refreshed while hidden while retaining its cause in telemetry.
+  while visibility recovery skips queries refreshed while hidden and retains its cause
+  in telemetry.
 - Import-safe schema bindings through `createHooks(schema)`. The generated hooks resolve their
   runtime from `FigbirdProvider`, and `useMutations()` returns that instance's typed write proxy.
   Imperative code uses `figbird.m`, `figbird.prepare`, and other instance methods directly, so

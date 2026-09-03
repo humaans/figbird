@@ -79,13 +79,6 @@ import { isWithinStaleTime, validatePrefetchStaleTime, validateStaleTime } from 
 
 const MAX_WINDOW_QUERY_CACHE_SIZE = 20
 
-function preparationAbortReason(signal: AbortSignal): unknown {
-  if (signal.reason !== undefined) return signal.reason
-  const error = new Error('Query preparation was aborted')
-  error.name = 'AbortError'
-  return error
-}
-
 type DescriptorWriteProjection<TItem> =
   | {
       optimistic?: true
@@ -518,9 +511,6 @@ export class Figbird<
    * earlier than the child itself. The component still reads via `useQuery(request)` —
    * preparation is an earlier read, not a different read. Keep the handle active until
    * the destination commits so its subscribers adopt the prepared result without revalidation.
-   * Pass the navigation's `AbortSignal` to release the lease automatically when navigation
-   * is cancelled. Aborting releases ownership; if readiness is still pending, the returned
-   * promise rejects with the signal's reason. Shared network work is not cancelled.
    *
    * @example
    * ```ts
@@ -536,7 +526,7 @@ export class Figbird<
    */
   prepare<Args, B extends AnyQueryBuilder<S>>(
     query: QueryInput<B, Args>,
-    options?: { staleTime?: number; signal?: AbortSignal },
+    options?: { staleTime?: number },
   ): PreparedQuery {
     const staleTime =
       options?.staleTime === undefined
@@ -547,39 +537,13 @@ export class Figbird<
     // While pinned, subsequent useQuery subscribers join the same ref. When everyone has
     // released and unsubscribed, RelationalQueryRef cleans up and evicts the cache entry.
     // A staleTime skips the SWR revalidation when the data is already fresh enough.
-    const unsubscribe = ref.subscribe(() => {}, {
+    const release = ref.subscribe(() => {}, {
       ...(staleTime === undefined ? {} : { staleTime }),
       source: 'prepare',
     })
-    const readiness = ref.suspensePromise()
-    const signal = options?.signal
-    let rejectAbort: ((reason?: unknown) => void) | undefined
-    const promise =
-      signal === undefined
-        ? readiness
-        : Promise.race([
-            readiness,
-            new Promise<void>((_resolve, reject) => {
-              rejectAbort = reject
-            }),
-          ])
-    let released = false
-    function release() {
-      if (released) return
-      released = true
-      signal?.removeEventListener('abort', abort)
-      unsubscribe()
-    }
-    function abort() {
-      if (!signal) return
-      release()
-      rejectAbort?.(preparationAbortReason(signal))
-    }
-    if (signal?.aborted) abort()
-    else signal?.addEventListener('abort', abort, { once: true })
     return {
       key: ref.hash(),
-      promise,
+      promise: ref.suspensePromise(),
       release,
     }
   }
