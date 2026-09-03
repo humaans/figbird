@@ -63,6 +63,19 @@ npm run devtools:sign:firefox:local
 
 The signed XPI is written to `extensions/build/firefox-signed`.
 
+After the version-bump PR has merged, update your local `master` checkout and run the complete
+local Firefox fallback:
+
+```sh
+git pull --ff-only origin master
+make upload-firefox-extension
+```
+
+The command builds fresh release inputs, signs the Firefox extension with the Keychain-backed
+Mozilla credentials, and uploads `figbird-devtools-firefox-signed.xpi` to the matching
+`devtools-v<version>` GitHub release. It exits successfully without signing again if that asset is
+already present, so it is safe to run after checking an uncertain workflow result.
+
 ## Release both extensions
 
 After merging the extension changes, run:

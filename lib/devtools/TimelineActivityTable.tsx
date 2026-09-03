@@ -37,7 +37,7 @@ export type TimelineVisibility = 'all' | 'fetch' | 'realtime' | 'write' | 'conne
 
 const COLUMNS = [
   { label: 'time', width: 96, minWidth: 78 },
-  { label: 'activity', width: 145, minWidth: 100 },
+  { label: 'activity', width: 435, minWidth: 100 },
   { label: 'operation', width: 85, minWidth: 70 },
   { label: 'context', width: 120, minWidth: 80 },
   { label: 'status', width: 84, minWidth: 70 },
