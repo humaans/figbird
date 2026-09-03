@@ -509,8 +509,9 @@ export class Figbird<
    *
    * Designed for router preparation, hover prefetch, and parents that can see child needs
    * earlier than the child itself. The component still reads via `useQuery(request)` —
-   * preparation is an earlier read, not a different read. Keep the handle active until
-   * the destination commits so its subscribers adopt the prepared result without revalidation.
+   * preparation is an earlier read, not a different read. Keep the handle active through
+   * the destination's first subscriber commit. That subscriber wave adopts the prepared
+   * result without revalidation; retaining the handle longer only keeps the query pinned.
    *
    * @example
    * ```ts

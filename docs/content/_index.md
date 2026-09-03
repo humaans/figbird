@@ -944,9 +944,10 @@ const data = {
 
 Preparation is an _earlier read_, not a different one. The component calls
 `useQuery(request)` and converges on the same cache key. Keep the preparation handle active
-until the destination commits. Subscribers that mount while that lease is active adopt its
+through the destination's first subscriber commit. That initial subscriber wave adopts its
 result without another freshness check, even when other queries or code took longer to load.
-Later mounts use the ordinary `staleTime` policy again.
+The adoption window then closes: retaining the handle longer only keeps the query pinned,
+and later mounts use the ordinary `staleTime` policy again.
 
 ### prefetch
 
