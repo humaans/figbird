@@ -249,7 +249,7 @@ test('window query: retained pages follow the strictest active reader', async t 
     preloadPages: 0,
     maxPages: 2,
   })
-  const lenient = readSettledWindow(ref, range, Infinity)
+  const lenient = readSettledWindow(ref, range)
   await lenient.promise
   const service = feathers.service('items')
   const initialFetches = service.counts.find

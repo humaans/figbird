@@ -41,6 +41,7 @@ import {
 } from './relationalFilters.js'
 import type { AnySchema, RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { validateStaleTime } from './staleTime.js'
 
 export type { RelationalPaginationState } from './queryRoots.js'
 
@@ -163,6 +164,14 @@ type GatherResult = {
   assembly: Map<string, AssembledRelationData>
 }
 
+type RelationalListener =
+  | { source: 'subscriber' | 'prefetch'; staleTime: number }
+  | { source: 'prepare'; staleTime: number; preparationGeneration: number }
+
+type PreparedAdoption =
+  | { kind: 'idle'; adoptedThrough: number }
+  | { kind: 'wave'; generation: number }
+
 export interface InspectedRelationalQuery {
   key: string
   name?: string
@@ -189,6 +198,7 @@ export interface RelationalRootOverride {
 }
 
 interface RelationalQueryOptions {
+  defaultStaleTime?: number
   root?: RelationalRootOverride
 }
 
@@ -221,10 +231,9 @@ export class RelationalQueryRef<
   // "comments.reactions"). A relation is "synced" once its entry exists here — even a
   // kind:'empty' entry counts, so loading detection doesn't hang on empty relations.
   #relationSubs: Map<string, RelationSub<S, TParams, TMeta, TQuery>> = new Map()
-  #listeners: Map<
-    (state: RelationalQueryState<T>) => void,
-    { staleTime: number; source: 'subscriber' | 'prepare' | 'prefetch' }
-  > = new Map()
+  #listeners: Map<(state: RelationalQueryState<T>) => void, RelationalListener> = new Map()
+  #nextPreparationGeneration = 0
+  #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #processedEventUnsub: (() => void) | null = null
   #relationalFilterRefetchQueued = false
   // Strictest active subscriber freshness tolerance — applied to newly-created
@@ -274,6 +283,7 @@ export class RelationalQueryRef<
   #fanOutWarnedKeys: Set<string> = new Set()
 
   #onEvict: (() => void) | null = null
+  #defaultStaleTime: number
   #name: string | undefined
   #rootOverride: RelationalRootOverride | null
 
@@ -289,6 +299,7 @@ export class RelationalQueryRef<
     this.#schema = schema
     this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
     this.#onEvict = onEvict ?? null
+    this.#defaultStaleTime = options?.defaultStaleTime ?? 0
     this.#rootOverride = options?.root ?? null
   }
 
@@ -400,9 +411,25 @@ export class RelationalQueryRef<
       source?: 'subscriber' | 'prepare' | 'prefetch'
     },
   ): () => void {
-    const staleTime = options?.staleTime ?? 0
+    const source = options?.source ?? 'subscriber'
+    const staleTime =
+      options?.staleTime === undefined
+        ? this.#defaultStaleTime
+        : validateStaleTime(options.staleTime, 'query(): staleTime')
+    const listener: RelationalListener =
+      source === 'prepare'
+        ? {
+            source,
+            staleTime,
+            preparationGeneration: ++this.#nextPreparationGeneration,
+          }
+        : { source, staleTime }
+    // Preparation makes one freshness decision for the destination's initial React
+    // commit. Every subscriber in that synchronous wave adopts it; later mounts use
+    // their own staleTime even if the router keeps the preparation pinned.
+    const adoptsPreparation = source === 'subscriber' && this.#claimPreparedAdoption()
     const claimsColdStart = this.#coldStartAwaitingSubscriber
-    this.#listeners.set(fn, { staleTime, source: options?.source ?? 'subscriber' })
+    this.#listeners.set(fn, listener)
     this.#staleTime = this.#currentStaleTime()
 
     if (!this.#root) {
@@ -416,7 +443,7 @@ export class RelationalQueryRef<
         queueMicrotask(() => {
           this.#coldStartAwaitingSubscriber = false
         })
-      } else {
+      } else if (!adoptsPreparation) {
         this.#ensureFresh(staleTime)
       }
     }
@@ -446,6 +473,29 @@ export class RelationalQueryRef<
       staleTime = Math.min(staleTime, listener.staleTime)
     }
     return staleTime
+  }
+
+  #claimPreparedAdoption(): boolean {
+    const adoption = this.#preparedAdoption
+    const adoptedThrough = adoption.kind === 'wave' ? adoption.generation : adoption.adoptedThrough
+    let newestActive = adoptedThrough
+    for (const listener of this.#listeners.values()) {
+      if (listener.source === 'prepare') {
+        newestActive = Math.max(newestActive, listener.preparationGeneration)
+      }
+    }
+
+    if (newestActive > adoptedThrough) {
+      this.#preparedAdoption = { kind: 'wave', generation: newestActive }
+      queueMicrotask(() => {
+        const current = this.#preparedAdoption
+        if (current.kind === 'wave' && current.generation === newestActive) {
+          this.#preparedAdoption = { kind: 'idle', adoptedThrough: newestActive }
+        }
+      })
+    }
+
+    return this.#preparedAdoption.kind === 'wave'
   }
 
   #beginGraphRun(): string | null {
@@ -1629,6 +1679,12 @@ export class RelationalQueryRef<
     this.#lastRelationAssembly = null
     this.#lastGatherWasPartial = false
     this.#staleTime = 0
+    if (this.#preparedAdoption.kind === 'wave') {
+      this.#preparedAdoption = {
+        kind: 'idle',
+        adoptedThrough: this.#preparedAdoption.generation,
+      }
+    }
     // Evict from the figbird-level cache so a subsequent query rebuilds a fresh ref.
     // Reset the suspense promise state too — a fresh cold-start will need a fresh promise.
     this.#suspensePromise = null

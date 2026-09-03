@@ -27,6 +27,7 @@ import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { RelationalQueryState } from '../core/figbird.js'
 import type { QueryInput, QueryInputBuilder } from '../core/queryDefinition.js'
 import { suspensePromiseAll } from '../core/relationalQuery.js'
+import { validateStaleTime } from '../core/staleTime.js'
 import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
@@ -118,7 +119,10 @@ export function useQueryResultsImpl(
   queries: readonly SchemaQueryInput<Schema>[],
   options: UseQueriesOptions = {},
 ): SuspenseQueryResult<unknown>[] {
-  const { staleTime } = options
+  const staleTime =
+    options.staleTime === undefined
+      ? undefined
+      : validateStaleTime(options.staleTime, 'useQueries(): staleTime')
 
   // figbird.query() interns refs by AST hash, so each element is reference-stable
   // across renders while retained (same reasoning as useQueryRef — no memoization

@@ -3,6 +3,7 @@ import type { QueryAST } from './queryBuilder.js'
 import { RelationalQueryRef, type RelationalQueryHost } from './relationalQuery.js'
 import type { AnySchema, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import { validateStaleTime } from './staleTime.js'
 import {
   CursorWindowPager,
   OffsetWindowPager,
@@ -77,7 +78,8 @@ interface SettledColdRead {
 
 type ColdRead = PendingColdRead | SettledColdRead
 
-interface WindowQueryLifecycle {
+interface WindowQueryOptions {
+  defaultStaleTime?: number
   onEvict?: () => void
   onIdle?: () => void
 }
@@ -123,6 +125,7 @@ export class WindowQueryRef<
   #pager: WindowPager
   #key: string
   #name: string | undefined
+  #defaultStaleTime: number
   #onEvict: (() => void) | null
   #onIdle: (() => void) | null
 
@@ -143,7 +146,7 @@ export class WindowQueryRef<
     ast: QueryAST,
     schema: S,
     config: WindowQueryConfig,
-    lifecycle?: WindowQueryLifecycle,
+    options?: WindowQueryOptions,
   ) {
     if (!Number.isInteger(config.pageSize) || config.pageSize <= 0) {
       throw new Error(
@@ -165,8 +168,9 @@ export class WindowQueryRef<
     this.#schema = schema
     this.#config = config
     this.#key = `wq/${hashObject({ ast, config })}`
-    this.#onEvict = lifecycle?.onEvict ?? null
-    this.#onIdle = lifecycle?.onIdle ?? null
+    this.#defaultStaleTime = options?.defaultStaleTime ?? 0
+    this.#onEvict = options?.onEvict ?? null
+    this.#onIdle = options?.onIdle ?? null
 
     const serviceName = resolveServicePath(schema, ast.service)
     const context = {
@@ -203,10 +207,14 @@ export class WindowQueryRef<
     options: { range: WindowRange; staleTime?: number },
   ): () => void {
     const range = normalizeRange(options.range)
+    const staleTime =
+      options.staleTime === undefined
+        ? this.#defaultStaleTime
+        : validateStaleTime(options.staleTime, 'useWindowQuery(): staleTime')
     this.#subscribers.set(listener, {
       listener,
       range,
-      staleTime: options.staleTime ?? 0,
+      staleTime,
     })
     const coldRead = this.#coldReads.get(rangeKey(range))
     if (coldRead?.status === 'settled') {
@@ -364,7 +372,10 @@ export class WindowQueryRef<
       this.#ast,
       this.#schema,
       undefined,
-      { root: this.#pager.rootOverride(start) },
+      {
+        defaultStaleTime: this.#defaultStaleTime,
+        root: this.#pager.rootOverride(start),
+      },
     )
     ref.setDisplayName(this.#name ? `${this.#name} [${start}]` : undefined)
     const staleTime = this.#currentStaleTime()

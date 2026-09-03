@@ -3205,12 +3205,18 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
   unmount()
 })
 
-test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t => {
+test('staleTime: the five-minute default skips SWR revalidation and explicit zero opts out', async t => {
+  const realNow = Date.now
+  let now = realNow()
+  Date.now = () => now
+  t.teardown(() => {
+    Date.now = realNow
+  })
   const { figbird, feathers } = createApp()
   const builder = figbird.q.issues.related('creator')
 
   // Cold read — fetches.
-  const unsub1 = figbird.query(builder).subscribe(() => {}, { staleTime: 60_000 })
+  const unsub1 = figbird.query(builder).subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.find, 1)
   unsub1()
@@ -3218,45 +3224,160 @@ test('staleTime: fresh data skips the SWR revalidation on resubscribe', async t 
 
   // Resubscribe within the tolerance — warm store data, no revalidation.
   const ref2 = figbird.query(builder)
-  const unsub2 = ref2.subscribe(() => {}, { staleTime: 60_000 })
+  const unsub2 = ref2.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.is(feathers.service('issues').counts.find, 1, 'fresh data must not refetch')
   t.is(ref2.getSnapshot().status, 'success')
   unsub2()
   await new Promise(resolve => setTimeout(resolve, 10))
 
-  // Default tolerance (0) revalidates on resubscribe.
-  const unsub3 = figbird.query(builder).subscribe(() => {})
+  now += 5 * 60_000
+  const stale = figbird.query(builder).subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
-  t.is(feathers.service('issues').counts.find, 2, 'default revalidates on resubscribe')
+  t.is(feathers.service('issues').counts.find, 2, 'the default expires at five minutes')
+  stale()
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  // A read site can still demand mount-time revalidation.
+  const unsub3 = figbird.query(builder).subscribe(() => {}, { staleTime: 0 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.find, 3, 'explicit zero revalidates on resubscribe')
   unsub3()
 })
 
-test('prepare and prefetch install staleTime before materializing a warm query', async t => {
+test('staleTime: public entry points reject invalid durations', t => {
+  const { adapter } = createApp()
+  t.throws(() => new Figbird({ schema, adapter, staleTime: Number.NaN }), {
+    instanceOf: RangeError,
+    message: /Figbird\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.notThrows(() => new Figbird({ schema, adapter, staleTime: Infinity }))
+
+  const { App, figbird } = createApp()
+  const builder = figbird.q.issues.related('creator')
+
+  function InvalidReader() {
+    useQuery(builder, { staleTime: Number.NaN })
+    return null
+  }
+
+  t.throws(
+    () =>
+      renderToString(
+        <App>
+          <InvalidReader />
+        </App>,
+      ),
+    {
+      instanceOf: RangeError,
+      message: /useQuery\(\): staleTime must be a non-negative number or Infinity/,
+    },
+  )
+
+  t.throws(() => figbird.query(builder).subscribe(() => {}, { staleTime: -1 }), {
+    instanceOf: RangeError,
+    message: /query\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.throws(() =>
+    figbird
+      .queryDesc({ serviceName: 'issues', method: 'find' })
+      .subscribe(() => {}, { staleTime: Number.NaN }),
+  )
+  t.throws(() => figbird.prepare(builder, { staleTime: -1 }), {
+    instanceOf: RangeError,
+    message: /prepare\(\): staleTime must be a non-negative number or Infinity/,
+  })
+  t.throws(() => figbird.prefetch(builder, { staleTime: Infinity }), {
+    instanceOf: RangeError,
+    message: /prefetch\(\): staleTime must be between 0 and 2147483647/,
+  })
+  t.throws(() => figbird.prefetch(builder, { staleTime: Number.MAX_SAFE_INTEGER }))
+})
+
+test('prepared result adoption covers one subscriber wave, not the retained pin lifetime', async t => {
   const { figbird, feathers } = createApp()
   const { q } = createHooks(schema)
   const issueDetail = defineQuery('preparedIssueStaleTime', ({ id }: { id: number }) =>
     q.issues.get(id).related('creator'),
   )
+  const request = issueDetail({ id: 1 })
 
-  const first = figbird.prepare(issueDetail({ id: 1 }), { staleTime: 60_000 })
-  await first.promise
-  first.release()
-  await new Promise(resolve => setTimeout(resolve, 10))
+  figbird.prefetch(request)
+  const prepared = figbird.prepare(request)
+  await prepared.promise
+  const ref = figbird.query(request)
+  const first = ref.subscribe(() => {}, { staleTime: 0 })
+  const sibling = ref.subscribe(() => {}, { staleTime: 0 })
+  first()
+  sibling()
+  const strictModeReplay = ref.subscribe(() => {}, { staleTime: 0 })
+  await new Promise<void>(resolve => queueMicrotask(resolve))
 
-  const second = figbird.prepare(issueDetail({ id: 1 }), { staleTime: 60_000 })
-  await second.promise
-  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(feathers.service('issues').counts.get, 1, 'the initial subscriber wave adopts the root')
+  t.is(feathers.service('users').counts.find, 1, 'the initial subscriber wave adopts the relation')
 
-  t.is(feathers.service('issues').counts.get, 1, 'fresh root must not revalidate')
-  t.is(feathers.service('users').counts.find, 1, 'fresh relation must not revalidate')
-  second.release()
-  await new Promise(resolve => setTimeout(resolve, 10))
+  strictModeReplay()
+  let releaseLaterMount = () => {}
+  await new Promise<void>(resolve => {
+    releaseLaterMount = ref.subscribe(
+      state => {
+        if (state.status === 'success' && !state.isFetching) resolve()
+      },
+      { staleTime: 0 },
+    )
+  })
 
-  figbird.prefetch(issueDetail({ id: 1 }), { staleTime: 60_000 })
-  await new Promise(resolve => setTimeout(resolve, 10))
-  t.is(feathers.service('issues').counts.get, 1, 'prefetch must respect fresh root data')
-  t.is(feathers.service('users').counts.find, 1, 'prefetch must respect fresh relation data')
+  t.is(feathers.service('issues').counts.get, 2, 'a later mount revalidates the root')
+  t.is(feathers.service('users').counts.find, 2, 'a later mount revalidates the relation')
+  prepared.release()
+  releaseLaterMount()
+})
+
+test('prepared result adoption orders overlapping and cancelled generations', async t => {
+  const { figbird, feathers } = createApp()
+  const { q } = createHooks(schema)
+  const issueDetail = defineQuery('preparedIssueGeneration', ({ id }: { id: number }) =>
+    q.issues.get(id).related('creator'),
+  )
+  const request = issueDetail({ id: 1 })
+
+  const older = figbird.prepare(request)
+  const cancelledBeforeClaim = figbird.prepare(request, { staleTime: Infinity })
+  cancelledBeforeClaim.release()
+  await older.promise
+
+  const ref = figbird.query(request)
+  const firstMount = ref.subscribe(() => {}, { staleTime: 0 })
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  t.is(feathers.service('issues').counts.get, 1, 'the surviving older generation is adopted')
+  t.is(feathers.service('users').counts.find, 1)
+  firstMount()
+
+  const newer = figbird.prepare(request, { staleTime: Infinity })
+  await newer.promise
+  const secondMount = ref.subscribe(() => {}, { staleTime: 0 })
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  t.is(feathers.service('issues').counts.get, 1, 'a newer generation gets its own adoption wave')
+  t.is(feathers.service('users').counts.find, 1)
+  secondMount()
+  newer.release()
+
+  const cancelledAfterClaim = figbird.prepare(request, { staleTime: Infinity })
+  cancelledAfterClaim.release()
+  let releaseLaterMount = () => {}
+  await new Promise<void>(resolve => {
+    releaseLaterMount = ref.subscribe(
+      state => {
+        if (state.status === 'success' && !state.isFetching) resolve()
+      },
+      { staleTime: 0 },
+    )
+  })
+
+  t.is(feathers.service('issues').counts.get, 2, 'the consumed older generation stays closed')
+  t.is(feathers.service('users').counts.find, 2)
+  older.release()
+  releaseLaterMount()
 })
 
 test('staleTime: stricter subscriber revalidates an already-live relational query', async t => {
@@ -3271,10 +3392,10 @@ test('staleTime: stricter subscriber revalidates an already-live relational quer
   t.is(feathers.service('issues').counts.get, 1)
   t.is(feathers.service('users').counts.find, 1)
 
-  // A normal subscriber has staleTime 0. Even though it joins the already-live
+  // An explicitly strict subscriber has staleTime 0. Even though it joins the already-live
   // relational ref, its stricter tolerance must propagate to the root and relation refs.
   const ref = figbird.query(issueDetail({ id: 1 }))
-  const unsub = ref.subscribe(() => {})
+  const unsub = ref.subscribe(() => {}, { staleTime: 0 })
   await new Promise(resolve => setTimeout(resolve, 10))
 
   t.is(feathers.service('issues').counts.get, 2, 'root get must revalidate')

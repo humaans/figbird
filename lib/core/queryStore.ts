@@ -75,6 +75,7 @@ import {
 } from './queryTypes.js'
 import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
 import { normalizeError } from './errors.js'
+import { isWithinStaleTime } from './staleTime.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -181,6 +182,7 @@ export interface QueryFetchHistoryEntry {
 }
 
 export const QUERY_FETCH_HISTORY_LIMIT = 50
+export const DEFAULT_STALE_TIME = 5 * 60_000
 
 export interface DevtoolsCacheEditResult {
   ok: boolean
@@ -231,7 +233,9 @@ export class QueryStore<
   // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
   // with trailing timers, and the set of reconciliations deferred while hidden.
   #reconcileCooldown: number
+  #staleTime: number
   #visibility: VisibilitySource
+  #hiddenAt: number | null
   #reconcileWindows: Map<
     string,
     { lastAt: number; trailing: ReturnType<typeof setTimeout> | null; causes?: TraceCause[] }
@@ -257,6 +261,7 @@ export class QueryStore<
   constructor({
     adapter,
     eventBatchInterval = 100,
+    staleTime = DEFAULT_STALE_TIME,
     reconcileCooldown = 2000,
     retry = DEFAULT_RETRIES,
     retryDelay = defaultRetryDelay,
@@ -266,6 +271,8 @@ export class QueryStore<
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchInterval?: number | undefined
+    /** Default age (ms) for skipping mount-time revalidation. */
+    staleTime?: number
     /**
      * Minimum interval (ms) between event-driven refetches of one query — burst
      * safety for server-window/server-authoritative reconciliation. The first
@@ -297,11 +304,13 @@ export class QueryStore<
     this.#telemetry = new QueryTelemetry()
     this.#mutations = new MutationTracker()
     this.#reconcileCooldown = reconcileCooldown
+    this.#staleTime = staleTime
     this.#retry = this.#normalizeRetry(retry)
     this.#retryDelay = retryDelay
     this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
-    this.#visibility.onChange(() => this.#drainDeferredReconciles())
+    this.#hiddenAt = this.#visibility.isHidden() ? Date.now() : null
+    this.#visibility.onChange(() => this.#visibilityChanged())
     if (this.#adapter.subscribeToConnectionEvents) {
       this.#adapter.subscribeToConnectionEvents(event => {
         const traceId = this.#telemetry.nextTraceId()
@@ -623,9 +632,8 @@ export class QueryStore<
       this.#telemetry.attachGraph(queryId, options.graph)
     }
 
-    const staleTime = options.staleTime ?? 0
-    const isFresh =
-      staleTime > 0 && q.fetchedAt !== undefined && Date.now() - q.fetchedAt < staleTime
+    const staleTime = options.staleTime ?? this.#staleTime
+    const isFresh = isWithinStaleTime(q.fetchedAt, staleTime)
     if (
       q.pending ||
       (q.state.status === 'success' &&
@@ -2455,15 +2463,42 @@ export class QueryStore<
     }
   }
 
+  #visibilityChanged(): void {
+    if (this.#visibility.isHidden()) {
+      this.#hiddenAt ??= Date.now()
+      return
+    }
+
+    const hiddenAt = this.#hiddenAt
+    this.#hiddenAt = null
+    const now = Date.now()
+    const sleptPastStaleTime = hiddenAt !== null && now - hiddenAt >= this.#staleTime
+    if (sleptPastStaleTime) {
+      this.#markReconciliationPending(
+        query => !isWithinStaleTime(query.fetchedAt, this.#staleTime, now),
+      )
+    }
+    const reconciled = this.#drainDeferredReconciles()
+    if (!sleptPastStaleTime) return
+
+    const queries = this.#activePendingReconciliationQueries().filter(
+      query => !reconciled.has(query.queryId),
+    )
+    this.#refetchActiveQueries(queries, this.#telemetry.cause('visibility'))
+  }
+
   /** On becoming visible, reconcile everything that deferred while hidden. */
-  #drainDeferredReconciles(): void {
-    if (this.#visibility.isHidden() || this.#deferredWhileHidden.size === 0) return
+  #drainDeferredReconciles(): Set<string> {
+    const reconciled = new Set<string>()
+    if (this.#visibility.isHidden() || this.#deferredWhileHidden.size === 0) return reconciled
     const deferred = Array.from(this.#deferredWhileHidden)
     this.#deferredWhileHidden.clear()
     for (const [queryId, causes] of deferred) {
       if (!this.#getQuery(queryId)) continue
+      reconciled.add(queryId)
       this.#requestReconcile(queryId, causes ? { causes } : {})
     }
+    return reconciled
   }
 
   #clearReconcileState(queryId: string): void {
@@ -2502,19 +2537,44 @@ export class QueryStore<
     }
   }
 
-  #activeReconnectQueries(): Array<{ queryId: string; force: boolean }> {
+  #markReconciliationPending(
+    shouldMark: (query: Query<unknown, TMeta, unknown>) => boolean = () => true,
+  ): void {
+    for (const service of this.getState().values()) {
+      if (service.materialized) {
+        const root = service.queries.get(service.materialized.queryId)
+        if (root && shouldMark(root)) this.#markQueryPending(root.queryId)
+      }
+      for (const query of service.queries.values()) {
+        if (query.queryId === service.materialized?.queryId) continue
+        if (this.#reconcilesAfterMissedEvents(query) && shouldMark(query)) {
+          this.#markQueryPending(query.queryId)
+        }
+      }
+    }
+  }
+
+  #reconcilesAfterMissedEvents(query: Query<unknown, TMeta, unknown>): boolean {
+    return (
+      !query.config.skip &&
+      (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId))
+    )
+  }
+
+  #activePendingReconciliationQueries(): Array<{ queryId: string; force: boolean }> {
     const queryIds = new Map<string, boolean>()
     for (const service of this.getState().values()) {
       // Materialization roots reconcile even with no subscribers — every local read
       // depends on their completeness, and events may have been missed while offline.
       if (service.materialized) {
-        queryIds.set(service.materialized.queryId, true)
+        const root = service.queries.get(service.materialized.queryId)
+        if (root?.pending) queryIds.set(root.queryId, true)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
         if (
-          !query.config.skip &&
-          (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId)) &&
+          query.pending &&
+          this.#reconcilesAfterMissedEvents(query) &&
           this.#listenerCount(query.queryId) > 0
         ) {
           queryIds.set(query.queryId, false)
@@ -2525,23 +2585,24 @@ export class QueryStore<
   }
 
   #refetchActiveQueries(
-    traceId: number | undefined,
     queries: readonly { queryId: string; force: boolean }[],
+    cause?: TraceCause,
   ): void {
     for (const query of queries) {
       this.#requestReconcile(query.queryId, {
         force: query.force,
-        ...(traceId === undefined ? {} : { causes: [{ kind: 'reconnect' as const, traceId }] }),
+        ...(cause === undefined ? {} : { causes: [cause] }),
       })
     }
   }
 
   #scheduleReconnectSweep(traceId: number | undefined): void {
+    this.#markReconciliationPending()
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
     if (delay === 0) {
-      const queries = this.#activeReconnectQueries()
+      const queries = this.#activePendingReconciliationQueries()
       this.#telemetry.emit({
         kind: 'reconnect:sweep',
         ...(traceId === undefined ? {} : { traceId }),
@@ -2549,7 +2610,10 @@ export class QueryStore<
         delayMs: 0,
         queryCount: queries.length,
       })
-      this.#refetchActiveQueries(traceId, queries)
+      this.#refetchActiveQueries(
+        queries,
+        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
+      )
       return
     }
 
@@ -2562,7 +2626,7 @@ export class QueryStore<
 
     const timer = setTimeout(() => {
       this.#reconnectSweepTimer = null
-      const queries = this.#activeReconnectQueries()
+      const queries = this.#activePendingReconciliationQueries()
       this.#telemetry.emit({
         kind: 'reconnect:sweep',
         ...(traceId === undefined ? {} : { traceId }),
@@ -2570,7 +2634,10 @@ export class QueryStore<
         delayMs: delay,
         queryCount: queries.length,
       })
-      this.#refetchActiveQueries(traceId, queries)
+      this.#refetchActiveQueries(
+        queries,
+        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
+      )
     }, delay)
     ;(timer as { unref?: () => void }).unref?.()
     this.#reconnectSweepTimer = timer

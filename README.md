@@ -75,6 +75,9 @@ code outside React uses the instance directly: `figbird.m`, `figbird.prepare`, a
 
 Cold reads suspend into your `<Suspense>` boundary; warm reads render synchronously.
 Transient fetch failures retry up to three times with exponential backoff before Figbird exposes the error. Client errors fail immediately, except for `408` and `429` responses.
+Successful results stay fresh for five minutes by default, so short remounts reuse the
+cache without another request. Set `staleTime` on `new Figbird(...)` to change the app-wide
+default, or pass it to an individual query reader.
 
 ## Features
 

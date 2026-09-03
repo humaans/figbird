@@ -2,6 +2,7 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { AnyWindowQueryBuilder, QueryBuilderItem } from '../core/queryBuilder.js'
 import type { QueryInput, QueryRequest } from '../core/queryDefinition.js'
 import type { Schema } from '../core/schema.js'
+import { validateStaleTime } from '../core/staleTime.js'
 import type { WindowQueryConfig, WindowQueryState, WindowRange } from '../core/windowQuery.js'
 import { useFigbird } from './context.js'
 import type { UseQueryOptions } from './useQuery.js'
@@ -182,7 +183,11 @@ export function useWindowQueryImpl(
   query: QueryInput<AnyWindowQueryBuilder> | null,
   options: UseWindowQueryOptions,
 ): unknown {
-  const { range, suspense = true, staleTime, skip = false } = options
+  const { range, suspense = true, skip = false } = options
+  const staleTime =
+    options.staleTime === undefined
+      ? undefined
+      : validateStaleTime(options.staleTime, 'useWindowQuery(): staleTime')
   const config = normalizeConfig(options)
   const qRef = skip || query === null ? null : figbird.window(query, config)
   const reader = useMemo(() => (qRef ? new WindowQueryReader(qRef) : null), [qRef])
