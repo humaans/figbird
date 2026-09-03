@@ -35,7 +35,7 @@ import {
 } from './ui.js'
 
 const CACHE_COLUMNS = [
-  { label: 'service', width: 140, minWidth: 95 },
+  { label: 'service', width: 280, minWidth: 95 },
   { label: 'entity', width: 150, minWidth: 90 },
   { label: 'value', width: 310, minWidth: 160 },
   { label: 'est. size', width: 90, minWidth: 72 },

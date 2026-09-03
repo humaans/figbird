@@ -18,7 +18,10 @@ import {
   type DevtoolsThemeMode,
 } from './ui.js'
 
-type Tab = 'queries' | 'timeline' | 'events' | 'cache'
+const TABS = ['queries', 'timeline', 'events', 'cache'] as const
+const DEVTOOLS_TAB_STORAGE_KEY = 'figbird.devtools.tab'
+
+type Tab = (typeof TABS)[number]
 export type QueryVisibility = 'active' | 'inactive' | 'retained' | 'all' | 'skipped'
 export type EventVisibility = 'groups' | 'raw'
 
@@ -65,7 +68,7 @@ export function FigbirdDevtoolsPanel({
   const colors = colorScheme === 'dark' ? darkColors : lightColors
   const styles = useMemo(() => makeStyles(colors), [colors])
   const themeValue = useMemo(() => ({ colors, styles }), [colors, styles])
-  const [tab, setTab] = useState<Tab>('queries')
+  const [tab, setTab] = useState<Tab>(readStoredTab)
   const [queryFilter, setQueryFilter] = useState('')
   const [queryVisibility, setQueryVisibility] = useState<QueryVisibility>('active')
   const [eventFilter, setEventFilter] = useState('')
@@ -84,6 +87,8 @@ export function FigbirdDevtoolsPanel({
   } | null>(null)
   const [timelineFollow, setTimelineFollow] = useState(true)
   const panelRef = useRef<HTMLElement>(null)
+
+  useEffect(() => storeTab(tab), [tab])
 
   const inspectFetch = useCallback((span: QuerySpan) => {
     if (span.fetchId !== undefined) {
@@ -176,7 +181,7 @@ export function FigbirdDevtoolsPanel({
         <TooltipLayer rootRef={panelRef} />
         <header style={styles.header}>
           <span style={styles.brand}>figbird</span>
-          {(['queries', 'timeline', 'events', 'cache'] as const).map(item => (
+          {TABS.map(item => (
             <TabButton key={item} active={tab === item} onClick={() => setTab(item)} label={item} />
           ))}
           {tab === 'queries' ? (
@@ -388,6 +393,27 @@ export function FigbirdDevtoolsPanel({
       </section>
     </ThemeContext.Provider>
   )
+}
+
+function readStoredTab(): Tab {
+  if (typeof window === 'undefined') return 'timeline'
+
+  try {
+    const storedTab = window.localStorage.getItem(DEVTOOLS_TAB_STORAGE_KEY)
+    return TABS.find(tab => tab === storedTab) ?? 'timeline'
+  } catch {
+    return 'timeline'
+  }
+}
+
+function storeTab(tab: Tab): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(DEVTOOLS_TAB_STORAGE_KEY, tab)
+  } catch {
+    // Devtools still work when storage is unavailable.
+  }
 }
 
 function inspectionTitle({
