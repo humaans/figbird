@@ -206,7 +206,7 @@ export class Figbird<
   A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 > {
   adapter: A
-  queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+  queryStore: QueryStore<AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
   #staleTime: number
   #disposed = false
@@ -290,7 +290,7 @@ export class Figbird<
     this.adapter = adapter
     this.schema = schema
     this.#staleTime = staleTime
-    this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
+    this.queryStore = new QueryStore<AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
       eventBatchInterval,
       staleTime,
@@ -663,10 +663,7 @@ export class Figbird<
   ): QueryRef<
     ServiceDefinitionByPath<S, P>['item'][],
     ServiceDefinitionByPath<S, P>['query'],
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
+    AdapterFindMeta<A>
   >
   /** Create a typed `get` query reference from a descriptor. */
   queryDesc<P extends ServicePaths<S>>(
@@ -683,23 +680,13 @@ export class Figbird<
   ): QueryRef<
     ServiceDefinitionByPath<S, P>['item'],
     ServiceDefinitionByPath<S, P>['query'],
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
+    AdapterFindMeta<A>
   >
   // Generic fallback overload (for dynamic descriptors)
   queryDesc<D extends QueryDescriptor>(
     desc: D,
     config?: QueryConfig<InferQueryData<S, D>, AdapterQuery<A>>,
-  ): QueryRef<
-    InferQueryData<S, D>,
-    AdapterQuery<A>,
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
-  >
+  ): QueryRef<InferQueryData<S, D>, AdapterQuery<A>, AdapterFindMeta<A>>
   // Implementation
   queryDesc(
     desc: {
@@ -711,13 +698,11 @@ export class Figbird<
     config?: QueryConfig<unknown, unknown>,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   ): any {
-    return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
-      {
-        desc: desc as QueryDescriptor,
-        config: normalizeQueryConfig(config),
-        queryStore: this.queryStore,
-      },
-    )
+    return new QueryRef<unknown, unknown, AdapterFindMeta<A>>({
+      desc: desc as QueryDescriptor,
+      config: normalizeQueryConfig(config),
+      queryStore: this.queryStore,
+    })
   }
 
   // Descriptor layer, write side — the primitive `m` is built on. Speaks plain

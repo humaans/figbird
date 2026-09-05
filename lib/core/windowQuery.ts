@@ -372,7 +372,7 @@ export class WindowQueryRef<
       this.#pager.pageSucceeded({
         start,
         rowCount: state.data.length,
-        pageInfo: metadata.pageInfo,
+        continuation: metadata.continuation,
         total: metadata.total,
         revision: metadata.revision,
       })

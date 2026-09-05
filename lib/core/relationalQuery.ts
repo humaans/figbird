@@ -127,18 +127,18 @@ export type RelationalQueryState<T> =
  *   when it resolved to zero edges) and re-synced from every junction success.
  * - `perParent` — windowed relations: one query per parent source value.
  */
-type RelationSub<S extends Schema, TParams, TMeta extends Record<string, unknown>, TQuery> =
+type RelationSub<TMeta extends Record<string, unknown>> =
   | { kind: 'empty'; sourceKey: string }
   | {
       kind: 'fanIn'
       sourceKey: string
-      queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+      queryRef: QueryRef<unknown[], unknown, TMeta>
       unsub: () => void
     }
   | {
       kind: 'junction'
       sourceKey: string
-      queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+      queryRef: QueryRef<unknown[], unknown, TMeta>
       unsub: () => void
     }
   | {
@@ -147,7 +147,7 @@ type RelationSub<S extends Schema, TParams, TMeta extends Record<string, unknown
       children: Map<
         string,
         {
-          queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+          queryRef: QueryRef<unknown[], unknown, TMeta>
           unsub: () => void
           sourceValue: string | number
         }
@@ -232,7 +232,7 @@ export class RelationalQueryRef<
   // Per-relation state, keyed by dotted relation path (e.g. "comments" or
   // "comments.reactions"). A relation is "synced" once its entry exists here — even a
   // kind:'empty' entry counts, so loading detection doesn't hang on empty relations.
-  #relationSubs: Map<string, RelationSub<S, TParams, TMeta, TQuery>> = new Map()
+  #relationSubs: Map<string, RelationSub<TMeta>> = new Map()
   #lifetime = new QueryLifetime<
     (state: RelationalQueryState<T>) => void,
     RelationalListener,
@@ -358,7 +358,13 @@ export class RelationalQueryRef<
 
   /** Adapter-neutral metadata for the root query, excluding relation-only updates. */
   rootMetadata(): RootMetadata {
-    return this.#root?.metadata() ?? { pageInfo: undefined, total: undefined, revision: undefined }
+    return (
+      this.#root?.metadata() ?? {
+        continuation: { kind: 'done' },
+        total: undefined,
+        revision: undefined,
+      }
+    )
   }
 
   /**
@@ -368,15 +374,8 @@ export class RelationalQueryRef<
   #query(
     desc: QueryDescriptor,
     config: QueryConfig<unknown, unknown> & QueryLifecycleConfig,
-  ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
-    return this.#host.queryDesc(desc, config) as QueryRef<
-      unknown[],
-      unknown,
-      S,
-      TParams,
-      TMeta,
-      TQuery
-    >
+  ): QueryRef<unknown[], unknown, TMeta> {
+    return this.#host.queryDesc(desc, config) as QueryRef<unknown[], unknown, TMeta>
   }
 
   /**
@@ -518,7 +517,7 @@ export class RelationalQueryRef<
   }
 
   *#queryLeaves(): Generator<{
-    queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+    queryRef: QueryRef<unknown[], unknown, TMeta>
     path: string
     role?: 'junction'
   }> {
@@ -903,7 +902,7 @@ export class RelationalQueryRef<
   refetch(): void {
     this.#beginGraphRun()
     this.#root?.refetch(this.#graph('(root)'))
-    const seen = new Set<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>>()
+    const seen = new Set<QueryRef<unknown[], unknown, TMeta>>()
     for (const { queryRef, path, role } of this.#queryLeaves()) {
       if (seen.has(queryRef)) continue
       seen.add(queryRef)
@@ -937,7 +936,7 @@ export class RelationalQueryRef<
       : {}
 
     if (this.#ast.kind === 'paginate') {
-      const pageSize = this.#ast.pageSize!
+      const { pageSize, includeTotal } = this.#ast
       const pageSource = this.#host.adapter.pageSource?.(serviceName)
       const paginationPlan = planRootPagination(pageSource !== undefined, Boolean(this.#ast.server))
       const sequential = paginationPlan.kind === 'sequential'
@@ -960,9 +959,9 @@ export class RelationalQueryRef<
             }
           : undefined
       const rootGraph = this.#graph('(root)')
-      this.#pagedRoot = new PagedQueryRoot<S, TParams, TMeta, TQuery>({
+      this.#pagedRoot = new PagedQueryRoot<TMeta>({
         pageSize,
-        includeTotal: Boolean(this.#ast.includeTotal),
+        includeTotal: includeTotal,
         sequential,
         realtime: this.#ast.snapshot
           ? 'manual'
@@ -983,7 +982,7 @@ export class RelationalQueryRef<
                   page: {
                     limit: pageSize,
                     ...(after !== undefined ? { after } : {}),
-                    includeTotal: Boolean(this.#ast.includeTotal) && pageIndex === 0,
+                    includeTotal: includeTotal && pageIndex === 0,
                   },
                 }
               : {
@@ -1025,7 +1024,7 @@ export class RelationalQueryRef<
         ? {
             serviceName,
             method: 'get',
-            resourceId: this.#ast.resourceId!,
+            resourceId: this.#ast.resourceId,
             // `.get(id).where(...)` conditions ride along as params.query to the
             // get endpoint (rare filters, $select, ...).
             ...(Object.keys(this.#ast.query).length > 0
@@ -1095,7 +1094,7 @@ export class RelationalQueryRef<
   }
 
   #syncNestedFromSnapshot(
-    queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
+    queryRef: QueryRef<unknown[], unknown, TMeta>,
     plan: Exclude<RelationPlan, { kind: 'missing' }>,
   ): void {
     if (plan.children.length === 0) return
@@ -1206,10 +1205,7 @@ export class RelationalQueryRef<
       )
     }
 
-    const entry: Extract<
-      RelationSub<S, TParams, TMeta, TQuery>,
-      { kind: 'perParent' }
-    > = existing?.kind === 'perParent'
+    const entry: Extract<RelationSub<TMeta>, { kind: 'perParent' }> = existing?.kind === 'perParent'
       ? existing
       : { kind: 'perParent', sourceKey: newSourceKey, children: new Map() }
     entry.sourceKey = newSourceKey
@@ -1248,7 +1244,7 @@ export class RelationalQueryRef<
   }
 
   #syncNestedWindowedRelationIfReady(
-    sub: RelationSub<S, TParams, TMeta, TQuery> & { kind: 'perParent' },
+    sub: RelationSub<TMeta> & { kind: 'perParent' },
     plan: Exclude<RelationPlan, { kind: 'missing' }>,
   ): void {
     if (plan.children.length === 0) return
@@ -1323,7 +1319,7 @@ export class RelationalQueryRef<
 
   /** Phase 2 from the junction's current snapshot, for an already-live junction sub. */
   #syncDestFromJunction(
-    junctionRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
+    junctionRef: QueryRef<unknown[], unknown, TMeta>,
     plan: Extract<RelationPlan, { kind: 'junction' }>,
   ): void {
     const s = junctionRef.getSnapshot()
@@ -1332,9 +1328,7 @@ export class RelationalQueryRef<
     }
   }
 
-  #perParentDataIfReady(
-    sub: RelationSub<S, TParams, TMeta, TQuery> & { kind: 'perParent' },
-  ): unknown[] | null {
+  #perParentDataIfReady(sub: RelationSub<TMeta> & { kind: 'perParent' }): unknown[] | null {
     const rows: unknown[] = []
     for (const child of sub.children.values()) {
       const state = child.queryRef.getSnapshot()
@@ -1350,7 +1344,7 @@ export class RelationalQueryRef<
    * whole map without keys instead: every dest entry is disposed exactly once there
    * through its own map entry.)
    */
-  #disposeRelationSub(sub: RelationSub<S, TParams, TMeta, TQuery>, key?: string): void {
+  #disposeRelationSub(sub: RelationSub<TMeta>, key?: string): void {
     switch (sub.kind) {
       case 'empty':
         return

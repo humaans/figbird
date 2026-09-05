@@ -62,18 +62,19 @@ export type WhereClause<TItem> = {
  * first page, then `loadMore()` appends additional pages of `pageSize` rows.
  * `data` is the concatenated array across all loaded pages.
  */
-export interface QueryAST {
+export type QueryOperation =
+  | { kind: 'find'; cardinality: 'one' | 'many' }
+  | { kind: 'get'; cardinality: 'one'; resourceId: string | number }
+  | { kind: 'paginate'; cardinality: 'many'; pageSize: number; includeTotal: boolean }
+  | { kind: 'all'; cardinality: 'many' }
+
+export type QueryAST = QueryOperation & {
   service: string
-  kind: 'find' | 'get' | 'paginate' | 'all'
-  resourceId?: string | number
   query: FeathersQuery
-  cardinality: 'one' | 'many'
   related: Record<string, QueryAST>
   server?: boolean
   /** Point-in-time result: fetched once, untouched by realtime; refetch() only. */
   snapshot?: boolean
-  pageSize?: number
-  includeTotal?: boolean
 }
 
 /**
@@ -106,22 +107,6 @@ function deepMerge(target: FeathersQuery, source: FeathersQuery): FeathersQuery 
 }
 
 /**
- * Internal state for building a query
- */
-interface QueryBuilderState {
-  service: string
-  kind: 'find' | 'get' | 'paginate' | 'all'
-  resourceId?: string | number
-  query: FeathersQuery
-  cardinality: 'one' | 'many'
-  related: Record<string, QueryAST>
-  server: boolean
-  snapshot: boolean
-  pageSize?: number
-  includeTotal?: boolean
-}
-
-/**
  * QueryBuilder creates a fluent interface for building relational queries.
  * Each method returns a new QueryBuilder instance (immutable).
  *
@@ -146,7 +131,7 @@ export class QueryBuilder<
   TCardinality extends 'one' | 'many' = 'many',
   TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find',
 > {
-  readonly #state: QueryBuilderState
+  readonly #state: QueryAST
   readonly [queryBuilderSchema]: S
   #hash: string | null = null
 
@@ -154,7 +139,7 @@ export class QueryBuilder<
   // derivations (a complete next state). No partial mode: a call site that dropped
   // fields would silently reset them; requiring the full state makes that a compile
   // error instead.
-  constructor(schema: S, service: string, state?: QueryBuilderState) {
+  constructor(schema: S, service: string, state?: QueryAST) {
     this[queryBuilderSchema] = schema
     this.#state = state ?? {
       service,
@@ -181,35 +166,12 @@ export class QueryBuilder<
    * Returns the AST representation of this query
    */
   toAST(): QueryAST {
-    const ast: QueryAST = {
-      service: this.#state.service,
-      kind: this.#state.kind,
-      query: this.#state.query,
-      cardinality: this.#state.cardinality,
-      related: this.#state.related,
+    const { server, snapshot, ...ast } = this.#state
+    return {
+      ...ast,
+      ...(server ? { server: true } : {}),
+      ...(snapshot ? { snapshot: true } : {}),
     }
-
-    if (this.#state.resourceId !== undefined) {
-      ast.resourceId = this.#state.resourceId
-    }
-
-    if (this.#state.server) {
-      ast.server = true
-    }
-
-    if (this.#state.snapshot) {
-      ast.snapshot = true
-    }
-
-    if (this.#state.pageSize !== undefined) {
-      ast.pageSize = this.#state.pageSize
-    }
-
-    if (this.#state.includeTotal) {
-      ast.includeTotal = true
-    }
-
-    return ast
   }
 
   /**
@@ -379,7 +341,7 @@ export class QueryBuilder<
       kind: 'paginate',
       cardinality: 'many',
       pageSize: options.pageSize,
-      ...(options.includeTotal !== undefined ? { includeTotal: options.includeTotal } : {}),
+      includeTotal: options.includeTotal ?? false,
     }) as QueryBuilder<S, TService, TItem, TRelated, 'many', 'paginate'>
   }
 
@@ -492,6 +454,9 @@ export class QueryBuilder<
     // 'embedded' is a relation-declaration concept (parent carries a list of ids); the
     // result shape is still an array, so it maps to 'many' on the AST.
     const relatedAST = refinedBuilder.toAST()
+    if (relatedAST.kind !== 'find') {
+      throw new Error('related(): refinements must return a find query')
+    }
     relatedAST.cardinality = relDef.cardinality === 'one' ? 'one' : 'many'
 
     return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {

@@ -1,3 +1,4 @@
+import { queryPage, EMPTY_PAGE, type QueryPage } from '../adapters/queryPage.js'
 import { ReconcileScheduler, type ReconcilePreparation } from './reconcileScheduler.js'
 import { commitQuery, deleteQuery } from './queryResults.js'
 import { QueryRetention } from './queryRetention.js'
@@ -7,8 +8,6 @@ import {
   type PageResponse,
   type QueryResponse,
 } from '../adapters/adapter.js'
-import type { AnySchema, Schema } from './schema.js'
-import type { QueryRef } from './queryRef.js'
 import { isEphemeralQuery } from './queryIdentity.js'
 import { type FigbirdEventEmitter, type FetchReason, type TraceCause } from './events.js'
 import { QueryTelemetry } from './queryTelemetry.js'
@@ -48,7 +47,6 @@ import {
   type Event,
   type FindQueryConfig,
   type GetQueryConfig,
-  type InferMutationData,
   type ItemId,
   type ItemMatcher,
   type MutationDescriptor,
@@ -166,7 +164,6 @@ function documentVisibility(): VisibilitySource {
  * Internal query store managing entities, queries, and subscriptions.
  */
 export class QueryStore<
-  S extends Schema = AnySchema,
   TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
   TQuery = Record<string, unknown>,
@@ -508,6 +505,18 @@ export class QueryStore<
     return this.#getQuery(queryId)?.rows.data ?? []
   }
 
+  getQueryPage(queryId: string): QueryPage {
+    const query = this.#getQuery(queryId)
+    if (!query || query.state.status !== 'success') return EMPTY_PAGE
+    return queryPage({
+      rows: query.rows.data,
+      meta: query.state.meta,
+      query: queryOfParams(query.desc.params),
+      pageInfo: query.state.pageInfo,
+      allPages: 'allPages' in query.config && query.config.allPages === true,
+    })
+  }
+
   getQueryStats(queryId: string): QueryFetchStats | undefined {
     const stats = this.#executions.get(queryId)?.stats
     if (!stats) return undefined
@@ -522,7 +531,9 @@ export class QueryStore<
    * Ensures that backing state exists for the given QueryRef by creating
    * service/query structures on first use.
    */
-  materialize<T, TQueryType>(queryRef: QueryRef<T, TQueryType, S, TParams, TMeta, TQuery>): void {
+  materialize<T, TQueryType>(queryRef: {
+    details(): { queryId: string; desc: QueryDescriptor; config: QueryConfig<T, TQueryType> }
+  }): void {
     this.assertActive()
     const { queryId, desc, config } = queryRef.details()
 
@@ -754,8 +765,8 @@ export class QueryStore<
   }
 
   /** Perform a service mutation and update the store from the result. */
-  mutate<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
-    return this.registerMutation(desc).promise as Promise<InferMutationData<S, D>>
+  mutate(desc: MutationDescriptor): Promise<unknown> {
+    return this.registerMutation(desc).promise
   }
 
   get supportsTransactions(): boolean {
@@ -766,8 +777,8 @@ export class QueryStore<
     return this.#mutationExecutor.transaction(descs)
   }
 
-  mutateConfirmedDirect<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
-    return this.#mutationExecutor.mutateConfirmedDirect(desc) as Promise<InferMutationData<S, D>>
+  mutateConfirmedDirect(desc: MutationDescriptor): Promise<unknown> {
+    return this.#mutationExecutor.mutateConfirmedDirect(desc)
   }
 
   registerMutation(
@@ -1046,7 +1057,10 @@ export class QueryStore<
             new Error(`Adapter does not support native pagination for "${desc.serviceName}"`),
           )
         }
-        return pageSource.find(desc.params as TParams, desc.page)
+        return pageSource.find(desc.params as TParams, desc.page).then(result => {
+          if (!result.pageInfo) throw new Error('Native page response is missing pageInfo')
+          return result
+        })
       }
       const local = this.#selectMaterializedFind(query)
       if (local) return Promise.resolve(local)
@@ -2426,7 +2440,6 @@ export class QueryStore<
         }) as (item: unknown) => boolean)
   }
 
-  /** Convert mutation descriptor to args array for adapter */
   #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
     const execution = this.#executions.get(queryId)
     if (!execution) return () => {}

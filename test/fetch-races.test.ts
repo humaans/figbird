@@ -227,6 +227,25 @@ test('journal overflow invalidates only cursors that exceed the event limit', t 
     newerSnapshot.events.map(event => event.itemId),
     ['3', '4'],
   )
+  journal.end(olderFetch)
+  journal.record([processedEvent(5)])
+  t.deepEqual(
+    journal.read(newerFetch).events.map(event => event.itemId),
+    ['3', '4', '5'],
+  )
+  journal.record([processedEvent(6)])
+  t.true(journal.read(newerFetch).overflowed, 'overflow begins only after the capacity boundary')
+  journal.end(newerFetch)
+  const nextFetch = journal.begin('notes')
+  t.deepEqual(journal.read(nextFetch), { events: [], overflowed: false })
+  t.true(journal.read(newerFetch).overflowed, 'released cursors cannot read a new journal')
+  journal.record([processedEvent(7)])
+  t.deepEqual(
+    journal.read(nextFetch).events.map(event => event.itemId),
+    ['7'],
+  )
+  journal.clear()
+  t.true(journal.read(nextFetch).overflowed)
 })
 
 test('a created event that lands during a find survives the stale response', async t => {
