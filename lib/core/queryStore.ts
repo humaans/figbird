@@ -157,7 +157,6 @@ interface AppliedEventEffect {
   event: ProcessedCacheEvent
   reconcileQueryIds: Set<string>
   queryEffects?: Map<string, 'merged' | 'reconcile'>
-  observabilityOnly?: boolean
 }
 
 interface PublishedEventEffects {
@@ -1866,19 +1865,12 @@ export class QueryStore<
       }
       for (const event of activeOverlayEvents) journaledItemIds.add(event.itemId)
 
-      // A complete-set fetch (unfiltered allPages — the materialization condition)
-      // is authoritative for the whole service: snapshot the entity cache before
-      // applying the result so it can be diffed below and the changes propagated
-      // to every other query the same way realtime events are. `.server()` fetches
-      // don't diff — a server-authoritative query refetching in response to diff
-      // events must not itself produce diff events, or two of them could cycle.
       const findConfig = query.config as FindQueryConfig<unknown, unknown>
       const isCompleteSet =
         query.desc.method === 'find' &&
         Boolean(findConfig.allPages) &&
         isUnfilteredFindQuery(query.desc.params)
-      const previousEntities =
-        isCompleteSet && !findConfig.server ? new Map(service.entities) : null
+      const previousEntities = isCompleteSet ? new Map(service.entities) : null
       const meta = (result as { meta?: TMeta }).meta
       const pageInfo = 'pageInfo' in result ? result.pageInfo : undefined
       const rebasedResponse = rebaseResponseData({
@@ -1906,6 +1898,7 @@ export class QueryStore<
       // not full entities — never write them to the entity cache, which must hold
       // only complete rows for the materialized local-answer paths to be sound
       // (isItemStale can't catch a projection: same updatedAt as the row it shadows).
+      const fetchedEvents: ProcessedCacheEvent[] = []
       for (const item of rebasedResponse.items) {
         const itemId = getId(item)
         if (itemId !== undefined) {
@@ -1914,21 +1907,16 @@ export class QueryStore<
             const currentItem = service.entities.get(key)
             if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
               service.entities.set(key, item)
-              if (!isCompleteSet && currentItem !== item && this.#telemetry.active) {
-                eventEffects.push({
-                  event: {
-                    mode: 'server',
-                    source: 'fetch',
-                    serviceName: query.desc.serviceName,
-                    type: currentItem === undefined ? 'created' : 'updated',
-                    item,
-                    previousItem: currentItem ?? null,
-                    itemId: key,
-                    ...(cause === undefined ? {} : { cause }),
-                  },
-                  reconcileQueryIds: new Set(),
-                  queryEffects: new Map([[queryId, 'merged']]),
-                  observabilityOnly: true,
+              if (!isCompleteSet && currentItem !== item) {
+                fetchedEvents.push({
+                  mode: 'server',
+                  source: 'fetch',
+                  serviceName: query.desc.serviceName,
+                  type: currentItem === undefined ? 'created' : 'updated',
+                  item,
+                  previousItem: currentItem ?? null,
+                  itemId: key,
+                  ...(cause === undefined ? {} : { cause }),
                 })
               }
             }
@@ -1972,31 +1960,26 @@ export class QueryStore<
         },
       })
 
-      // Diff the complete set against the pre-fetch cache and apply the changes as
-      // synthetic events. Without this, queries answered locally from the cache
-      // (see #tryLocalFind) would never observe changes a root refetch brought in —
-      // rows created or removed out-of-band would be invisible to them forever.
-      // The fetched query itself is excluded: its state was just set from the result.
-      if (previousEntities) {
-        const diffEvents = diffCompleteSet({
-          service,
-          serviceName: query.desc.serviceName,
-          previousEntities,
-          nextItemIds,
-          ignoredItemIds: journaledItemIds,
-        })
-        eventEffects.push(
-          ...this.#updateQueriesForEvents({
+      const changes = previousEntities
+        ? diffCompleteSet({
             service,
             serviceName: query.desc.serviceName,
-            processedEvents: diffEvents.map(event =>
-              cause === undefined ? event : { ...event, cause },
-            ),
-            touch,
-            excludeQueryId: queryId,
-          }),
-        )
-      }
+            previousEntities,
+            nextItemIds,
+            ignoredItemIds: journaledItemIds,
+          })
+        : fetchedEvents
+      eventEffects.push(
+        ...this.#updateQueriesForEvents({
+          service,
+          serviceName: query.desc.serviceName,
+          processedEvents: changes.map(event =>
+            cause === undefined ? event : { ...event, cause },
+          ),
+          touch,
+          excludeQueryId: queryId,
+        }),
+      )
 
       if (effectiveJournalEvents.length > 0 && responseMode === 'entity') {
         replayFetchedQueryFromEvents({
@@ -2378,8 +2361,7 @@ export class QueryStore<
       if (merged) reconcileCauses.set(queryId, merged)
     }
 
-    for (const { event, reconcileQueryIds, queryEffects, observabilityOnly } of effects) {
-      if (observabilityOnly) continue
+    for (const { event, reconcileQueryIds, queryEffects } of effects) {
       const cause = causeFor(event)
       const deferred =
         event.mode === 'optimistic' &&

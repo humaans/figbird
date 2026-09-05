@@ -9,7 +9,7 @@
  * "refetch" when it is not. The soundness argument lives on the function.
  */
 
-import { isServerMaintained } from './queryClassification.js'
+import { isProjectionQuery, isServerMaintained } from './queryClassification.js'
 import { ItemRemovedError } from './errors.js'
 import { buildComparator } from './sort.js'
 import {
@@ -363,14 +363,15 @@ function applyVisibleEventEffect<TMeta>(
   }
 
   if (!hasItem || query.state.status !== 'success') return false
+  const data = (query.state.data as unknown[]).map(current =>
+    itemHasKey(current, itemId, getId) ? item : current,
+  )
+  if (query.classification === 'local-exact') {
+    sortQueryRows(data, query, context.defaultSort)
+  }
   service.queries.set(queryId, {
     ...query,
-    state: {
-      ...query.state,
-      data: (query.state.data as unknown[]).map(current =>
-        itemHasKey(current, itemId, getId) ? item : current,
-      ),
-    },
+    state: { ...query.state, data },
   })
   touch(queryId)
   return true
@@ -409,6 +410,15 @@ export function applyVisibleEventToQuery<TMeta>({
     event,
     event.type === 'removed' ? 'remove' : 'replace',
   )
+}
+
+function sortQueryRows<TMeta>(
+  rows: unknown[],
+  query: Query<unknown, TMeta, unknown>,
+  defaultSort: Record<string, number> | undefined,
+): unknown[] {
+  const sort = splitWindow(queryOfParams(query.desc.params)).sort ?? defaultSort
+  return sort ? rows.sort(buildComparator(sort)) : rows
 }
 
 function applyMergeEventToQuery<TMeta>(
@@ -476,7 +486,7 @@ function applyMergeEventToQuery<TMeta>(
       state: {
         ...query.state,
         meta: itemAdded(query.state.meta),
-        data: (query.state.data as unknown[]).concat(item),
+        data: sortQueryRows((query.state.data as unknown[]).concat(item), query, defaultSort),
       },
     })
     addQueryToItemIndex(service, itemId, queryId)
@@ -534,6 +544,35 @@ export function updateQueriesFromEvents<TMeta>({
     for (const [queryId, query] of service.queries) {
       if (queryId === excludeQueryId || query.config.realtime !== 'merge') continue
       if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') continue
+      if (
+        isServerMaintained(query.classification) &&
+        event.mode === 'server' &&
+        event.source === 'fetch'
+      ) {
+        if (
+          query.classification === 'server-window' &&
+          service.materialized &&
+          service.materialized?.queryId === excludeQueryId
+        ) {
+          serverMaintainedQueriesToRefetch.add(queryId)
+          onEffect?.(queryId, 'reconcile')
+          continue
+        }
+        // A fetched row supplies values, not another server query's membership.
+        // Preserve projections and avoid fetch-to-fetch reconciliation cycles.
+        if (
+          !isProjectionQuery(queryOfParams(query.desc.params)) &&
+          applyVisibleEventEffect(
+            context,
+            queryId,
+            event,
+            event.type === 'removed' ? 'remove' : 'replace',
+          )
+        ) {
+          onEffect?.(queryId, 'merged')
+        }
+        continue
+      }
       const result = applyMergeEventToQuery(context, queryId, event)
       if (result === 'reconcile') {
         serverMaintainedQueriesToRefetch.add(queryId)
