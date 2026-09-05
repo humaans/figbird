@@ -108,7 +108,16 @@ test('Figbird instance retains idle queries and releases owned resources on disp
   await all.suspensePromise()
   releaseAll()
   await new Promise(resolve => setTimeout(resolve, 30))
-  t.true(figbird.getState().has('notes'), 'complete materializations remain available')
+  t.false(figbird.getState().has('notes'), 'idle complete materializations expire too')
+  t.is(realtimeSubscriptions, 0, 'expired materializations release realtime ownership')
+
+  const prepared = figbird.prepare(figbird.q.notes.all())
+  await prepared.promise
+  await new Promise(resolve => setTimeout(resolve, 30))
+  t.true(figbird.getState().has('notes'), 'an explicit preparation keeps the service available')
+  prepared.release()
+  await new Promise(resolve => setTimeout(resolve, 30))
+  t.false(figbird.getState().has('notes'), 'releasing the preparation starts normal retention')
 
   const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
   const pending = queue.m.notes.patch(1, { content: 'saved during disposal' })

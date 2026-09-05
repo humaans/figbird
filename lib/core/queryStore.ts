@@ -166,6 +166,15 @@ interface PublishedEventEffects {
   reconcileCauses: Map<string, TraceCause[]>
 }
 
+interface QueryExecution<TMeta> {
+  readonly serviceName: string
+  readonly generation: number
+  readonly listeners: Set<(state: QueryState<unknown, TMeta>) => void>
+  cancelRetry?: () => void
+  stats?: QueryFetchStats
+  followup?: FetchContext
+}
+
 interface FetchContext {
   reason: Exclude<FetchReason, 'retry'>
   causes?: TraceCause[]
@@ -231,19 +240,14 @@ export class QueryStore<
   #visibilityUnsub: () => void
   #retention: QueryRetention
   #disposed = false
-  #retryWaits = new Set<() => void>()
   #dependencyOwners = new Map<string, number>()
-  #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
   #processedEventListeners: Set<(event: ProcessedCacheEvent) => void> = new Set()
   #projectionSettlementListeners: Set<(event: ProcessedProjectionEvent) => void> = new Set()
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
-  #serviceNamesByQueryId: Map<string, string> = new Map()
-  #queryGenerations: Map<string, number> = new Map()
-  #queryStats: Map<string, QueryFetchStats> = new Map()
+  #executions = new Map<string, QueryExecution<TMeta>>()
   #nextQueryGeneration = 1
-  #followupFetchContexts = new Map<string, FetchContext>()
 
   #fetchEventJournal = new FetchEventJournal()
   #mutationLanes: MutationLanes<QueuedMutation>
@@ -314,13 +318,7 @@ export class QueryStore<
     defaultSort?: Record<string, number>
   }) {
     this.#retention = new QueryRetention(gcTime, queryId => {
-      const serviceName = this.#serviceNamesByQueryId.get(queryId)
-      if (
-        this.#listenerCount(queryId) > 0 ||
-        (serviceName !== undefined &&
-          this.#state.get(serviceName)?.materialized?.queryId === queryId)
-      )
-        return
+      if (this.#listenerCount(queryId) > 0) return
       this.#vacuum({ queryId })
     })
     this.#adapter = adapter
@@ -421,17 +419,13 @@ export class QueryStore<
     this.#reconciliation.dispose()
     if (this.#reconnectSweepTimer) clearTimeout(this.#reconnectSweepTimer)
     if (this.#eventBatchProcessingTimer) clearTimeout(this.#eventBatchProcessingTimer)
-    for (const cancel of this.#retryWaits) cancel()
+    for (const execution of this.#executions.values()) execution.cancelRetry?.()
     this.#state.clear()
-    this.#serviceNamesByQueryId.clear()
-    this.#queryGenerations.clear()
-    this.#queryStats.clear()
-    this.#followupFetchContexts.clear()
+    this.#executions.clear()
     this.#reconnectQueryIds.clear()
     this.#dependencyOwners.clear()
     this.#eventQueue = []
     this.#appliedEventQueue = []
-    this.#listeners.clear()
     this.#globalListeners.clear()
     this.#processedEventListeners.clear()
     this.#projectionSettlementListeners.clear()
@@ -549,14 +543,18 @@ export class QueryStore<
     return this.#getQuery(queryId)?.state as QueryState<T, TMeta> | undefined
   }
 
+  getQueryRows(queryId: string): unknown[] {
+    return this.#getQuery(queryId)?.rows.data ?? []
+  }
+
   getQueryStats(queryId: string): QueryFetchStats | undefined {
-    const stats = this.#queryStats.get(queryId)
+    const stats = this.#executions.get(queryId)?.stats
     if (!stats) return undefined
     return { ...stats, history: [...stats.history] }
   }
 
   getQueryGeneration(queryId: string): number | undefined {
-    return this.#queryGenerations.get(queryId)
+    return this.#executions.get(queryId)?.generation
   }
 
   /**
@@ -569,8 +567,11 @@ export class QueryStore<
 
     if (!this.#getQuery(queryId)) {
       this.#retention.retain(queryId)
-      this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
-      this.#queryGenerations.set(queryId, this.#nextQueryGeneration++)
+      this.#executions.set(queryId, {
+        serviceName: desc.serviceName,
+        generation: this.#nextQueryGeneration++,
+        listeners: new Set(),
+      })
 
       const classification = classifyStoredQuery(desc.method, queryOfParams(desc.params), {
         server: (config as { server?: boolean }).server,
@@ -586,7 +587,6 @@ export class QueryStore<
           config: config as QueryConfig<unknown, unknown>,
           classification,
           pending: this.#reconciliation.isPending(queryId),
-          dirty: false,
           filterItem: this.#createItemFilter<unknown, unknown>(
             desc,
             config as QueryConfig<unknown, unknown>,
@@ -660,7 +660,7 @@ export class QueryStore<
 
   /** Re-evaluate one cached query after projected relational dependencies changed. */
   reapplyQuery(queryId: string, mutationLaneKeys: ReadonlySet<string>): void {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     if (!serviceName) return
     const reapply = { result: 'ignored' as 'applied' | 'reconcile' | 'ignored' }
     const modified = this.#transactOverServiceByName(serviceName, (service, touch) => {
@@ -731,7 +731,7 @@ export class QueryStore<
         q.config.fetchPolicy === 'swr' &&
         !q.state.isFetching &&
         !isFresh) ||
-      (q.state.status === 'error' && !q.state.isFetching)
+      (q.state.error !== null && !q.state.isFetching)
     ) {
       this.#queue(queryId, {
         reason: 'subscription',
@@ -758,14 +758,8 @@ export class QueryStore<
     if (!q.state.isFetching) {
       this.#queue(queryId, fetchContext)
     } else {
-      // Mark as dirty to refetch after current fetch completes
-      this.#transactOverService(queryId, (service, query) => {
-        commitQuery(service, {
-          ...query!,
-          dirty: true,
-        })
-      })
-      this.#followupFetchContexts.set(queryId, fetchContext)
+      const execution = this.#executions.get(queryId)
+      if (execution) execution.followup = fetchContext
     }
   }
 
@@ -776,7 +770,7 @@ export class QueryStore<
 
   /** Replace/remove a row already visible in one query without changing membership. @internal */
   applyVisibleEvent(queryId: string, event: ProcessedCacheEvent): void {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     if (!serviceName) return
     const getId = this.#getIdReader(serviceName)
     const touched = this.#transactOverServiceByName(serviceName, (service, touch) => {
@@ -1525,8 +1519,8 @@ export class QueryStore<
     }
     const graph = this.#telemetry.beginGraph(queryId, fetchContext.graph)
     this.#fetching({ queryId })
-    const generation = this.#queryGenerations.get(queryId)
-    if (generation === undefined) {
+    const execution = this.#executions.get(queryId)
+    if (!execution) {
       this.#telemetry.finishGraph(queryId, graph)
       return
     }
@@ -1536,7 +1530,7 @@ export class QueryStore<
       while (true) {
         const outcome = await this.#runFetchAttempt(
           queryId,
-          generation,
+          execution,
           {
             reason: retryAttempt === 0 ? fetchContext.reason : 'retry',
             attempt: retryAttempt,
@@ -1549,11 +1543,11 @@ export class QueryStore<
         const query = this.#getQuery(queryId)
         if (
           !query ||
-          this.#queryGenerations.get(queryId) !== generation ||
+          this.#executions.get(queryId) !== execution ||
           !this.#hasRetryOwner(queryId) ||
           !this.#shouldRetry(query, retryAttempt, outcome.error)
         ) {
-          if (query && this.#queryGenerations.get(queryId) === generation) {
+          if (query && this.#executions.get(queryId) === execution) {
             this.#fetchFailed({ queryId, error: outcome.error })
           }
           return
@@ -1565,14 +1559,14 @@ export class QueryStore<
         await new Promise<void>(resolve => {
           const cancel = () => {
             clearTimeout(timer)
-            this.#retryWaits.delete(cancel)
+            delete execution.cancelRetry
             resolve()
           }
           const timer = setTimeout(cancel, delay)
-          this.#retryWaits.add(cancel)
+          execution.cancelRetry = cancel
         })
 
-        if (this.#queryGenerations.get(queryId) !== generation) return
+        if (this.#executions.get(queryId) !== execution) return
         if (!this.#hasRetryOwner(queryId)) {
           this.#fetchFailed({ queryId, error: outcome.error })
           return
@@ -1585,19 +1579,19 @@ export class QueryStore<
 
   async #runFetchAttempt(
     queryId: string,
-    generation: number,
+    execution: QueryExecution<TMeta>,
     context: { reason: FetchReason; attempt: number; causes?: TraceCause[] },
     graphRefs: ReadonlyMap<string, QueryGraphRef>,
   ): Promise<FetchAttemptOutcome> {
     const query = this.#getQuery(queryId)
-    if (!query || this.#queryGenerations.get(queryId) !== generation) {
+    if (!query || this.#executions.get(queryId) !== execution) {
       return { kind: 'stale' }
     }
 
     const startedAt = Date.now()
     const fetchId = this.#telemetry.nextFetchId()
     const trace = {
-      generation,
+      generation: execution.generation,
       serviceName: query.desc.serviceName,
       method: query.desc.method,
       ...(query.desc.method === 'get' ? { resourceId: query.desc.resourceId } : {}),
@@ -1611,7 +1605,7 @@ export class QueryStore<
       serviceName: trace.serviceName,
       method: trace.method,
       queryId,
-      generation,
+      generation: execution.generation,
       fetchId,
       reason: context.reason,
       attempt: context.attempt,
@@ -1626,7 +1620,7 @@ export class QueryStore<
       const endedAt = Date.now()
       const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
-      if (current && this.#queryGenerations.get(queryId) === generation) {
+      if (current && this.#executions.get(queryId) === execution) {
         const journal = this.#fetchEventJournal.read(journalCursor)
         if (journal.overflowed) {
           this.#discardFetchedResponse(queryId)
@@ -1656,7 +1650,7 @@ export class QueryStore<
         serviceName: trace.serviceName,
         method: trace.method,
         queryId,
-        generation,
+        generation: execution.generation,
         fetchId,
         durationMs,
         itemCount,
@@ -1668,7 +1662,7 @@ export class QueryStore<
       const endedAt = Date.now()
       const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
-      const isCurrent = Boolean(current && this.#queryGenerations.get(queryId) === generation)
+      const isCurrent = Boolean(current && this.#executions.get(queryId) === execution)
       if (isCurrent) {
         this.#recordFetchStats(queryId, {
           fetchId,
@@ -1685,7 +1679,7 @@ export class QueryStore<
         serviceName: trace.serviceName,
         method: trace.method,
         queryId,
-        generation,
+        generation: execution.generation,
         fetchId,
         durationMs,
         error,
@@ -1711,18 +1705,19 @@ export class QueryStore<
 
   #hasRetryOwner(queryId: string): boolean {
     if (this.#listenerCount(queryId) > 0) return true
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     return (
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     )
   }
 
   #takeFollowupFetchContext(queryId: string): FetchContext {
-    const context = this.#followupFetchContexts.get(queryId) ?? {
+    const context = this.#executions.get(queryId)?.followup ?? {
       reason: 'follow-up' as const,
       ...this.#causeContext('fetch-rebase'),
     }
-    this.#followupFetchContexts.delete(queryId)
+    const execution = this.#executions.get(queryId)
+    if (execution) delete execution.followup
     return context
   }
 
@@ -1870,6 +1865,8 @@ export class QueryStore<
 
   #fetching({ queryId }: { queryId: string }): void {
     this.#reconciliation.settle(queryId)
+    const execution = this.#executions.get(queryId)
+    if (execution) delete execution.followup
     // This is the only listener-notifying transition reachable synchronously from
     // a React render (useQuery → suspensePromise → root/relation setup → subscribe
     // → #queue → here); everything past `await #fetch` is already async. Deferring
@@ -1882,7 +1879,6 @@ export class QueryStore<
 
         commitQuery(service, {
           ...query,
-          dirty: false,
           // error and loading states both restart as a clean loading state.
           state:
             query.state.status === 'success'
@@ -1914,7 +1910,7 @@ export class QueryStore<
     let hadEffectiveJournalEvents = false
     const eventEffects: AppliedEventEffect[] = []
 
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     const touched = this.#transactOverServiceByName(serviceName ?? '', (service, touch) => {
       const query = service.queries.get(queryId)
       if (!query) return
@@ -2039,7 +2035,7 @@ export class QueryStore<
         }
       }
 
-      shouldRefetch = query.dirty
+      shouldRefetch = this.#executions.get(queryId)?.followup !== undefined
 
       // A successful unfiltered allPages fetch (`.all()` with no filters) means the
       // complete row set is now local: mark the service materialized so matcher-
@@ -2152,22 +2148,25 @@ export class QueryStore<
     const touched = this.#transactOverService(queryId, (service, query) => {
       if (!query) return
 
-      shouldRefetch = query.dirty
+      shouldRefetch = this.#executions.get(queryId)?.followup !== undefined
 
       commitQuery(service, {
         ...query!,
-        state: {
-          status: 'error' as const,
-          data: null,
-          meta: this.#adapter.emptyMeta(),
-          isFetching: false,
-          error,
-        },
+        state:
+          query.state.status === 'success'
+            ? { ...query.state, isFetching: false, error }
+            : {
+                status: 'error',
+                data: null,
+                meta: this.#adapter.emptyMeta(),
+                isFetching: false,
+                error,
+              },
       })
     })
     this.#notify(touched)
 
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     const isMaterializedRoot =
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     if (shouldRefetch && (this.#listenerCount(queryId) > 0 || isMaterializedRoot)) {
@@ -2185,7 +2184,7 @@ export class QueryStore<
       })
     })
 
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     const isMaterializedRoot =
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
     this.#reconciliation.request(queryId, {
@@ -2198,20 +2197,22 @@ export class QueryStore<
   }
 
   #recordFetchStats(queryId: string, entry: QueryFetchHistoryEntry): void {
+    const execution = this.#executions.get(queryId)
+    if (!execution) return
     const { ok, durationMs } = entry
-    const current = this.#queryStats.get(queryId) ?? {
+    const current = execution.stats ?? {
       fetchCount: 0,
       errorCount: 0,
       totalDurationMs: 0,
       history: [],
     }
-    this.#queryStats.set(queryId, {
+    execution.stats = {
       fetchCount: current.fetchCount + 1,
       errorCount: current.errorCount + (ok ? 0 : 1),
       totalDurationMs: current.totalDurationMs + durationMs,
       lastDurationMs: durationMs,
       history: [...current.history.slice(-(QUERY_FETCH_HISTORY_LIMIT - 1)), entry],
-    })
+    }
   }
 
   // Realtime event handling
@@ -2732,7 +2733,7 @@ export class QueryStore<
     decision: 'fetch-now' | 'coalesced' | 'deferred-hidden' | 'inactive',
     causes: readonly TraceCause[] | undefined,
   ): void {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     if (serviceName !== undefined) {
       this.#telemetry.emit({
         kind: 'reconcile:decision',
@@ -2745,7 +2746,7 @@ export class QueryStore<
   }
 
   #emitReconcileStarted(queryId: string, causes: readonly TraceCause[] | undefined): void {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     if (serviceName !== undefined) {
       this.#telemetry.emit({
         kind: 'reconcile:started',
@@ -2799,7 +2800,7 @@ export class QueryStore<
         const active = this.#listenerCount(query.queryId) > 0
         const isMaterializedRoot = query.queryId === service.materialized?.queryId
         if (active || isMaterializedRoot) {
-          // `refetch()` marks an in-flight query dirty, guaranteeing exactly one
+          // `refetch()` records an in-flight follow-up, guaranteeing exactly one
           // follow-up instead of dispatching a second fetch in the same generation.
           this.refetch(query.queryId)
         } else {
@@ -2956,7 +2957,7 @@ export class QueryStore<
 
   // State management
   #getQuery(queryId: string): Query<unknown, TMeta, unknown> | undefined {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     if (serviceName) {
       const service = this.getState().get(serviceName)
       if (service) {
@@ -3014,7 +3015,7 @@ export class QueryStore<
     queryId: string,
     fn: (service: ServiceState<TMeta>, query?: Query<unknown, TMeta, unknown>) => void,
   ): Set<string> {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     if (!serviceName) return new Set()
 
     return this.#transactOverServiceByName(serviceName, (service, touch) => {
@@ -3045,21 +3046,19 @@ export class QueryStore<
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
-    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    const serviceName = this.#executions.get(queryId)?.serviceName
     this.#retention.cancel(queryId)
-    this.#followupFetchContexts.delete(queryId)
+    this.#executions.get(queryId)?.cancelRetry?.()
     this.#reconciliation.forget(queryId)
     this.#transactOverService(queryId, (service, query) => {
       if (query) {
         deleteQuery(service, queryId)
-        this.#serviceNamesByQueryId.delete(queryId)
-        this.#queryGenerations.delete(queryId)
-        this.#queryStats.delete(queryId)
         if (service.materialized?.queryId === queryId) {
           delete service.materialized
         }
       }
     })
+    this.#executions.delete(queryId)
     if (serviceName) this.#pruneService(serviceName)
   }
 
@@ -3143,23 +3142,17 @@ export class QueryStore<
   }
 
   #addListener<T>(queryId: string, fn: (state: QueryState<T, TMeta>) => void): () => void {
-    if (!this.#listeners.has(queryId)) {
-      this.#listeners.set(queryId, new Set())
-    }
-    this.#listeners.get(queryId)!.add(fn as (state: QueryState<unknown, TMeta>) => void)
+    const execution = this.#executions.get(queryId)
+    if (!execution) return () => {}
+    const listener = fn as (state: QueryState<unknown, TMeta>) => void
+    execution.listeners.add(listener)
     return () => {
-      const listeners = this.#listeners.get(queryId)
-      if (listeners) {
-        listeners.delete(fn as (state: QueryState<unknown, TMeta>) => void)
-        if (listeners.size === 0) {
-          this.#listeners.delete(queryId)
-        }
-      }
+      execution.listeners.delete(listener)
     }
   }
 
   #invokeListeners(queryId: string): void {
-    const listeners = this.#listeners.get(queryId)
+    const listeners = this.#executions.get(queryId)?.listeners
     if (listeners) {
       const state = this.getQueryState(queryId)
       if (state) {
@@ -3201,6 +3194,6 @@ export class QueryStore<
   }
 
   #listenerCount(queryId: string): number {
-    return this.#listeners.get(queryId)?.size || 0
+    return this.#executions.get(queryId)?.listeners.size ?? 0
   }
 }

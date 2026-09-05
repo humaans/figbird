@@ -69,18 +69,18 @@ const LOADING_ROOT: RootSnapshot = {
   error: null,
 }
 
+type RootQueryRef<TMeta extends Record<string, unknown>> = Pick<
+  QueryRef<unknown, unknown, AnySchema, unknown, TMeta>,
+  'getRows' | 'getSnapshot' | 'subscribe' | 'ensureFresh' | 'refetch' | 'hash'
+>
+
 /**
  * Store listeners fire only on changes. Seed from the current state as well so a
  * query already warmed by another consumer does not look cold until its SWR fetch
  * settles.
  */
-export function subscribeAndSeed<
-  S extends Schema,
-  TParams,
-  TMeta extends Record<string, unknown>,
-  TQuery,
->(
-  queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
+export function subscribeAndSeed<TMeta extends Record<string, unknown>>(
+  queryRef: RootQueryRef<TMeta>,
   onSuccess: (data: unknown[]) => void,
   onChange: () => void,
   staleTime = 0,
@@ -88,61 +88,36 @@ export function subscribeAndSeed<
 ): () => void {
   const unsub = queryRef.subscribe(
     state => {
-      if (state.status === 'success') onSuccess(state.data as unknown[])
+      if (state.status === 'success') onSuccess(queryRef.getRows())
       onChange()
     },
     { staleTime, graph },
   )
   const initial = queryRef.getSnapshot()
-  if (initial?.status === 'success') onSuccess(initial.data as unknown[])
+  if (initial?.status === 'success') onSuccess(queryRef.getRows())
   return unsub
 }
 
 /** Root backed by one find or get query. */
-export class SingleQueryRoot<
-  S extends Schema = AnySchema,
-  TParams = unknown,
-  TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
-> implements RootSource {
-  #queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+export class SingleQueryRoot<TMeta extends Record<string, unknown>> implements RootSource {
+  #queryRef: RootQueryRef<TMeta>
   #unsub: () => void
-  #isGet: boolean
-  #lastGetData: unknown = undefined
-  #lastGetDataAsArray: unknown[] = []
 
   constructor({
     queryRef,
-    isGet,
     onRows,
     onChange,
     staleTime = 0,
     graph,
   }: {
-    queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
-    isGet: boolean
+    queryRef: RootQueryRef<TMeta>
     onRows: (rows: unknown[]) => void
     onChange: () => void
     staleTime?: number
     graph?: QueryGraphRef
   }) {
     this.#queryRef = queryRef
-    this.#isGet = isGet
-    this.#unsub = subscribeAndSeed(
-      queryRef,
-      data => onRows(this.#asRows(data)),
-      onChange,
-      staleTime,
-      graph,
-    )
-  }
-
-  #asRows(data: unknown): unknown[] {
-    if (!this.#isGet) return data as unknown[]
-    if (data === this.#lastGetData) return this.#lastGetDataAsArray
-    this.#lastGetData = data
-    this.#lastGetDataAsArray = data == null ? [] : [data]
-    return this.#lastGetDataAsArray
+    this.#unsub = subscribeAndSeed(queryRef, onRows, onChange, staleTime, graph)
   }
 
   snapshot(): RootSnapshot {
@@ -153,9 +128,9 @@ export class SingleQueryRoot<
     }
     return {
       phase: 'ready',
-      rows: this.#asRows(state.data),
+      rows: this.#queryRef.getRows(),
       isFetching: state.isFetching,
-      error: null,
+      error: state.error,
     }
   }
 
@@ -191,7 +166,7 @@ export class SingleQueryRoot<
   }
 
   queryIds(): string[] {
-    return [this.#queryRef.details().queryId]
+    return [this.#queryRef.hash()]
   }
 }
 
@@ -332,6 +307,17 @@ export class PagedQueryRoot<
         return
       }
 
+      if (state?.error && !state.isFetching) {
+        if (pendingSettle) {
+          const settle = pendingSettle
+          pendingSettle = undefined
+          settle.onError(state.error)
+        } else if (this.#reconcile.phase === 'running') {
+          this.#abortReconcile()
+        }
+        return
+      }
+
       if (state?.status === 'success') {
         const pageData = (state.data ?? []) as unknown[]
         if (pendingSettle && !state.isFetching) {
@@ -350,12 +336,6 @@ export class PagedQueryRoot<
         ) {
           this.#advanceReconcile(pageIndex, state)
         }
-      } else if (state?.status === 'error' && pendingSettle) {
-        const currentSettle = pendingSettle
-        pendingSettle = undefined
-        currentSettle.onError(state.error)
-      } else if (state?.status === 'error' && this.#reconcile.phase === 'running') {
-        this.#abortReconcile()
       }
     }
 
@@ -422,7 +402,7 @@ export class PagedQueryRoot<
       phase: 'ready',
       rows: this.#allPagesData(),
       isFetching: pageStates.some(state => state.isFetching),
-      error: null,
+      error: pageStates.find(state => state.error)?.error ?? null,
     }
   }
 

@@ -93,3 +93,13 @@ default, or pass it to an individual query reader.
 ## Documentation
 
 Visit [humaans.github.io/figbird](https://humaans.github.io/figbird/) for full documentation and API reference.
+
+## Package entry points
+
+Import the library, including `useGet`, `useFind`, and `useMutation`, from `figbird`.
+The in-memory test client is available from `figbird/testing`. These are the supported
+JavaScript entry points in both ESM and CommonJS. Internal `core/`, `react/`, `adapters/`,
+and `devtools/` paths are private. Package metadata and the TypeScript configuration
+remain available as `figbird/package.json` and `figbird/tsconfig.json`.
+
+Run `npm run package:check` to build and verify the packed package's exports and types.
