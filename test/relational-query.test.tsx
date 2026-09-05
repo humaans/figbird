@@ -2777,7 +2777,7 @@ it('useQuery: limited sorted relation refetches its server window after a visibl
 
 it('useQuery: limited sorted many relation applies the window per parent', async t => {
   const { render, unmount, flush, $ } = dom()
-  const { App, figbird } = createWindowQueryApp()
+  const { App, figbird, feathers } = createWindowQueryApp()
 
   function CompaniesView() {
     const data = useQuery(
@@ -2789,6 +2789,7 @@ it('useQuery: limited sorted many relation applies the window per parent', async
           .limit(2)
           .related('currentEmployment', e => e.where({ effectiveAt: '2025-04-23' })),
       ),
+      { staleTime: 0 },
     )
 
     return (
@@ -2818,6 +2819,22 @@ it('useQuery: limited sorted many relation applies the window per parent', async
   await flush()
 
   t.truthy($('.companies'))
+  t.is($('.companies')!.getAttribute('data-people'), 'Acme:Alice,Bob|Globex:Eve,Finn')
+  t.is(
+    $('.companies')!.getAttribute('data-employment'),
+    'Acme:Alice role,Bob role|Globex:Eve role,Finn role',
+  )
+
+  const initialPeopleFinds = feathers.service('people').counts.find
+  await flush(async () => {
+    await feathers.service('companies').create({ id: 3, name: 'Newco' })
+  })
+  t.is(feathers.service('people').counts.find, initialPeopleFinds + 1)
+  t.is($('.companies')!.getAttribute('data-people'), 'Acme:Alice,Bob|Globex:Eve,Finn|Newco:')
+  await flush(async () => {
+    await feathers.service('companies').remove(3)
+  })
+  t.is(feathers.service('people').counts.find, initialPeopleFinds + 1)
   t.is($('.companies')!.getAttribute('data-people'), 'Acme:Alice,Bob|Globex:Eve,Finn')
   t.is(
     $('.companies')!.getAttribute('data-employment'),
@@ -3038,7 +3055,18 @@ test('inspect: stable read-only projection of live queries', async t => {
 })
 
 test('.all(): materialized reads stay local only when their ordering is knowable', async t => {
-  const { figbird, feathers } = createApp()
+  const { feathers } = createApp()
+  const reconnectEvents = new EventEmitter()
+  ;(feathers as ReturnType<typeof mockFeathers> & { io: EventEmitter }).io = reconnectEvents
+  let hidden = false
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    retry: false,
+    reconnectJitter: 0,
+    visibility: { isHidden: () => hidden, onChange: () => () => {} },
+  })
 
   // Preload the complete set ($sort doesn't affect completeness, so it still materializes).
   const allRef = figbird.query(figbird.q.issues.orderBy('title').all())
@@ -3072,6 +3100,31 @@ test('.all(): materialized reads stay local only when their ordering is knowable
     [3, 2],
   )
   t.is(feathers.service('issues').counts.find, findsAfterUnsorted, 'window computed locally')
+
+  const exhaustive = figbird.queryDesc(
+    {
+      serviceName: 'issues',
+      method: 'find',
+      params: { query: { status: 'open', $sort: { id: 1 }, $limit: 1 } },
+    },
+    { allPages: true },
+  )
+  let exhaustiveNotifications = 0
+  const unsubExhaustive = exhaustive.subscribe(() => {
+    exhaustiveNotifications++
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    exhaustive.getSnapshot()?.data?.map(issue => issue.id),
+    [1, 3],
+  )
+
+  const beforeUnrelatedPatch = exhaustive.getSnapshot()
+  exhaustiveNotifications = 0
+  await figbird.m.issues.patch(2, { title: 'Closed issue updated' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(exhaustive.getSnapshot(), beforeUnrelatedPatch)
+  t.is(exhaustiveNotifications, 0)
 
   // Realtime maintains the set; the windowed subset recomputes locally — still no fetch.
   await feathers.service('issues').create({ id: 9, title: 'Newest', status: 'open', creatorId: 1 })
@@ -3122,6 +3175,38 @@ test('.all(): materialized reads stay local only when their ordering is knowable
     local.getSnapshot().data?.map(issue => issue.id),
     [1, 2, 3, 10],
   )
+  const findsBeforeHiddenChanges = feathers.service('issues').counts.find
+  hidden = true
+  await figbird.m.issues.remove(10)
+  t.deepEqual(
+    winRef.getSnapshot().data?.map(issue => issue.id),
+    [3, 2],
+  )
+  await figbird.m.issues.remove(3)
+  t.deepEqual(
+    winRef.getSnapshot().data?.map(issue => issue.id),
+    [2, 1],
+  )
+  t.is(winRef.rootMetadata().total, 2)
+  t.deepEqual(
+    exhaustive.getSnapshot()?.data?.map(issue => issue.id),
+    [1],
+  )
+  t.is(feathers.service('issues').counts.find, findsBeforeHiddenChanges)
+
+  hidden = false
+  reconnectEvents.emit('reconnect')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const settled = figbird.getState().get('issues')?.queries.get(exhaustive.details().queryId)
+  t.is(settled?.pending, false, 'local reconciliation settles pending work')
+  const beforeEnsureFresh = exhaustive.getSnapshot()
+  exhaustiveNotifications = 0
+  exhaustive.ensureFresh({ staleTime: Infinity })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(exhaustive.getSnapshot(), beforeEnsureFresh)
+  t.is(exhaustiveNotifications, 0)
+
+  unsubExhaustive()
   unsubLocal()
   unsubServerAll()
   unsubDetail()
@@ -3130,6 +3215,7 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   unsubOpen()
   unsubWin()
   unsubAll()
+  figbird.dispose()
 })
 
 test('.all(): accepts filters — complete slice, no materialization; rejects windowing', async t => {

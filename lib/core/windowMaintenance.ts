@@ -418,6 +418,7 @@ export function updateQueriesFromEvents<TMeta>({
   serverMaintainedQueriesToRefetch,
   onEffect,
   excludeQueryId,
+  excludeQueryIds,
   defaultSort,
 }: {
   service: ServiceState<TMeta>
@@ -430,6 +431,7 @@ export function updateQueriesFromEvents<TMeta>({
   onEffect?: (queryId: string, effect: 'merged' | 'reconcile') => void
   /** A query whose state already reflects the applied items (e.g. the fetch they came from). */
   excludeQueryId?: string
+  excludeQueryIds?: ReadonlySet<string>
   /** The backend's implicit order for queries without `$sort` — see QueryStore options. */
   defaultSort?: Record<string, number> | undefined
 }): void {
@@ -443,7 +445,8 @@ export function updateQueriesFromEvents<TMeta>({
   }
   for (const event of appliedItems) {
     for (const [queryId, query] of service.queries) {
-      if (queryId === excludeQueryId || query.config.realtime !== 'merge') continue
+      if (queryId === excludeQueryId || excludeQueryIds?.has(queryId)) continue
+      if (query.config.realtime !== 'merge') continue
       if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') continue
       if (
         isServerMaintained(query.classification) &&
