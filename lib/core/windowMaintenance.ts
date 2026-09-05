@@ -549,6 +549,15 @@ export function updateQueriesFromEvents<TMeta>({
         event.mode === 'server' &&
         event.source === 'fetch'
       ) {
+        if (
+          query.classification === 'server-window' &&
+          service.materialized &&
+          service.materialized?.queryId === excludeQueryId
+        ) {
+          serverMaintainedQueriesToRefetch.add(queryId)
+          onEffect?.(queryId, 'reconcile')
+          continue
+        }
         // A fetched row supplies values, not another server query's membership.
         // Preserve projections and avoid fetch-to-fetch reconciliation cycles.
         if (

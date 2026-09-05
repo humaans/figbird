@@ -3092,12 +3092,25 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   delete feathers.service('issues').data[9]
   serverAll.refetch()
   await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    winRef.getSnapshot().data?.map(issue => issue.id),
+    [3, 2],
+  )
+  const findsAfterRemoval = feathers.service('issues').counts.find
+  feathers.service('issues').data[10] = { id: 10, title: 'Ten', status: 'open', creatorId: 1 }
+  serverAll.refetch()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    winRef.getSnapshot().data?.map(issue => issue.id),
+    [10, 3],
+  )
+  t.is(feathers.service('issues').counts.find, findsAfterRemoval + 1, 'window refill stays local')
   const local = figbird.query(figbird.q.issues.orderBy('id'))
   const unsubLocal = local.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   t.deepEqual(
     local.getSnapshot().data?.map(issue => issue.id),
-    [1, 2, 3],
+    [1, 2, 3, 10],
   )
   unsubLocal()
   unsubServerAll()
