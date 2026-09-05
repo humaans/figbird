@@ -3117,17 +3117,18 @@ export class QueryStore<
 
   #pruneService(serviceName: string): void {
     const service = this.#state.get(serviceName)
-    if (!service || service.materialized || this.#dependencyOwners.has(serviceName)) return
-    for (const key of service.entities.keys()) {
-      if (!service.itemQueryIndex.has(key) && !this.#mutationLanes.get(serviceName, key)) {
-        service.entities.delete(key)
+    if (service?.materialized || this.#dependencyOwners.has(serviceName)) return
+    if (service) {
+      for (const key of service.entities.keys()) {
+        if (!service.itemQueryIndex.has(key) && !this.#mutationLanes.get(serviceName, key)) {
+          service.entities.delete(key)
+        }
       }
-    }
-    if (service.queries.size === 0 && service.entities.size === 0) {
+      if (service.queries.size > 0 || service.entities.size > 0) return
       this.#state.delete(serviceName)
-      this.#realtime.get(serviceName)?.()
-      this.#realtime.delete(serviceName)
     }
+    this.#realtime.get(serviceName)?.()
+    this.#realtime.delete(serviceName)
   }
 
   // Internal helpers

@@ -93,6 +93,16 @@ test('Figbird instance retains idle queries and releases owned resources on disp
   await figbird.m.notes.create([{ id: 2, content: 'created without a query' }])
   t.is(figbird.getState().size, 0, 'unkeyed writes release unreferenced entities too')
 
+  const releaseDependency = figbird.queryStore.ensureRealtimeSubscription('posts')
+  const releaseSecondDependency = figbird.queryStore.ensureRealtimeSubscription('posts')
+  t.false(figbird.getState().has('posts'), 'dependency subscriptions need no cached rows')
+  t.is(realtimeSubscriptions, 1)
+  releaseDependency()
+  releaseDependency()
+  t.is(realtimeSubscriptions, 1, 'another dependency owner keeps the subscription alive')
+  releaseSecondDependency()
+  t.is(realtimeSubscriptions, 0, 'the last dependency owner releases the subscription')
+
   const all = figbird.query(figbird.q.notes.all())
   const releaseAll = all.subscribe(() => {})
   await all.suspensePromise()
