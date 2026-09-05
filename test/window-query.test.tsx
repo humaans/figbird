@@ -366,6 +366,17 @@ it('useWindowQuery: each hook gets an independent first-window Suspense lifecycl
   await ref.suspensePromise({ start: 0, end: 5 })
 
   items.find = workingFind
+  const crossingRange = { start: 5, end: 15 }
+  t.is(ref.getSnapshot(crossingRange).status, 'loading')
+  await flush(async () => {
+    await ref.suspensePromise(crossingRange)
+  })
+  const crossing = ref.getSnapshot(crossingRange)
+  t.is(crossing.status, 'success')
+  t.is(crossing.error, failure)
+  t.is(crossing.data.get(14)?.id, 15)
+  ref.releaseColdStart(crossingRange)
+
   await flush(async () => {
     ref.refetch()
     await new Promise(resolve => setTimeout(resolve, 60))
@@ -390,6 +401,7 @@ interface CursorCall {
 
 function createCursorWindowApp(initialRows: Item[]) {
   let rows = initialRows
+  let failure: Error | null = null
   const calls: CursorCall[] = []
   const listeners = new Map<string, Set<(item: unknown) => void>>()
   const cursorService = {
@@ -398,6 +410,7 @@ function createCursorWindowApp(initialRows: Item[]) {
       const after = (query.$after as string | null) ?? null
       const requestedLimit = query.$limit as number
       calls.push({ after, limit: requestedLimit })
+      if (failure) throw failure
       const start = after ? Number(after.slice('cursor:'.length)) : 0
       // Deliberately return short, non-terminal pages to prove that absolute
       // checkpoints follow actual row counts rather than requested page size.
@@ -432,6 +445,9 @@ function createCursorWindowApp(initialRows: Item[]) {
   return {
     calls,
     figbird,
+    failWith(error: Error | null) {
+      failure = error
+    },
     replaceRows(next: Item[]) {
       rows = next
     },
@@ -480,5 +496,29 @@ test('window query: cursor strategy walks short pages and rebuilds invalid check
   t.is(ref.getSnapshot(range).data.get(5)?.id, 5)
   t.true(app.calls.slice(callsBeforeRefetch).some(call => call.after === null))
   t.true(app.calls.slice(callsBeforeRefetch).some(call => call.after === 'cursor:4'))
+  const failure = new Error('cursor refresh failed')
+  app.failWith(failure)
+  const refresh = new Promise<void>(resolve => {
+    const unsubscribe = ref.subscribe(
+      state => {
+        if (state.error === failure && !state.isFetching) {
+          unsubscribe()
+          resolve()
+        }
+      },
+      { range },
+    )
+  })
+  ref.refetch()
+  await refresh
+  t.is(ref.getSnapshot(range).status, 'success')
+
+  app.failWith(null)
+  const seek = { start: 7, end: 8 }
+  t.is(ref.getSnapshot(seek).status, 'loading')
+  await ref.suspensePromise(seek)
+  t.is(ref.getSnapshot(seek).status, 'success')
+  t.is(ref.getSnapshot(seek).data.get(7)?.id, 7)
+  ref.releaseColdStart(seek)
   read.unsubscribe()
 })

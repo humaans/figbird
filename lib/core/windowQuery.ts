@@ -228,24 +228,25 @@ export class WindowQueryRef<
     })
     const missing = !this.#pager.rangeReady(range)
     let isFetching = false
-    let error: Error | null = null
+    let coldError: Error | null = null
+    let backgroundError: Error | null = null
     for (const page of required) {
       const state = page.ref.getSnapshot()
       if (state.isFetching) isFetching = true
-      if (state.status === 'error') error ??= state.error
-      if (state.status === 'success' && state.error) error ??= state.error
+      if (state.status === 'error') coldError ??= state.error
+      if (state.status === 'success') backgroundError ??= state.error
     }
     for (const start of this.#pager.fetchingStarts(range, this.#config.preloadPages)) {
       if (this.#pages.get(start)?.ref.getSnapshot().isFetching) isFetching = true
     }
 
     let state: WindowQueryState<T>
-    if (error && missing) {
+    if (coldError) {
       state = {
         status: 'error',
         data: this.#data,
         total: this.#total,
-        error,
+        error: coldError,
         isFetching: false,
       }
     } else if (missing) {
@@ -261,7 +262,7 @@ export class WindowQueryRef<
         status: 'success',
         data: this.#data,
         total: this.#total,
-        error,
+        error: backgroundError,
         isFetching,
       }
     }
