@@ -1979,6 +1979,11 @@ it('realtime: child entity arrival on nested relation updates the assembled view
   t.is($('.comment[data-id="1"]')!.innerHTML, 'r=2')
   t.is($('.comment[data-id="2"]')!.innerHTML, 'r=1')
 
+  const ref = figbird.query(
+    figbird.q.issues.get(1).related('comments', c => c.related('reactions')),
+  )
+  const before = ref.getSnapshot().data
+
   // New reaction on comment 2 should propagate into the nested view.
   await feathers.service('reactions').create({
     id: 99,
@@ -1990,6 +1995,11 @@ it('realtime: child entity arrival on nested relation updates the assembled view
 
   t.is($('.comment[data-id="2"]')!.innerHTML, 'r=2')
 
+  const after = ref.getSnapshot().data
+  t.not(after, before, 'the changed parent receives a new identity')
+  t.is(after?.comments[0], before?.comments[0], 'the untouched sibling retains its identity')
+  t.is(after?.comments[0]?.reactions, before?.comments[0]?.reactions)
+  t.not(after?.comments[1], before?.comments[1], 'the changed nested child receives a new identity')
   unmount()
 })
 

@@ -24,7 +24,7 @@ import {
   type RootSource,
 } from './queryRoots.js'
 import {
-  assembleRelations,
+  createRelationAssembler,
   getFieldValueAsList,
   relationKey,
   sourceSet,
@@ -265,6 +265,7 @@ export class RelationalQueryRef<
   // keeps an unresolved leaf stale without rolling back unrelated optimistic edges.
   #lastRelationAssembly: Map<string, AssembledRelationData> | null = null
   #lastGatherWasPartial = false
+  #assembleRelations: ReturnType<typeof createRelationAssembler> | null = null
 
   // Suspense-support state. The promise is created lazily when suspensePromise() is
   // first called and resolves/rejects on the first transition to success/error. Once
@@ -690,7 +691,8 @@ export class RelationalQueryRef<
   }
 
   #assemble(rootRows: unknown[], assembly: Map<string, AssembledRelationData>): T {
-    const assembled = assembleRelations(rootRows, this.#ast, this.#schema, assembly)
+    this.#assembleRelations ??= createRelationAssembler(this.#ast, this.#schema)
+    const assembled = this.#assembleRelations(rootRows, assembly)
     return this.#ast.kind !== 'paginate' && this.#ast.cardinality === 'one'
       ? ((assembled[0] ?? null) as T)
       : (assembled as unknown as T)
@@ -1696,6 +1698,7 @@ export class RelationalQueryRef<
     this.#lastRelationData.clear()
     this.#lastRelationAssembly = null
     this.#lastGatherWasPartial = false
+    this.#assembleRelations = null
     this.#staleTime = 0
     if (this.#preparedAdoption.kind === 'wave') {
       this.#preparedAdoption = {
