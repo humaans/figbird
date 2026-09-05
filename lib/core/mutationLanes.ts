@@ -71,6 +71,14 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return this.#lanes.get(this.#key(serviceName, id))
   }
 
+  hasOptimisticCreate(serviceName: string, id: ItemId): boolean {
+    return (
+      this.#lanes
+        .get(this.#key(serviceName, id))
+        ?.entries.some(entry => entry.optimistic && entry.desc.method === 'create') ?? false
+    )
+  }
+
   ensure(serviceName: string, id: ItemId, cached: unknown): MutationLane {
     const key = this.#key(serviceName, id)
     let lane = this.#lanes.get(key)

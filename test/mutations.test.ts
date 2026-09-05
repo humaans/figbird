@@ -5,7 +5,7 @@ import {
   type FigbirdEvent,
   type QueryState,
 } from '../lib'
-import { createTestApp } from './helpers'
+import { createTestApp, waitForEmissions } from './helpers'
 import {
   collectEvents,
   deferred,
@@ -598,7 +598,8 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
   await new Promise(r => setTimeout(r, 10))
 
   let patchCalls = 0
-  feathers.service('notes').create = (() => Promise.reject(new Error('rejected'))) as never
+  const createGate = deferred<MockItem>()
+  feathers.service('notes').create = (() => createGate.promise) as never
   feathers.service('notes').patch = (() => {
     patchCalls += 1
     return Promise.resolve({ id: 77, content: 'should not run' })
@@ -611,8 +612,23 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
     { optimisticItem: { id: 77, content: 'explicitly doomed' } },
   )
   t.is(latest?.data?.find(note => note.id === 77)?.content, 'explicitly doomed')
-  await t.throwsAsync(() => create, { message: 'rejected' })
-  await t.throwsAsync(() => dependentPatch, { message: /cancelled queued mutations/ })
+  const detail = figbird.query(figbird.q.notes.get(77))
+  const getCount = feathers.service('notes').counts.get
+  const unsubscribe = detail.subscribe(() => {})
+  t.teardown(unsubscribe)
+  await detail.suspensePromise()
+  t.is(detail.getSnapshot().data?.content, 'explicitly doomed')
+  t.is(feathers.service('notes').counts.get, getCount, 'pending creates are read locally')
+  detail.refetch()
+  await waitForEmissions()
+  t.is(detail.getSnapshot().data?.content, 'explicitly doomed')
+
+  const rejectedCreate = t.throwsAsync(create, { message: 'rejected' })
+  const cancelledPatch = t.throwsAsync(dependentPatch, { message: /cancelled queued mutations/ })
+  createGate.reject(new Error('rejected'))
+  await Promise.all([rejectedCreate, cancelledPatch])
+  await waitForEmissions()
+  t.is(detail.getSnapshot().error?.message, 'Item with id 77 not found')
   t.false(latest?.data?.some(note => note.id === 77))
   t.is(latest?.data?.length, 2)
   t.is(patchCalls, 0)
