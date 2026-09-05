@@ -161,6 +161,7 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
    * loop reads this instead of re-walking the query per item.
    */
   classification: StoredQueryClass
+  /** Diagnostic projection of the reconciliation scheduler; only the scheduler updates it. */
   pending: boolean
   dirty: boolean
   filterItem: (item: ElementType<T>) => boolean
