@@ -3,7 +3,7 @@
  * edge) and hidden-tab deferral for event-driven refetches.
  *
  * These tests run at the store level with a `realtime: 'refetch'` query — any
- * service event routes it through the same `#requestReconcile` gate that
+ * service event routes it through the same reconciliation scheduler that
  * server-window and server-authoritative builder queries use.
  */
 
@@ -145,7 +145,7 @@ test('cooldown: sustained events cost roughly one refetch per window', async t =
 })
 
 test('cooldown: manual refetch() bypasses the gate', async t => {
-  const { figbird, feathers } = createApp({ reconcileCooldown: 5000 })
+  const { figbird, feathers } = createApp({ reconcileCooldown: 80 })
   const notes = feathers.service('notes')
   const { ref, unsub } = subscribeRefetchQuery(figbird)
   await sleep(20)
@@ -155,10 +155,20 @@ test('cooldown: manual refetch() bypasses the gate', async t => {
   await sleep(20)
   const afterLeading = notes.counts.find
 
+  notes.emit('created', { id: 11, content: 'y' })
+  await sleep(5)
+
   // ...manual refetches are user intent and fire immediately regardless.
   ref.refetch()
   await sleep(20)
   t.is(notes.counts.find, afterLeading + 1)
+
+  await sleep(100)
+  t.is(
+    notes.counts.find,
+    afterLeading + 1,
+    'manual fetch consumes the outstanding trailing request',
+  )
 
   unsub()
 })

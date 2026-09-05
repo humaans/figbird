@@ -78,11 +78,18 @@ interface RelationIndex {
  * - `listByKey` groups entities by dest-key value in result order ('many').
  * - `junctionsByParent` groups junction rows by the parent-side join value (two-hop).
  */
+interface CachedRelationIndex {
+  items: unknown[]
+  junctionItems: unknown[] | undefined
+  index: RelationIndex
+}
+
 function buildIndexes(
   ast: QueryAST,
   parentKey: string | null,
   relationships: Record<string, RelationshipDef>,
   relationData: Map<string, AssembledRelationData>,
+  cache: Map<string, CachedRelationIndex>,
 ): Map<string, RelationIndex> {
   const indexes = new Map<string, RelationIndex>()
 
@@ -93,8 +100,18 @@ function buildIndexes(
     const key = relationKey(parentKey, relName)
     const rel = relationData.get(key)
     // Per-parent data is already keyed by parent; 'none' has nothing to index.
-    if (!rel || rel.kind === 'none' || rel.kind === 'perParent') continue
+    if (!rel || rel.kind === 'none' || rel.kind === 'perParent') {
+      cache.delete(key)
+      continue
+    }
+    const junctionItems = rel.kind === 'junction' ? rel.junctionItems : undefined
+    const previous = cache.get(key)
+    if (previous) {
+      indexes.set(relName, previous.index)
+      continue
+    }
 
+    let index: RelationIndex
     if (rel.kind === 'junction') {
       const byKey = firstMatchIndex(rel.items, relDef.destField)
       const junctionsByParent = new Map<string | number, unknown[]>()
@@ -108,9 +125,9 @@ function buildIndexes(
         }
         list.push(j)
       }
-      indexes.set(relName, { byKey, junctionsByParent })
+      index = { byKey, junctionsByParent }
     } else if (relDef.cardinality === 'one' || relDef.cardinality === 'embedded') {
-      indexes.set(relName, { byKey: firstMatchIndex(rel.items, relDef.destField) })
+      index = { byKey: firstMatchIndex(rel.items, relDef.destField) }
     } else {
       const listByKey = new Map<string | number, unknown[]>()
       for (const entity of rel.items) {
@@ -123,8 +140,10 @@ function buildIndexes(
         }
         list.push(entity)
       }
-      indexes.set(relName, { listByKey })
+      index = { listByKey }
     }
+    indexes.set(relName, index)
+    cache.set(key, { items: rel.items, junctionItems, index })
   }
 
   return indexes
@@ -149,6 +168,7 @@ function firstMatchIndex(items: unknown[], destField: string): Map<string | numb
 interface AssemblyContext {
   schema: Schema
   relationData: Map<string, AssembledRelationData>
+  indexCache: Map<string, CachedRelationIndex>
   indexesByPath: Map<string | null, Map<string, RelationIndex>>
   previousByPath: Map<string | null, WeakMap<object, Record<string, unknown>>>
 }
@@ -164,7 +184,7 @@ function assembleRelations(
   if (Object.keys(ast.related).length === 0) return items
   let indexes = indexesByPath.get(parentKey)
   if (!indexes) {
-    indexes = buildIndexes(ast, parentKey, relationships, relationData)
+    indexes = buildIndexes(ast, parentKey, relationships, relationData, context.indexCache)
     indexesByPath.set(parentKey, indexes)
   }
   let previousRows = previousByPath.get(parentKey)
@@ -270,17 +290,31 @@ function reuseArray(previous: unknown, next: unknown[]): unknown[] {
     : next
 }
 
-/** Each query owns weak row caches; each assembly builds an index once per relation path. */
+/** Each query retains row identities and indexes for the latest relation arrays. */
 export function createRelationAssembler(ast: QueryAST, schema: Schema) {
   const previousByPath = new Map<string | null, WeakMap<object, Record<string, unknown>>>()
+  const indexCache = new Map<string, CachedRelationIndex>()
   let previous: unknown[] = []
   return (items: unknown[], relationData: Map<string, AssembledRelationData>): unknown[] => {
+    for (const [key, cached] of indexCache) {
+      const data = relationData.get(key)
+      if (
+        !data ||
+        data.kind === 'none' ||
+        data.kind === 'perParent' ||
+        cached.items !== data.items ||
+        cached.junctionItems !== (data.kind === 'junction' ? data.junctionItems : undefined)
+      ) {
+        indexCache.delete(key)
+      }
+    }
     previous = reuseArray(
       previous,
       assembleRelations(items, ast, null, {
         schema,
         relationData,
         indexesByPath: new Map(),
+        indexCache,
         previousByPath,
       }),
     )

@@ -1,3 +1,4 @@
+import { ReconcileScheduler } from './reconcileScheduler.js'
 import { commitQuery, deleteQuery } from './queryResults.js'
 import { QueryRetention } from './queryRetention.js'
 import {
@@ -247,17 +248,11 @@ export class QueryStore<
   #fetchEventJournal = new FetchEventJournal()
   #mutationLanes: MutationLanes<QueuedMutation>
 
-  // Reconciliation gate state (see #requestReconcile): per-query cooldown windows
-  // with trailing timers, and the set of reconciliations deferred while hidden.
-  #reconcileCooldown: number
+  // Scheduling owns pending work; query snapshots retain its diagnostic pending flag.
+  #reconciliation: ReconcileScheduler
   #staleTime: number
   #visibility: VisibilitySource
   #hiddenAt: number | null
-  #reconcileWindows: Map<
-    string,
-    { lastAt: number; trailing: ReturnType<typeof setTimeout> | null; causes?: TraceCause[] }
-  > = new Map()
-  #deferredWhileHidden: Map<string, TraceCause[] | undefined> = new Map()
 
   #defaultSort: Record<string, number> | undefined
   #retry: number | false
@@ -334,7 +329,21 @@ export class QueryStore<
     this.#eventBatchInterval = eventBatchInterval
     this.#telemetry = new QueryTelemetry()
     this.#mutations = new MutationTracker()
-    this.#reconcileCooldown = reconcileCooldown
+    this.#reconciliation = new ReconcileScheduler(reconcileCooldown, {
+      prepare: (queryId, force) => this.#prepareReconcile(queryId, force),
+      fetch: (queryId, causes) => {
+        this.#emitReconcileStarted(queryId, causes)
+        this.refetch(queryId, { reason: 'reconcile', ...(causes ? { causes: [...causes] } : {}) })
+      },
+      pendingChanged: (queryId, pending) => {
+        this.#transactOverService(queryId, (service, query) => {
+          if (query) commitQuery(service, { ...query, pending })
+        })
+      },
+      decision: (queryId, decision, causes) =>
+        this.#emitReconcileDecision(queryId, decision, causes),
+      merge: (left, right) => this.#telemetry.merge(left, right),
+    })
     this.#staleTime = staleTime
     this.#retry = this.#normalizeRetry(retry)
     this.#retryDelay = retryDelay
@@ -408,7 +417,7 @@ export class QueryStore<
     this.#connectionUnsub?.()
     for (const unsubscribe of this.#realtime.values()) unsubscribe()
     this.#realtime.clear()
-    for (const queryId of this.#reconcileWindows.keys()) this.#clearReconcileState(queryId)
+    this.#reconciliation.dispose()
     if (this.#reconnectSweepTimer) clearTimeout(this.#reconnectSweepTimer)
     if (this.#eventBatchProcessingTimer) clearTimeout(this.#eventBatchProcessingTimer)
     for (const cancel of this.#retryWaits) cancel()
@@ -417,7 +426,6 @@ export class QueryStore<
     this.#queryGenerations.clear()
     this.#queryStats.clear()
     this.#followupFetchContexts.clear()
-    this.#deferredWhileHidden.clear()
     this.#reconnectQueryIds.clear()
     this.#dependencyOwners.clear()
     this.#eventQueue = []
@@ -569,13 +577,14 @@ export class QueryStore<
         localOperators: locallySupportedOperators(this.#adapter, desc.serviceName),
       })
 
+      if (!config.skip) this.#reconciliation.markPending(queryId)
       this.#transactOverService(queryId, service => {
         commitQuery(service, {
           queryId,
           desc,
           config: config as QueryConfig<unknown, unknown>,
           classification,
-          pending: !config.skip,
+          pending: this.#reconciliation.isPending(queryId),
           dirty: false,
           filterItem: this.#createItemFilter<unknown, unknown>(
             desc,
@@ -672,7 +681,7 @@ export class QueryStore<
     for (const laneKey of mutationLaneKeys) {
       deferred = this.#mutationLanes.deferQueryIds(laneKey, [queryId]) || deferred
     }
-    if (!deferred) this.#requestReconcile(queryId)
+    if (!deferred) this.#reconciliation.request(queryId)
   }
 
   /**
@@ -716,7 +725,7 @@ export class QueryStore<
     const staleTime = options.staleTime ?? this.#staleTime
     const isFresh = isWithinStaleTime(q.fetchedAt, staleTime)
     if (
-      q.pending ||
+      this.#reconciliation.isPending(queryId) ||
       (q.state.status === 'success' &&
         q.config.fetchPolicy === 'swr' &&
         !q.state.isFetching &&
@@ -761,7 +770,7 @@ export class QueryStore<
 
   /** Route an event-driven refetch through cooldown and visibility handling. @internal */
   reconcile(queryId: string): void {
-    this.#requestReconcile(queryId)
+    this.#reconciliation.request(queryId)
   }
 
   /** Replace/remove a row already visible in one query without changing membership. @internal */
@@ -1366,7 +1375,7 @@ export class QueryStore<
     if (!effects) return
 
     if (effects.projection) this.#emitProjectionSettlement(effects.projection)
-    for (const queryId of effects.queryIds) this.#requestReconcile(queryId)
+    for (const queryId of effects.queryIds) this.#reconciliation.request(queryId)
   }
 
   /** Active optimistic projections must survive fetches that started after them. */
@@ -1859,6 +1868,7 @@ export class QueryStore<
   }
 
   #fetching({ queryId }: { queryId: string }): void {
+    this.#reconciliation.settle(queryId)
     // This is the only listener-notifying transition reachable synchronously from
     // a React render (useQuery → suspensePromise → root/relation setup → subscribe
     // → #queue → here); everything past `await #fetch` is already async. Deferring
@@ -1871,7 +1881,6 @@ export class QueryStore<
 
         commitQuery(service, {
           ...query,
-          pending: false,
           dirty: false,
           // error and loading states both restart as a clean loading state.
           state:
@@ -2127,7 +2136,7 @@ export class QueryStore<
     }
 
     for (const id of serverMaintainedQueriesToRefetch) {
-      this.#requestReconcile(id, {
+      this.#reconciliation.request(id, {
         force: id === service?.materialized?.queryId,
         ...(publishedEffects.reconcileCauses.has(id)
           ? { causes: publishedEffects.reconcileCauses.get(id)! }
@@ -2178,7 +2187,7 @@ export class QueryStore<
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     const isMaterializedRoot =
       serviceName !== undefined && this.#state.get(serviceName)?.materialized?.queryId === queryId
-    this.#requestReconcile(queryId, {
+    this.#reconciliation.request(queryId, {
       force: isMaterializedRoot,
       ...this.#causeContext('fetch-rebase'),
     })
@@ -2641,7 +2650,7 @@ export class QueryStore<
           // ones through the gate (cooldown + hidden-tab deferral); the gate marks
           // inactive cached ones pending so their next subscription reconciles.
           for (const queryId of publishedEffects.reconcileQueryIds) {
-            this.#requestReconcile(queryId, {
+            this.#reconciliation.request(queryId, {
               ...(publishedEffects.reconcileCauses.has(queryId)
                 ? { causes: publishedEffects.reconcileCauses.get(queryId)! }
                 : {}),
@@ -2701,16 +2710,12 @@ export class QueryStore<
    *   edge — isolated changes stay as fast as today); further events within
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
-  #requestReconcile(
+  #prepareReconcile(
     queryId: string,
-    { force = false, causes }: { force?: boolean; causes?: readonly TraceCause[] } = {},
-  ): void {
-    const mergedCauses = this.#telemetry.merge(undefined, causes)
-    if (!force && this.#listenerCount(queryId) === 0) {
-      this.#emitReconcileDecision(queryId, 'inactive', mergedCauses)
-      this.#markQueryPending(queryId)
-      return
-    }
+    force: boolean,
+  ): 'missing' | 'inactive' | 'local' | 'hidden' | 'network' {
+    if (!this.#getQuery(queryId)) return 'missing'
+    if (!force && this.#listenerCount(queryId) === 0) return 'inactive'
 
     let selected = false
     let changed = false
@@ -2719,80 +2724,12 @@ export class QueryStore<
       const result = this.#reapplyMaterializedFind(service, query)
       selected = result !== 'unavailable'
       changed = result === 'changed'
-      const current = service.queries.get(queryId)
-      if (selected && current?.pending) {
-        commitQuery(service, { ...current, pending: false })
-      }
     })
     if (selected) {
-      this.#clearReconcileState(queryId)
       if (changed) this.#notify(touched)
-      return
+      return 'local'
     }
-
-    if (this.#visibility.isHidden()) {
-      this.#deferredWhileHidden.set(
-        queryId,
-        this.#telemetry.merge(this.#deferredWhileHidden.get(queryId), mergedCauses),
-      )
-      this.#emitReconcileDecision(queryId, 'deferred-hidden', mergedCauses)
-      this.#markQueryPending(queryId)
-      return
-    }
-
-    if (this.#reconcileCooldown <= 0) {
-      this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
-      this.#emitReconcileStarted(queryId, mergedCauses)
-      this.refetch(queryId, {
-        reason: 'reconcile',
-        ...(mergedCauses ? { causes: mergedCauses } : {}),
-      })
-      return
-    }
-
-    const now = Date.now()
-    const window = this.#reconcileWindows.get(queryId)
-
-    if (!window || now - window.lastAt >= this.#reconcileCooldown) {
-      this.#reconcileWindows.set(queryId, {
-        lastAt: now,
-        trailing: window?.trailing ?? null,
-      })
-      this.#emitReconcileDecision(queryId, 'fetch-now', mergedCauses)
-      this.#emitReconcileStarted(queryId, mergedCauses)
-      this.refetch(queryId, {
-        reason: 'reconcile',
-        ...(mergedCauses ? { causes: mergedCauses } : {}),
-      })
-      return
-    }
-
-    const coalescedCauses = this.#telemetry.merge(window.causes, mergedCauses)
-    if (coalescedCauses) window.causes = coalescedCauses
-    this.#emitReconcileDecision(queryId, 'coalesced', mergedCauses)
-    if (window.trailing) return // the pending trailing refetch already covers this
-
-    const timer = setTimeout(
-      () => {
-        const current = this.#reconcileWindows.get(queryId)
-        const trailingCauses = current?.causes
-        if (current) {
-          current.trailing = null
-          delete current.causes
-        }
-        if (!this.#getQuery(queryId)) {
-          this.#reconcileWindows.delete(queryId)
-          return
-        }
-        // Re-enter the gate after the window expires unless the tab went hidden or
-        // the last subscriber left in the meantime.
-        this.#requestReconcile(queryId, trailingCauses ? { causes: trailingCauses } : {})
-      },
-      window.lastAt + this.#reconcileCooldown - now,
-    )
-    // Never keep a Node process alive for a pending reconciliation.
-    ;(timer as { unref?: () => void }).unref?.()
-    window.trailing = timer
+    return this.#visibility.isHidden() ? 'hidden' : 'network'
   }
 
   #emitReconcileDecision(
@@ -2839,34 +2776,13 @@ export class QueryStore<
         query => !isWithinStaleTime(query.fetchedAt, this.#staleTime, now),
       )
     }
-    const reconciled = this.#drainDeferredReconciles()
+    const reconciled = this.#reconciliation.drainHidden()
     if (!sleptPastStaleTime) return
 
     const queries = this.#activePendingReconciliationQueries().filter(
       query => !reconciled.has(query.queryId),
     )
     this.#refetchActiveQueries(queries, this.#telemetry.cause('visibility'))
-  }
-
-  /** On becoming visible, reconcile everything that deferred while hidden. */
-  #drainDeferredReconciles(): Set<string> {
-    const reconciled = new Set<string>()
-    if (this.#visibility.isHidden() || this.#deferredWhileHidden.size === 0) return reconciled
-    const deferred = Array.from(this.#deferredWhileHidden)
-    this.#deferredWhileHidden.clear()
-    for (const [queryId, causes] of deferred) {
-      if (!this.#getQuery(queryId)) continue
-      reconciled.add(queryId)
-      this.#requestReconcile(queryId, causes ? { causes } : {})
-    }
-    return reconciled
-  }
-
-  #clearReconcileState(queryId: string): void {
-    const window = this.#reconcileWindows.get(queryId)
-    if (window?.trailing) clearTimeout(window.trailing)
-    this.#reconcileWindows.delete(queryId)
-    this.#deferredWhileHidden.delete(queryId)
   }
 
   /**
@@ -2892,7 +2808,7 @@ export class QueryStore<
           // follow-up instead of dispatching a second fetch in the same generation.
           this.refetch(query.queryId)
         } else {
-          this.#markQueryPending(query.queryId)
+          this.#reconciliation.markPending(query.queryId)
         }
       }
     }
@@ -2904,12 +2820,12 @@ export class QueryStore<
     for (const service of this.getState().values()) {
       if (service.materialized) {
         const root = service.queries.get(service.materialized.queryId)
-        if (root && shouldMark(root)) this.#markQueryPending(root.queryId)
+        if (root && shouldMark(root)) this.#reconciliation.markPending(root.queryId)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
         if (this.#reconcilesAfterMissedEvents(query) && shouldMark(query)) {
-          this.#markQueryPending(query.queryId)
+          this.#reconciliation.markPending(query.queryId)
         }
       }
     }
@@ -2929,12 +2845,12 @@ export class QueryStore<
       // depends on their completeness, and events may have been missed while offline.
       if (service.materialized) {
         const root = service.queries.get(service.materialized.queryId)
-        if (root?.pending) queryIds.set(root.queryId, true)
+        if (root && this.#reconciliation.isPending(root.queryId)) queryIds.set(root.queryId, true)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
         if (
-          query.pending &&
+          this.#reconciliation.isPending(query.queryId) &&
           this.#reconcilesAfterMissedEvents(query) &&
           this.#listenerCount(query.queryId) > 0
         ) {
@@ -2950,7 +2866,7 @@ export class QueryStore<
     cause?: TraceCause,
   ): void {
     for (const query of queries) {
-      this.#requestReconcile(query.queryId, {
+      this.#reconciliation.request(query.queryId, {
         force: query.force,
         ...(cause === undefined ? {} : { causes: [cause] }),
       })
@@ -3011,17 +2927,6 @@ export class QueryStore<
     const first = Math.max(0, value[0])
     const second = Math.max(0, value[1])
     return first <= second ? [first, second] : [second, first]
-  }
-
-  #markQueryPending(queryId: string): void {
-    this.#transactOverService(queryId, (service, query) => {
-      if (!query) return
-
-      commitQuery(service, {
-        ...query,
-        pending: true,
-      })
-    })
   }
 
   // Optimistic mutation support
@@ -3148,7 +3053,7 @@ export class QueryStore<
     const serviceName = this.#serviceNamesByQueryId.get(queryId)
     this.#retention.cancel(queryId)
     this.#followupFetchContexts.delete(queryId)
-    this.#clearReconcileState(queryId)
+    this.#reconciliation.forget(queryId)
     this.#transactOverService(queryId, (service, query) => {
       if (query) {
         deleteQuery(service, queryId)

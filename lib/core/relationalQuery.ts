@@ -1,8 +1,9 @@
+import { compileRelations, type RelationPlan } from './relationPlan.js'
 import { hashObject } from './hash.js'
 import type { MatcherContext, PageSource } from '../adapters/adapter.js'
 import { cursorQueryCanKeepPrefix, cursorQueryInputsUnchanged } from './cursorMaintenance.js'
 import type { QueryAST } from './queryBuilder.js'
-import { planRelation, planRootPagination, rootAllPages } from './queryClassification.js'
+import { planRootPagination, rootAllPages } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
 import type { QueryLifecycleConfig } from './queryIdentity.js'
 import type {
@@ -39,7 +40,7 @@ import {
   materializeRelationalFilterItem,
   shouldRefetchRelationalFilterQuery,
 } from './relationalFilters.js'
-import type { AnySchema, RelationshipDef, Schema } from './schema.js'
+import type { AnySchema, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
 import { validateStaleTime } from './staleTime.js'
 
@@ -288,6 +289,7 @@ export class RelationalQueryRef<
   #defaultStaleTime: number
   #name: string | undefined
   #rootOverride: RelationalRootOverride | null
+  #relationPlans: RelationPlan[]
 
   constructor(
     host: RelationalQueryHost<TParams, TMeta, TQuery>,
@@ -299,6 +301,7 @@ export class RelationalQueryRef<
     this.#host = host
     this.#ast = ast
     this.#schema = schema
+    this.#relationPlans = compileRelations(ast, schema, ast.snapshot ? 'disabled' : 'merge')
     this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
     this.#onEvict = onEvict ?? null
     this.#defaultStaleTime = options?.defaultStaleTime ?? 0
@@ -944,7 +947,7 @@ export class RelationalQueryRef<
       // Sync (create/recreate/dispose) relation queries based on current root data.
       // Called on every root success — not just first — so realtime-inserted root
       // entities cause their relations to be fetched.
-      if (hasRelations) this.#syncRelations(rows, this.#ast, null)
+      if (hasRelations) this.#syncRelations(rows, this.#relationPlans)
     }
     const matcherConfig = hasRelationalFilter(this.#schema, this.#ast)
       ? { matcher: this.#createRelationalMatcher(this.#ast) }
@@ -1087,50 +1090,35 @@ export class RelationalQueryRef<
    * - two-hop `'many'` (`relDef.via` set) — first fetch the junction service, then fetch
    *   the destination keyed by ids collected from the junction
    */
-  #syncRelations(parentData: unknown[], ast: QueryAST, parentKey: string | null): void {
-    const relationships = this.#schema.relationships?.[ast.service] ?? {}
-
-    for (const [relName, relAST] of Object.entries(ast.related)) {
-      const key = relationKey(parentKey, relName)
-      const relDef = relationships[relName]
-      if (!relDef) {
-        console.warn(`Relationship "${relName}" not found for service "${ast.service}"`)
-        // Mark as synced with no query so loading detection doesn't hang.
-        if (!this.#relationSubs.has(key)) {
-          this.#relationSubs.set(key, { kind: 'empty', sourceKey: '' })
-        }
-      } else {
-        // The strategy is decided in one place (planRelation) — explain() reads
-        // the same plan, so what it reports is what runs here.
-        const { strategy } = planRelation(relDef, relAST.query)
-        if (strategy === 'junction') {
-          this.#syncJunctionRelation(parentData, relDef, relAST, key)
-        } else if (strategy === 'perParent') {
-          this.#syncWindowedManyRelation(parentData, relDef, relAST, key)
-        } else {
-          this.#syncFanInRelation(parentData, relDef, relAST, key)
-        }
+  #syncRelations(parentData: unknown[], plans: RelationPlan[]): void {
+    for (const plan of plans) {
+      switch (plan.kind) {
+        case 'missing':
+          console.warn(`Relationship "${plan.name}" not found for service "${plan.service}"`)
+          if (!this.#relationSubs.has(plan.key)) {
+            this.#relationSubs.set(plan.key, { kind: 'empty', sourceKey: '' })
+          }
+          break
+        case 'junction':
+          this.#syncJunctionRelation(parentData, plan)
+          break
+        case 'perParent':
+          this.#syncWindowedManyRelation(parentData, plan)
+          break
+        case 'fanIn':
+          this.#syncFanInRelation(parentData, plan)
+          break
       }
     }
   }
 
-  /** Recurse into a relation's own nested relations, if it declares any. */
-  #syncNested(data: unknown[], relAST: QueryAST, key: string): void {
-    if (Object.keys(relAST.related).length === 0) return
-    this.#syncRelations(data, relAST, key)
-  }
-
-  /** Like #syncNested, but reading the relation's current (possibly resolved) snapshot. */
   #syncNestedFromSnapshot(
     queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
-    relAST: QueryAST,
-    key: string,
+    plan: Exclude<RelationPlan, { kind: 'missing' }>,
   ): void {
-    if (Object.keys(relAST.related).length === 0) return
+    if (plan.children.length === 0) return
     const s = queryRef.getSnapshot()
-    if (s?.status === 'success') {
-      this.#syncRelations(s.data as unknown[], relAST, key)
-    }
+    if (s?.status === 'success') this.#syncRelations(s.data, plan.children)
   }
 
   /**
@@ -1142,11 +1130,10 @@ export class RelationalQueryRef<
    */
   #syncFanInRelation(
     parentData: unknown[],
-    relDef: RelationshipDef,
-    relAST: QueryAST,
-    subKey: string,
-    nestedKey: string = subKey,
+    plan: Exclude<RelationPlan, { kind: 'missing' }>,
+    subKey: string = plan.key,
   ): void {
+    const { definition: relDef, key: nestedKey } = plan
     // Collect the set of ids we need to IN(...) for this relation. For 'embedded' the
     // parent's sourceField is itself a list — flat-map across parents.
     let values: (string | number)[]
@@ -1171,7 +1158,7 @@ export class RelationalQueryRef<
       // nested relations in case this relation's data already resolved and its own
       // children need to be synced.
       if (existing.kind === 'fanIn') {
-        this.#syncNestedFromSnapshot(existing.queryRef, relAST, nestedKey)
+        this.#syncNestedFromSnapshot(existing.queryRef, plan)
       }
       return
     }
@@ -1184,10 +1171,13 @@ export class RelationalQueryRef<
       return
     }
 
-    const queryRef = this.#buildRelationQueryRef(relDef.destService, relDef, relAST, values)
+    const queryRef = this.#query(
+      plan.destination.descriptor({ $in: values }),
+      plan.destination.config,
+    )
     const unsub = subscribeAndSeed(
       queryRef,
-      data => this.#syncNested(data, relAST, nestedKey),
+      data => this.#syncRelations(data, plan.children),
       () => this.#notifyListeners(),
       this.#staleTime,
       this.#graph(nestedKey),
@@ -1198,10 +1188,9 @@ export class RelationalQueryRef<
 
   #syncWindowedManyRelation(
     parentData: unknown[],
-    relDef: RelationshipDef,
-    relAST: QueryAST,
-    key: string,
+    plan: Exclude<RelationPlan, { kind: 'missing' }>,
   ): void {
+    const { definition: relDef, key } = plan
     const { values: uniqueValues, key: newSourceKey } = uniqueSourceValues(
       parentData,
       relDef.sourceField,
@@ -1209,7 +1198,7 @@ export class RelationalQueryRef<
 
     const existing = this.#relationSubs.get(key)
     if (existing?.kind === 'perParent' && existing.sourceKey === newSourceKey) {
-      this.#syncNestedWindowedRelationIfReady(existing, relAST, key)
+      this.#syncNestedWindowedRelationIfReady(existing, plan)
       return
     }
 
@@ -1253,16 +1242,14 @@ export class RelationalQueryRef<
         entry.children.set(childKey, retained)
         continue
       }
-      const queryRef = this.#buildSingleParentRelationQueryRef(
-        relDef.destService,
-        relDef,
-        relAST,
-        sourceValue,
+      const queryRef = this.#query(
+        plan.destination.descriptor(sourceValue),
+        plan.destination.config,
       )
       const unsub = queryRef.subscribe(
         state => {
           if (state.status === 'success') {
-            this.#syncNestedWindowedRelationIfReady(entry, relAST, key)
+            this.#syncNestedWindowedRelationIfReady(entry, plan)
           }
           this.#notifyListeners()
         },
@@ -1275,18 +1262,17 @@ export class RelationalQueryRef<
     for (const [childKey, child] of previousChildren) {
       if (!entry.children.has(childKey)) child.unsub()
     }
-    this.#syncNestedWindowedRelationIfReady(entry, relAST, key)
+    this.#syncNestedWindowedRelationIfReady(entry, plan)
   }
 
   #syncNestedWindowedRelationIfReady(
     sub: RelationSub<S, TParams, TMeta, TQuery> & { kind: 'perParent' },
-    relAST: QueryAST,
-    key: string,
+    plan: Exclude<RelationPlan, { kind: 'missing' }>,
   ): void {
-    if (Object.keys(relAST.related).length === 0) return
+    if (plan.children.length === 0) return
     const childData = this.#perParentDataIfReady(sub)
     if (childData) {
-      this.#syncRelations(childData, relAST, key)
+      this.#syncRelations(childData, plan.children)
     }
   }
 
@@ -1301,10 +1287,9 @@ export class RelationalQueryRef<
    */
   #syncJunctionRelation(
     parentData: unknown[],
-    relDef: RelationshipDef,
-    relAST: QueryAST,
-    key: string,
+    plan: Extract<RelationPlan, { kind: 'junction' }>,
   ): void {
+    const { definition: relDef, key } = plan
     const via = relDef.via!
 
     const { values: uniqueParentIds, key: junctionSourceKey } = uniqueSourceValues(
@@ -1318,7 +1303,7 @@ export class RelationalQueryRef<
     // current snapshot — the fan-in's own sourceKey check makes it a no-op when the
     // dest set hasn't changed, and it recurses into nested relations either way.
     if (existing?.kind === 'junction' && existing.sourceKey === junctionSourceKey) {
-      this.#syncDestFromJunction(existing.queryRef, relDef, relAST, key)
+      this.#syncDestFromJunction(existing.queryRef, plan)
       return
     }
 
@@ -1333,28 +1318,15 @@ export class RelationalQueryRef<
     // Build the junction queryRef. Junction never windows from the consumer's API surface;
     // it must be exhaustive for the parents we asked about so assembly doesn't drop edges.
     const junctionRef = this.#query(
-      {
-        serviceName: resolveServicePath(this.#schema, via.destService),
-        method: 'find',
-        params: {
-          query: {
-            [via.destField]: { $in: uniqueParentIds },
-            ...(via.query || {}),
-          },
-        },
-      },
-      {
-        realtime: this.#realtimeMode,
-        fetchPolicy: 'swr',
-        allPages: true,
-      },
+      plan.junction.descriptor({ $in: uniqueParentIds }),
+      plan.junction.config,
     )
 
     // Phase 2 is the shared fan-in reconcile with the junction rows as parents: the
     // dest sub lives at `${key}#dest` and its nested relations key under `key`.
     const unsub = subscribeAndSeed(
       junctionRef,
-      junctionItems => this.#syncFanInRelation(junctionItems, relDef, relAST, `${key}#dest`, key),
+      junctionItems => this.#syncFanInRelation(junctionItems, plan, `${key}#dest`),
       () => this.#notifyListeners(),
       this.#staleTime,
       this.#graph(key, 'junction'),
@@ -1370,91 +1342,12 @@ export class RelationalQueryRef<
   /** Phase 2 from the junction's current snapshot, for an already-live junction sub. */
   #syncDestFromJunction(
     junctionRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>,
-    relDef: RelationshipDef,
-    relAST: QueryAST,
-    key: string,
+    plan: Extract<RelationPlan, { kind: 'junction' }>,
   ): void {
     const s = junctionRef.getSnapshot()
     if (s?.status === 'success') {
-      this.#syncFanInRelation(s.data as unknown[], relDef, relAST, `${key}#dest`, key)
+      this.#syncFanInRelation(s.data as unknown[], plan, `${plan.key}#dest`)
     }
-  }
-
-  /**
-   * Build the destination `find` queryRef for a relation. Shared between single-hop and the
-   * second hop of two-hop `many`. The query is built as `WHERE destField IN (uniqueIds)`
-   * merged with any `relAST.query` (user-provided constraints) and `relDef.query` (schema-
-   * level filter). `allPages` is enabled when no windowing is requested so the IN(...) set
-   * isn't silently truncated by the default page cap.
-   */
-  #buildRelationQueryRef(
-    destService: string,
-    relDef: RelationshipDef,
-    relAST: QueryAST,
-    uniqueValues: (string | number)[],
-  ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
-    const hasExplicitSort = '$sort' in relAST.query || '$sort' in (relDef.query ?? {})
-    // A fully materialized service can answer filtered finds locally only when their
-    // order is deterministic. These relation shapes do not expose destination-query
-    // order (assembly follows the parent id list / junction rows, or selects one), so
-    // an internal key sort is semantics-preserving and unlocks an immediate cache hit.
-    // Direct `many` keeps backend order unless the consumer supplied one.
-    const deterministicSort =
-      !hasExplicitSort &&
-      (relDef.cardinality === 'one' || relDef.cardinality === 'embedded' || Boolean(relDef.via))
-        ? { $sort: { [relDef.destField]: 1 } }
-        : {}
-    const query = {
-      ...relAST.query,
-      ...deterministicSort,
-      [relDef.destField]: { $in: uniqueValues },
-      ...(relDef.query || {}),
-    }
-
-    // allPages comes from the shared fetch plan (see planRelation): un-windowed
-    // relations drain every page so the IN(...) set isn't truncated; an explicit
-    // window is the consumer's intent and stays server-maintained.
-    const { allPages } = planRelation(relDef, relAST.query)
-
-    return this.#query(
-      {
-        serviceName: resolveServicePath(this.#schema, destService),
-        method: 'find',
-        params: { query },
-      },
-      {
-        realtime: this.#realtimeMode,
-        fetchPolicy: 'swr',
-        ...(allPages ? { allPages: true } : {}),
-        ...(relAST.server ? { server: true } : {}),
-      },
-    )
-  }
-
-  #buildSingleParentRelationQueryRef(
-    destService: string,
-    relDef: { destField: string; query?: Record<string, unknown> },
-    relAST: QueryAST,
-    sourceValue: string | number,
-  ): QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery> {
-    const query = {
-      ...relAST.query,
-      [relDef.destField]: sourceValue,
-      ...(relDef.query || {}),
-    }
-
-    return this.#query(
-      {
-        serviceName: resolveServicePath(this.#schema, destService),
-        method: 'find',
-        params: { query },
-      },
-      {
-        realtime: this.#realtimeMode,
-        fetchPolicy: 'swr',
-        ...(relAST.server ? { server: true } : {}),
-      },
-    )
   }
 
   #perParentDataIfReady(
