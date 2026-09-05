@@ -1,7 +1,4 @@
-.PHONY: release-extensions upload-firefox-extension
+.PHONY: release-devtools
 
-release-extensions:
+release-devtools:
 	@node tasks/release-devtools.js
-
-upload-firefox-extension:
-	@node tasks/upload-firefox-devtools.js

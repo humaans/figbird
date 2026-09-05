@@ -59,8 +59,9 @@ The release workflow uploads both installable builds to the matching
 These release assets are the stable team downloads; the workflow artifacts are retained as
 build records.
 
-The shared browser extension version lives in `extensions/version.json`. See
-`extensions/RELEASING.md` for publisher setup and release instructions.
+Run `make release-devtools` locally to cut and publish a release. It writes the shared browser
+version to `extensions/version.json` in the release tag; the source checkout stays unchanged. See
+`extensions/RELEASING.md` for publisher setup and recovery instructions.
 
 ## QA checklist
 
