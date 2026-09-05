@@ -3,34 +3,24 @@ name: Browser devtools
 on:
   pull_request:
     paths:
-      - .github/workflows/devtools-release.yml
       - .github/workflows/devtools.yml
       - extensions/**
       - lib/**
       - Makefile
       - package-lock.json
       - package.json
-      - tasks/build-devtools.js
-      - tasks/lint-firefox-devtools.js
-      - tasks/package-devtools.js
-      - tasks/publish-chrome-devtools.js
-      - tasks/release-devtools.js
+      - tasks/**
   push:
     branches:
       - master
     paths:
-      - .github/workflows/devtools-release.yml
       - .github/workflows/devtools.yml
       - extensions/**
       - lib/**
       - Makefile
       - package-lock.json
       - package.json
-      - tasks/build-devtools.js
-      - tasks/lint-firefox-devtools.js
-      - tasks/package-devtools.js
-      - tasks/publish-chrome-devtools.js
-      - tasks/release-devtools.js
+      - tasks/**
 
 permissions:
   contents: read
