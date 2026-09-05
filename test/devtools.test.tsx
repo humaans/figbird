@@ -811,6 +811,7 @@ test('devtools model keeps operation identity separate from shared fetch identit
         ast: {
           service: 'issues',
           kind: 'paginate',
+          includeTotal: true,
           query: {},
           cardinality: 'many',
           pageSize: 25,

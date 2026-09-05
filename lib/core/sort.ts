@@ -31,8 +31,3 @@ export function buildComparator(sort: Record<string, number>): (a: unknown, b: u
     return 0
   }
 }
-
-/** Sort a copy of `rows` by a `$sort` map. */
-export function sortRowsLocally(rows: unknown[], sort: Record<string, number>): unknown[] {
-  return [...rows].sort(buildComparator(sort))
-}

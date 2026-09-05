@@ -1,3 +1,4 @@
+import { TestClock } from './clock.js'
 import test from 'ava'
 import type { FigbirdEvent, QueryState } from '../lib'
 import { isMutationSupersededError } from '../lib'
@@ -229,7 +230,8 @@ test('mutation queue: structurally equal params still coalesce patches', async t
 })
 
 test('mutation queue: cancelled non-head items cannot shorten the head deadline', async t => {
-  const { figbird, feathers } = createTestApp(schema, services())
+  const clock = new TestClock()
+  const { figbird, feathers } = createTestApp(schema, services(), { clock })
   const removeGate = deferred<MockItem>()
   const patchGate = deferred<MockItem>()
   const calls: string[] = []
@@ -250,10 +252,10 @@ test('mutation queue: cancelled non-head items cannot shorten the head deadline'
   removeGate.resolve({ id: 1, content: 'hello' })
   await removing
   t.true(isMutationSupersededError(await cancelledError))
-  await new Promise(resolve => setTimeout(resolve, 80))
+  await clock.advance(499)
   t.deepEqual(calls, [])
 
-  queue.flush()
+  await clock.advance(1)
   t.deepEqual(calls, ['slow head'])
   patchGate.resolve({ id: 2, content: 'slow head' })
   await head
@@ -273,7 +275,8 @@ test('mutation queue: throwing subscribers cannot fail transport', async t => {
 })
 
 test('mutation queue: a throwing retryDelay cannot replace the transport failure', async t => {
-  const { figbird, feathers } = createTestApp(schema, services())
+  const clock = new TestClock()
+  const { figbird, feathers } = createTestApp(schema, services(), { clock })
   let calls = 0
   feathers.service('notes').patch = ((_id: number, data: Partial<Note>) => {
     calls += 1
@@ -286,7 +289,12 @@ test('mutation queue: a throwing retryDelay cannot replace the transport failure
     },
   })
 
-  const result = await queue.m.notes.patch(1, { content: 'retried' })
+  const pending = queue.m.notes.patch(1, { content: 'retried' })
+  await clock.advance(999)
+  t.is(calls, 1, 'a throwing timing policy falls back to the normal retry delay')
+  t.is(queue.status, 'retrying')
+  await clock.advance(1)
+  const result = await pending
   t.is(result.content, 'retried')
   t.is(calls, 2)
 })

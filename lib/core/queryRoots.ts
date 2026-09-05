@@ -1,7 +1,7 @@
-import type { PageCursor, PageInfo } from '../adapters/adapter.js'
+import type { PageCursor } from '../adapters/adapter.js'
+import type { PageContinuation } from '../adapters/queryPage.js'
 import type { QueryRef } from './queryRef.js'
 import type { ProcessedCacheEvent, QueryGraphRef, QueryState } from './queryTypes.js'
-import type { AnySchema, Schema } from './schema.js'
 
 /** The relational engine's adapter-neutral view of its root rows. */
 export interface RootSnapshot {
@@ -15,7 +15,7 @@ export interface RootSnapshot {
 /** Adapter-neutral metadata attached to the relational root query. */
 export interface RootMetadata {
   /** Normalized native continuation metadata, when the root is page-backed. */
-  pageInfo: PageInfo | undefined
+  continuation: PageContinuation
   /** Server-reported result-set size, when the adapter supplied one. */
   total: number | undefined
   /** Root row identity, excluding relation-only changes. */
@@ -70,8 +70,8 @@ const LOADING_ROOT: RootSnapshot = {
 }
 
 type RootQueryRef<TMeta extends Record<string, unknown>> = Pick<
-  QueryRef<unknown, unknown, AnySchema, unknown, TMeta>,
-  'getRows' | 'getSnapshot' | 'subscribe' | 'ensureFresh' | 'refetch' | 'hash'
+  QueryRef<unknown, unknown, TMeta>,
+  'getPage' | 'getRows' | 'getSnapshot' | 'subscribe' | 'ensureFresh' | 'refetch' | 'hash'
 >
 
 /**
@@ -136,16 +136,9 @@ export class SingleQueryRoot<TMeta extends Record<string, unknown>> implements R
 
   metadata(): RootMetadata {
     const state = this.#queryRef.getSnapshot()
-    const pageTotal = state?.pageInfo?.total
-    const meta = state?.meta as { total?: unknown } | undefined
-    const total =
-      typeof pageTotal === 'number' && pageTotal >= 0
-        ? pageTotal
-        : typeof meta?.total === 'number' && meta.total >= 0
-          ? meta.total
-          : undefined
+    const { continuation, total } = this.#queryRef.getPage()
     return {
-      pageInfo: state?.pageInfo,
+      continuation,
       total,
       revision: state?.status === 'success' ? state.data : undefined,
     }
@@ -193,15 +186,9 @@ type SequentialReconcileState =
  * any of it.
  */
 export class PagedQueryRoot<
-  S extends Schema = AnySchema,
-  TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
 > implements PaginatedRootSource {
-  #makePageRef: (
-    pageIndex: number,
-    after?: PageCursor,
-  ) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+  #makePageRef: (pageIndex: number, after?: PageCursor) => QueryRef<unknown[], unknown, TMeta>
   #onRows: (rows: unknown[]) => void
   #onChange: () => void
   #pageSize: number
@@ -209,7 +196,7 @@ export class PagedQueryRoot<
   #sequential: boolean
   #realtime: InspectedPagination['realtime']
 
-  #pageRefs: Array<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>> = []
+  #pageRefs: Array<QueryRef<unknown[], unknown, TMeta>> = []
   #pageUnsubs: Array<() => void> = []
   #staleTime = 0
   #isLoadingMore = false
@@ -237,10 +224,7 @@ export class PagedQueryRoot<
     pageSize: number
     includeTotal: boolean
     sequential: boolean
-    makePageRef: (
-      pageIndex: number,
-      after?: PageCursor,
-    ) => QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+    makePageRef: (pageIndex: number, after?: PageCursor) => QueryRef<unknown[], unknown, TMeta>
     onRows: (rows: unknown[]) => void
     onChange: () => void
     cursorRealtime?: {
@@ -316,14 +300,13 @@ export class PagedQueryRoot<
           this.#abortReconcile()
         }
       } else if (state?.status === 'success') {
-        const pageData = (state.data ?? []) as unknown[]
         if (pendingSettle && !state.isFetching) {
           pendingSettle = undefined
           this.#isLoadingMore = false
           this.#loadMoreError = null
-          this.#hasMoreSticky = this.#pageHasMore(state, pageData)
+          this.#hasMoreSticky = queryRef.getPage().continuation.kind !== 'done'
         } else if (!this.#isLoadingMore && !state.isFetching) {
-          this.#hasMoreSticky = this.#pageHasMore(state, pageData)
+          this.#hasMoreSticky = queryRef.getPage().continuation.kind !== 'done'
         }
       }
 
@@ -335,7 +318,7 @@ export class PagedQueryRoot<
         this.#reconcile.phase === 'running' &&
         pageIndex === this.#pageRefs.length - 1
       ) {
-        this.#advanceReconcile(pageIndex, state)
+        this.#advanceReconcile(pageIndex)
       }
     }
 
@@ -359,9 +342,9 @@ export class PagedQueryRoot<
 
     const previousPageState = this.#pageRefs.at(-1)?.getSnapshot()
     if (!previousPageState || previousPageState.status !== 'success') return
-    const pageInfo = this.#sequential ? this.#requirePageInfo(previousPageState) : undefined
-    if (pageInfo && !pageInfo.hasMore) return
-    const after = pageInfo?.endCursor
+    const continuation = this.#pageRefs.at(-1)!.getPage().continuation
+    if (continuation.kind === 'done') return
+    const after = continuation.kind === 'cursor' ? continuation.cursor : undefined
 
     this.#isLoadingMore = true
     this.#loadMoreError = null
@@ -407,9 +390,8 @@ export class PagedQueryRoot<
   }
 
   metadata(): RootMetadata {
-    const state = this.#pageRefs.at(-1)?.getSnapshot()
     return {
-      pageInfo: state?.pageInfo,
+      continuation: this.#pageRefs.at(-1)?.getPage().continuation ?? { kind: 'done' },
       total: this.#computeTotal(),
       revision: this.#lastAllPagesData,
     }
@@ -489,26 +471,7 @@ export class PagedQueryRoot<
 
   #computeTotal(): number | undefined {
     if (!this.#includeTotal) return undefined
-    const state = this.#pageRefs[0]?.getSnapshot()
-    if (!state || state.status !== 'success') return undefined
-    if (state.pageInfo && typeof state.pageInfo.total === 'number' && state.pageInfo.total >= 0) {
-      return state.pageInfo.total
-    }
-    const meta = state.meta as { total?: number } | undefined
-    if (!meta || typeof meta.total !== 'number' || meta.total < 0) return undefined
-    return meta.total
-  }
-
-  #pageHasMore(state: QueryState<unknown, TMeta>, data: unknown[]): boolean {
-    if (this.#sequential) return this.#requirePageInfo(state).hasMore
-    return data.length >= this.#pageSize
-  }
-
-  #requirePageInfo(state: QueryState<unknown, TMeta>): PageInfo {
-    if (!state.pageInfo) {
-      throw new Error('Native page query settled without pageInfo')
-    }
-    return state.pageInfo
+    return this.#pageRefs[0]?.getPage().total
   }
 
   #beginReconcile(): void {
@@ -539,13 +502,13 @@ export class PagedQueryRoot<
     this.#onChange()
   }
 
-  #advanceReconcile(pageIndex: number, state: QueryState<unknown, TMeta>): void {
+  #advanceReconcile(pageIndex: number): void {
     const current = this.#reconcile
     if (current.phase !== 'running') return
 
-    const pageInfo = this.#requirePageInfo(state)
-    if (pageIndex + 1 < current.targetPages && pageInfo.hasMore) {
-      this.#setupPage(pageIndex + 1, undefined, pageInfo.endCursor)
+    const continuation = this.#pageRefs[pageIndex]!.getPage().continuation
+    if (pageIndex + 1 < current.targetPages && continuation.kind === 'cursor') {
+      this.#setupPage(pageIndex + 1, undefined, continuation.cursor)
       return
     }
 
@@ -564,7 +527,7 @@ export class PagedQueryRoot<
     this.#dropFollowupPages()
     const firstPage = this.#pageRefs[0]?.getSnapshot()
     if (firstPage?.status === 'success' && !firstPage.isFetching) {
-      this.#advanceReconcile(0, firstPage)
+      this.#advanceReconcile(0)
     }
   }
 

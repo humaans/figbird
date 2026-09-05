@@ -25,6 +25,29 @@ export interface WindowQueryConfig {
   maxPages: number
 }
 
+export function normalizeWindowConfig({
+  pageSize,
+  preloadPages = 1,
+  maxPages = 5,
+}: {
+  pageSize: number
+  preloadPages?: number
+  maxPages?: number
+}): WindowQueryConfig {
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    throw new Error(`useWindowQuery(): pageSize must be a positive integer, got ${pageSize}`)
+  }
+  if (!Number.isInteger(preloadPages) || preloadPages < 0) {
+    throw new Error(
+      `useWindowQuery(): preloadPages must be a non-negative integer, got ${preloadPages}`,
+    )
+  }
+  if (!Number.isInteger(maxPages) || maxPages <= 0) {
+    throw new Error(`useWindowQuery(): maxPages must be a positive integer, got ${maxPages}`)
+  }
+  return { pageSize, preloadPages, maxPages }
+}
+
 export type WindowQueryState<T> =
   | {
       status: 'loading'
@@ -134,21 +157,7 @@ export class WindowQueryRef<
     config: WindowQueryConfig,
     options?: WindowQueryOptions,
   ) {
-    if (!Number.isInteger(config.pageSize) || config.pageSize <= 0) {
-      throw new Error(
-        `useWindowQuery(): pageSize must be a positive integer, got ${config.pageSize}`,
-      )
-    }
-    if (!Number.isInteger(config.preloadPages) || config.preloadPages < 0) {
-      throw new Error(
-        `useWindowQuery(): preloadPages must be a non-negative integer, got ${config.preloadPages}`,
-      )
-    }
-    if (!Number.isInteger(config.maxPages) || config.maxPages <= 0) {
-      throw new Error(
-        `useWindowQuery(): maxPages must be a positive integer, got ${config.maxPages}`,
-      )
-    }
+    config = normalizeWindowConfig(config)
     this.#host = host
     this.#ast = ast
     this.#schema = schema
@@ -294,11 +303,16 @@ export class WindowQueryRef<
   }
 
   /** @internal Evicts an abandoned render-phase read under Figbird cache pressure. */
-  evictAbandonedRead(): boolean {
+  canEvictAbandonedRead(): boolean {
     if (this.#lifetime.owners.size > 0 || this.#lifetime.reads.size === 0) return false
     for (const read of this.#lifetime.reads.values()) {
       if (read.status === 'pending') return false
     }
+    return true
+  }
+
+  evictAbandonedRead(): boolean {
+    if (!this.canEvictAbandonedRead()) return false
     this.#cleanup()
     return true
   }
@@ -372,7 +386,7 @@ export class WindowQueryRef<
       this.#pager.pageSucceeded({
         start,
         rowCount: state.data.length,
-        pageInfo: metadata.pageInfo,
+        continuation: metadata.continuation,
         total: metadata.total,
         revision: metadata.revision,
       })

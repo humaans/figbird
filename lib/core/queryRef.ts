@@ -1,5 +1,5 @@
+import type { QueryPage } from '../adapters/queryPage.js'
 import { createQueryId } from './queryIdentity.js'
-import type { AnySchema, Schema } from './schema.js'
 import type { QueryStore } from './queryStore.js'
 import type {
   ProcessedCacheEvent,
@@ -9,6 +9,20 @@ import type {
   QueryState,
 } from './queryTypes.js'
 import { validateStaleTime } from './staleTime.js'
+
+type QueryRefStore<TMeta extends Record<string, unknown>> = Pick<
+  QueryStore<unknown, TMeta, unknown>,
+  | 'getQueryPage'
+  | 'materialize'
+  | 'subscribe'
+  | 'ensureFresh'
+  | 'getQueryState'
+  | 'getQueryRows'
+  | 'refetch'
+  | 'reconcile'
+  | 'applyVisibleEvent'
+  | 'registerReconnectQuery'
+>
 
 function validateExecutionOptions(
   options: QueryExecutionOptions | undefined,
@@ -31,15 +45,12 @@ function validateExecutionOptions(
 export class QueryRef<
   T,
   TQueryType = unknown,
-  S extends Schema = AnySchema,
-  TParams = unknown,
   TMeta extends Record<string, unknown> = Record<string, unknown>,
-  TQuery = Record<string, unknown>,
 > {
   #queryId: string
   #desc: QueryDescriptor
   #config: QueryConfig<T, TQueryType>
-  #queryStore: QueryStore<S, TParams, TMeta, TQuery>
+  #queryStore: QueryRefStore<TMeta>
 
   constructor({
     desc,
@@ -48,7 +59,7 @@ export class QueryRef<
   }: {
     desc: QueryDescriptor
     config: QueryConfig<T, TQueryType>
-    queryStore: QueryStore<S, TParams, TMeta, TQuery>
+    queryStore: QueryRefStore<TMeta>
   }) {
     this.#queryId = createQueryId(desc, config)
     this.#desc = desc
@@ -103,6 +114,12 @@ export class QueryRef<
   getRows(): unknown[] {
     this.#queryStore.materialize(this)
     return this.#queryStore.getQueryRows(this.#queryId)
+  }
+
+  /** Normalized current page, including realtime changes to rows and totals. @internal */
+  getPage(): QueryPage {
+    this.#queryStore.materialize(this)
+    return this.#queryStore.getQueryPage(this.#queryId)
   }
 
   /** Triggers a refetch for this query. */

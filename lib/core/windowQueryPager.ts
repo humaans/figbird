@@ -1,4 +1,5 @@
-import type { PageCursor, PageInfo } from '../adapters/adapter.js'
+import type { PageCursor } from '../adapters/adapter.js'
+import type { PageContinuation } from '../adapters/queryPage.js'
 import type { QueryAST } from './queryBuilder.js'
 import type { RelationalRootOverride } from './relationalQuery.js'
 
@@ -16,7 +17,7 @@ export interface PagerPage {
 export interface PagerPageSuccess {
   start: number
   rowCount: number
-  pageInfo: PageInfo | undefined
+  continuation: PageContinuation
   total: number | undefined
   revision: unknown
 }
@@ -229,7 +230,6 @@ export class CursorWindowPager implements WindowPager {
   }
 
   pageSucceeded(page: PagerPageSuccess): void {
-    if (!page.pageInfo) throw new Error('Native window page settled without pageInfo')
     if (page.start === 0) {
       if (this.#rootRevision !== undefined && this.#rootRevision !== page.revision) {
         this.#resetDescendants()
@@ -240,7 +240,7 @@ export class CursorWindowPager implements WindowPager {
       this.#context.access.setTotal(page.total)
       this.#terminalIndex = page.total
     }
-    if (!page.pageInfo.hasMore) {
+    if (page.continuation.kind === 'done') {
       this.#terminalIndex = page.start + page.rowCount
       if (this.#context.access.total() === undefined) {
         this.#context.access.setTotal(this.#terminalIndex)
@@ -250,7 +250,9 @@ export class CursorWindowPager implements WindowPager {
     if (page.rowCount === 0) {
       throw new Error('Native window page reported hasMore without returning rows')
     }
-    this.#cursorAt.set(page.start + page.rowCount, page.pageInfo.endCursor)
+    if (page.continuation.kind === 'cursor') {
+      this.#cursorAt.set(page.start + page.rowCount, page.continuation.cursor)
+    }
   }
 
   reset(): void {

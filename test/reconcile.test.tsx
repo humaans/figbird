@@ -1,3 +1,4 @@
+import { TestClock, flushTasks } from './clock.js'
 /**
  * The reconciliation gate: burst safety (cooldown with a guaranteed trailing
  * edge) and hidden-tab deferral for event-driven refetches.
@@ -50,10 +51,12 @@ function createApp({
   reconcileCooldown,
   staleTime,
   visibility,
+  clock,
 }: {
   reconcileCooldown?: number
   staleTime?: number
   visibility?: VisibilitySource
+  clock?: TestClock
 } = {}) {
   const feathers = mockFeathers({
     notes: { data: { 1: { id: 1, content: 'hello' }, 2: { id: 2, content: 'world' } } },
@@ -62,6 +65,7 @@ function createApp({
   const figbird = new Figbird({
     schema,
     adapter,
+    ...(clock ? { clock } : {}),
     eventBatchInterval: 0,
     ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
     ...(staleTime !== undefined ? { staleTime } : {}),
@@ -90,22 +94,25 @@ function subscribeRefetchQuery(figbird: ReturnType<typeof createApp>['figbird'])
 }
 
 test('cooldown: a burst costs one leading and one trailing refetch, and lands on the final data', async t => {
-  const { figbird, feathers } = createApp({ reconcileCooldown: 80 })
+  const clock = new TestClock()
+  const { figbird, feathers } = createApp({ clock, reconcileCooldown: 80 })
   const notes = feathers.service('notes')
   const { ref, unsub } = subscribeRefetchQuery(figbird)
 
-  await sleep(20)
+  await flushTasks()
   t.is(notes.counts.find, 1, 'initial fetch')
 
   // A burst of events well inside one cooldown window.
   for (let i = 10; i < 15; i++) {
     serverCreate(notes, { id: i, content: `note ${i}` })
-    await sleep(5)
+    await clock.advance(5)
   }
   t.is(notes.counts.find, 2, 'leading edge fired once for the whole burst')
 
   // The trailing edge is the correctness guarantee: one refetch after the window.
-  await sleep(120)
+  await clock.advance(54)
+  t.is(notes.counts.find, 2, 'the trailing fetch waits until the deadline')
+  await clock.advance(1)
   t.is(notes.counts.find, 3, 'exactly one trailing refetch')
   const data = (ref.getSnapshot()?.data ?? []) as Note[]
   t.true(
@@ -114,56 +121,56 @@ test('cooldown: a burst costs one leading and one trailing refetch, and lands on
   )
 
   // Quiet period over — an isolated event reconciles immediately again.
+  await clock.advance(80)
   serverCreate(notes, { id: 99, content: 'isolated' })
-  await sleep(20)
+  await clock.advance(20)
   t.is(notes.counts.find, 4, 'isolated events keep leading-edge latency')
 
   unsub()
 })
 
-test('cooldown: sustained events cost roughly one refetch per window', async t => {
-  const { figbird, feathers } = createApp({ reconcileCooldown: 60 })
+test('cooldown: sustained events cost one refetch per window', async t => {
+  const clock = new TestClock()
+  const { figbird, feathers } = createApp({ clock, reconcileCooldown: 60 })
   const notes = feathers.service('notes')
   const { unsub } = subscribeRefetchQuery(figbird)
-  await sleep(20)
+  await clock.advance(20)
   const baseline = notes.counts.find
 
   // ~150ms of continuous events across ~2.5 windows.
   for (let i = 0; i < 15; i++) {
     notes.emit('patched', { id: 1, content: `tick ${i}` })
-    await sleep(10)
+    await clock.advance(10)
   }
-  await sleep(100) // let the last trailing land
+  await clock.advance(100) // let the last trailing land
 
   const refetches = notes.counts.find - baseline
-  t.true(
-    refetches >= 2 && refetches <= 5,
-    `sustained burst throttled to ~1/window (got ${refetches})`,
-  )
+  t.is(refetches, 4, 'one leading fetch and trailing fetches at 60, 120, and 180 ms')
 
   unsub()
 })
 
 test('cooldown: manual refetch() bypasses the gate', async t => {
-  const { figbird, feathers } = createApp({ reconcileCooldown: 80 })
+  const clock = new TestClock()
+  const { figbird, feathers } = createApp({ clock, reconcileCooldown: 80 })
   const notes = feathers.service('notes')
   const { ref, unsub } = subscribeRefetchQuery(figbird)
-  await sleep(20)
+  await clock.advance(20)
 
   // Enter a cooldown window via an event...
   notes.emit('created', { id: 10, content: 'x' })
-  await sleep(20)
+  await clock.advance(20)
   const afterLeading = notes.counts.find
 
   notes.emit('created', { id: 11, content: 'y' })
-  await sleep(5)
+  await clock.advance(5)
 
   // ...manual refetches are user intent and fire immediately regardless.
   ref.refetch()
-  await sleep(20)
+  await clock.advance(20)
   t.is(notes.counts.find, afterLeading + 1)
 
-  await sleep(100)
+  await clock.advance(100)
   t.is(
     notes.counts.find,
     afterLeading + 1,
@@ -174,19 +181,20 @@ test('cooldown: manual refetch() bypasses the gate', async t => {
 })
 
 test('cooldown: a trailing refetch is skipped when the last subscriber left', async t => {
-  const { figbird, feathers } = createApp({ reconcileCooldown: 60 })
+  const clock = new TestClock()
+  const { figbird, feathers } = createApp({ clock, reconcileCooldown: 60 })
   const notes = feathers.service('notes')
   const { unsub } = subscribeRefetchQuery(figbird)
-  await sleep(20)
+  await clock.advance(20)
 
   notes.emit('created', { id: 10, content: 'x' })
-  await sleep(10)
+  await clock.advance(10)
   notes.emit('created', { id: 11, content: 'y' }) // schedules the trailing edge
-  await sleep(10)
+  await clock.advance(10)
   const beforeTrailing = notes.counts.find
   unsub()
 
-  await sleep(120)
+  await clock.advance(120)
   t.is(notes.counts.find, beforeTrailing, 'no fetch for a query nobody watches')
 
   // The store state stayed coherent — the query is simply pending for the
@@ -275,14 +283,10 @@ test('hidden tabs: a reconnect while hidden defers the refetch-all until visible
 })
 
 test('visibility: returning after staleTime reconciles active queries once', async t => {
-  const realNow = Date.now
-  let now = realNow()
-  Date.now = () => now
-  t.teardown(() => {
-    Date.now = realNow
-  })
+  const clock = new TestClock()
   const visibility = fakeVisibility(false)
   const { figbird, feathers } = createApp({
+    clock,
     reconcileCooldown: 0,
     staleTime: 20,
     visibility: visibility.source,
@@ -296,22 +300,22 @@ test('visibility: returning after staleTime reconciles active queries once', asy
   })
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsub = ref.subscribe(() => {})
-  await sleep(20)
+  await flushTasks()
   const baseline = notes.counts.find
 
   visibility.set(true)
-  now += 19
+  await clock.advance(19)
   visibility.set(false)
-  await sleep(10)
+  await flushTasks()
   t.is(notes.counts.find, baseline, 'a short background visit keeps the live result')
 
   visibility.set(true)
-  now += 15
+  await clock.advance(15)
   ref.refetch()
-  await sleep(10)
-  now += 5
+  await flushTasks()
+  await clock.advance(5)
   visibility.set(false)
-  await sleep(10)
+  await flushTasks()
   t.is(
     notes.counts.find,
     baseline + 1,
@@ -319,9 +323,9 @@ test('visibility: returning after staleTime reconciles active queries once', asy
   )
 
   visibility.set(true)
-  now += 20
+  await clock.advance(20)
   visibility.set(false)
-  await sleep(20)
+  await flushTasks()
   t.is(notes.counts.find, baseline + 2, 'a meaningful sleep gets one safety refetch')
   t.deepEqual(reconcileCauses, [['visibility']])
 

@@ -13,8 +13,6 @@
  *   (`.server()`, `$select`, or operators the local matcher cannot evaluate); events
  *   always trigger a refetch.
  */
-import type { QueryAST } from './queryBuilder.js'
-import type { SchemaRelationships } from './schema.js'
 
 export type QueryNodeClass = 'local-exact' | 'server-window' | 'server-authoritative'
 
@@ -184,26 +182,6 @@ export function isProjectionQuery(query: unknown): boolean {
   return found
 }
 
-/** True when the query uses `$limit`/`$skip`/`$sort` anywhere. */
-export function hasWindowFilters(value: unknown): boolean {
-  let found = false
-  walkQueryKeys(value, key => {
-    if (SERVER_WINDOW_QUERY_FILTERS.has(key)) found = true
-  })
-  return found
-}
-
-/** How a relation node is executed at runtime. */
-export type RelationStrategy = 'junction' | 'perParent' | 'fanIn'
-
-export interface RelationPlan {
-  strategy: RelationStrategy
-  /** The relation carries `$limit`/`$skip`/`$sort` — an explicit consumer window. */
-  windowed: boolean
-  /** allPages for the destination fetch (a junction's first hop is always exhaustive). */
-  allPages: boolean
-}
-
 /** One plan shared by paginated-root execution and static explanation. */
 export interface RootPaginationPlan {
   kind: 'offset' | 'sequential'
@@ -232,34 +210,6 @@ export function planRootPagination(
     server: serverReasons.length > 0,
     serverReasons,
   }
-}
-
-/**
- * The fetch plan for a relation node — the single statement of how the engine
- * executes relations, consumed by both the runtime (`RelationalQueryRef`) and
- * `figbird.explain()` so the two provably can't drift:
- *
- * - `via` set → two-hop junction fetch.
- * - windowed `many` → one query per parent (per-parent windows can't be expressed
- *   as a single find).
- * - everything else → one fan-in `IN(...)` query.
- *
- * Relations without explicit windowing drain every page (`allPages`) so the
- * parent's `IN(...)` set isn't silently truncated by the default page cap; an
- * explicit window is the consumer's intent and stays a single server-maintained
- * window.
- */
-export function planRelation(
-  relDef: { via?: unknown; cardinality?: string } | undefined,
-  relQuery: unknown,
-): RelationPlan {
-  const windowed = hasWindowFilters(relQuery)
-  const strategy: RelationStrategy = relDef?.via
-    ? 'junction'
-    : windowed && relDef?.cardinality === 'many'
-      ? 'perParent'
-      : 'fanIn'
-  return { strategy, windowed, allPages: !windowed }
 }
 
 /** allPages for a root node: `.all()` drains every page; everything else is one page. */
@@ -331,131 +281,4 @@ export interface ExplainNode {
 
 export interface ExplainReport {
   nodes: ExplainNode[]
-}
-
-/** The realtime handling a node's class (and snapshot flag) implies. */
-function nodeRealtime(snapshot: boolean, cls: QueryNodeClass): ExplainNode['realtime'] {
-  return snapshot ? 'manual' : cls === 'local-exact' ? 'merge' : 'refetch'
-}
-
-/**
- * Walk a query AST into a flat explain report: one node per executed query (root,
- * relations, and junction hops), each carrying its classification and structured
- * reasons. Reads the same plans the runtime executes
- * (`rootAllPages`, `planRelation`, `explainQueryNode`) so the report provably
- * can't drift from what actually runs. `figbird.explain()` is the public wrapper.
- */
-export function explainQuery(
-  ast: QueryAST,
-  relationships: SchemaRelationships | undefined,
-  localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
-  hasNativePagination: (serviceName: string) => boolean,
-): ExplainNode[] {
-  const nodes: ExplainNode[] = []
-  explainAst(ast, '(root)', true, nodes, relationships, localOperatorsFor, hasNativePagination)
-  return nodes
-}
-
-function explainAst(
-  ast: QueryAST,
-  path: string,
-  isRoot: boolean,
-  nodes: ExplainNode[],
-  relationships: SchemaRelationships | undefined,
-  localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
-  hasNativePagination: (serviceName: string) => boolean,
-): void {
-  const snapshot = Boolean(ast.snapshot)
-  const paginationPlan =
-    isRoot && ast.kind === 'paginate'
-      ? planRootPagination(hasNativePagination(ast.service), Boolean(ast.server))
-      : null
-  // Root fetch shape comes from the same plan the runtime executes (rootAllPages):
-  // .all() drains every page, so window filters ($sort — the builder refuses
-  // $limit/$skip) don't demote the class. Offset pagination is a server window;
-  // native sequential pagination is server-authoritative.
-  const explained = explainQueryNode(ast.query, {
-    server: paginationPlan?.server ?? ast.server,
-    ...(paginationPlan ? { serverReasons: paginationPlan.serverReasons } : {}),
-    allPages: rootAllPages(ast.kind),
-    localOperators: localOperatorsFor(ast.service),
-    snapshot,
-    paginatedRoot: paginationPlan?.kind === 'offset',
-  })
-
-  nodes.push({
-    path,
-    service: ast.service,
-    kind: ast.kind,
-    class: explained.class,
-    reasons: explained.reasons,
-    realtime: nodeRealtime(snapshot, explained.class),
-  })
-
-  explainRelations(ast, path, snapshot, nodes, relationships, localOperatorsFor)
-}
-
-/**
- * One walk for relations at every depth. `snapshot` is the root's — `.snapshot()`
- * freezes the root and every relation under it, so it propagates all the way down.
- */
-function explainRelations(
-  ast: QueryAST,
-  path: string,
-  snapshot: boolean,
-  nodes: ExplainNode[],
-  relationships: SchemaRelationships | undefined,
-  localOperatorsFor: (serviceName: string) => ReadonlySet<string>,
-): void {
-  const serviceRelationships = relationships?.[ast.service] ?? {}
-  for (const [relName, relAST] of Object.entries(ast.related)) {
-    const relDef = serviceRelationships[relName]
-    const relPath = path === '(root)' ? relName : `${path}.${relName}`
-    const destService = relDef?.destService ?? relAST.service
-    // The relation's fetch shape is read off the same plan the runtime executes
-    // (planRelation) — explain can't drift from what actually runs.
-    const plan = planRelation(relDef, relAST.query)
-    const relQuery = {
-      ...relAST.query,
-      ...(relDef?.query ?? {}),
-    }
-    const relExplained = explainQueryNode(relQuery, {
-      server: relAST.server,
-      allPages: plan.allPages,
-      localOperators: localOperatorsFor(destService),
-    })
-    if (plan.strategy === 'perParent') {
-      relExplained.reasons = [
-        ...relExplained.reasons,
-        { code: 'window-filter', detail: 'per-parent window — one query per parent' },
-      ]
-    }
-    if (relDef?.via) {
-      const junctionService = relDef.via.destService
-      const junctionExplained = explainQueryNode(relDef.via.query, {
-        allPages: true,
-        localOperators: localOperatorsFor(junctionService),
-      })
-      nodes.push({
-        path: `${relPath}#junction`,
-        service: junctionService,
-        kind: 'find',
-        role: 'junction',
-        class: junctionExplained.class,
-        reasons: junctionExplained.reasons,
-        realtime: nodeRealtime(snapshot, junctionExplained.class),
-      })
-    }
-
-    nodes.push({
-      path: relPath,
-      service: destService,
-      kind: 'find',
-      class: relExplained.class,
-      reasons: relExplained.reasons,
-      realtime: nodeRealtime(snapshot, relExplained.class),
-      ...(relDef?.via ? { via: relDef.via.destService } : {}),
-    })
-    explainRelations(relAST, relPath, snapshot, nodes, relationships, localOperatorsFor)
-  }
 }

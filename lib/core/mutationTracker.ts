@@ -26,7 +26,7 @@ export interface InFlightMutation {
 
 /**
  * Read-only view of the tracker — what `figbird.mutating` exposes. `start`/`end`
- * are internal to the store.
+ * are internal to the mutation executor.
  */
 export interface MutationActivity {
   /** Notifies synchronously whenever the active set changes. */

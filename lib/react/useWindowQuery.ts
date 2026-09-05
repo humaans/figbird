@@ -1,3 +1,4 @@
+import { normalizeWindowConfig } from '../core/windowQuery.js'
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react'
 import type { AnyWindowQueryBuilder, QueryBuilderItem } from '../core/queryBuilder.js'
 import type { QueryInput, QueryRequest } from '../core/queryDefinition.js'
@@ -111,22 +112,6 @@ const idleState = {
   isFetching: false,
 }
 
-function normalizeConfig(options: UseWindowQueryOptions): WindowQueryConfig {
-  const { pageSize, preloadPages = 1, maxPages = 5 } = options
-  if (!Number.isInteger(pageSize) || pageSize <= 0) {
-    throw new Error(`useWindowQuery(): pageSize must be a positive integer, got ${pageSize}`)
-  }
-  if (!Number.isInteger(preloadPages) || preloadPages < 0) {
-    throw new Error(
-      `useWindowQuery(): preloadPages must be a non-negative integer, got ${preloadPages}`,
-    )
-  }
-  if (!Number.isInteger(maxPages) || maxPages <= 0) {
-    throw new Error(`useWindowQuery(): maxPages must be a positive integer, got ${maxPages}`)
-  }
-  return { pageSize, preloadPages, maxPages }
-}
-
 export const useWindowQuery: UseWindowQueryHook = ((
   query: QueryInput<AnyWindowQueryBuilder> | null,
   options: UseWindowQueryOptions,
@@ -143,7 +128,7 @@ export function useWindowQueryImpl(
     options.staleTime === undefined
       ? undefined
       : validateStaleTime(options.staleTime, 'useWindowQuery(): staleTime')
-  const config = normalizeConfig(options)
+  const config = normalizeWindowConfig(options)
   const qRef = skip || query === null ? null : figbird.window(query, config)
   const [reader, setReader] = useState({ query: qRef, settled: false })
   const stableRange = useMemo(

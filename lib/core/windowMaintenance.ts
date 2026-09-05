@@ -11,9 +11,8 @@ import { commitQuery } from './queryResults.js'
  * "refetch" when it is not. The soundness argument lives on the function.
  */
 
-import { isProjectionQuery, isServerMaintained } from './queryClassification.js'
+import { isServerMaintained } from './queryClassification.js'
 import { ItemRemovedError } from './errors.js'
-import { buildComparator } from './sort.js'
 import {
   entityKey,
   type EntityKey,
@@ -52,23 +51,6 @@ function itemHasKey(
 export function isUnfilteredFindQuery(params: unknown): boolean {
   const q = queryOfParams(params)
   return !q || Object.keys(q).every(key => key === '$sort')
-}
-
-/** Split window operators off a query so the rest can feed the local matcher. */
-export function splitWindow(q: Record<string, unknown> | undefined): {
-  filters: Record<string, unknown> | undefined
-  sort: Record<string, number> | undefined
-  limit: number | undefined
-  skip: number
-} {
-  if (!q) return { filters: undefined, sort: undefined, limit: undefined, skip: 0 }
-  const { $sort, $limit, $skip, ...filters } = q
-  return {
-    filters: Object.keys(filters).length > 0 ? filters : undefined,
-    sort: $sort as Record<string, number> | undefined,
-    limit: $limit as number | undefined,
-    skip: ($skip as number | undefined) ?? 0,
-  }
 }
 
 /** First index whose row sorts strictly after the item — ties insert after their equals. */
@@ -211,7 +193,6 @@ interface QueryEventContext<TMeta> {
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
-  defaultSort: Record<string, number> | undefined
 }
 
 type QueryEventApplication = 'applied' | 'reconcile' | 'ignored'
@@ -274,8 +255,8 @@ function applyVisibleEventEffect<TMeta>(
 
   if (!hasItem || query.state.status !== 'success') return false
   const data = query.rows.data.map(current => (itemHasKey(current, itemId, getId) ? item : current))
-  if (query.classification === 'local-exact') {
-    sortQueryRows(data, query, context.defaultSort)
+  if (query.maintenance.classification === 'local-exact') {
+    sortQueryRows(data, query)
   }
   commitQuery(service, {
     ...query,
@@ -312,7 +293,6 @@ export function applyVisibleEventToQuery<TMeta>({
       getId,
       itemAdded: meta => meta,
       itemRemoved,
-      defaultSort: undefined,
     },
     queryId,
     event,
@@ -320,13 +300,8 @@ export function applyVisibleEventToQuery<TMeta>({
   )
 }
 
-function sortQueryRows<TMeta>(
-  rows: unknown[],
-  query: Query<unknown, TMeta, unknown>,
-  defaultSort: Record<string, number> | undefined,
-): unknown[] {
-  const sort = splitWindow(queryOfParams(query.desc.params)).sort ?? defaultSort
-  return sort ? rows.sort(buildComparator(sort)) : rows
+function sortQueryRows<TMeta>(rows: unknown[], query: Query<unknown, TMeta, unknown>): unknown[] {
+  return query.maintenance.compare ? rows.sort(query.maintenance.compare) : rows
 }
 
 function applyMergeEventToQuery<TMeta>(
@@ -334,15 +309,15 @@ function applyMergeEventToQuery<TMeta>(
   queryId: string,
   event: ProcessedCacheEvent,
 ): QueryEventApplication {
-  const { service, touch, getId, itemAdded, itemRemoved, defaultSort } = context
+  const { service, touch, getId, itemAdded, itemRemoved } = context
   const query = service.queries.get(queryId)
   if (!query) return 'ignored'
 
   const { type, item, previousItem, itemId } = event
-  if (isServerMaintained(query.classification)) {
+  if (isServerMaintained(query.maintenance.classification)) {
     // Server windows merge every provable effect locally. An unprovable effect,
     // and every server-authoritative query, reconciles from the server.
-    if (query.classification !== 'server-window' || query.desc.method !== 'find') {
+    if (query.maintenance.classification !== 'server-window' || query.desc.method !== 'find') {
       return 'reconcile'
     }
     const result = mergeEventIntoWindow({
@@ -353,7 +328,6 @@ function applyMergeEventToQuery<TMeta>(
       itemId,
       hasItem: service.itemQueryIndex.get(itemId)?.has(queryId) ?? false,
       getId,
-      ...(defaultSort !== undefined ? { defaultSort } : {}),
     })
     if (result.action === 'refetch') return 'reconcile'
     if (result.action === 'noop' || query.state.status !== 'success') return 'ignored'
@@ -375,7 +349,7 @@ function applyMergeEventToQuery<TMeta>(
     return 'applied'
   }
 
-  const matches = type !== 'removed' && query.filterItem(item)
+  const matches = type !== 'removed' && query.maintenance.matches(item)
   const hasItem = service.itemQueryIndex.get(itemId)?.has(queryId) ?? false
   if (hasItem) {
     return applyVisibleEventEffect(context, queryId, event, matches ? 'replace' : 'remove')
@@ -389,7 +363,7 @@ function applyMergeEventToQuery<TMeta>(
       state: {
         ...query.state,
         meta: itemAdded(query.state.meta),
-        data: sortQueryRows(query.rows.data.concat(item), query, defaultSort),
+        data: sortQueryRows(query.rows.data.concat(item), query),
       },
     })
     touch(queryId)
@@ -420,7 +394,6 @@ export function updateQueriesFromEvents<TMeta>({
   onEffect,
   excludeQueryId,
   excludeQueryIds,
-  defaultSort,
 }: {
   service: ServiceState<TMeta>
   appliedItems: readonly ProcessedCacheEvent[]
@@ -433,8 +406,6 @@ export function updateQueriesFromEvents<TMeta>({
   /** A query whose state already reflects the applied items (e.g. the fetch they came from). */
   excludeQueryId?: string
   excludeQueryIds?: ReadonlySet<string>
-  /** The backend's implicit order for queries without `$sort` — see QueryStore options. */
-  defaultSort?: Record<string, number> | undefined
 }): void {
   const context: QueryEventContext<TMeta> = {
     service,
@@ -442,7 +413,6 @@ export function updateQueriesFromEvents<TMeta>({
     getId,
     itemAdded,
     itemRemoved,
-    defaultSort,
   }
   for (const event of appliedItems) {
     for (const [queryId, query] of service.queries) {
@@ -450,12 +420,12 @@ export function updateQueriesFromEvents<TMeta>({
       if (query.config.realtime !== 'merge') continue
       if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') continue
       if (
-        isServerMaintained(query.classification) &&
+        isServerMaintained(query.maintenance.classification) &&
         event.mode === 'server' &&
         event.source === 'fetch'
       ) {
         if (
-          query.classification === 'server-window' &&
+          query.maintenance.classification === 'server-window' &&
           service.materialized &&
           service.materialized?.queryId === excludeQueryId
         ) {
@@ -466,8 +436,8 @@ export function updateQueriesFromEvents<TMeta>({
         // New fetch rows may already be counted in another server page's total.
         // Only reconcile known membership when a previously visible row changes.
         const visible = service.itemQueryIndex.get(event.itemId)?.has(queryId) ?? false
-        if (!visible || isProjectionQuery(queryOfParams(query.desc.params))) continue
-        if (query.classification === 'server-window' && event.type !== 'created') {
+        if (!visible || query.maintenance.isProjection) continue
+        if (query.maintenance.classification === 'server-window' && event.type !== 'created') {
           const result = applyMergeEventToQuery(context, queryId, event)
           if (result === 'reconcile') {
             serverMaintainedQueriesToRefetch.add(queryId)
@@ -508,7 +478,6 @@ export function reapplyQueryFromEntities<TMeta>({
   getId,
   itemAdded,
   itemRemoved,
-  defaultSort,
 }: {
   service: ServiceState<TMeta>
   queryId: string
@@ -516,19 +485,18 @@ export function reapplyQueryFromEntities<TMeta>({
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
-  defaultSort?: Record<string, number> | undefined
 }): QueryReapplyResult {
   const query = service.queries.get(queryId)
   if (!query || query.config.realtime !== 'merge') return 'ignored'
   if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') return 'ignored'
-  if (isServerMaintained(query.classification)) return 'reconcile'
+  if (isServerMaintained(query.maintenance.classification)) return 'reconcile'
   if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
   if (!Array.isArray(query.state.data)) return 'ignored'
 
   const candidates = new Map<EntityKey, { id: EntityKey; item: unknown }>()
   for (const [storedId, item] of service.entities) {
     const incomingId = getId(item)
-    if (incomingId === undefined || !query.filterItem(item)) continue
+    if (incomingId === undefined || !query.maintenance.matches(item)) continue
     candidates.set(storedId, { id: storedId, item })
   }
 
@@ -555,9 +523,7 @@ export function reapplyQueryFromEntities<TMeta>({
     if (!retainedKeys.has(key)) nextRows.push(candidate.item)
   }
 
-  const { sort } = splitWindow(queryOfParams(query.desc.params))
-  const effectiveSort = sort ?? defaultSort
-  if (effectiveSort) nextRows.sort(buildComparator(effectiveSort))
+  if (query.maintenance.compare) nextRows.sort(query.maintenance.compare)
 
   const nextKeys = new Set(candidates.keys())
   const added = [...nextKeys].filter(key => !previousKeys.has(key))
@@ -587,7 +553,6 @@ export function replayFetchedQueryFromEvents<TMeta>({
   getId,
   itemAdded,
   itemRemoved,
-  defaultSort,
 }: {
   service: ServiceState<TMeta>
   queryId: string
@@ -596,7 +561,6 @@ export function replayFetchedQueryFromEvents<TMeta>({
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
   itemRemoved: (meta: TMeta) => TMeta
-  defaultSort?: Record<string, number> | undefined
 }): void {
   const context: QueryEventContext<TMeta> = {
     service,
@@ -604,7 +568,6 @@ export function replayFetchedQueryFromEvents<TMeta>({
     getId,
     itemAdded,
     itemRemoved,
-    defaultSort,
   }
   for (const event of events) {
     const query = service.queries.get(queryId)
@@ -616,7 +579,7 @@ export function replayFetchedQueryFromEvents<TMeta>({
     const needsVisibleFallback =
       query.config.realtime === 'refetch' ||
       query.config.fetchPolicy === 'network-only' ||
-      isServerMaintained(query.classification)
+      isServerMaintained(query.maintenance.classification)
     if (canMerge) {
       const result = applyMergeEventToQuery(context, queryId, event)
       if (result === 'applied' || !needsVisibleFallback) continue
@@ -671,7 +634,6 @@ function mergeEventIntoWindow<TMeta>({
   itemId,
   hasItem,
   getId,
-  defaultSort,
 }: {
   query: Query<unknown, TMeta, unknown>
   type: EventType
@@ -680,31 +642,27 @@ function mergeEventIntoWindow<TMeta>({
   itemId: EntityKey
   hasItem: boolean
   getId: (item: unknown) => ItemId | undefined
-  defaultSort?: Record<string, number> | undefined
 }): WindowMergeResult {
   const state = query.state
   if (state.status !== 'success' || !Array.isArray(state.data)) return { action: 'noop' }
 
-  const q = queryOfParams(query.desc.params)
-  const { sort, limit, skip } = splitWindow(q)
-  const effectiveSort = sort ?? defaultSort
-  const cmp = effectiveSort ? buildComparator(effectiveSort) : null
+  const { limit, skip, compare: cmp } = query.maintenance
   const rows = query.rows.data
   const full = limit !== undefined && rows.length >= limit
-  const matches = type !== 'removed' && query.filterItem(item)
+  const matches = type !== 'removed' && query.maintenance.matches(item)
   const last = rows.length > 0 ? rows[rows.length - 1] : undefined
   // Is an invisible member provably past the window? At skip 0 everything before
   // the window is visible, so invisible ⇒ beyond; at an offset we need the
   // comparator to prove it sorts after the last visible row.
   const beyondWindow = (x: unknown) =>
-    skip === 0 ? true : cmp !== null && last !== undefined && cmp(x, last) > 0
+    skip === 0 ? true : cmp !== undefined && last !== undefined && cmp(x, last) > 0
   // Prior result-set membership: judged by the cached previous entity when there is
   // one; a removed event carries the full removed record, which serves the same
   // purpose when the row was never cached (it lived beyond the window).
   const wasMember =
     previousItem != null
-      ? query.filterItem(previousItem)
-      : type === 'removed' && query.filterItem(item)
+      ? query.maintenance.matches(previousItem)
+      : type === 'removed' && query.maintenance.matches(item)
 
   if (!hasItem) {
     if (!matches) {

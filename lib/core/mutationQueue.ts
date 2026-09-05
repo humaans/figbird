@@ -1,3 +1,4 @@
+import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import { createMutationsProxy, type MutationsProxy } from './mutations.js'
 import type { Schema } from './schema.js'
 import type { MutationDescriptor } from './queryTypes.js'
@@ -126,7 +127,7 @@ interface QueueItem extends ScheduledMutationControl {
   maxAt: number
   ready: boolean
   settled: boolean
-  timer: ReturnType<typeof setTimeout> | null
+  timer: ClockTimer | null
   listeners: Set<() => void>
 }
 
@@ -138,6 +139,7 @@ interface QueueItem extends ScheduledMutationControl {
 export class MutationQueue<S extends Schema> {
   readonly m: MutationsProxy<S>
 
+  readonly #clock: Clock
   readonly #host: MutationQueueHost
   readonly #config: MutationQueueConfig
   readonly #items: QueueItem[] = []
@@ -149,7 +151,12 @@ export class MutationQueue<S extends Schema> {
   #flushThrough = 0
   #detached = false
 
-  constructor(host: MutationQueueHost, config: MutationQueueConfig = {}) {
+  constructor(
+    host: MutationQueueHost,
+    config: MutationQueueConfig = {},
+    clock: Clock = systemClock,
+  ) {
+    this.#clock = clock
     this.#host = host
     this.#config = Object.freeze({ ...config })
     this.m = createMutationsProxy({
@@ -231,7 +238,7 @@ export class MutationQueue<S extends Schema> {
       if (tail.registration!.tryUpdate(merged)) {
         tail.desc = merged
         tail.operation = operation
-        tail.dueAt = Date.now() + schedule.wait
+        tail.dueAt = this.#clock.now() + schedule.wait
         tail.maxAt = Math.min(
           tail.maxAt,
           schedule.maxWait === undefined
@@ -281,7 +288,7 @@ export class MutationQueue<S extends Schema> {
 
   #createItem(operation: MutationQueueOperation, desc: MutationDescriptor | null): QueueItem {
     const sequence = this.#nextSequence++
-    const enqueuedAt = Date.now()
+    const enqueuedAt = this.#clock.now()
     const schedule = this.#schedule(operation)
     const item: QueueItem = {
       sequence,
@@ -322,7 +329,7 @@ export class MutationQueue<S extends Schema> {
 
   #settled(item: QueueItem): void {
     item.settled = true
-    if (item.timer) clearTimeout(item.timer)
+    if (item.timer) item.timer.cancel()
     item.timer = null
 
     while (this.#items[0]?.settled) this.#items.shift()
@@ -398,11 +405,11 @@ export class MutationQueue<S extends Schema> {
     return new Promise(resolve => {
       const finish = (elapsed: boolean) => {
         if (this.#cancelRetryWait === cancel) this.#cancelRetryWait = null
-        clearTimeout(timer)
+        timer.cancel()
         resolve(elapsed)
       }
       const cancel = () => finish(false)
-      const timer = setTimeout(() => finish(true), delay)
+      const timer = this.#clock.setTimeout(() => finish(true), delay)
       this.#cancelRetryWait = cancel
       if (this.#detached) cancel()
     })
@@ -411,9 +418,9 @@ export class MutationQueue<S extends Schema> {
   #armCurrent(): void {
     const current = this.#items[0]
     if (!current || current.settled || current.ready || this.#failedDecision) return
-    if (current.timer) clearTimeout(current.timer)
+    if (current.timer) current.timer.cancel()
 
-    const now = Date.now()
+    const now = this.#clock.now()
     let deadline = Math.min(current.dueAt, current.maxAt)
     for (const item of this.#items) {
       if (!item.settled) deadline = Math.min(deadline, item.dueAt, item.maxAt)
@@ -426,7 +433,7 @@ export class MutationQueue<S extends Schema> {
       this.#makeReady(current)
       return
     }
-    current.timer = setTimeout(() => {
+    current.timer = this.#clock.setTimeout(() => {
       current.timer = null
       this.#makeReady(current)
     }, delay)

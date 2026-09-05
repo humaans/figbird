@@ -1,16 +1,13 @@
+import { CappedBuffer } from './cappedBuffer.js'
 import { entityKey, type EntityKey, type ItemId, type ProcessedCacheEvent } from './queryTypes.js'
 
 /** Maximum retained events per service while one or more fetches are in flight. */
 export const MAX_FETCH_JOURNAL_EVENTS = 1024
 
-interface ActiveFetch {
-  eventIndex: number
-  overflowed: boolean
-}
-
 interface ServiceJournal {
-  events: ProcessedCacheEvent[]
-  activeFetches: Map<number, ActiveFetch>
+  events: CappedBuffer<ProcessedCacheEvent>
+  nextSequence: number
+  activeFetches: Map<number, number>
 }
 
 export interface FetchJournalCursor {
@@ -50,29 +47,30 @@ export class FetchEventJournal {
   begin(serviceName: string): FetchJournalCursor {
     let journal = this.#services.get(serviceName)
     if (!journal) {
-      journal = { events: [], activeFetches: new Map() }
+      journal = {
+        events: new CappedBuffer(this.#maxEvents),
+        nextSequence: 0,
+        activeFetches: new Map(),
+      }
       this.#services.set(serviceName, journal)
-    } else {
-      this.#compact(journal)
     }
 
     const cursor = { serviceName, id: this.#nextCursorId++ }
-    journal.activeFetches.set(cursor.id, {
-      eventIndex: journal.events.length,
-      overflowed: false,
-    })
+    journal.activeFetches.set(cursor.id, journal.nextSequence)
     return cursor
   }
 
   read(cursor: FetchJournalCursor): FetchJournalSnapshot {
     const journal = this.#services.get(cursor.serviceName)
     const activeFetch = journal?.activeFetches.get(cursor.id)
-    if (!journal || !activeFetch) {
+    if (!journal || activeFetch === undefined) {
       return { events: [], overflowed: true }
     }
+    const firstSequence = journal.nextSequence - journal.events.length
+    const overflowed = activeFetch < firstSequence
     return {
-      events: activeFetch.overflowed ? [] : journal.events.slice(activeFetch.eventIndex),
-      overflowed: activeFetch.overflowed,
+      events: overflowed ? [] : journal.events.toArray().slice(activeFetch - firstSequence),
+      overflowed,
     }
   }
 
@@ -82,8 +80,6 @@ export class FetchEventJournal {
     journal.activeFetches.delete(cursor.id)
     if (journal.activeFetches.size === 0) {
       this.#services.delete(cursor.serviceName)
-    } else {
-      this.#compact(journal)
     }
   }
 
@@ -92,34 +88,8 @@ export class FetchEventJournal {
       const journal = this.#services.get(event.serviceName)
       if (!journal) continue
 
-      const safeFetches = [...journal.activeFetches.values()].filter(fetch => !fetch.overflowed)
-      if (safeFetches.length === 0) continue
-
       journal.events.push(event)
-      let didOverflow = false
-      for (const fetch of safeFetches) {
-        if (journal.events.length - fetch.eventIndex > this.#maxEvents) {
-          fetch.overflowed = true
-          didOverflow = true
-        }
-      }
-      if (didOverflow) this.#compact(journal)
-    }
-  }
-
-  /** Discard the event prefix no safe active fetch still needs. */
-  #compact(journal: ServiceJournal): void {
-    const safeFetches = [...journal.activeFetches.values()].filter(fetch => !fetch.overflowed)
-    if (safeFetches.length === 0) {
-      journal.events = []
-      return
-    }
-
-    const firstRequiredIndex = Math.min(...safeFetches.map(fetch => fetch.eventIndex))
-    if (firstRequiredIndex === 0) return
-    journal.events.splice(0, firstRequiredIndex)
-    for (const fetch of safeFetches) {
-      fetch.eventIndex -= firstRequiredIndex
+      journal.nextSequence += 1
     }
   }
 }

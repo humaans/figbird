@@ -421,6 +421,18 @@ it('materialized services evaluate scoped operators with their canonical path', 
   t.true(contexts.length > 0)
   t.true(contexts.every(serviceName => serviceName === 'api/job-roles'))
 
+  const compiledMatchers = contexts.length
+  current.refetch()
+  await flush()
+  current.refetch()
+  await flush()
+  t.is(contexts.length, compiledMatchers, 'local refetches reuse the compiled scoped matcher')
+  t.is(roles.counts.find, findsAfterMaterialize)
+  t.deepEqual(
+    (current.getSnapshot().data as ScopedItem[]).map(item => item.id),
+    [1],
+  )
+
   unsubCurrent()
   unsubAll()
   unmount()

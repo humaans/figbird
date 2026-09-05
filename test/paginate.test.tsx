@@ -99,18 +99,18 @@ function createPaginateApp(opts: PaginateAppOptions = {}) {
 test('QueryBuilder.paginate: sets kind=paginate, pageSize, includeTotal in AST', t => {
   const { figbird } = createPaginateApp()
   const ast = figbird.q.issues.paginate({ pageSize: 4, includeTotal: true }).toAST()
-  t.is(ast.kind, 'paginate')
+  if (ast.kind !== 'paginate') return t.fail('Expected a paginated AST')
   t.is(ast.pageSize, 4)
   t.is(ast.includeTotal, true)
   t.is(ast.cardinality, 'many')
 })
 
-test('QueryBuilder.paginate: includeTotal defaults to omitted (undefined)', t => {
+test('QueryBuilder.paginate: includeTotal defaults to false', t => {
   const { figbird } = createPaginateApp()
   const ast = figbird.q.issues.paginate({ pageSize: 4 }).toAST()
-  t.is(ast.kind, 'paginate')
+  if (ast.kind !== 'paginate') return t.fail('Expected a paginated AST')
   t.is(ast.pageSize, 4)
-  t.is(ast.includeTotal, undefined)
+  t.is(ast.includeTotal, false)
 })
 
 test('QueryBuilder.paginate: requires a positive integer pageSize', t => {
@@ -127,7 +127,7 @@ test('QueryBuilder.paginate: composes with where and orderBy before paginate', t
     .orderBy('rank', 'desc')
     .paginate({ pageSize: 5 })
     .toAST()
-  t.is(ast.kind, 'paginate')
+  if (ast.kind !== 'paginate') return t.fail('Expected a paginated AST')
   t.is(ast.pageSize, 5)
   t.deepEqual(ast.query, { status: 'open', $sort: { rank: -1 } })
 })

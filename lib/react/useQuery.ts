@@ -66,6 +66,7 @@ export interface QueryRefLike<T> {
   getSnapshot(): RelationalQueryState<T>
   refetch(): void
   loadMore(): void
+  setColdReadGroup(group: object): void
   suspensePromise(): Promise<void>
   releaseColdStart(): void
   hash(): string

@@ -1,3 +1,6 @@
+import { trimAbandonedReads } from './abandonedReads.js'
+import { systemClock, type Clock, type ClockTimer } from './clock.js'
+import { explainQuery } from './relationPlan.js'
 import {
   locallySupportedOperators,
   type Adapter,
@@ -30,7 +33,6 @@ import {
 } from './queryBuilder.js'
 import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
 import {
-  explainQuery,
   explainQueryNode,
   isServerMaintained,
   type ClassificationReason,
@@ -78,8 +80,6 @@ import type {
 import { resolveServicePath } from './schema.js'
 import { isWithinStaleTime, validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
 import { createTransactionContext, type TransactionContext } from './transactions.js'
-
-const MAX_WINDOW_QUERY_CACHE_SIZE = 20
 
 type DescriptorWriteProjection<TItem> =
   | {
@@ -173,7 +173,7 @@ const KEYED_MUTATION_QUEUE_RETENTION_MS = 5 * 60_000
 interface KeyedMutationQueueEntry<S extends Schema> {
   queue: MutationQueue<S>
   owners: number
-  evictionTimer: ReturnType<typeof setTimeout> | null
+  evictionTimer: ClockTimer | null
   unsubscribe: () => void
 }
 
@@ -206,8 +206,10 @@ export class Figbird<
   A extends Adapter<any, any, any> = Adapter<unknown, Record<string, unknown>, unknown>,
 > {
   adapter: A
-  queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
+  queryStore: QueryStore<AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
+  /** @internal Time source shared by the query and mutation engines. */
+  readonly clock: Clock
   #staleTime: number
   #disposed = false
   #mutationQueues = new Set<MutationQueue<S>>()
@@ -272,6 +274,7 @@ export class Figbird<
     reconnectJitter,
     visibility,
     defaultSort,
+    clock = systemClock,
   }: {
     adapter: A
     eventBatchInterval?: number
@@ -285,13 +288,17 @@ export class Figbird<
     reconnectJitter?: ReconnectJitter
     visibility?: VisibilitySource
     defaultSort?: Record<string, 1 | -1>
+    /** @internal Deterministic policy time for tests. */
+    clock?: Clock
   }) {
     staleTime = validateStaleTime(staleTime, 'Figbird(): staleTime')
+    this.clock = clock
     this.adapter = adapter
     this.schema = schema
     this.#staleTime = staleTime
-    this.queryStore = new QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
+    this.queryStore = new QueryStore<AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
+      clock,
       eventBatchInterval,
       staleTime,
       gcTime,
@@ -310,7 +317,7 @@ export class Figbird<
     if (this.#disposed) return
     this.#disposed = true
     for (const prefetch of this.#prefetches.values()) {
-      clearTimeout(prefetch.timer)
+      prefetch.timer.cancel()
       prefetch.release()
     }
     this.#prefetches.clear()
@@ -320,7 +327,7 @@ export class Figbird<
     this.#relationalQueryCache.clear()
     for (const queues of this.#keyedMutationQueues.values()) {
       for (const entry of queues.values()) {
-        if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+        if (entry.evictionTimer) entry.evictionTimer.cancel()
         entry.unsubscribe()
       }
     }
@@ -441,7 +448,11 @@ export class Figbird<
     let ref = cached as
       | RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
       | undefined
-    if (!ref) {
+    if (ref) {
+      this.#relationalQueryCache.delete(hash)
+      this.#relationalQueryCache.set(hash, ref)
+      trimAbandonedReads(this.#relationalQueryCache, ref)
+    } else {
       const ast = builder.toAST()
       ref = new RelationalQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
         // Figbird structurally satisfies the engine's narrow RelationalQueryHost contract.
@@ -458,10 +469,14 @@ export class Figbird<
             this.#relationalQueryCache.delete(hash)
           }
         },
-        { defaultStaleTime: this.#staleTime },
+        {
+          defaultStaleTime: this.#staleTime,
+          onIdle: () => trimAbandonedReads(this.#relationalQueryCache, ref),
+        },
       )
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#relationalQueryCache.set(hash, ref as RelationalQueryRef<any, S, any, any, any>)
+      trimAbandonedReads(this.#relationalQueryCache, ref)
     }
     ref.setDisplayName(name)
     return ref
@@ -508,7 +523,7 @@ export class Figbird<
       this.#windowQueryCache.delete(hash)
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#windowQueryCache.set(hash, ref as WindowQueryRef<any, S, any, any, any>)
-      this.#trimWindowQueryCache(ref)
+      trimAbandonedReads(this.#windowQueryCache, ref)
     } else {
       ref = new WindowQueryRef<T, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
         this,
@@ -520,27 +535,15 @@ export class Figbird<
           onEvict: () => {
             if (this.#windowQueryCache.get(hash) === ref) this.#windowQueryCache.delete(hash)
           },
-          onIdle: () => this.#trimWindowQueryCache(ref),
+          onIdle: () => trimAbandonedReads(this.#windowQueryCache, ref),
         },
       )
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any
       this.#windowQueryCache.set(hash, ref as WindowQueryRef<any, S, any, any, any>)
-      this.#trimWindowQueryCache(ref)
+      trimAbandonedReads(this.#windowQueryCache, ref)
     }
     ref.setDisplayName(name)
     return ref
-  }
-
-  #trimWindowQueryCache(
-    // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-    protectedRef: WindowQueryRef<any, S, any, any, any> | undefined,
-  ): void {
-    if (this.#windowQueryCache.size <= MAX_WINDOW_QUERY_CACHE_SIZE) return
-    for (const candidate of this.#windowQueryCache.values()) {
-      if (this.#windowQueryCache.size <= MAX_WINDOW_QUERY_CACHE_SIZE) return
-      if (candidate === protectedRef) continue
-      candidate.evictAbandonedRead()
-    }
   }
 
   /**
@@ -594,10 +597,7 @@ export class Figbird<
   }
 
   // Active speculative pins, keyed by query hash (see prefetch()).
-  #prefetches: Map<
-    string,
-    { at: number; release: () => void; timer: ReturnType<typeof setTimeout> }
-  > = new Map()
+  #prefetches: Map<string, { at: number; release: () => void; timer: ClockTimer }> = new Map()
 
   /**
    * Speculatively warm a query — the idempotent, fire-and-forget sibling of `prepare()`.
@@ -626,11 +626,11 @@ export class Figbird<
     const ref = this.query(query)
     const hash = ref.hash()
 
-    const now = Date.now()
+    const now = this.clock.now()
     const existing = this.#prefetches.get(hash)
     if (existing && isWithinStaleTime(existing.at, staleTime, now)) return
     if (existing) {
-      clearTimeout(existing.timer)
+      existing.timer.cancel()
       existing.release()
       this.#prefetches.delete(hash)
     }
@@ -638,12 +638,12 @@ export class Figbird<
     // The pin also carries the staleTime so a warm-in-store read within the window
     // skips the SWR revalidation instead of re-fetching.
     const release = ref.subscribe(() => {}, { staleTime, source: 'prefetch' })
-    const timer = setTimeout(() => {
+    const timer = this.clock.setTimeout(() => {
       this.#prefetches.delete(hash)
       release()
     }, staleTime)
     // Never keep a Node process alive for a speculative pin (browsers ignore this).
-    ;(timer as { unref?: () => void }).unref?.()
+    timer.unref()
     this.#prefetches.set(hash, { at: now, release, timer })
   }
 
@@ -663,10 +663,7 @@ export class Figbird<
   ): QueryRef<
     ServiceDefinitionByPath<S, P>['item'][],
     ServiceDefinitionByPath<S, P>['query'],
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
+    AdapterFindMeta<A>
   >
   /** Create a typed `get` query reference from a descriptor. */
   queryDesc<P extends ServicePaths<S>>(
@@ -683,23 +680,13 @@ export class Figbird<
   ): QueryRef<
     ServiceDefinitionByPath<S, P>['item'],
     ServiceDefinitionByPath<S, P>['query'],
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
+    AdapterFindMeta<A>
   >
   // Generic fallback overload (for dynamic descriptors)
   queryDesc<D extends QueryDescriptor>(
     desc: D,
     config?: QueryConfig<InferQueryData<S, D>, AdapterQuery<A>>,
-  ): QueryRef<
-    InferQueryData<S, D>,
-    AdapterQuery<A>,
-    S,
-    AdapterParams<A>,
-    AdapterFindMeta<A>,
-    AdapterQuery<A>
-  >
+  ): QueryRef<InferQueryData<S, D>, AdapterQuery<A>, AdapterFindMeta<A>>
   // Implementation
   queryDesc(
     desc: {
@@ -711,13 +698,11 @@ export class Figbird<
     config?: QueryConfig<unknown, unknown>,
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   ): any {
-    return new QueryRef<unknown, unknown, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>(
-      {
-        desc: desc as QueryDescriptor,
-        config: normalizeQueryConfig(config),
-        queryStore: this.queryStore,
-      },
-    )
+    return new QueryRef<unknown, unknown, AdapterFindMeta<A>>({
+      desc: desc as QueryDescriptor,
+      config: normalizeQueryConfig(config),
+      queryStore: this.queryStore,
+    })
   }
 
   // Descriptor layer, write side — the primitive `m` is built on. Speaks plain
@@ -900,7 +885,7 @@ export class Figbird<
           control,
         ),
     }
-    const queue = new MutationQueue<S>(host, config)
+    const queue = new MutationQueue<S>(host, config, this.clock)
     queue.subscribe(() => {
       if (queue.pending > 0 && !this.#disposed) this.#mutationQueues.add(queue)
       else this.#mutationQueues.delete(queue)
@@ -920,7 +905,7 @@ export class Figbird<
     const entry = {
       queue,
       owners: 0,
-      evictionTimer: null as ReturnType<typeof setTimeout> | null,
+      evictionTimer: null as ClockTimer | null,
       unsubscribe: () => {},
     }
     entry.unsubscribe = queue.subscribe(() => {
@@ -948,7 +933,7 @@ export class Figbird<
       throw new Error(`figbird: mutation queue "${key}" is no longer registered`)
     }
     entry.owners += 1
-    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    if (entry.evictionTimer) entry.evictionTimer.cancel()
     entry.evictionTimer = null
 
     let released = false
@@ -970,13 +955,12 @@ export class Figbird<
     key: string,
     entry: KeyedMutationQueueEntry<S>,
   ): void {
-    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
-    entry.evictionTimer = setTimeout(
+    if (entry.evictionTimer) entry.evictionTimer.cancel()
+    entry.evictionTimer = this.clock.setTimeout(
       () => this.#evictMutationQueue(definition, key, entry),
       KEYED_MUTATION_QUEUE_RETENTION_MS,
     )
-    const timer = entry.evictionTimer as ReturnType<typeof setTimeout> & { unref?: () => void }
-    timer.unref?.()
+    entry.evictionTimer.unref()
   }
 
   #evictMutationQueue(
@@ -986,7 +970,7 @@ export class Figbird<
   ): void {
     const queues = this.#keyedMutationQueues.get(definition)
     if (entry.owners > 0 || queues?.get(key) !== entry) return
-    if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+    if (entry.evictionTimer) entry.evictionTimer.cancel()
     entry.unsubscribe()
     queues.delete(key)
     if (queues.size === 0) this.#keyedMutationQueues.delete(definition)
@@ -1025,11 +1009,11 @@ export class Figbird<
    */
   explain<Args, B extends AnyQueryBuilder<S>>(queryOrBuilder: QueryInput<B, Args>): ExplainReport {
     // Resolved without interning — explain never materializes a query. The walk
-    // itself lives in queryClassification.ts, next to the plans it reports on.
+    // itself consumes the compiled relation plan used by query execution.
     const { builder } = resolveQueryInput(queryOrBuilder)
     const nodes = explainQuery(
       builder.toAST(),
-      this.schema?.relationships,
+      this.schema ?? { services: {} },
       serviceName =>
         locallySupportedOperators(this.adapter, resolveServicePath(this.schema, serviceName)),
       serviceName =>
@@ -1074,12 +1058,13 @@ export class Figbird<
                 },
               }
             : {}),
-          classification: query.classification,
+          classification: query.maintenance.classification,
           classificationReasons: explanation?.reasons ?? [],
           realtimeStrategy:
             query.config.realtime === 'disabled'
               ? 'manual'
-              : query.config.realtime === 'refetch' || isServerMaintained(query.classification)
+              : query.config.realtime === 'refetch' ||
+                  isServerMaintained(query.maintenance.classification)
                 ? 'refetch'
                 : 'merge',
           skipped: query.config.skip === true,

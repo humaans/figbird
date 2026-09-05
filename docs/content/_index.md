@@ -294,7 +294,7 @@ intermediate rows match a parent, the first resolves — make the first hop sele
 
 Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service's realtime events.
 
-Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** like `.related('recent', i => i.orderBy(...).limit(5))`, which needs one query _per parent_ because per-parent windows can't be expressed as a single find. Figbird warns past 10 parents and points at `embed` as the batched alternative.
+Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** like `.related('recent', i => i.orderBy(...).limit(5))`, which needs one query _per parent_ because per-parent windows can't be expressed as a single find. Figbird warns past 10 parents and points at `embed` as the batched alternative. Sorting alone stays batched and fetches all matching rows across server pages. Only `$limit` or `$skip`, supplied by the builder or the relationship definition, requires a per-parent window for a single-hop `many` relation.
 
 You can also filter parents by a field on a related entity, with a dotted path:
 

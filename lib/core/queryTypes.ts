@@ -1,6 +1,6 @@
 import type { QueryRows } from './queryResults.js'
 import type { AnySchema, Schema, ServiceDefinitionByPath, ServicePaths } from './schema.js'
-import type { StoredQueryClass } from './queryClassification.js'
+import type { QueryMaintenance } from './queryMaintenance.js'
 import type { PageInfo, PageRequest } from '../adapters/adapter.js'
 
 export type ItemId = string | number
@@ -156,15 +156,9 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   queryId: string
   desc: QueryDescriptor
   config: QueryConfig<T, TQuery>
-  /**
-   * How this query is maintained, computed once at materialize time (`desc` and
-   * `config` are frozen — they are what the query id hashes). The realtime event
-   * loop reads this instead of re-walking the query per item.
-   */
-  classification: StoredQueryClass
+  maintenance: QueryMaintenance
   /** Diagnostic projection of the reconciliation scheduler; only the scheduler updates it. */
   pending: boolean
-  filterItem: (item: ElementType<T>) => boolean
   /** Immutable reader snapshot, derived when query membership or values commit. */
   readonly state: QueryState<T, TMeta>
   readonly rows: QueryRows

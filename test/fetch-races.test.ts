@@ -1,3 +1,4 @@
+import { TestClock, flushTasks } from './clock.js'
 import test from 'ava'
 import { FeathersAdapter, Figbird, createSchema, service, type RetryDelay } from '../lib'
 import { FetchEventJournal, MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
@@ -33,15 +34,18 @@ function createApp(
     eventBatchInterval = 0,
     retry,
     retryDelay,
+    clock,
   }: {
     eventBatchInterval?: number
     retry?: number | false
     retryDelay?: RetryDelay
+    clock?: TestClock
   } = {},
 ) {
   const feathers = mockFeathers({ notes: { data } }, { queryAwareFind: true })
   const figbird = new Figbird({
     schema,
+    ...(clock ? { clock } : {}),
     adapter: new FeathersAdapter(feathers),
     eventBatchInterval,
     reconcileCooldown: 0,
@@ -53,13 +57,15 @@ function createApp(
 }
 
 test('failed fetches retry with backoff before exposing an error', async t => {
+  const clock = new TestClock()
   const delays: Array<{ attempt: number; message: string }> = []
   const { figbird, notes } = createApp(
     { 1: { id: 1, content: 'one', rank: 1 } },
     {
+      clock,
       retryDelay: (attempt, error) => {
         delays.push({ attempt, message: error.message })
-        return 0
+        return attempt * 10
       },
     },
   )
@@ -77,7 +83,14 @@ test('failed fetches retry with backoff before exposing an error', async t => {
   const observedStatuses: string[] = []
   const unsub = ref.subscribe(state => observedStatuses.push(state.status))
 
-  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the retried find')
+  await clock.advance(9)
+  t.is(notes.counts.find, 1)
+  await clock.advance(1)
+  t.is(notes.counts.find, 2)
+  await clock.advance(19)
+  t.is(notes.counts.find, 2)
+  await clock.advance(1)
+  t.is(ref.getSnapshot()?.status, 'success')
 
   t.is(notes.counts.find, 3, 'the initial request plus two retries ran')
   t.deepEqual(delays, [
@@ -137,7 +150,8 @@ test('retry policy handles server errors, client errors, and per-query opt-out',
 })
 
 test('a pending retry stops when the query loses its last subscriber', async t => {
-  const { figbird, notes } = createApp({}, { retry: 3, retryDelay: 20 })
+  const clock = new TestClock()
+  const { figbird, notes } = createApp({}, { clock, retry: 3, retryDelay: 20 })
   notes.find = async () => {
     notes.counts.find++
     throw new Error('offline')
@@ -145,9 +159,9 @@ test('a pending retry stops when the query loses its last subscriber', async t =
 
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsub = ref.subscribe(() => {})
-  await waitFor(() => notes.counts.find === 1, 'the first failed request')
+  await flushTasks()
   unsub()
-  await sleep(40)
+  await clock.advance(40)
 
   t.is(notes.counts.find, 1)
   t.is(ref.getSnapshot()?.status, 'error')
@@ -227,6 +241,25 @@ test('journal overflow invalidates only cursors that exceed the event limit', t 
     newerSnapshot.events.map(event => event.itemId),
     ['3', '4'],
   )
+  journal.end(olderFetch)
+  journal.record([processedEvent(5)])
+  t.deepEqual(
+    journal.read(newerFetch).events.map(event => event.itemId),
+    ['3', '4', '5'],
+  )
+  journal.record([processedEvent(6)])
+  t.true(journal.read(newerFetch).overflowed, 'overflow begins only after the capacity boundary')
+  journal.end(newerFetch)
+  const nextFetch = journal.begin('notes')
+  t.deepEqual(journal.read(nextFetch), { events: [], overflowed: false })
+  t.true(journal.read(newerFetch).overflowed, 'released cursors cannot read a new journal')
+  journal.record([processedEvent(7)])
+  t.deepEqual(
+    journal.read(nextFetch).events.map(event => event.itemId),
+    ['7'],
+  )
+  journal.clear()
+  t.true(journal.read(nextFetch).overflowed)
 })
 
 test('a created event that lands during a find survives the stale response', async t => {
