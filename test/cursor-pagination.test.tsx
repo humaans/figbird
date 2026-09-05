@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react'
 import test from 'ava'
 import React, { type ReactNode } from 'react'
 import {
@@ -14,7 +15,7 @@ import {
   type FeathersService,
   type VisibilitySource,
 } from '../lib/index.js'
-import { dom } from './helpers.js'
+import { dom, it } from './dom.js'
 
 interface Item {
   id: number
@@ -184,7 +185,7 @@ function makeRows(count: number): Item[] {
   return Array.from({ length: count }, (_, index) => ({ id: index + 1, rank: index + 1 }))
 }
 
-test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full final page', async t => {
+it('cursor paginate: chains opaque cursors and trusts hasNextPage on a full final page', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, calls, figbird } = createCursorApp(makeRows(6))
   let loadMore: (() => void) | undefined
@@ -193,7 +194,9 @@ test('cursor paginate: chains opaque cursors and trusts hasNextPage on a full fi
     const result = useQueryResult(
       figbird.q.items.where({ rank: { $gte: 1 } }).paginate({ pageSize: 3, includeTotal: true }),
     )
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return (
       <div
         className='items'
@@ -337,14 +340,16 @@ test('cursorPagination: validates and enforces the service maximum', async t => 
   t.is(calls.length, 0)
 })
 
-test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor chain', async t => {
+it('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor chain', async t => {
   const { render, unmount, flush, $ } = dom()
   const cursorApp = createCursorApp(makeRows(7))
   let loadMore: (() => void) | undefined
 
   function List() {
     const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
 
@@ -372,7 +377,7 @@ test('cursor paginate: realtime rebuilds the loaded prefix with a fresh cursor c
   unmount()
 })
 
-test('cursor paginate: stable visible updates merge locally; ordering changes rebuild', async t => {
+it('cursor paginate: stable visible updates merge locally; ordering changes rebuild', async t => {
   const { render, unmount, flush, $ } = dom()
   const initialRows = makeRows(7).map(row => ({ ...row, title: `Item ${row.id}` }))
   const cursorApp = createCursorApp(initialRows)
@@ -382,7 +387,9 @@ test('cursor paginate: stable visible updates merge locally; ordering changes re
     const result = useQueryResult(
       cursorApp.figbird.q.items.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return (
       <div
         className='items'
@@ -422,7 +429,7 @@ test('cursor paginate: stable visible updates merge locally; ordering changes re
   unmount()
 })
 
-test('cursor paginate: without a cursor stability contract, visible updates rebuild', async t => {
+it('cursor paginate: without a cursor stability contract, visible updates rebuild', async t => {
   const { render, unmount, flush } = dom()
   const initialRows = makeRows(3).map(row => ({ ...row, title: `Item ${row.id}` }))
   const cursorApp = createCursorApp(initialRows, 3, { cursorStability: false })
@@ -453,7 +460,7 @@ test('cursor paginate: without a cursor stability contract, visible updates rebu
   unmount()
 })
 
-test('cursor paginate: missing server-only inputs make a visible update rebuild', async t => {
+it('cursor paginate: missing server-only inputs make a visible update rebuild', async t => {
   const { render, unmount, flush } = dom()
   const initialRows = makeRows(3).map(row => ({ ...row, title: `Item ${row.id}` }))
   const cursorApp = createCursorApp(initialRows)
@@ -489,14 +496,16 @@ test('cursor paginate: missing server-only inputs make a visible update rebuild'
   unmount()
 })
 
-test('cursor paginate: an old in-flight page never leaks into a rebuilt prefix', async t => {
+it('cursor paginate: an old in-flight page never leaks into a rebuilt prefix', async t => {
   const { render, unmount, flush, $ } = dom()
   const cursorApp = createCursorApp(makeRows(7))
   let loadMore: (() => void) | undefined
 
   function List() {
     const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
 
@@ -542,14 +551,16 @@ test('cursor paginate: an old in-flight page never leaks into a rebuilt prefix',
   unmount()
 })
 
-test('cursor paginate: reconnect rebuilds every loaded page from page zero', async t => {
+it('cursor paginate: reconnect rebuilds every loaded page from page zero', async t => {
   const { render, unmount, flush, $ } = dom()
   const cursorApp = createCursorApp(makeRows(7))
   let loadMore: (() => void) | undefined
 
   function List() {
     const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
 
@@ -577,7 +588,7 @@ test('cursor paginate: reconnect rebuilds every loaded page from page zero', asy
   unmount()
 })
 
-test('cursor paginate: hidden reconnect waits, then rebuilds on visibility', async t => {
+it('cursor paginate: hidden reconnect waits, then rebuilds on visibility', async t => {
   const { render, unmount, flush, $ } = dom()
   const visibility = fakeVisibility(false)
   const cursorApp = createCursorApp(makeRows(7), 3, { visibility: visibility.source })
@@ -585,7 +596,9 @@ test('cursor paginate: hidden reconnect waits, then rebuilds on visibility', asy
 
   function List() {
     const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
 
@@ -618,14 +631,16 @@ test('cursor paginate: hidden reconnect waits, then rebuilds on visibility', asy
   unmount()
 })
 
-test('cursor paginate: failed prefix rebuild stays atomic and retries its depth', async t => {
+it('cursor paginate: failed prefix rebuild stays atomic and retries its depth', async t => {
   const { render, unmount, flush, $ } = dom()
   const cursorApp = createCursorApp(makeRows(7), 3, { retry: false })
   let loadMore: (() => void) | undefined
 
   function List() {
     const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
 
@@ -664,14 +679,16 @@ test('cursor paginate: failed prefix rebuild stays atomic and retries its depth'
   unmount()
 })
 
-test('cursor paginate: automatic fetch retry stays inside the frozen rebuild', async t => {
+it('cursor paginate: automatic fetch retry stays inside the frozen rebuild', async t => {
   const { render, unmount, flush, $ } = dom()
   const cursorApp = createCursorApp(makeRows(7), 3, { retry: 1, retryDelay: 0 })
   let loadMore: (() => void) | undefined
 
   function List() {
     const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
-    loadMore = result.loadMore
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
     return <div className='items' data-ids={result.data.map(item => item.id).join(',')} />
   }
 

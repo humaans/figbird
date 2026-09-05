@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -442,27 +443,20 @@ export function TooltipLayer({ rootRef }: { rootRef: RefObject<HTMLElement | nul
   )
 }
 
+function subscribeColorScheme(onChange: () => void): () => void {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {}
+  const media = window.matchMedia('(prefers-color-scheme: dark)')
+  media.addEventListener('change', onChange)
+  return () => media.removeEventListener('change', onChange)
+}
+
 export function usePreferredColorScheme(theme: DevtoolsThemeMode): ColorScheme {
-  const [scheme, setScheme] = useState<ColorScheme>(() => resolveColorScheme(theme))
-
-  useEffect(() => {
-    if (theme !== 'system') {
-      setScheme(theme)
-      return
-    }
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      setScheme('light')
-      return
-    }
-
-    const media = window.matchMedia('(prefers-color-scheme: dark)')
-    const update = () => setScheme(media.matches ? 'dark' : 'light')
-    update()
-    media.addEventListener('change', update)
-    return () => media.removeEventListener('change', update)
-  }, [theme])
-
-  return scheme
+  const systemScheme = useSyncExternalStore(
+    subscribeColorScheme,
+    () => resolveColorScheme('system'),
+    (): ColorScheme => 'light',
+  )
+  return theme === 'system' ? systemScheme : theme
 }
 
 export function usePopoutDocument(
@@ -473,6 +467,7 @@ export function usePopoutDocument(
   useEffect(() => {
     if (!popoutWindow) return
     const { document } = popoutWindow
+    // oxlint-disable react/immutability -- This effect synchronizes an external DOM document.
     document.title = 'Figbird devtools'
     let viewport = document.querySelector('meta[name="viewport"]')
     if (!viewport) {
@@ -491,6 +486,7 @@ export function usePopoutDocument(
     document.body.style.background = colors.bg
     document.body.style.color = colors.text
     document.body.style.fontSize = '11px'
+    // oxlint-enable react/immutability
   }, [colorScheme, colors, popoutWindow])
 }
 

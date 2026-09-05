@@ -1,4 +1,12 @@
-import { startTransition, useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+} from 'react'
 import { FigbirdEventEmitter, type FigbirdEvent } from '../core/events.js'
 import { normalizeError } from '../core/errors.js'
 import type { FigbirdEvents } from '../core/figbird.js'
@@ -119,7 +127,7 @@ function emitterOf(figbird: ActionEventsHost | undefined | null): EmitFn | null 
  *   Suspense fallback — writes compose with the read side's transition story.
  *   Corollary: urgent synchronous UI (closing an editor, clearing an input)
  *   belongs *before* `run()`, not inside the body.
- * - The function is captured fresh every render, so it can close over current
+ * - The function is captured at each commit, so it can close over current
  *   props/state — no deps array.
  * - The optional `name` labels `action:start/end/error` observability events so
  *   devtools speak the app's vocabulary ("reassign · 340ms"), not just the data
@@ -154,15 +162,15 @@ export function useActionImpl<TArgs extends unknown[], TResult>(
     data: null,
   })
 
-  // Latest-closure refs: run() always sees the current render's fn/name/emitter
-  // without being re-created, so it is referentially stable for the lifetime of
-  // the component.
+  // Stable callbacks read the latest committed props, including when a render suspends.
   const fnRef = useRef(fn)
-  fnRef.current = fn
   const nameRef = useRef(name)
-  nameRef.current = name
   const emitRef = useRef<EmitFn | null>(null)
-  emitRef.current = emitterOf(figbird)
+  useLayoutEffect(() => {
+    fnRef.current = fn
+    nameRef.current = name
+    emitRef.current = emitterOf(figbird)
+  }, [fn, name, figbird])
 
   const mountedRef = useRef(false)
   useEffect(() => {

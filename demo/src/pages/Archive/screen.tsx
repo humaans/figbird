@@ -109,6 +109,8 @@ function ArchiveWindow({
   sort,
   onSortChange,
 }: ArchiveWindowProps) {
+  'use no memo'
+
   const [initialPosition] = useState(readSavedPosition)
   const [range, setRange] = useState(() => {
     const start = initialPosition?.index ?? 0
@@ -129,6 +131,7 @@ function ArchiveWindow({
   })
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
+  // oxlint-disable-next-line react/incompatible-library -- This component opts out of compilation because the virtualizer exposes mutable methods.
   const virtualizer = useVirtualizer({
     count: total ?? Math.max(1, range.end),
     getScrollElement: () => scrollRef.current,

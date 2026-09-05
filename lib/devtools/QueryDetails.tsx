@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -8,7 +7,8 @@ import {
 } from 'react'
 import { QUERY_FETCH_HISTORY_LIMIT } from '../core/queryStore.js'
 import type { QueryRecord, QuerySpan } from './collector.js'
-import { compactJson, formatMs, now } from './format.js'
+import { compactJson, formatMs } from './format.js'
+import { useClock } from './useClock.js'
 import { JsonViewer } from './JsonViewer.js'
 import type {
   DevtoolsOperation,
@@ -50,10 +50,18 @@ export function QueryDetails({
   const requestedUnderlyingKey = requestedUnderlying
     ? underlyingFetchKey(requestedUnderlying)
     : null
-  const [selectedUnderlyingKey, setSelectedUnderlyingKey] = useState<string | null>(null)
-  useEffect(() => {
+  const [selectedUnderlyingKey, setSelectedUnderlyingKey] = useState(requestedUnderlyingKey)
+  const [selectionSource, setSelectionSource] = useState({
+    operationKey: operation.key,
+    requestedUnderlyingKey,
+  })
+  if (
+    selectionSource.operationKey !== operation.key ||
+    selectionSource.requestedUnderlyingKey !== requestedUnderlyingKey
+  ) {
+    setSelectionSource({ operationKey: operation.key, requestedUnderlyingKey })
     setSelectedUnderlyingKey(requestedUnderlyingKey)
-  }, [operation.key, requestedUnderlyingKey])
+  }
 
   const { summary, rootFetches, underlying, composition } = operation
   const selectedUnderlying =
@@ -616,7 +624,7 @@ function Sparkline({
   onSelect: (span: QuerySpan) => void
 }) {
   const { colors } = useDevtoolsTheme()
-  const nowPoint = now()
+  const { now: nowPoint } = useClock(query.spans.some(span => span.endAt === undefined))
   const recordedByFetchId = new Map(
     query.spans.flatMap(span =>
       span.fetchId === undefined ? [] : [[span.fetchId, span] as const],

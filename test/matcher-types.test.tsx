@@ -4,7 +4,8 @@ import { Figbird } from '../lib/core/figbird.js'
 import { createSchema, service } from '../lib/core/schema.js'
 import { createHooks } from '../lib/react/createHooks.js'
 import { FigbirdProvider } from '../lib/react/context.js'
-import { dom, mockFeathers } from './helpers.js'
+import { dom, it } from './dom.js'
+import { mockFeathers } from './helpers.js'
 
 // Define typed query interfaces
 interface TodoQuery {
@@ -156,7 +157,7 @@ test('matcher receives properly typed query from schema', async t => {
   t.pass('Matcher receives properly typed queries')
 })
 
-test('React hooks provide typed query in matcher', async t => {
+it('React hooks provide typed query in matcher', async t => {
   const { render, unmount, flush } = dom()
 
   const schema = createSchema({

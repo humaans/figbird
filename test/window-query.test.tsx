@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react'
 import test from 'ava'
 import { Suspense, useState } from 'react'
 import {
@@ -13,7 +14,8 @@ import {
   type WindowQueryState,
   type WindowRange,
 } from '../lib/index.js'
-import { createTestApp, dom } from './helpers.js'
+import { dom, it } from './dom.js'
+import { createTestApp } from './helpers.js'
 
 interface Item {
   [key: string]: unknown
@@ -287,7 +289,7 @@ test('window query: retained pages follow the strictest active reader', async t 
   lenient.unsubscribe()
 })
 
-test('useWindowQuery: each hook gets an independent first-window Suspense lifecycle', async t => {
+it('useWindowQuery: each hook gets an independent first-window Suspense lifecycle', async t => {
   const rows = makeRows(80)
   const { App, feathers, figbird } = createTestApp(schema, {
     items: { data: keyed(rows) },
@@ -308,7 +310,9 @@ test('useWindowQuery: each hook gets an independent first-window Suspense lifecy
 
   function Harness() {
     const [second, setSecond] = useState(false)
-    showSecond = () => setSecond(true)
+    useLayoutEffect(() => {
+      showSecond = () => setSecond(true)
+    })
     return (
       <>
         <Suspense fallback={<div className='first-loading' />}>

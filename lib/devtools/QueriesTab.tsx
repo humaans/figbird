@@ -3,6 +3,7 @@ import type { QueryVisibility } from './Devtools.js'
 import type { QuerySpan } from './collector.js'
 import { compactJson, formatAge, formatMs } from './format.js'
 import type { DevtoolsModel, DevtoolsOperation, QuerySummary } from './model.js'
+import { useClock } from './useClock.js'
 import { QueryDetails } from './QueryDetails.js'
 import { ClassBadge, plural, queryStatus, QueryStatusDot } from './QueryPresentation.js'
 import {
@@ -107,6 +108,7 @@ export function QueriesTab({
   onFetchSelect: (span: QuerySpan) => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
+  const { wallNow } = useClock()
   const [columnWidths, onColumnResizeStart] = useResizableColumns(QUERY_COLUMNS)
   const [detailsWidth, onDetailsResizeStart] = useDetailsPaneWidth({ defaultWidth: 680 })
   const normalizedFilter = filter.trim().toLowerCase()
@@ -303,7 +305,7 @@ export function QueriesTab({
                     <QueryLastTiming query={query} />
                   </td>
                   <td style={styles.td}>
-                    <QueryAge query={query} />
+                    <QueryAge query={query} wallNow={wallNow} />
                   </td>
                 </tr>
               )
@@ -433,7 +435,7 @@ function QueryLastTiming({ query }: { query: QuerySummary }) {
   )
 }
 
-function QueryAge({ query }: { query: QuerySummary }) {
+function QueryAge({ query, wallNow }: { query: QuerySummary; wallNow: number }) {
   const { colors } = useDevtoolsTheme()
   return (
     <span
@@ -445,7 +447,7 @@ function QueryAge({ query }: { query: QuerySummary }) {
         color: colors.muted,
       }}
     >
-      {query.fetchedAt ? formatAge(Date.now() - query.fetchedAt) : '—'}
+      {query.fetchedAt ? formatAge(wallNow - query.fetchedAt) : '—'}
     </span>
   )
 }

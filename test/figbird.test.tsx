@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react'
 import test from 'ava'
 import React, { StrictMode, useEffect, useState } from 'react'
 import type { FeathersClient, QueryResult, QueryStatus, UseMutationResult } from '../lib'
@@ -12,7 +13,8 @@ import {
   service,
   useFeathers,
 } from '../lib'
-import { dom, mockFeathers, queueTask } from './helpers'
+import { dom, it } from './dom.js'
+import { mockFeathers, queueTask } from './helpers'
 
 interface Note {
   id: number
@@ -158,7 +160,7 @@ function NoteList<TMeta = any>({ notes, keyField = 'id' }: NoteListProps<TMeta>)
   )
 }
 
-test('useGet', async t => {
+it('useGet', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, useGet } = app()
 
@@ -167,7 +169,9 @@ test('useGet', async t => {
   function Note() {
     // Use schema-based typed hook - this provides full type inference
     const note = useGet('notes', 1)
-    noteData = note.data
+    useLayoutEffect(() => {
+      noteData = note.data
+    })
     return <NoteList notes={note} />
   }
 
@@ -188,7 +192,7 @@ test('useGet', async t => {
   unmount()
 })
 
-test('useGet surfaces ItemRemovedError after a realtime removal', async t => {
+it('useGet surfaces ItemRemovedError after a realtime removal', async t => {
   const { render, unmount, flush } = dom()
   const { App, useGet, feathers } = app()
   const result: { status: QueryStatus; data: Note | null; error: Error | null } = {
@@ -199,9 +203,11 @@ test('useGet surfaces ItemRemovedError after a realtime removal', async t => {
 
   function NoteDetail() {
     const note = useGet('notes', 1)
-    result.status = note.status
-    result.data = note.data
-    result.error = note.error
+    useLayoutEffect(() => {
+      result.status = note.status
+      result.data = note.data
+      result.error = note.error
+    })
     return null
   }
 
@@ -239,7 +245,7 @@ test('isItemRemovedError recognizes an error from another package instance or re
   t.false(isItemRemovedError({ name: 'ItemRemovedError', itemId: 1 }))
 })
 
-test('useGet updates after realtime patch', async t => {
+it('useGet updates after realtime patch', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useGet, feathers } = app()
 
@@ -269,7 +275,7 @@ test('useGet updates after realtime patch', async t => {
   unmount()
 })
 
-test('useFind', async t => {
+it('useFind', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind } = app()
 
@@ -291,7 +297,7 @@ test('useFind', async t => {
   unmount()
 })
 
-test('useFind binding updates after realtime create', async t => {
+it('useFind binding updates after realtime create', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -323,7 +329,7 @@ test('useFind binding updates after realtime create', async t => {
   unmount()
 })
 
-test('useFind binding updates after realtime patch', async t => {
+it('useFind binding updates after realtime patch', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind, feathers } = app()
 
@@ -351,7 +357,7 @@ test('useFind binding updates after realtime patch', async t => {
   unmount()
 })
 
-test('useFind binding updates after realtime update', async t => {
+it('useFind binding updates after realtime update', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -385,7 +391,7 @@ test('useFind binding updates after realtime update', async t => {
   unmount()
 })
 
-test('useFind binding updates after realtime remove', async t => {
+it('useFind binding updates after realtime remove', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -421,7 +427,7 @@ test('useFind binding updates after realtime remove', async t => {
   unmount()
 })
 
-test('useFind binding updates after realtime patch with no query', async t => {
+it('useFind binding updates after realtime patch with no query', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -452,7 +458,7 @@ test('useFind binding updates after realtime patch with no query', async t => {
   unmount()
 })
 
-test('realtime listeners continue updating the store even if queries are unmounted', async t => {
+it('realtime listeners continue updating the store even if queries are unmounted', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, figbird, feathers } = app()
 
@@ -473,6 +479,7 @@ test('realtime listeners continue updating the store even if queries are unmount
       if (counter >= 2) {
         return
       }
+      // oxlint-disable-next-line react/set-state-in-effect -- Exercise successive mounts sharing a cached query.
       setCounter(counter => counter + 1)
     }, [counter])
 
@@ -538,7 +545,7 @@ test('realtime listeners continue updating the store even if queries are unmount
   t.is((state3?.entities.get('1') as Note)?.content, 'still updating')
 })
 
-test('useMutation - multicreate updates cache correctly', async t => {
+it('useMutation - multicreate updates cache correctly', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, useMutation } = app()
   let create: UseMutationResult<Note>['create']
@@ -546,7 +553,9 @@ test('useMutation - multicreate updates cache correctly', async t => {
   function Note() {
     const notes = useFind('notes')
     const { create: _create } = useMutation('notes')
-    create = _create
+    useLayoutEffect(() => {
+      create = _create
+    })
 
     return <NoteList notes={notes} />
   }
@@ -572,7 +581,7 @@ test('useMutation - multicreate updates cache correctly', async t => {
   unmount()
 })
 
-test('useMutation patch updates the get binding', async t => {
+it('useMutation patch updates the get binding', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useGet, useMutation } = app()
   let _patch: (id: number, data: Partial<Note>) => Promise<Note>
@@ -580,7 +589,9 @@ test('useMutation patch updates the get binding', async t => {
   function Note() {
     const note = useGet('notes', 1)
     const { patch } = useMutation('notes')
-    _patch = patch
+    useLayoutEffect(() => {
+      _patch = patch
+    })
     return <NoteList notes={note} />
   }
 
@@ -603,7 +614,7 @@ test('useMutation patch updates the get binding', async t => {
   unmount()
 })
 
-test('useMutation handles errors', async t => {
+it('useMutation handles errors', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useGet, useMutation, feathers } = app()
 
@@ -647,7 +658,7 @@ test('useMutation handles errors', async t => {
   unmount()
 })
 
-test('useFeathers', async t => {
+it('useFeathers', async t => {
   const { render, unmount } = dom()
   const { App, feathers } = app()
 
@@ -674,7 +685,7 @@ test('useFeathers', async t => {
   unmount()
 })
 
-test('support _id out of the box', async t => {
+it('support _id out of the box', async t => {
   const { render, flush, unmount, $ } = dom()
   const feathers = mockFeathers({
     notes: {
@@ -706,7 +717,7 @@ test('support _id out of the box', async t => {
   unmount()
 })
 
-test('support custom idField string', async t => {
+it('support custom idField string', async t => {
   const { render, flush, unmount, $ } = dom()
   const feathers = mockFeathers({
     notes: {
@@ -738,7 +749,7 @@ test('support custom idField string', async t => {
   unmount()
 })
 
-test('support custom idField function', async t => {
+it('support custom idField function', async t => {
   const { render, flush, unmount, $ } = dom()
   const feathers = mockFeathers({
     notes: {
@@ -770,7 +781,7 @@ test('support custom idField function', async t => {
   unmount()
 })
 
-test('useFind error', async t => {
+it('useFind error', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind, feathers } = app()
 
@@ -795,7 +806,7 @@ test('useFind error', async t => {
   unmount()
 })
 
-test('useFind with skip', async t => {
+it('useFind with skip', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind, feathers } = app()
 
@@ -803,7 +814,9 @@ test('useFind with skip', async t => {
 
   function Note() {
     const [skip, _setSkip] = useState(true)
-    setSkip = _setSkip
+    useLayoutEffect(() => {
+      setSkip = _setSkip
+    }, [_setSkip])
     const notes = useFind('notes', { skip })
     return <div className='data'>{notes.status}</div>
   }
@@ -827,7 +840,7 @@ test('useFind with skip', async t => {
   unmount()
 })
 
-test('useFind with refetch', async t => {
+it('useFind with refetch', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind, feathers } = app()
   let refetch: () => void
@@ -835,7 +848,9 @@ test('useFind with refetch', async t => {
   function Note() {
     const notes = useFind('notes')
 
-    refetch = notes.refetch
+    useLayoutEffect(() => {
+      refetch = notes.refetch
+    })
 
     return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
@@ -878,14 +893,16 @@ test('useFind with refetch', async t => {
   t.is(calls, 2)
 })
 
-test('useFind with refetch while already fetching', async t => {
+it('useFind with refetch while already fetching', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind, feathers } = app()
   let refetch: () => void
 
   function Note() {
     const notes = useFind('notes')
-    refetch = notes.refetch
+    useLayoutEffect(() => {
+      refetch = notes.refetch
+    })
     return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
 
@@ -952,14 +969,16 @@ test('useFind with refetch while already fetching', async t => {
   unmount()
 })
 
-test('refetch only works with active listeners', async t => {
+it('refetch only works with active listeners', async t => {
   const { App, useFind, feathers } = app({ staleTime: 0 })
   let refetch: () => void
   let calls = 0
 
   function Note() {
     const notes = useFind('notes')
-    refetch = notes.refetch
+    useLayoutEffect(() => {
+      refetch = notes.refetch
+    })
     return <div className='data'>{notes.status === 'success' ? notes.data[0]?.id : null}</div>
   }
 
@@ -1023,7 +1042,7 @@ test('refetch only works with active listeners', async t => {
   dom2.unmount()
 })
 
-test('useFind with allPages', async t => {
+it('useFind with allPages', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -1051,7 +1070,7 @@ test('useFind with allPages', async t => {
   unmount()
 })
 
-test('useFind with allPages without total', async t => {
+it('useFind with allPages without total', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app({ feathers: createFeathers({ skipTotal: true }) })
 
@@ -1079,7 +1098,7 @@ test('useFind with allPages without total', async t => {
   unmount()
 })
 
-test('useFind - realtime merge', async t => {
+it('useFind - realtime merge', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -1118,7 +1137,7 @@ test('useFind - realtime merge', async t => {
   unmount()
 })
 
-test('useFind with allPages and defaultPageSize', async t => {
+it('useFind with allPages and defaultPageSize', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app({ config: { defaultPageSize: 1 } })
 
@@ -1150,7 +1169,7 @@ test('useFind with allPages and defaultPageSize', async t => {
   unmount()
 })
 
-test('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
+it('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app({ config: { defaultPageSizeWhenFetchingAll: 1 } })
 
@@ -1182,7 +1201,7 @@ test('useFind with allPages and defaultPageSizeWhenFetchingAll', async t => {
   unmount()
 })
 
-test('useFind - realtime refetch', async t => {
+it('useFind - realtime refetch', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -1221,7 +1240,7 @@ test('useFind - realtime refetch', async t => {
   unmount()
 })
 
-test('useFind - realtime refetch only with active listeners', async t => {
+it('useFind - realtime refetch only with active listeners', async t => {
   const { App, useFind, feathers } = app({ staleTime: 0 })
   let findCallCount = 0
 
@@ -1290,7 +1309,7 @@ test('useFind - realtime refetch only with active listeners', async t => {
   dom2.unmount()
 })
 
-test('useFind - realtime disabled', async t => {
+it('useFind - realtime disabled', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
   let notes: QueryResult<Note[]>
@@ -1347,7 +1366,7 @@ test('useFind - realtime disabled', async t => {
   unmount()
 })
 
-test('useFind - fetchPolicy swr', async t => {
+it('useFind - fetchPolicy swr', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app({ staleTime: 0 })
 
@@ -1355,7 +1374,9 @@ test('useFind - fetchPolicy swr', async t => {
 
   function Content() {
     const [shouldRenderNote, setRenderNote] = useState(true)
-    renderNote = setRenderNote
+    useLayoutEffect(() => {
+      renderNote = setRenderNote
+    }, [setRenderNote])
     return shouldRenderNote ? <Note /> : null
   }
 
@@ -1422,14 +1443,16 @@ test('useFind - fetchPolicy swr', async t => {
   unmount()
 })
 
-test('useFind - fetchPolicy cache-first', async t => {
+it('useFind - fetchPolicy cache-first', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
   let renderNote: React.Dispatch<React.SetStateAction<boolean>>
 
   function Content() {
     const [shouldRenderNote, setRenderNote] = useState(true)
-    renderNote = setRenderNote
+    useLayoutEffect(() => {
+      renderNote = setRenderNote
+    }, [setRenderNote])
     return shouldRenderNote ? <Note /> : null
   }
 
@@ -1477,14 +1500,16 @@ test('useFind - fetchPolicy cache-first', async t => {
   unmount()
 })
 
-test('useFind - fetchPolicy cache-first and changing query', async t => {
+it('useFind - fetchPolicy cache-first and changing query', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
   let renderNote: React.Dispatch<React.SetStateAction<number>>
 
   function Content() {
     const [n, setRenderNote] = useState(1)
-    renderNote = setRenderNote
+    useLayoutEffect(() => {
+      renderNote = setRenderNote
+    }, [setRenderNote])
     return n ? <Note n={n} /> : null
   }
 
@@ -1547,14 +1572,16 @@ test('useFind - fetchPolicy cache-first and changing query', async t => {
   unmount()
 })
 
-test('useFind - fetchPolicy network-only', async t => {
+it('useFind - fetchPolicy network-only', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, feathers } = app()
   let renderNote: React.Dispatch<React.SetStateAction<boolean>>
 
   function Content() {
     const [shouldRenderNote, setRenderNote] = useState(true)
-    renderNote = setRenderNote
+    useLayoutEffect(() => {
+      renderNote = setRenderNote
+    }, [setRenderNote])
     return shouldRenderNote ? <Note /> : null
   }
 
@@ -1641,7 +1668,7 @@ function serialize(input: unknown): unknown {
   return input
 }
 
-test('useFind - updates correctly after a sequence of create+patch', async t => {
+it('useFind - updates correctly after a sequence of create+patch', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers } = app()
 
@@ -1673,7 +1700,7 @@ test('useFind - updates correctly after a sequence of create+patch', async t => 
   unmount()
 })
 
-test('useFind - with custom matcher', async t => {
+it('useFind - with custom matcher', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers } = app()
   const { matcher: defaultMatcher } = await import('../lib/adapters/matcher')
@@ -1721,7 +1748,7 @@ test('useFind - with custom matcher', async t => {
   unmount()
 })
 
-test('items get updated in cache even if not currently relevant to any query', async t => {
+it('items get updated in cache even if not currently relevant to any query', async t => {
   const { render, flush, unmount, $, $all } = dom()
   const { App, useFind, feathers, figbird } = app({ config: { noUpdatedAt: true } })
 
@@ -1821,7 +1848,7 @@ test('items get updated in cache even if not currently relevant to any query', a
   unmount()
 })
 
-test('useFind - state sequencing for fetchPolicy swr', async t => {
+it('useFind - state sequencing for fetchPolicy swr', async t => {
   const { render, flush, unmount } = dom()
   const { App, useFind } = app()
 
@@ -1836,7 +1863,9 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
 
   function Note() {
     const [n, setN] = useState(1)
-    renderNote = setN
+    useLayoutEffect(() => {
+      renderNote = setN
+    }, [setN])
 
     const notes = useFind('notes', { n })
 
@@ -1884,7 +1913,7 @@ test('useFind - state sequencing for fetchPolicy swr', async t => {
   unmount()
 })
 
-test('useFind - state sequencing for fetchPolicy network-only', async t => {
+it('useFind - state sequencing for fetchPolicy network-only', async t => {
   const { render, flush, unmount } = dom()
   const { App, useFind } = app()
 
@@ -1899,7 +1928,9 @@ test('useFind - state sequencing for fetchPolicy network-only', async t => {
 
   function Content() {
     const [n, setRenderNote] = useState(1)
-    renderNote = setRenderNote
+    useLayoutEffect(() => {
+      renderNote = setRenderNote
+    }, [setRenderNote])
     return n ? <Note n={n} /> : null
   }
 
@@ -1949,7 +1980,7 @@ test('useFind - state sequencing for fetchPolicy network-only', async t => {
   unmount()
 })
 
-test('subscribeToStateChanges', async t => {
+it('subscribeToStateChanges', async t => {
   const { render, flush, unmount } = dom()
   const { App, useFind, figbird, feathers } = app()
 
@@ -2014,7 +2045,7 @@ test('subscribeToStateChanges', async t => {
   unmount()
 })
 
-test('useFind - multiple queries against the same service', async t => {
+it('useFind - multiple queries against the same service', async t => {
   const { render, flush, unmount, $all } = dom()
 
   function NoteList1() {
@@ -2081,7 +2112,7 @@ test('useFind - multiple queries against the same service', async t => {
   unmount()
 })
 
-test('useFind - stale realtime event is ignored', async t => {
+it('useFind - stale realtime event is ignored', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Note() {
@@ -2143,14 +2174,16 @@ test('recursive serializer for maps and sets', async t => {
   )
 })
 
-test('useFind handles rapid query parameter changes without showing stale data', async t => {
+it('useFind handles rapid query parameter changes without showing stale data', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind, feathers } = app()
   let setTag: React.Dispatch<React.SetStateAction<string>>
 
   function SearchableNotes() {
     const [tag, _setTag] = useState('')
-    setTag = _setTag
+    useLayoutEffect(() => {
+      setTag = _setTag
+    }, [_setTag])
 
     const notes = useFind('notes', {
       query: { tag },
@@ -2224,13 +2257,15 @@ test('useFind handles rapid query parameter changes without showing stale data',
   unmount()
 })
 
-test('useFind recovers gracefully from errors on refetch', async t => {
+it('useFind recovers gracefully from errors on refetch', async t => {
   const { render, flush, unmount, $ } = dom()
   let refetch: () => void
 
   function Notes() {
     const notes = useFind('notes')
-    refetch = notes.refetch
+    useLayoutEffect(() => {
+      refetch = notes.refetch
+    })
 
     return (
       <div>
@@ -2287,7 +2322,7 @@ test('useFind recovers gracefully from errors on refetch', async t => {
   unmount()
 })
 
-test('legacy useMutation preserves concurrent transport behavior', async t => {
+it('legacy useMutation preserves concurrent transport behavior', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, useMutation, feathers } = app()
   let hasFiredMutations = false
@@ -2343,7 +2378,7 @@ test('legacy useMutation preserves concurrent transport behavior', async t => {
   unmount()
 })
 
-test('handles component unmounting during active requests without warnings', async t => {
+it('handles component unmounting during active requests without warnings', async t => {
   const { render, flush, unmount } = dom()
   let unmountNotes: React.Dispatch<React.SetStateAction<void>>
   const warnings: string[] = []
@@ -2354,7 +2389,9 @@ test('handles component unmounting during active requests without warnings', asy
 
   function Container() {
     const [showNotes, setShowNotes] = useState(true)
-    unmountNotes = () => setShowNotes(false)
+    useLayoutEffect(() => {
+      unmountNotes = () => setShowNotes(false)
+    })
 
     return showNotes ? <Notes /> : <div>Unmounted</div>
   }
@@ -2417,7 +2454,7 @@ test('handles component unmounting during active requests without warnings', asy
   unmount()
 })
 
-test('allPages handles errors gracefully during pagination', async t => {
+it('allPages handles errors gracefully during pagination', async t => {
   const { render, flush, unmount, $ } = dom()
   const { App, useFind, feathers } = app()
 
@@ -2471,7 +2508,7 @@ test('allPages handles errors gracefully during pagination', async t => {
   unmount()
 })
 
-test('useFind with custom query operators does not crash when realtime is not merge', async t => {
+it('useFind with custom query operators does not crash when realtime is not merge', async t => {
   const { render, flush, unmount, $ } = dom()
 
   function Notes() {
@@ -2506,7 +2543,7 @@ test('useFind with custom query operators does not crash when realtime is not me
   unmount()
 })
 
-test('mutations work correctly when no queries are active', async t => {
+it('mutations work correctly when no queries are active', async t => {
   const { render, flush, unmount } = dom()
   let createResult: Note, patchResult: Note, removeResult: Note
   let mutationsCompleted = false
@@ -2554,7 +2591,7 @@ test('mutations work correctly when no queries are active', async t => {
   unmount()
 })
 
-test('mutate methods return the mutated item', async t => {
+it('mutate methods return the mutated item', async t => {
   const { render, flush, unmount } = dom()
   let createResult: Note, patchResult: Note, updateResult: Note, removeResult: Note
 
@@ -2611,7 +2648,7 @@ test('mutate methods return the mutated item', async t => {
   unmount()
 })
 
-test('realtime events are batched to reduce re-renders', async t => {
+it('realtime events are batched to reduce re-renders', async t => {
   const { render, flush, unmount, $all } = dom()
   let renderLog: string[][] = []
 

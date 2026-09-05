@@ -1,8 +1,9 @@
-import test from 'ava'
+import { useLayoutEffect } from 'react'
 import React, { useState } from 'react'
 import type { QueryState } from '../lib'
 import { createHooks, defineMutationQueue, useAction } from '../lib'
-import { createTestApp, dom } from './helpers'
+import { dom, it } from './dom.js'
+import { createTestApp } from './helpers'
 import {
   collectEvents,
   deferred,
@@ -25,8 +26,10 @@ function renderAction<TArgs extends unknown[], TResult>(harness: ActionHarness<T
 
   function Probe() {
     const action = useAction(harness.fn)
-    run = action.run
-    reset = action.reset
+    useLayoutEffect(() => {
+      run = action.run
+      reset = action.reset
+    })
     return (
       <div>
         <div className='pending'>{String(action.pending)}</div>
@@ -45,7 +48,7 @@ function renderAction<TArgs extends unknown[], TResult>(harness: ActionHarness<T
   return { d, read, run: (...args: TArgs) => run(...args), reset: () => reset() }
 }
 
-test('useAction: pending is a counter across overlapping runs; data and args flow through', async t => {
+it('useAction: pending is a counter across overlapping runs; data and args flow through', async t => {
   const gates: Array<ReturnType<typeof deferred<string>>> = []
   const harness: ActionHarness<[string], string> = {
     fn: async (input: string) => {
@@ -83,7 +86,7 @@ test('useAction: pending is a counter across overlapping runs; data and args flo
   t.is(read().data, '"b:two"')
 })
 
-test('useAction: run never rejects; error is a slot cleared when a new run starts; reset clears it', async t => {
+it('useAction: run never rejects; error is a slot cleared when a new run starts; reset clears it', async t => {
   const gates: Array<ReturnType<typeof deferred<string>>> = []
   const harness: ActionHarness<[], string> = {
     fn: () => {
@@ -125,7 +128,7 @@ test('useAction: run never rejects; error is a slot cleared when a new run start
   t.is(read().data, 'null')
 })
 
-test('useAction: the action body sees the current render closure without a deps array', async t => {
+it('useAction: the action body sees the current render closure without a deps array', async t => {
   const d = dom()
   const results: string[] = []
   let run!: () => Promise<void>
@@ -136,8 +139,10 @@ test('useAction: the action body sees the current render closure without a deps 
     const action = useAction(async () => {
       results.push(label)
     })
-    run = action.run
-    bump = () => setLabel('updated')
+    useLayoutEffect(() => {
+      run = action.run
+      bump = () => setLabel('updated')
+    })
     return <div className='pending'>{String(action.pending)}</div>
   }
 
@@ -148,7 +153,7 @@ test('useAction: the action body sees the current render closure without a deps 
   t.deepEqual(results, ['initial', 'updated'])
 })
 
-test('useAction: settling after unmount does not update state', async t => {
+it('useAction: settling after unmount does not update state', async t => {
   const gate = deferred<string>()
   const harness: ActionHarness<[], string> = { fn: () => gate.promise }
   const { d, run } = renderAction(harness)
@@ -162,7 +167,7 @@ test('useAction: settling after unmount does not update state', async t => {
   await t.notThrowsAsync(pending)
 })
 
-test('useAction (kit): named actions report action:start/end/error through the bound instance', async t => {
+it('useAction (kit): named actions report action:start/end/error through the bound instance', async t => {
   const { App, figbird } = createTestApp(schema, services())
   const { useAction: useKitAction } = createHooks(schema)
   t.is(useKitAction, useAction)
@@ -177,8 +182,10 @@ test('useAction (kit): named actions report action:start/end/error through the b
     const bad = useKitAction('explode', async () => {
       throw new Error('kaboom')
     })
-    succeed = ok.run
-    fail = bad.run
+    useLayoutEffect(() => {
+      succeed = ok.run
+      fail = bad.run
+    })
     return <div className='pending'>{String(ok.pending || bad.pending)}</div>
   }
 
@@ -209,7 +216,7 @@ test('useAction (kit): named actions report action:start/end/error through the b
 
 // ----- form action interop -----
 
-test('useAction: run works as a React 19 <form action>', async t => {
+it('useAction: run works as a React 19 <form action>', async t => {
   const d = dom()
   // React builds `new FormData(form)` via the global constructor; Node's
   // built-in (undici) FormData can't read a jsdom form — use jsdom's.
@@ -227,7 +234,9 @@ test('useAction: run works as a React 19 <form action>', async t => {
     const submit = useAction(async (formData: FormData) => {
       received.push(formData.get('title') as string | null)
     })
-    pendingText = String(submit.pending)
+    useLayoutEffect(() => {
+      pendingText = String(submit.pending)
+    })
     return (
       <form action={submit.run}>
         <input name='title' defaultValue='hello form' />
@@ -250,7 +259,7 @@ test('useAction: run works as a React 19 <form action>', async t => {
 
 // ----- useMutationQueue -----
 
-test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', async t => {
+it('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', async t => {
   const { App, feathers } = createTestApp(schema, services())
   const { useMutationQueue: useQueue } = createHooks(schema)
   const d = dom()
@@ -260,9 +269,12 @@ test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', a
 
   function Probe() {
     const [, setVersion] = useState(0)
-    queue = useQueue(componentQueue)
-    rerender = () => setVersion(version => version + 1)
-    return <div className='status'>{queue.status}</div>
+    const currentQueue = useQueue(componentQueue)
+    useLayoutEffect(() => {
+      queue = currentQueue
+      rerender = () => setVersion(version => version + 1)
+    })
+    return <div className='status'>{currentQueue.status}</div>
   }
 
   d.render(
@@ -285,8 +297,11 @@ test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', a
   const noteEditorQueue = defineMutationQueue({ schedule: () => ({ wait: 0 }) })
   let keyedQueue!: ReturnType<typeof useQueue>
   function KeyedProbe() {
-    keyedQueue = useQueue(noteEditorQueue, 'note-editor')
-    return <div className='status'>{keyedQueue.status}</div>
+    const currentKeyedQueue = useQueue(noteEditorQueue, 'note-editor')
+    useLayoutEffect(() => {
+      keyedQueue = currentKeyedQueue
+    })
+    return <div className='status'>{currentKeyedQueue.status}</div>
   }
 
   const firstOwner = dom()
@@ -300,7 +315,10 @@ test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', a
   const unrelatedDefinition = defineMutationQueue({ retry: 1 })
   let unrelatedQueue!: ReturnType<typeof useQueue>
   function UnrelatedProbe() {
-    unrelatedQueue = useQueue(unrelatedDefinition, 'note-editor')
+    const currentUnrelatedQueue = useQueue(unrelatedDefinition, 'note-editor')
+    useLayoutEffect(() => {
+      unrelatedQueue = currentUnrelatedQueue
+    })
     return null
   }
   const unrelatedOwner = dom()
@@ -348,7 +366,7 @@ test('useMutationQueue: owns unkeyed definitions and reconnects keyed owners', a
   thirdOwner.unmount()
 })
 
-test('useMutationQueue: unmount stops automatic retries and cannot strand an optimistic lane', async t => {
+it('useMutationQueue: unmount stops automatic retries and cannot strand an optimistic lane', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useMutationQueue: useQueue } = createHooks(schema)
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
@@ -366,7 +384,10 @@ test('useMutationQueue: unmount stops automatic retries and cannot strand an opt
     retryDelay: 10_000,
   })
   function Probe() {
-    queue = useQueue(retryingQueue)
+    const currentQueue = useQueue(retryingQueue)
+    useLayoutEffect(() => {
+      queue = currentQueue
+    })
     return null
   }
   d.render(
@@ -408,7 +429,7 @@ function renderMutating(
   return { d, read: () => d.$('.busy')!.textContent }
 }
 
-test('useMutating: reflects in-flight mutations by service and id, including custom methods', async t => {
+it('useMutating: reflects in-flight mutations by service and id, including custom methods', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useMutating } = createHooks(schema)
   const { m } = figbird
@@ -443,7 +464,7 @@ test('useMutating: reflects in-flight mutations by service and id, including cus
   t.is(byMethod.read(), 'false')
 })
 
-test('useMutating: a component that mounts while a mutation is already in flight reports true', async t => {
+it('useMutating: a component that mounts while a mutation is already in flight reports true', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useMutating } = createHooks(schema)
   const { m } = figbird
@@ -465,7 +486,7 @@ test('useMutating: a component that mounts while a mutation is already in flight
   t.is(probe.read(), 'false')
 })
 
-test('useMutating: service filter resolves schema aliases to transport paths', async t => {
+it('useMutating: service filter resolves schema aliases to transport paths', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services())
   const { useMutating } = createHooks(schema)
   const { m } = figbird

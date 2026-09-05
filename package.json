@@ -32,9 +32,9 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "test": "tsc --noEmit && oxlint -c oxlintrc.json && oxfmt --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
+    "test": "npm run tsc && oxlint -c oxlintrc.json && oxfmt --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
     "lint": "oxlint -c oxlintrc.json",
-    "tsc": "tsc --noEmit",
+    "tsc": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/figbird/tsconfig.tsbuildinfo",
     "ava": "ava",
     "format": "oxfmt --write '**/*.{ts,tsx,js,jsx,css,yml}'",
     "coverage": "c8 -r html -r text ava",
@@ -89,23 +89,6 @@
     "typescript": "^6.0.2"
   },
   "sideEffects": false,
-  "ava": {
-    "serial": true,
-    "files": [
-      "test/*.test.{js,ts,tsx}"
-    ],
-    "extensions": [
-      "js",
-      "ts",
-      "tsx"
-    ],
-    "nodeArguments": [
-      "--import=@swc-node/register/esm-register"
-    ],
-    "require": [
-      "./test/setup.ts"
-    ]
-  },
   "overrides": {
     "minimatch": "^10.0.0",
     "multimatch": {

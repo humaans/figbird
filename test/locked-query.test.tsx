@@ -4,7 +4,8 @@ import { Figbird } from '../lib/core/figbird.js'
 import { createSchema, service } from '../lib/core/schema.js'
 import { createHooks } from '../lib/react/createHooks.js'
 import { FigbirdProvider } from '../lib/react/context.js'
-import { dom, mockFeathers } from './helpers.js'
+import { dom, it } from './dom.js'
+import { mockFeathers } from './helpers.js'
 
 // Locked down query types - no index signature
 interface StrictQuery {
@@ -233,7 +234,7 @@ test('allPages works correctly with proper pagination fields', async t => {
   unsubscribe()
 })
 
-test('React hooks work with locked-down query types', async t => {
+it('React hooks work with locked-down query types', async t => {
   const { $all, render, unmount, flush } = dom()
 
   const schema = createSchema({

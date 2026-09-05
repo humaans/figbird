@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react'
 import EventEmitter from 'events'
 import test from 'ava'
 import React from 'react'
@@ -16,7 +17,8 @@ import {
   type QueryBuilder,
   type StandardSchemaV1,
 } from '../lib'
-import { createTestApp, dom, mockFeathers } from './helpers'
+import { dom, it } from './dom.js'
+import { createTestApp, mockFeathers } from './helpers'
 
 // Tagged-union variant of useQuery — the shape the deleted useRelationalQuery had.
 function useStatusQuery<
@@ -1016,7 +1018,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
 // useRelationalQuery Hook Tests
 // ============================================================================
 
-test('useRelationalQuery: basic fetch', async t => {
+it('useRelationalQuery: basic fetch', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -1057,7 +1059,7 @@ test('useRelationalQuery: basic fetch', async t => {
   unmount()
 })
 
-test('useRelationalQuery: with relations', async t => {
+it('useRelationalQuery: with relations', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -1099,7 +1101,7 @@ test('useRelationalQuery: with relations', async t => {
   unmount()
 })
 
-test('useRelationalQuery: with many relation', async t => {
+it('useRelationalQuery: with many relation', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -1138,7 +1140,7 @@ test('useRelationalQuery: with many relation', async t => {
   unmount()
 })
 
-test('useRelationalQuery: query changes trigger refetch', async t => {
+it('useRelationalQuery: query changes trigger refetch', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1156,7 +1158,9 @@ test('useRelationalQuery: query changes trigger refetch', async t => {
 
   function IssueList() {
     const [currentStatus, setCurrentStatus] = React.useState(status)
-    setStatus = setCurrentStatus
+    useLayoutEffect(() => {
+      setStatus = setCurrentStatus
+    }, [setCurrentStatus])
 
     const issues = useStatusQuery(figbird.q.issues.where({ status: currentStatus }))
 
@@ -1201,7 +1205,7 @@ test('useRelationalQuery: query changes trigger refetch', async t => {
   unmount()
 })
 
-test('useRelationalQuery: skip option prevents fetch', async t => {
+it('useRelationalQuery: skip option prevents fetch', async t => {
   const { render, unmount, flush } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1233,7 +1237,7 @@ test('useRelationalQuery: skip option prevents fetch', async t => {
   unmount()
 })
 
-test('useRelationalQuery: refetch function works', async t => {
+it('useRelationalQuery: refetch function works', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1249,7 +1253,9 @@ test('useRelationalQuery: refetch function works', async t => {
 
   function RefetchTest() {
     const issues = useStatusQuery(figbird.q.issues)
-    triggerRefetch = issues.refetch
+    useLayoutEffect(() => {
+      triggerRefetch = issues.refetch
+    })
 
     if (issues.status === 'loading') {
       return <div className='loading'>Loading...</div>
@@ -1353,7 +1359,7 @@ test('schema: relationship properties are correct', t => {
 // Cache Sharing Tests (new in v2)
 // ============================================================================
 
-test('useRelationalQuery: two components share cached data', async t => {
+it('useRelationalQuery: two components share cached data', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1413,7 +1419,7 @@ test('useRelationalQuery: two components share cached data', async t => {
 // createHooks Tests
 // ============================================================================
 
-test('createHooks: schema bindings use the provider runtime', async t => {
+it('createHooks: schema bindings use the provider runtime', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -1499,7 +1505,7 @@ test('createHooks: schema bindings use the provider runtime', async t => {
 // Realtime Tests — events flow into assembled relational views
 // ============================================================================
 
-test('realtime: creating a child entity appears in the active relation view', async t => {
+it('realtime: creating a child entity appears in the active relation view', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1549,7 +1555,7 @@ test('realtime: creating a child entity appears in the active relation view', as
   unmount()
 })
 
-test('realtime: patching a related entity updates the assembled view', async t => {
+it('realtime: patching a related entity updates the assembled view', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1577,7 +1583,7 @@ test('realtime: patching a related entity updates the assembled view', async t =
   unmount()
 })
 
-test('realtime: removing a related entity removes it from the assembled view', async t => {
+it('realtime: removing a related entity removes it from the assembled view', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1605,7 +1611,7 @@ test('realtime: removing a related entity removes it from the assembled view', a
   unmount()
 })
 
-test('realtime: a new root entity gets its relations fetched (Gap B)', async t => {
+it('realtime: a new root entity gets its relations fetched (Gap B)', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -1662,7 +1668,7 @@ test('realtime: a new root entity gets its relations fetched (Gap B)', async t =
   unmount()
 })
 
-test('realtime: relation-path filters match root events through cached relations', async t => {
+it('realtime: relation-path filters match root events through cached relations', async t => {
   interface FilterDocument {
     id: number
     title: string
@@ -1789,7 +1795,7 @@ test('realtime: relation-path filters match root events through cached relations
   unmount()
 })
 
-test('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
+it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
   interface FilterDocument {
     id: number
     title: string
@@ -1900,7 +1906,7 @@ test('optimistic queue: projected dependency changes update relational filters w
   unmount()
 })
 
-test('optimistic queue: child patches update an assembled relation before transport', async t => {
+it('optimistic queue: child patches update an assembled relation before transport', async t => {
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, act, $ } = dom()
 
@@ -1939,7 +1945,7 @@ test('optimistic queue: child patches update an assembled relation before transp
   unmount()
 })
 
-test('realtime: child entity arrival on nested relation updates the assembled view', async t => {
+it('realtime: child entity arrival on nested relation updates the assembled view', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -2005,7 +2011,7 @@ class ErrorBoundary extends React.Component<
   }
 }
 
-test('suspense: first-mount cold shows fallback, then data', async t => {
+it('suspense: first-mount cold shows fallback, then data', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -2072,7 +2078,7 @@ test('get(): consecutive getSnapshot reads return ref-equal results (regression)
   unsubscribe()
 })
 
-test('suspense: refetch does not re-suspend', async t => {
+it('suspense: refetch does not re-suspend', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -2080,7 +2086,9 @@ test('suspense: refetch does not re-suspend', async t => {
 
   function IssueDetail() {
     const { data, isFetching, refetch } = useQueryResult(figbird.q.issues.get(1).related('creator'))
-    refetchFn = refetch
+    useLayoutEffect(() => {
+      refetchFn = refetch
+    })
     const issue = data as Issue & { creator: User | null }
     return (
       <div className='issue-detail' data-fetching={isFetching}>
@@ -2113,7 +2121,7 @@ test('suspense: refetch does not re-suspend', async t => {
   unmount()
 })
 
-test('suspense: param change inside startTransition keeps previous render committed', async t => {
+it('suspense: param change inside startTransition keeps previous render committed', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -2121,7 +2129,9 @@ test('suspense: param change inside startTransition keeps previous render commit
 
   function IssueDetail() {
     const [issueId, _setIssueId] = React.useState(1)
-    setIssueId = _setIssueId
+    useLayoutEffect(() => {
+      setIssueId = _setIssueId
+    }, [_setIssueId])
     const { data, isFetching } = useQueryResult(figbird.q.issues.get(issueId).related('creator'))
     const issue = data as Issue & { creator: User | null }
     return (
@@ -2161,7 +2171,7 @@ test('suspense: param change inside startTransition keeps previous render commit
   unmount()
 })
 
-test('suspense: first-mount error throws to ErrorBoundary', async t => {
+it('suspense: first-mount error throws to ErrorBoundary', async t => {
   const caughtErrors: unknown[] = []
   const { render, unmount, flush, $, act } = dom({
     onCaughtError: error => caughtErrors.push(error),
@@ -2204,7 +2214,7 @@ test('suspense: first-mount error throws to ErrorBoundary', async t => {
   unmount()
 })
 
-test('suspense: refetch failure keeps previous data, exposes error, clears on recovery', async t => {
+it('suspense: refetch failure keeps previous data, exposes error, clears on recovery', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -2213,7 +2223,9 @@ test('suspense: refetch failure keeps previous data, exposes error, clears on re
   function IssueDetail() {
     const { data, error, refetch } = useQueryResult(figbird.q.issues.get(1).related('creator'))
     const rawData = useQuery(figbird.q.issues.get(1).related('creator'))
-    refetchFn = refetch
+    useLayoutEffect(() => {
+      refetchFn = refetch
+    })
     const issue = data as Issue & { creator: User | null }
     return (
       <div className='issue-detail' data-error={error ? error.message : ''}>
@@ -2265,7 +2277,7 @@ test('suspense: refetch failure keeps previous data, exposes error, clears on re
   unmount()
 })
 
-test('suspense: root item removed while on screen keeps data and surfaces ItemRemovedError', async t => {
+it('suspense: root item removed while on screen keeps data and surfaces ItemRemovedError', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -2303,7 +2315,7 @@ test('suspense: root item removed while on screen keeps data and surfaces ItemRe
   unmount()
 })
 
-test('suspense: revisiting a query with warm nested relations does not re-suspend', async t => {
+it('suspense: revisiting a query with warm nested relations does not re-suspend', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -2355,7 +2367,7 @@ test('suspense: revisiting a query with warm nested relations does not re-suspen
   remount.unmount()
 })
 
-test('empty top-level relation does not hang loading', async t => {
+it('empty top-level relation does not hang loading', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -2387,7 +2399,7 @@ test('empty top-level relation does not hang loading', async t => {
   unmount()
 })
 
-test('useQuery: refined relations assemble from the relation query result, not the service cache', async t => {
+it('useQuery: refined relations assemble from the relation query result, not the service cache', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createExactQueryApp()
 
@@ -2441,7 +2453,7 @@ test('useQuery: refined relations assemble from the relation query result, not t
   unmount()
 })
 
-test('useQuery: profile graph fetches manager and windowed direct reports on demand', async t => {
+it('useQuery: profile graph fetches manager and windowed direct reports on demand', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createProfileQueryApp()
 
@@ -2497,7 +2509,7 @@ test('useQuery: profile graph fetches manager and windowed direct reports on dem
   unmount()
 })
 
-test('useQuery: server refetches a server-authoritative query from its service event', async t => {
+it('useQuery: server refetches a server-authoritative query from its service event', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createServerProjectionQueryApp()
   const periodsService = feathers.service('timeAwayPeriods')
@@ -2544,7 +2556,7 @@ test('useQuery: server refetches a server-authoritative query from its service e
   unmount()
 })
 
-test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
+it('useQuery: foreign-key changes fetch the new relation leaf', async t => {
   const { render, unmount, flush, act, $ } = dom()
   const { App, figbird, feathers } = createProfileQueryApp()
 
@@ -2614,7 +2626,7 @@ test('useQuery: foreign-key changes fetch the new relation leaf', async t => {
   unmount()
 })
 
-test('useQuery: fixed-depth manager chains resolve through nested relations', async t => {
+it('useQuery: fixed-depth manager chains resolve through nested relations', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createProfileQueryApp()
 
@@ -2650,7 +2662,7 @@ test('useQuery: fixed-depth manager chains resolve through nested relations', as
   unmount()
 })
 
-test('useQuery: many-to-many through a join service expands nested relation leaves', async t => {
+it('useQuery: many-to-many through a join service expands nested relation leaves', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createMembershipQueryApp()
 
@@ -2689,7 +2701,7 @@ test('useQuery: many-to-many through a join service expands nested relation leav
   unmount()
 })
 
-test('useQuery: limited sorted relation refetches its server window after a visible item leaves', async t => {
+it('useQuery: limited sorted relation refetches its server window after a visible item leaves', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createWindowQueryApp()
   const people = feathers.service('people')
@@ -2753,7 +2765,7 @@ test('useQuery: limited sorted relation refetches its server window after a visi
   unmount()
 })
 
-test('useQuery: limited sorted many relation applies the window per parent', async t => {
+it('useQuery: limited sorted many relation applies the window per parent', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createWindowQueryApp()
 
@@ -2805,7 +2817,7 @@ test('useQuery: limited sorted many relation applies the window per parent', asy
   unmount()
 })
 
-test('useQuery: limited sorted relation refetches when an out-of-window item enters', async t => {
+it('useQuery: limited sorted relation refetches when an out-of-window item enters', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createProfileQueryApp()
 
@@ -2861,7 +2873,7 @@ test('useQuery: limited sorted relation refetches when an out-of-window item ent
 // defineQuery + prepare
 // ============================================================================
 
-test('defineQuery + prepare: prepare and useQuery share the same cache entry', async t => {
+it('defineQuery + prepare: prepare and useQuery share the same cache entry', async t => {
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -3139,7 +3151,7 @@ test('.all(): accepts filters — complete slice, no materialization; rejects wi
   unsubClosed()
 })
 
-test('snapshot: frozen queries ignore realtime; refetch still works; explain says manual', async t => {
+it('snapshot: frozen queries ignore realtime; refetch still works; explain says manual', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -3147,7 +3159,9 @@ test('snapshot: frozen queries ignore realtime; refetch still works; explain say
 
   function FrozenIssues() {
     const { data, refetch } = useQueryResult(figbird.q.issues.related('comments').snapshot())
-    refetchFn = refetch
+    useLayoutEffect(() => {
+      refetchFn = refetch
+    })
     return (
       <div
         className='frozen'
@@ -3442,7 +3456,7 @@ test('prefetch: idempotent within staleTime and warms the cache for a later read
   t.is(ref.getSnapshot().status, 'success')
 })
 
-test('useQueryResult suspense:false returns the tagged union and never suspends', async t => {
+it('useQueryResult suspense:false returns the tagged union and never suspends', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -3484,7 +3498,7 @@ test('defineQuery: typed-args form (no validator, no name) builds and prepares',
   b.release()
 })
 
-test('defineQuery: argumentless definitions are direct query inputs', async t => {
+it('defineQuery: argumentless definitions are direct query inputs', async t => {
   const { App, figbird } = createApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -3600,7 +3614,7 @@ test('embed: helper returns cardinality "embedded"', t => {
   t.is(rel.destField, 'id')
 })
 
-test("embed: useQuery resolves the parent's id-list field, preserving order", async t => {
+it("embed: useQuery resolves the parent's id-list field, preserving order", async t => {
   const { App, figbird } = createEmbedApp()
   const { render, unmount, flush, $all } = dom()
 
@@ -3639,7 +3653,7 @@ test("embed: useQuery resolves the parent's id-list field, preserving order", as
   unmount()
 })
 
-test('embed: realtime — patching a referenced person updates the inline preview', async t => {
+it('embed: realtime — patching a referenced person updates the inline preview', async t => {
   const { App, figbird, feathers } = createEmbedApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -3668,7 +3682,7 @@ test('embed: realtime — patching a referenced person updates the inline previe
   unmount()
 })
 
-test("embed: realtime — patching the parent's id-list reorders/changes the preview", async t => {
+it("embed: realtime — patching the parent's id-list reorders/changes the preview", async t => {
   const { App, figbird, feathers } = createEmbedApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -3808,7 +3822,7 @@ test('many variadic: helper records via hop and stores the dest hop at the top l
   t.is(rel.via!.destField, 'roleId')
 })
 
-test('junction: useQuery returns dest items via the junction transparently', async t => {
+it('junction: useQuery returns dest items via the junction transparently', async t => {
   const { App, figbird } = createJunctionApp()
   const { render, unmount, flush, $all } = dom()
 
@@ -3852,7 +3866,7 @@ test('junction: useQuery returns dest items via the junction transparently', asy
   unmount()
 })
 
-test('junction: realtime — adding a roleMember row appears under the right role', async t => {
+it('junction: realtime — adding a roleMember row appears under the right role', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, act, $ } = dom()
 
@@ -3907,7 +3921,7 @@ test('junction: realtime — adding a roleMember row appears under the right rol
   unmount()
 })
 
-test('junction: realtime — patching a destination user updates the assembled view', async t => {
+it('junction: realtime — patching a destination user updates the assembled view', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -3941,7 +3955,7 @@ test('junction: realtime — patching a destination user updates the assembled v
   unmount()
 })
 
-test('junction: empty parent set (no find match) resolves with no junction fetch needed', async t => {
+it('junction: empty parent set (no find match) resolves with no junction fetch needed', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -4050,7 +4064,7 @@ test('chained one: helper stores the via hop with cardinality one', t => {
   t.is(rel.via!.destField, 'id')
 })
 
-test('chained one: resolves through the intermediate, null when the chain breaks', async t => {
+it('chained one: resolves through the intermediate, null when the chain breaks', async t => {
   const { App, figbird } = createChainedOneApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -4081,7 +4095,7 @@ test('chained one: resolves through the intermediate, null when the chain breaks
   unmount()
 })
 
-test('chained one: a hop filter selects the current intermediate (FK on the child)', async t => {
+it('chained one: a hop filter selects the current intermediate (FK on the child)', async t => {
   const { App, figbird } = createChainedOneApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -4108,7 +4122,7 @@ test('chained one: a hop filter selects the current intermediate (FK on the chil
   unmount()
 })
 
-test('chained one: realtime on intermediate and destination re-resolves the edge', async t => {
+it('chained one: realtime on intermediate and destination re-resolves the edge', async t => {
   const { App, figbird, feathers } = createChainedOneApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -4161,7 +4175,7 @@ test('chained one: realtime on intermediate and destination re-resolves the edge
 // Nullable request skip
 // ============================================================================
 
-test('useQuery: null request skips without invoking the factory or fetching', async t => {
+it('useQuery: null request skips without invoking the factory or fetching', async t => {
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -4192,7 +4206,7 @@ test('useQuery: null request skips without invoking the factory or fetching', as
   unmount()
 })
 
-test('useQuery: request flipping from null to real starts the query', async t => {
+it('useQuery: request flipping from null to real starts the query', async t => {
   const { App, figbird } = createApp()
   const { render, unmount, flush, $, act } = dom()
 
@@ -4201,7 +4215,9 @@ test('useQuery: request flipping from null to real starts the query', async t =>
   let setId: (id: number | null) => void
   function Issue() {
     const [id, _setId] = React.useState<number | null>(null)
-    setId = _setId
+    useLayoutEffect(() => {
+      setId = _setId
+    }, [_setId])
     const data = useQuery(id ? issueDetail({ id }) : null)
     return <div className='detail'>{data?.title ?? 'none'}</div>
   }
@@ -4228,7 +4244,7 @@ test('useQuery: request flipping from null to real starts the query', async t =>
 // figbird.refetch() — manual escape hatch for eventless changes
 // ============================================================================
 
-test('figbird.refetch(service): refetches active queries after out-of-band changes', async t => {
+it('figbird.refetch(service): refetches active queries after out-of-band changes', async t => {
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -4267,7 +4283,7 @@ test('figbird.refetch(service): refetches active queries after out-of-band chang
 // Cold error → error boundary retry recovers
 // ============================================================================
 
-test('suspense: remounting after a cold error refetches and recovers', async t => {
+it('suspense: remounting after a cold error refetches and recovers', async t => {
   const caughtErrors: unknown[] = []
   const { render, unmount, flush, $, act } = dom({
     onCaughtError: error => caughtErrors.push(error),
@@ -4287,7 +4303,9 @@ test('suspense: remounting after a cold error refetches and recovers', async t =
   let reset: () => void
   function Retryable() {
     const [attempt, setAttempt] = React.useState(0)
-    reset = () => setAttempt(a => a + 1)
+    useLayoutEffect(() => {
+      reset = () => setAttempt(a => a + 1)
+    })
     return (
       <ErrorBoundary key={attempt} fallback={err => <div className='boundary'>{err.message}</div>}>
         <React.Suspense fallback={<div className='fallback'>Loading...</div>}>
@@ -4317,7 +4335,7 @@ test('suspense: remounting after a cold error refetches and recovers', async t =
   unmount()
 })
 
-test('useQuery: a null argumentless request skips the query', async t => {
+it('useQuery: a null argumentless request skips the query', async t => {
   const { App, figbird, feathers } = createApp()
   const { render, unmount, flush, $ } = dom()
 

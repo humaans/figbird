@@ -9,6 +9,7 @@
 
 import EventEmitter from 'events'
 import test from 'ava'
+const it = test.serial
 import type { VisibilitySource } from '../lib'
 import { createSchema, service, FeathersAdapter, Figbird } from '../lib'
 import { mockFeathers } from './helpers'
@@ -395,7 +396,7 @@ test('reconcileCooldown: 0 preserves per-event refetching exactly', async t => {
   unsub()
 })
 
-test('a throwing subscriber cannot block other listeners or reconcile follow-ups', async t => {
+it('a throwing subscriber cannot block other listeners or reconcile follow-ups', async t => {
   const { figbird, feathers } = createApp({ reconcileCooldown: 0 })
   const notes = feathers.service('notes')
   const localRef = figbird.queryDesc({ serviceName: 'notes', method: 'find' })

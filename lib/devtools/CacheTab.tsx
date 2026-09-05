@@ -17,6 +17,7 @@ import {
   prettyJson,
 } from './format.js'
 import type { DevtoolsCacheEntity, DevtoolsCacheService } from './collector.js'
+import { useClock } from './useClock.js'
 import { JsonViewer } from './JsonViewer.js'
 import type { DevtoolsModel } from './model.js'
 import {
@@ -79,6 +80,7 @@ export function CacheTab({
   onRequestedEntityHandled?: () => void
 }) {
   const { colors, styles } = useDevtoolsTheme()
+  const { wallNow } = useClock()
   const orderedServices = useMemo(
     () => [...services].sort((a, b) => a.serviceName.localeCompare(b.serviceName)),
     [services],
@@ -115,24 +117,26 @@ export function CacheTab({
   const totalSize = [...serviceSizes.values()].reduce((total, size) => total + size, 0)
   const totalEntities = orderedServices.reduce((count, item) => count + item.entities.length, 0)
 
-  useEffect(() => {
-    if (!serviceName || orderedServices.some(service => service.serviceName === serviceName)) return
+  if (serviceName && !orderedServices.some(service => service.serviceName === serviceName)) {
     setServiceName(null)
     setSelectedKey(null)
-  }, [orderedServices, serviceName])
+  }
 
-  useEffect(() => {
-    if (!requestedEntity) return
+  const [previousRequest, setPreviousRequest] = useState<typeof requestedEntity>(null)
+  if (previousRequest !== requestedEntity) {
+    setPreviousRequest(requestedEntity)
+  }
+  if (requestedEntity && previousRequest !== requestedEntity) {
     const service = orderedServices.find(item => item.serviceName === requestedEntity.serviceName)
-    if (!service) {
-      onRequestedEntityHandled?.()
-      return
+    if (service) {
+      const entity = service.entities.find(item => item.id === String(requestedEntity.itemId))
+      setServiceName(service.serviceName)
+      setSelectedKey(entity ? cacheEntityKey(service.serviceName, entity.id) : null)
     }
-    const entity = service.entities.find(item => item.id === String(requestedEntity.itemId))
-    setServiceName(service.serviceName)
-    setSelectedKey(entity ? cacheEntityKey(service.serviceName, entity.id) : null)
-    onRequestedEntityHandled?.()
-  }, [onRequestedEntityHandled, orderedServices, requestedEntity])
+  }
+  useEffect(() => {
+    if (requestedEntity) onRequestedEntityHandled?.()
+  }, [onRequestedEntityHandled, requestedEntity])
 
   const normalizedFilter = filter.trim().toLowerCase()
   const entries = useMemo(
@@ -419,7 +423,7 @@ export function CacheTab({
                             {entity.lastChange.source}
                           </Badge>
                           <span style={{ color: colors.faint }}>
-                            {formatAge(Date.now() - entity.lastChange.wallAt)} ago
+                            {formatAge(wallNow - entity.lastChange.wallAt)} ago
                           </span>
                         </span>
                       ) : (
