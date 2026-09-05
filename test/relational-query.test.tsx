@@ -3031,7 +3031,8 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   const { figbird, feathers } = createApp()
 
   // Preload the complete set ($sort doesn't affect completeness, so it still materializes).
-  const unsubAll = figbird.query(figbird.q.issues.orderBy('id').all()).subscribe(() => {})
+  const allRef = figbird.query(figbird.q.issues.orderBy('title').all())
+  const unsubAll = allRef.subscribe(() => {})
   await new Promise(resolve => setTimeout(resolve, 10))
   const findsAfterAll = feathers.service('issues').counts.find
   t.true(findsAfterAll >= 1)
@@ -3074,6 +3075,33 @@ test('.all(): materialized reads stay local only when their ordering is knowable
     findsAfterUnsorted,
     'realtime maintenance stays local',
   )
+
+  await figbird.m.issues.patch(1, { title: 'ZZZ' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(allRef.getSnapshot().data?.at(-1)?.id, 1, 'patches restore exhaustive query order')
+
+  feathers.service('issues').data[1] = { id: 1, title: 'AAA', status: 'open', creatorId: 1 }
+  const detail = figbird.query(figbird.q.issues.get(1).server())
+  const unsubDetail = detail.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(allRef.getSnapshot().data?.[0]?.title, 'AAA', 'a get updates existing live lists')
+
+  const serverAll = figbird.query(figbird.q.issues.all().server())
+  const unsubServerAll = serverAll.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  delete feathers.service('issues').data[9]
+  serverAll.refetch()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const local = figbird.query(figbird.q.issues.orderBy('id'))
+  const unsubLocal = local.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    local.getSnapshot().data?.map(issue => issue.id),
+    [1, 2, 3],
+  )
+  unsubLocal()
+  unsubServerAll()
+  unsubDetail()
 
   unsubUnsorted()
   unsubOpen()
