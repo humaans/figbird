@@ -327,25 +327,8 @@ export class RelationalQueryRef<
     for (const queryId of this.#root?.queryIds() ?? []) {
       nodes.push({ path: '(root)', queryId })
     }
-    for (const [path, sub] of this.#relationSubs) {
-      switch (sub.kind) {
-        case 'empty':
-          break
-        case 'fanIn':
-          nodes.push({
-            path: path.endsWith('#dest') ? path.slice(0, -'#dest'.length) : path,
-            queryId: sub.queryRef.details().queryId,
-          })
-          break
-        case 'junction':
-          nodes.push({ path, role: 'junction', queryId: sub.queryRef.details().queryId })
-          break
-        case 'perParent':
-          for (const child of sub.children.values()) {
-            nodes.push({ path, queryId: child.queryRef.details().queryId })
-          }
-          break
-      }
+    for (const { queryRef, path, role } of this.#queryLeaves()) {
+      nodes.push({ path, ...(role ? { role } : {}), queryId: queryRef.details().queryId })
     }
     const snapshot = this.getSnapshot()
     const listenerMetadata = [...this.#listeners.values()]
@@ -540,37 +523,35 @@ export class RelationalQueryRef<
   #ensureFresh(staleTime: number): void {
     if (!this.#graphRunId) this.#beginGraphRun()
     this.#root?.ensureFresh(staleTime, this.#graph('(root)'))
-    for (const sub of this.#relationSubs.values()) {
-      this.#ensureRelationSubFresh(sub, staleTime)
+    for (const { queryRef, path, role } of this.#queryLeaves()) {
+      queryRef.ensureFresh({ staleTime, graph: this.#graph(path, role) })
     }
     this.#scheduleGraphRunCompletion(this.getSnapshot())
   }
 
-  #ensureRelationSubFresh(sub: RelationSub<S, TParams, TMeta, TQuery>, staleTime: number): void {
-    switch (sub.kind) {
-      case 'empty':
-        return
-      case 'fanIn':
-        sub.queryRef.ensureFresh({ staleTime, graph: this.#graph(this.#pathForSub(sub)) })
-        return
-      case 'junction':
-        sub.queryRef.ensureFresh({
-          staleTime,
-          graph: this.#graph(this.#pathForSub(sub), 'junction'),
-        })
-        return
-      case 'perParent':
-        for (const child of sub.children.values()) {
-          child.queryRef.ensureFresh({ staleTime, graph: this.#graph(this.#pathForSub(sub)) })
-        }
+  *#queryLeaves(): Generator<{
+    queryRef: QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>
+    path: string
+    role?: 'junction'
+  }> {
+    for (const [key, sub] of this.#relationSubs) {
+      const path = key.endsWith('#dest') ? key.slice(0, -'#dest'.length) : key
+      switch (sub.kind) {
+        case 'empty':
+          break
+        case 'fanIn':
+          yield { queryRef: sub.queryRef, path }
+          break
+        case 'junction':
+          yield { queryRef: sub.queryRef, path, role: 'junction' }
+          break
+        case 'perParent':
+          for (const child of sub.children.values()) {
+            yield { queryRef: child.queryRef, path }
+          }
+          break
+      }
     }
-  }
-
-  #pathForSub(target: RelationSub<S, TParams, TMeta, TQuery>): string {
-    for (const [path, sub] of this.#relationSubs) {
-      if (sub === target) return path.endsWith('#dest') ? path.slice(0, -'#dest'.length) : path
-    }
-    return '(unknown)'
   }
 
   #scheduleCleanup(): void {
@@ -937,32 +918,10 @@ export class RelationalQueryRef<
     this.#beginGraphRun()
     this.#root?.refetch(this.#graph('(root)'))
     const seen = new Set<QueryRef<unknown[], unknown, S, TParams, TMeta, TQuery>>()
-    for (const sub of this.#relationSubs.values()) {
-      switch (sub.kind) {
-        case 'empty':
-          break
-        case 'fanIn':
-          if (!seen.has(sub.queryRef)) {
-            seen.add(sub.queryRef)
-            sub.queryRef.refetch({ graph: this.#graph(this.#pathForSub(sub)) })
-          }
-          break
-        case 'junction':
-          if (!seen.has(sub.queryRef)) {
-            seen.add(sub.queryRef)
-            sub.queryRef.refetch({
-              graph: this.#graph(this.#pathForSub(sub), 'junction'),
-            })
-          }
-          break
-        case 'perParent':
-          for (const child of sub.children.values()) {
-            if (seen.has(child.queryRef)) continue
-            seen.add(child.queryRef)
-            child.queryRef.refetch({ graph: this.#graph(this.#pathForSub(sub)) })
-          }
-          break
-      }
+    for (const { queryRef, path, role } of this.#queryLeaves()) {
+      if (seen.has(queryRef)) continue
+      seen.add(queryRef)
+      queryRef.refetch({ graph: this.#graph(path, role) })
     }
     this.#scheduleGraphRunCompletion(this.getSnapshot())
   }
