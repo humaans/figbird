@@ -2666,6 +2666,7 @@ it('mutate methods return the mutated item', async t => {
 it('realtime events are batched to reduce re-renders', async t => {
   const { render, flush, unmount, $all } = dom()
   let renderLog: string[][] = []
+  let total: number | undefined
 
   // Create custom figbird with specific event batching interval
   const feathers = createFeathers()
@@ -2676,6 +2677,7 @@ it('realtime events are batched to reduce re-renders', async t => {
 
   function Notes() {
     const notes = useFind('notes')
+    total = notes.meta.total
 
     // Track renders with data snapshots
     useEffect(() => {
@@ -2733,6 +2735,7 @@ it('realtime events are batched to reduce re-renders', async t => {
       feathers
         .service('notes')
         .emit('created', { id: 4, content: 'batch 4', updatedAt: Date.now() + 3 })
+      feathers.service('notes').emit('removed', { id: 2, content: 'batch 2' })
     })
   })
 
@@ -2755,12 +2758,13 @@ it('realtime events are batched to reduce re-renders', async t => {
   })
 
   t.is(renderLog.length, 1, 'First event in batch should process immediately')
-  t.deepEqual(renderLog[0], ['batch 1', 'batch 2', 'batch 3', 'batch 4'])
+  t.deepEqual(renderLog[0], ['batch 1', 'batch 3', 'batch 4'])
+  t.is(total, 3, 'a mixed batch applies each membership change to pagination totals')
 
   // Verify final DOM state
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['batch 1', 'batch 2', 'batch 3', 'batch 4'],
+    ['batch 1', 'batch 3', 'batch 4'],
   )
 
   unmount()

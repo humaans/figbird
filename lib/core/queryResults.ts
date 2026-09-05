@@ -17,11 +17,10 @@ export function queryRowsData<TMeta>(
   query: Query<unknown, TMeta>,
 ): unknown {
   if (query.rows.kind === 'values') return query.rows.data
-  const items: unknown[] = []
-  for (const id of query.rows.ids) {
-    const item = service.entities.get(id)
-    if (item !== undefined) items.push(item)
-  }
+  const previous = Array.isArray(query.state.data) ? query.state.data : [query.state.data]
+  // A batch removes entities before queries process their removal events. Keep
+  // each owned row until that event updates its membership and pagination meta.
+  const items = query.rows.ids.map((id, index) => service.entities.get(id) ?? previous[index])
   return query.desc.method === 'get' ? (items[0] ?? null) : items
 }
 
