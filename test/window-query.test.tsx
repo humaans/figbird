@@ -297,26 +297,33 @@ it('useWindowQuery: each hook gets an independent first-window Suspense lifecycl
   })
   const { render, flush, act, $, unmount } = dom()
   let showSecond = () => {}
+  let moveFirst = () => {}
+  const query = figbird.q.items.orderBy('rank', 'asc')
+  const config = { pageSize: 10, preloadPages: 0, maxPages: 3 }
+  const ref = figbird.window(query, config)
 
   function Reader({ className, range }: { className: string; range: WindowRange }) {
-    const { data } = useWindowQuery(figbird.q.items.orderBy('rank', 'asc'), {
-      range,
-      pageSize: 10,
-      preloadPages: 0,
-      maxPages: 3,
-    })
-    return <div className={className}>{Array.from(data.values(), row => row.id).join(',')}</div>
+    const options = { ...config, range }
+    const tagged = useWindowQuery(query, { ...options, suspense: false })
+    const { data, error } = useWindowQuery(query, options)
+    return (
+      <div className={className} data-status={tagged.status} data-error={error?.message}>
+        {Array.from(data.values(), row => row.id).join(',')}
+      </div>
+    )
   }
 
   function Harness() {
     const [second, setSecond] = useState(false)
+    const [firstStart, setFirstStart] = useState(0)
     useLayoutEffect(() => {
       showSecond = () => setSecond(true)
+      moveFirst = () => setFirstStart(20)
     })
     return (
       <>
         <Suspense fallback={<div className='first-loading' />}>
-          <Reader className='first' range={{ start: 0, end: 5 }} />
+          <Reader className='first' range={{ start: firstStart, end: firstStart + 5 }} />
         </Suspense>
         {second ? (
           <Suspense fallback={<div className='second-loading' />}>
@@ -343,6 +350,36 @@ it('useWindowQuery: each hook gets an independent first-window Suspense lifecycl
   await flush(() => new Promise(resolve => setTimeout(resolve, 60)))
   t.truthy($('.second'))
   t.falsy($('.second-loading'))
+  const items = feathers.service('items')
+  const workingFind = items.find.bind(items)
+  const failure = new Error('window refresh failed')
+  items.find = () => Promise.reject(failure)
+  await flush(() => ref.refetch())
+  const warm = ref.getSnapshot({ start: 0, end: 5 })
+  t.is(warm.status, 'success')
+  t.is(warm.error, failure)
+  t.false(warm.isFetching)
+  t.is(warm.data.get(0)?.id, 1)
+  t.is($('.first')?.getAttribute('data-status'), 'success')
+  t.is($('.first')?.getAttribute('data-error'), failure.message)
+  t.falsy($('.first-loading'))
+  await ref.suspensePromise({ start: 0, end: 5 })
+
+  items.find = workingFind
+  await flush(async () => {
+    ref.refetch()
+    await new Promise(resolve => setTimeout(resolve, 60))
+  })
+  t.is(ref.getSnapshot({ start: 0, end: 5 }).error, null)
+  t.is($('.first')?.getAttribute('data-error'), null)
+
+  act(moveFirst)
+  t.truthy($('.first'))
+  t.falsy($('.first-loading'))
+  t.is($('.first')?.getAttribute('data-status'), 'loading')
+  await flush(() => new Promise(resolve => setTimeout(resolve, 60)))
+  t.is($('.first')?.getAttribute('data-status'), 'success')
+  t.is(ref.getSnapshot({ start: 20, end: 25 }).data.get(20)?.id, 21)
   unmount()
 })
 

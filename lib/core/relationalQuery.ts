@@ -1,3 +1,4 @@
+import { QueryLifetime } from './queryLifetime.js'
 import { compileRelations, type RelationPlan } from './relationPlan.js'
 import { hashObject } from './hash.js'
 import type { MatcherContext, PageSource } from '../adapters/adapter.js'
@@ -233,7 +234,11 @@ export class RelationalQueryRef<
   // "comments.reactions"). A relation is "synced" once its entry exists here — even a
   // kind:'empty' entry counts, so loading detection doesn't hang on empty relations.
   #relationSubs: Map<string, RelationSub<S, TParams, TMeta, TQuery>> = new Map()
-  #listeners: Map<(state: RelationalQueryState<T>) => void, RelationalListener> = new Map()
+  #lifetime = new QueryLifetime<
+    (state: RelationalQueryState<T>) => void,
+    RelationalListener,
+    null
+  >()
   #nextPreparationGeneration = 0
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #processedEventUnsub: (() => void) | null = null
@@ -247,8 +252,6 @@ export class RelationalQueryRef<
   get #realtimeMode(): 'merge' | 'disabled' {
     return this.#ast.snapshot ? 'disabled' : 'merge'
   }
-  // A teardown is parked on the microtask queue (see #scheduleCleanup).
-  #cleanupScheduled = false
 
   // Snapshot identity caching — useSyncExternalStore requires getSnapshot() to return
   // ref-equal values when nothing has changed, otherwise React detects a tear and
@@ -268,14 +271,6 @@ export class RelationalQueryRef<
   #lastGatherWasPartial = false
   #assembleRelations: ReturnType<typeof createRelationAssembler> | null = null
 
-  // Suspense-support state. The promise is created lazily when suspensePromise() is
-  // first called and resolves/rejects on the first transition to success/error. Once
-  // settled, no new promise is created for this qRef instance — a cold start happens
-  // exactly once.
-  #suspensePromise: Promise<void> | null = null
-  #resolveSuspense: (() => void) | null = null
-  #rejectSuspense: ((error: Error) => void) | null = null
-  #suspenseSettled = false
   // A Suspense read materializes and fetches the graph before React can commit its
   // subscription. The first committed listener claims that fetch instead of treating
   // the just-resolved data as stale and immediately repeating the whole graph.
@@ -334,7 +329,7 @@ export class RelationalQueryRef<
       nodes.push({ path, ...(role ? { role } : {}), queryId: queryRef.details().queryId })
     }
     const snapshot = this.getSnapshot()
-    const listenerMetadata = [...this.#listeners.values()]
+    const listenerMetadata = [...this.#lifetime.owners.values()]
     return {
       key: this.#queryId,
       ...(this.#name ? { name: this.#name } : {}),
@@ -420,8 +415,8 @@ export class RelationalQueryRef<
     const adoptsPreparation = source === 'subscriber' && this.#claimPreparedAdoption()
     const adoptsPrefetch = source === 'prepare' && this.#claimPrefetch()
     const claimsColdStart = this.#coldStartAwaitingSubscriber
-    this.#listeners.set(fn, listener)
-    this.#staleTime = this.#currentStaleTime()
+    this.#lifetime.acquire(fn, listener)
+    this.#staleTime = this.#lifetime.staleTime()
 
     if (!this.#root) {
       this.#setupRoot()
@@ -444,8 +439,8 @@ export class RelationalQueryRef<
     // Don't call fn synchronously - useSyncExternalStore will call getSnapshot() instead
 
     return () => {
-      this.#listeners.delete(fn)
-      this.#staleTime = this.#currentStaleTime()
+      this.#lifetime.release(fn)
+      this.#staleTime = this.#lifetime.staleTime()
       this.#root?.setStaleTime(this.#staleTime)
 
       // Clean up if no more listeners — but not synchronously. React StrictMode
@@ -453,26 +448,17 @@ export class RelationalQueryRef<
       // spot would evict this ref and reset its state, so the resubscribed hook
       // would find a cold replacement on its next render and re-suspend, forever.
       // Deferring by a microtask lets a back-to-back resubscribe cancel the teardown.
-      if (this.#listeners.size === 0) {
+      if (this.#lifetime.owners.size === 0) {
         this.#scheduleCleanup()
       }
     }
-  }
-
-  #currentStaleTime(): number {
-    if (this.#listeners.size === 0) return 0
-    let staleTime = Infinity
-    for (const listener of this.#listeners.values()) {
-      staleTime = Math.min(staleTime, listener.staleTime)
-    }
-    return staleTime
   }
 
   #claimPreparedAdoption(): boolean {
     const adoption = this.#preparedAdoption
     const adoptedThrough = adoption.kind === 'wave' ? adoption.generation : adoption.adoptedThrough
     let newestActive = adoptedThrough
-    for (const listener of this.#listeners.values()) {
+    for (const listener of this.#lifetime.owners.values()) {
       if (listener.source === 'prepare') {
         newestActive = Math.max(newestActive, listener.preparationGeneration)
       }
@@ -494,7 +480,7 @@ export class RelationalQueryRef<
   #claimPrefetch(): boolean {
     const now = Date.now()
     let claimed = false
-    for (const listener of this.#listeners.values()) {
+    for (const listener of this.#lifetime.owners.values()) {
       if (listener.source === 'prefetch' && listener.adoptableUntil !== null) {
         claimed ||= now < listener.adoptableUntil
         listener.adoptableUntil = null
@@ -558,14 +544,10 @@ export class RelationalQueryRef<
   }
 
   #scheduleCleanup(): void {
-    if (this.#cleanupScheduled) return
-    this.#cleanupScheduled = true
-    queueMicrotask(() => {
-      this.#cleanupScheduled = false
-      if (this.#listeners.size === 0 && this.#root) {
-        this.#cleanup()
-      }
-    })
+    this.#lifetime.scheduleCleanup(
+      () => this.#root !== null,
+      () => this.#cleanup(),
+    )
   }
 
   /** Returns the latest snapshot of the relational query state. */
@@ -1446,7 +1428,7 @@ export class RelationalQueryRef<
     this.#relationalFilterRefetchQueued = true
     queueMicrotask(() => {
       this.#relationalFilterRefetchQueued = false
-      if (this.#listeners.size === 0) return
+      if (this.#lifetime.owners.size === 0) return
       this.refetch()
     })
   }
@@ -1476,7 +1458,7 @@ export class RelationalQueryRef<
     const snapshot = this.getSnapshot()
     this.#settleSuspense(snapshot)
     // Notify all listeners with the cached snapshot
-    for (const listener of this.#listeners.keys()) {
+    for (const listener of this.#lifetime.owners.keys()) {
       listener(snapshot)
     }
     this.#scheduleGraphRunCompletion(snapshot)
@@ -1500,16 +1482,8 @@ export class RelationalQueryRef<
    * because the keep-previous-data contract in the hook handles them without throwing.
    */
   #settleSuspense(snapshot: RelationalQueryState<T>): void {
-    if (this.#suspenseSettled) return
     if (snapshot.status !== 'success' && snapshot.status !== 'error') return
-    this.#suspenseSettled = true
-    if (snapshot.status === 'success') {
-      this.#resolveSuspense?.()
-    } else {
-      this.#rejectSuspense?.(snapshot.error)
-    }
-    this.#resolveSuspense = null
-    this.#rejectSuspense = null
+    this.#lifetime.settle('root', null, snapshot.status === 'error' ? snapshot.error : null)
   }
 
   /**
@@ -1520,7 +1494,10 @@ export class RelationalQueryRef<
    * eviction, a retry interns a fresh ref and cold-starts.
    */
   releaseColdStart(): void {
-    if (this.#suspenseSettled && this.#listeners.size === 0) {
+    if (
+      this.#lifetime.reads.get('root')?.status === 'settled' &&
+      this.#lifetime.owners.size === 0
+    ) {
       this.#scheduleCleanup()
     }
   }
@@ -1532,28 +1509,19 @@ export class RelationalQueryRef<
    * to the keep-previous-data path rather than throwing again.
    */
   suspensePromise(): Promise<void> {
-    if (this.#suspenseSettled) return Promise.resolve()
-    if (!this.#suspensePromise) {
-      this.#suspensePromise = new Promise<void>((resolve, reject) => {
-        this.#resolveSuspense = resolve
-        this.#rejectSuspense = reject
-      })
-      // Ensure the underlying queries are materialised — callers may reach this method via
-      // the hook before subscribe() runs in some orderings.
+    if (this.#lifetime.reads.get('root')?.status === 'settled') return Promise.resolve()
+    return this.#lifetime.read('root', null, () => {
       if (!this.#root) {
-        this.#coldStartAwaitingSubscriber = this.#listeners.size === 0
+        this.#coldStartAwaitingSubscriber = this.#lifetime.owners.size === 0
         this.#setupRoot()
       }
-      // If we've already reached a terminal state synchronously, settle immediately.
       this.#settleSuspense(this.getSnapshot())
-    }
-    return this.#suspensePromise
+    })
   }
 
   /** @internal Release readers and pending Suspense work when the instance closes. */
   dispose(): void {
-    this.#rejectSuspense?.(new Error('figbird: instance has been disposed'))
-    this.#listeners.clear()
+    this.#lifetime.dispose()
     this.#cleanup()
   }
 
@@ -1583,12 +1551,7 @@ export class RelationalQueryRef<
         adoptedThrough: this.#preparedAdoption.generation,
       }
     }
-    // Evict from the figbird-level cache so a subsequent query rebuilds a fresh ref.
-    // Reset the suspense promise state too — a fresh cold-start will need a fresh promise.
-    this.#suspensePromise = null
-    this.#resolveSuspense = null
-    this.#rejectSuspense = null
-    this.#suspenseSettled = false
+    this.#lifetime.reset()
     this.#coldStartAwaitingSubscriber = false
     this.#onEvict?.()
   }
