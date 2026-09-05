@@ -1,3 +1,4 @@
+import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import { compileQueryMaintenance } from './queryMaintenance.js'
 import { queryPage, EMPTY_PAGE, type QueryPage } from '../adapters/queryPage.js'
 import { ReconcileScheduler, type ReconcilePreparation } from './reconcileScheduler.js'
@@ -167,6 +168,7 @@ export class QueryStore<
   #realtime = new Map<string, () => void>()
   #connectionUnsub: (() => void) | undefined
   #visibilityUnsub: () => void
+  readonly #clock: Clock
   #retention: QueryRetention
   #disposed = false
   #dependencyOwners = new Map<string, number>()
@@ -190,14 +192,14 @@ export class QueryStore<
   #retry: number | false
   #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
-  #reconnectSweepTimer: ReturnType<typeof setTimeout> | null = null
+  #reconnectSweepTimer: ClockTimer | null = null
   #reconnectQueryIds: Set<string> = new Set()
   #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
   // Lane bases already contain these acknowledgements; only query publication remains.
   #appliedEventQueue: ProcessedCacheEvent[] = []
-  #eventBatchProcessingTimer: ReturnType<typeof setTimeout> | null = null
+  #eventBatchProcessingTimer: ClockTimer | null = null
   #eventBatchInterval: number | undefined = 100
   #processingEventQueue = false
   // Query ids whose listener notification has been deferred to the next microtask
@@ -215,6 +217,7 @@ export class QueryStore<
     reconnectJitter = [0, 3000],
     visibility,
     defaultSort,
+    clock = systemClock,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
     eventBatchInterval?: number | undefined
@@ -244,11 +247,18 @@ export class QueryStore<
      * until the next fetch.
      */
     defaultSort?: Record<string, number>
+    /** @internal Deterministic policy time for tests. */
+    clock?: Clock
   }) {
-    this.#retention = new QueryRetention(gcTime, queryId => {
-      if (this.#listenerCount(queryId) > 0) return
-      this.#vacuum({ queryId })
-    })
+    this.#clock = clock
+    this.#retention = new QueryRetention(
+      gcTime,
+      queryId => {
+        if (this.#listenerCount(queryId) > 0) return
+        this.#vacuum({ queryId })
+      },
+      clock,
+    )
     this.#adapter = adapter
     this.#defaultSort = defaultSort
     this.#eventBatchInterval = eventBatchInterval
@@ -277,28 +287,32 @@ export class QueryStore<
       },
       telemetry: this.#telemetry,
     })
-    this.#reconciliation = new ReconcileScheduler(reconcileCooldown, {
-      prepare: (queryId, force) => this.#prepareReconcile(queryId, force),
-      notify: queryId => this.#notify(new Set([queryId])),
-      fetch: (queryId, causes) => {
-        this.#emitReconcileStarted(queryId, causes)
-        this.refetch(queryId, { reason: 'reconcile', ...(causes ? { causes: [...causes] } : {}) })
+    this.#reconciliation = new ReconcileScheduler(
+      reconcileCooldown,
+      {
+        prepare: (queryId, force) => this.#prepareReconcile(queryId, force),
+        notify: queryId => this.#notify(new Set([queryId])),
+        fetch: (queryId, causes) => {
+          this.#emitReconcileStarted(queryId, causes)
+          this.refetch(queryId, { reason: 'reconcile', ...(causes ? { causes: [...causes] } : {}) })
+        },
+        pendingChanged: (queryId, pending) => {
+          this.#transactOverService(queryId, (service, query) => {
+            if (query) commitQuery(service, { ...query, pending })
+          })
+        },
+        decision: (queryId, decision, causes) =>
+          this.#emitReconcileDecision(queryId, decision, causes),
+        merge: (left, right) => this.#telemetry.merge(left, right),
       },
-      pendingChanged: (queryId, pending) => {
-        this.#transactOverService(queryId, (service, query) => {
-          if (query) commitQuery(service, { ...query, pending })
-        })
-      },
-      decision: (queryId, decision, causes) =>
-        this.#emitReconcileDecision(queryId, decision, causes),
-      merge: (left, right) => this.#telemetry.merge(left, right),
-    })
+      clock,
+    )
     this.#staleTime = staleTime
     this.#retry = this.#normalizeRetry(retry)
     this.#retryDelay = retryDelay
     this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
-    this.#hiddenAt = this.#visibility.isHidden() ? Date.now() : null
+    this.#hiddenAt = this.#visibility.isHidden() ? this.#clock.now() : null
     this.#visibilityUnsub = this.#visibility.onChange(() => this.#visibilityChanged())
     if (this.#adapter.subscribeToConnectionEvents) {
       this.#connectionUnsub = this.#adapter.subscribeToConnectionEvents(event => {
@@ -367,8 +381,8 @@ export class QueryStore<
     for (const unsubscribe of this.#realtime.values()) unsubscribe()
     this.#realtime.clear()
     this.#reconciliation.dispose()
-    if (this.#reconnectSweepTimer) clearTimeout(this.#reconnectSweepTimer)
-    if (this.#eventBatchProcessingTimer) clearTimeout(this.#eventBatchProcessingTimer)
+    if (this.#reconnectSweepTimer) this.#reconnectSweepTimer.cancel()
+    if (this.#eventBatchProcessingTimer) this.#eventBatchProcessingTimer.cancel()
     for (const execution of this.#executions.values()) execution.cancelRetry?.()
     this.#state.clear()
     this.#executions.clear()
@@ -684,7 +698,7 @@ export class QueryStore<
     }
 
     const staleTime = options.staleTime ?? this.#staleTime
-    const isFresh = isWithinStaleTime(q.fetchedAt, staleTime)
+    const isFresh = isWithinStaleTime(q.fetchedAt, staleTime, this.#clock.now())
     if (
       this.#reconciliation.isPending(queryId) ||
       (q.state.status === 'success' &&
@@ -855,11 +869,11 @@ export class QueryStore<
         const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
         await new Promise<void>(resolve => {
           const cancel = () => {
-            clearTimeout(timer)
+            timer.cancel()
             delete execution.cancelRetry
             resolve()
           }
-          const timer = setTimeout(cancel, delay)
+          const timer = this.#clock.setTimeout(cancel, delay)
           execution.cancelRetry = cancel
         })
 
@@ -885,7 +899,7 @@ export class QueryStore<
       return { kind: 'stale' }
     }
 
-    const startedAt = Date.now()
+    const startedAt = this.#clock.now()
     const fetchId = this.#telemetry.nextFetchId()
     const trace = {
       generation: execution.generation,
@@ -914,7 +928,7 @@ export class QueryStore<
 
     try {
       const result = await this.#fetch(queryId)
-      const endedAt = Date.now()
+      const endedAt = this.#clock.now()
       const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
       if (current && this.#executions.get(queryId) === execution) {
@@ -956,7 +970,7 @@ export class QueryStore<
       return { kind: 'completed' }
     } catch (err) {
       const error = normalizeError(err)
-      const endedAt = Date.now()
+      const endedAt = this.#clock.now()
       const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
       const isCurrent = Boolean(current && this.#executions.get(queryId) === execution)
@@ -1341,12 +1355,12 @@ export class QueryStore<
         if (previousRoot && previousRoot !== queryId && this.#listenerCount(previousRoot) === 0) {
           this.#retention.retain(previousRoot)
         }
-        service.materialized = { queryId, fetchedAt: Date.now() }
+        service.materialized = { queryId, fetchedAt: this.#clock.now() }
       }
 
       commitQuery(service, {
         ...query,
-        fetchedAt: Date.now(),
+        fetchedAt: this.#clock.now(),
         state: {
           status: 'success' as const,
           data: rebasedResponse.data,
@@ -1639,7 +1653,7 @@ export class QueryStore<
     if (!this.#eventBatchProcessingTimer && !this.#processingEventQueue) {
       // process all events in a short interval as a batch later
       if (this.#eventBatchInterval) {
-        this.#eventBatchProcessingTimer = setTimeout(() => {
+        this.#eventBatchProcessingTimer = this.#clock.setTimeout(() => {
           this.#eventBatchProcessingTimer = null
           this.#processQueuedEvents()
         }, this.#eventBatchInterval)
@@ -2048,13 +2062,13 @@ export class QueryStore<
 
   #visibilityChanged(): void {
     if (this.#visibility.isHidden()) {
-      this.#hiddenAt ??= Date.now()
+      this.#hiddenAt ??= this.#clock.now()
       return
     }
 
     const hiddenAt = this.#hiddenAt
     this.#hiddenAt = null
-    const now = Date.now()
+    const now = this.#clock.now()
     const sleptPastStaleTime = hiddenAt !== null && now - hiddenAt >= this.#staleTime
     if (sleptPastStaleTime) {
       this.#markReconciliationPending(
@@ -2186,7 +2200,7 @@ export class QueryStore<
       delayMs: delay,
     })
 
-    const timer = setTimeout(() => {
+    const timer = this.#clock.setTimeout(() => {
       this.#reconnectSweepTimer = null
       const queries = this.#activePendingReconciliationQueries()
       this.#telemetry.emit({
@@ -2201,7 +2215,7 @@ export class QueryStore<
         traceId === undefined ? undefined : { kind: 'reconnect', traceId },
       )
     }, delay)
-    ;(timer as { unref?: () => void }).unref?.()
+    timer.unref()
     this.#reconnectSweepTimer = timer
   }
 

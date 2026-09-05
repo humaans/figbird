@@ -1,3 +1,4 @@
+import { TestClock, flushTasks } from './clock.js'
 import { useLayoutEffect } from 'react'
 import EventEmitter from 'events'
 import test from 'ava'
@@ -225,41 +226,45 @@ const schema = createSchema({
 // Mock Feathers with Multiple Services
 // ============================================================================
 
-function createApp() {
-  return createTestApp(schema, {
-    issues: {
-      data: {
-        1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
-        2: { id: 2, title: 'Second issue', status: 'closed', creatorId: 2 },
-        3: { id: 3, title: 'Third issue', status: 'open', creatorId: 1 },
-      },
-    },
-    comments: {
-      data: {
-        1: { id: 1, issueId: 1, authorId: 2, body: 'First comment on issue 1' },
-        2: {
-          id: 2,
-          issueId: 1,
-          authorId: 1,
-          body: 'Second comment on issue 1',
+function createApp(clock?: TestClock) {
+  return createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second issue', status: 'closed', creatorId: 2 },
+          3: { id: 3, title: 'Third issue', status: 'open', creatorId: 1 },
         },
-        3: { id: 3, issueId: 2, authorId: 1, body: 'Comment on issue 2' },
+      },
+      comments: {
+        data: {
+          1: { id: 1, issueId: 1, authorId: 2, body: 'First comment on issue 1' },
+          2: {
+            id: 2,
+            issueId: 1,
+            authorId: 1,
+            body: 'Second comment on issue 1',
+          },
+          3: { id: 3, issueId: 2, authorId: 1, body: 'Comment on issue 2' },
+        },
+      },
+      users: {
+        data: {
+          1: { id: 1, name: 'Alice', email: 'alice@example.com' },
+          2: { id: 2, name: 'Bob', email: 'bob@example.com' },
+        },
+      },
+      reactions: {
+        data: {
+          1: { id: 1, commentId: 1, userId: 1, emoji: '👍' },
+          2: { id: 2, commentId: 1, userId: 2, emoji: '❤️' },
+          3: { id: 3, commentId: 2, userId: 2, emoji: '🎉' },
+        },
       },
     },
-    users: {
-      data: {
-        1: { id: 1, name: 'Alice', email: 'alice@example.com' },
-        2: { id: 2, name: 'Bob', email: 'bob@example.com' },
-      },
-    },
-    reactions: {
-      data: {
-        1: { id: 1, commentId: 1, userId: 1, emoji: '👍' },
-        2: { id: 2, commentId: 1, userId: 2, emoji: '❤️' },
-        3: { id: 3, commentId: 2, userId: 2, emoji: '🎉' },
-      },
-    },
-  })
+    clock ? { clock } : {},
+  )
 }
 
 const exactQuerySchema = createSchema({
@@ -3457,41 +3462,36 @@ it('snapshot: frozen queries ignore realtime; refetch still works; explain says 
 })
 
 test('staleTime: the five-minute default skips SWR revalidation and explicit zero opts out', async t => {
-  const realNow = Date.now
-  let now = realNow()
-  Date.now = () => now
-  t.teardown(() => {
-    Date.now = realNow
-  })
-  const { figbird, feathers } = createApp()
+  const clock = new TestClock()
+  const { figbird, feathers } = createApp(clock)
   const builder = figbird.q.issues.related('creator')
 
   // Cold read — fetches.
   const unsub1 = figbird.query(builder).subscribe(() => {})
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(feathers.service('issues').counts.find, 1)
   unsub1()
-  await new Promise(resolve => setTimeout(resolve, 10)) // let deferred teardown run
+  await flushTasks() // let deferred teardown run
 
   // Resubscribe within the tolerance — warm store data, no revalidation.
   const ref2 = figbird.query(builder)
   const unsub2 = ref2.subscribe(() => {})
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(feathers.service('issues').counts.find, 1, 'fresh data must not refetch')
   t.is(ref2.getSnapshot().status, 'success')
   unsub2()
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
 
-  now += 5 * 60_000
+  await clock.advance(5 * 60_000)
   const stale = figbird.query(builder).subscribe(() => {})
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(feathers.service('issues').counts.find, 2, 'the default expires at five minutes')
   stale()
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
 
   // A read site can still demand mount-time revalidation.
   const unsub3 = figbird.query(builder).subscribe(() => {}, { staleTime: 0 })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(feathers.service('issues').counts.find, 3, 'explicit zero revalidates on resubscribe')
   unsub3()
 })

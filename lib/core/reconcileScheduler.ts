@@ -1,3 +1,4 @@
+import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import type { TraceCause } from './events.js'
 
 type Request = {
@@ -30,13 +31,15 @@ interface SchedulerHost {
 
 /** Owns outstanding reconciliations and cooldowns; the store owns how queries resolve. */
 export class ReconcileScheduler {
+  readonly #clock: Clock
   readonly #entries = new Map<string, Entry>()
   readonly #host: SchedulerHost
   readonly #cooldown: number
-  #timer: ReturnType<typeof setTimeout> | undefined
+  #timer: ClockTimer | undefined
   #timerAt = Infinity
 
-  constructor(cooldown: number, host: SchedulerHost) {
+  constructor(cooldown: number, host: SchedulerHost, clock: Clock = systemClock) {
+    this.#clock = clock
     this.#cooldown = cooldown
     this.#host = host
   }
@@ -87,7 +90,7 @@ export class ReconcileScheduler {
         merged,
       )
     } else {
-      const now = Date.now()
+      const now = this.#clock.now()
       const eligibleAt = (entry?.lastAt ?? -Infinity) + this.#cooldown
       if (this.#cooldown <= 0 || now >= eligibleAt) {
         this.#set(queryId, { lastAt: now, request: undefined })
@@ -126,7 +129,7 @@ export class ReconcileScheduler {
   }
 
   dispose(): void {
-    if (this.#timer !== undefined) clearTimeout(this.#timer)
+    if (this.#timer !== undefined) this.#timer.cancel()
     this.#timer = undefined
     this.#timerAt = Infinity
     this.#entries.clear()
@@ -141,13 +144,13 @@ export class ReconcileScheduler {
 
   #schedule(next: number): void {
     if (next >= this.#timerAt) return
-    if (this.#timer !== undefined) clearTimeout(this.#timer)
+    if (this.#timer !== undefined) this.#timer.cancel()
     this.#timerAt = next
-    this.#timer = setTimeout(
+    this.#timer = this.#clock.setTimeout(
       () => {
         this.#timer = undefined
         this.#timerAt = Infinity
-        const now = Date.now()
+        const now = this.#clock.now()
         const due = [...this.#entries].filter(
           ([, entry]) => entry.request?.kind === 'cooldown' && entry.request.eligibleAt <= now,
         )
@@ -160,9 +163,8 @@ export class ReconcileScheduler {
         }
         this.#schedule(next)
       },
-      Math.max(0, next - Date.now()),
+      Math.max(0, next - this.#clock.now()),
     )
-    const timer = this.#timer as ReturnType<typeof setTimeout> & { unref?: () => void }
-    timer.unref?.()
+    this.#timer.unref()
   }
 }

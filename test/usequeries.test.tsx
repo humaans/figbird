@@ -83,8 +83,12 @@ it('useQueries: fetches all queries in parallel under a single suspension', asyn
     }
   }
 
+  const additional = Array.from({ length: 25 }, (_, index) =>
+    figbird.q.issues.where({ status: `group-${index}` }),
+  )
+
   function Dashboard() {
-    const [issues, users] = useQueries([openIssues({ status: 'open' }), allUsers])
+    const [issues, users] = useQueries([openIssues({ status: 'open' }), allUsers, ...additional])
     // Type-inference assertions — the tuple element types flow from each builder.
     const issueRows: Issue[] = issues
     const userRows: User[] = users
@@ -114,6 +118,11 @@ it('useQueries: fetches all queries in parallel under a single suspension', asyn
   t.falsy($('.fallback'))
   t.is($('.issues')!.innerHTML, 'First issue,Second issue')
   t.is($('.users')!.innerHTML, 'Alice,Bob')
+  t.is(
+    calls.length,
+    27,
+    'a parallel read larger than the abandoned-read budget commits without refetching',
+  )
 
   unmount()
 })

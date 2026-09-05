@@ -1,3 +1,4 @@
+import type { Clock } from './clock.js'
 import { QueryLifetime } from './queryLifetime.js'
 import { compileRelations, type RelationPlan } from './relationPlan.js'
 import { hashObject } from './hash.js'
@@ -68,6 +69,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
     ): (item: unknown) => boolean
     pageSource?(serviceName: string): PageSource<TParams, TMeta> | undefined
   }
+  clock: Clock
   queryStore: {
     isObservabilityActive(): boolean
     subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void
@@ -195,6 +197,7 @@ export interface RelationalRootOverride {
 }
 
 interface RelationalQueryOptions {
+  onIdle?: () => void
   defaultStaleTime?: number
   root?: RelationalRootOverride
 }
@@ -274,6 +277,18 @@ export class RelationalQueryRef<
   // not on every sync pass.
   #fanOutWarnedKeys: Set<string> = new Set()
 
+  #coldReadGroup: object = {}
+
+  /** @internal Queries suspended together share one abandoned-read retention unit. */
+  get coldReadGroup(): object {
+    return this.#coldReadGroup
+  }
+
+  setColdReadGroup(group: object): void {
+    this.#coldReadGroup = group
+  }
+
+  #onIdle: (() => void) | null
   #onEvict: (() => void) | null = null
   #defaultStaleTime: number
   #name: string | undefined
@@ -292,6 +307,7 @@ export class RelationalQueryRef<
     this.#schema = schema
     this.#relationPlans = compileRelations(ast, schema, ast.snapshot ? 'disabled' : 'merge')
     this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
+    this.#onIdle = options?.onIdle ?? null
     this.#onEvict = onEvict ?? null
     this.#defaultStaleTime = options?.defaultStaleTime ?? 0
     this.#rootOverride = options?.root ?? null
@@ -400,7 +416,7 @@ export class RelationalQueryRef<
             preparationGeneration: ++this.#nextPreparationGeneration,
           }
         : source === 'prefetch'
-          ? { source, staleTime, adoptableUntil: Date.now() + staleTime }
+          ? { source, staleTime, adoptableUntil: this.#host.clock.now() + staleTime }
           : { source, staleTime }
     // Preparation makes one freshness decision for the destination's initial React
     // commit. Every subscriber in that synchronous wave adopts it; later mounts use
@@ -471,7 +487,7 @@ export class RelationalQueryRef<
   }
 
   #claimPrefetch(): boolean {
-    const now = Date.now()
+    const now = this.#host.clock.now()
     let claimed = false
     for (const listener of this.#lifetime.owners.values()) {
       if (listener.source === 'prefetch' && listener.adoptableUntil !== null) {
@@ -1451,7 +1467,9 @@ export class RelationalQueryRef<
    */
   #settleSuspense(snapshot: RelationalQueryState<T>): void {
     if (snapshot.status !== 'success' && snapshot.status !== 'error') return
+    const wasPending = this.#lifetime.reads.get('root')?.status === 'pending'
     this.#lifetime.settle('root', null, snapshot.status === 'error' ? snapshot.error : null)
+    if (wasPending) this.#onIdle?.()
   }
 
   /**
@@ -1485,6 +1503,19 @@ export class RelationalQueryRef<
       }
       this.#settleSuspense(this.getSnapshot())
     })
+  }
+
+  /** @internal Release settled speculative work only when no owner adopted it. */
+  canEvictAbandonedRead(): boolean {
+    return (
+      this.#lifetime.owners.size === 0 && this.#lifetime.reads.get('root')?.status === 'settled'
+    )
+  }
+
+  evictAbandonedRead(): boolean {
+    if (!this.canEvictAbandonedRead()) return false
+    this.#cleanup()
+    return true
   }
 
   /** @internal Release readers and pending Suspense work when the instance closes. */
@@ -1536,8 +1567,14 @@ export class RelationalQueryRef<
  * next to that contract, so hooks don't re-encode it with their own timers.
  */
 export function suspensePromiseAll(
-  refs: readonly { suspensePromise(): Promise<void>; releaseColdStart(): void }[],
+  refs: readonly {
+    suspensePromise(): Promise<void>
+    releaseColdStart(): void
+    setColdReadGroup(group: object): void
+  }[],
 ): Promise<unknown> {
+  const group = {}
+  for (const ref of refs) ref.setColdReadGroup(group)
   const promises = refs.map(ref => ref.suspensePromise())
   const aggregate = Promise.all(promises)
   void aggregate.catch(() => {

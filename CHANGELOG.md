@@ -4,6 +4,14 @@
 
 The relational rewrite.
 
+Ordinary relational queries now bound settled, unowned Suspense reads under cache
+pressure, matching window-query retention. Eviction releases root and relation
+subscriptions; active consumers, preparation pins, and unresolved reads stay live.
+Recent abandoned reads remain warm for retries. Parallel `useQueries` reads retain
+and evict as a group so batches larger than the retention budget can still commit. Query and mutation policy timers
+share an internal clock so retention, cooldown, freshness, and retry tests can
+advance exact deadlines without replacing global time or sleeping.
+
 Query ASTs now require the fields associated with each operation: gets carry an ID,
 and paginated queries carry a page size and an explicit `includeTotal` boolean,
 which defaults to `false`. Public query and mutation result inference is preserved

@@ -1,3 +1,4 @@
+import { TestClock } from './clock.js'
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
@@ -27,6 +28,7 @@ const schema = createSchema({
 })
 
 test('Figbird instance retains idle queries and releases owned resources on disposal', async t => {
+  const clock = new TestClock()
   const feathers = mockFeathers({
     notes: {
       data: {
@@ -62,6 +64,7 @@ test('Figbird instance retains idle queries and releases owned resources on disp
     schema,
     adapter,
     gcTime: 10,
+    clock,
     visibility: {
       isHidden: () => false,
       onChange: () => {
@@ -79,7 +82,9 @@ test('Figbird instance retains idle queries and releases owned resources on disp
   const idleWrite = idleQueue.m.notes.patch(1, { content: 'saved after expiry' })
   unsubscribe()
   t.true(figbird.inspect().length > 0, 'idle cache survives immediate unmount')
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await clock.advance(9)
+  t.true(figbird.inspect().length > 0, 'retained until the exact deadline')
+  await clock.advance(1)
   t.is(figbird.inspect().length, 0, 'idle queries expire')
   t.is(figbird.getState().get('notes')?.entities.size, 1, 'pending mutation retains its row')
   t.is(realtimeSubscriptions, 1)
@@ -107,17 +112,54 @@ test('Figbird instance retains idle queries and releases owned resources on disp
   const releaseAll = all.subscribe(() => {})
   await all.suspensePromise()
   releaseAll()
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await clock.advance(10)
   t.false(figbird.getState().has('notes'), 'idle complete materializations expire too')
   t.is(realtimeSubscriptions, 0, 'expired materializations release realtime ownership')
 
   const prepared = figbird.prepare(figbird.q.notes.all())
   await prepared.promise
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await clock.advance(10)
   t.true(figbird.getState().has('notes'), 'an explicit preparation keeps the service available')
   prepared.release()
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await clock.advance(10)
   t.false(figbird.getState().has('notes'), 'releasing the preparation starts normal retention')
+
+  const pinned = figbird.query(figbird.q.notes.where({ tag: 'active' }))
+  const releasePinned = pinned.subscribe(() => {})
+  await pinned.suspensePromise()
+  const preparation = figbird.prepare(figbird.q.notes.where({ tag: 'prepared' }))
+  await preparation.promise
+  const find = feathers.service('notes').find.bind(feathers.service('notes'))
+  let resolvePending!: () => void
+  const gate = new Promise<void>(resolve => {
+    resolvePending = resolve
+  })
+  feathers.service('notes').find = async params => {
+    if (params?.query?.tag === 'pending') await gate
+    return find(params)
+  }
+  const pendingRef = figbird.query(figbird.q.notes.where({ tag: 'pending' }))
+  const pendingRead = pendingRef.suspensePromise()
+  const oldestBuilder = figbird.q.notes.where({ tag: 'abandoned-0' })
+  const oldest = figbird.query(oldestBuilder)
+  await oldest.suspensePromise()
+  t.is(figbird.query(oldestBuilder), oldest, 'a recent retry reuses the settled reference')
+  for (let index = 1; index < 100; index++) {
+    await figbird.query(figbird.q.notes.where({ tag: `abandoned-${index}` })).suspensePromise()
+  }
+  await clock.advance(10)
+  t.true(figbird.inspect().length <= 20, 'abandoned roots release their underlying subscriptions')
+  t.is(figbird.query(figbird.q.notes.where({ tag: 'active' })), pinned)
+  t.is(figbird.query(figbird.q.notes.where({ tag: 'pending' })), pendingRef)
+  t.true(figbird.inspectRelational().some(row => row.prepareCount === 1))
+  const retry = figbird.query(oldestBuilder)
+  t.not(retry, oldest, 'older abandoned reads can be recreated under pressure')
+  await retry.suspensePromise()
+  resolvePending()
+  await pendingRead
+  t.is(pendingRef.getSnapshot().status, 'success')
+  releasePinned()
+  preparation.release()
 
   const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
   const pending = queue.m.notes.patch(1, { content: 'saved during disposal' })

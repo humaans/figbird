@@ -1,3 +1,4 @@
+import { TestClock } from './clock.js'
 import { useLayoutEffect } from 'react'
 import test from 'ava'
 import React, { StrictMode, useEffect, useState } from 'react'
@@ -2666,6 +2667,7 @@ it('mutate methods return the mutated item', async t => {
 })
 
 it('realtime events are batched to reduce re-renders', async t => {
+  const clock = new TestClock()
   const { render, flush, unmount, $all } = dom()
   let renderLog: string[][] = []
   let total: number | undefined
@@ -2673,7 +2675,7 @@ it('realtime events are batched to reduce re-renders', async t => {
   // Create custom figbird with specific event batching interval
   const feathers = createFeathers()
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter, eventBatchInterval: 100 })
+  const figbird = new Figbird({ schema, adapter, clock, eventBatchInterval: 100 })
 
   const { App, useFind } = app({ figbird })
 
@@ -2722,7 +2724,6 @@ it('realtime events are batched to reduce re-renders', async t => {
   )
 
   // Emit 4 events in rapid succession
-  const startTime = Date.now()
   await flush(async () => {
     queueTask(() => {
       feathers
@@ -2743,7 +2744,7 @@ it('realtime events are batched to reduce re-renders', async t => {
 
   // Wait a bit to check nothing was rendered yet
   await flush(async () => {
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await clock.advance(99)
   })
 
   t.is(renderLog.length, 0, 'Events will only be processed as a batch later')
@@ -2754,9 +2755,7 @@ it('realtime events are batched to reduce re-renders', async t => {
 
   // Wait for batch timeout (100ms from start)
   await flush(async () => {
-    const elapsed = Date.now() - startTime
-    const remaining = Math.max(0, 100 - elapsed)
-    await new Promise(resolve => setTimeout(resolve, remaining))
+    await clock.advance(1)
   })
 
   t.is(renderLog.length, 1, 'First event in batch should process immediately')

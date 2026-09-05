@@ -303,11 +303,16 @@ export class WindowQueryRef<
   }
 
   /** @internal Evicts an abandoned render-phase read under Figbird cache pressure. */
-  evictAbandonedRead(): boolean {
+  canEvictAbandonedRead(): boolean {
     if (this.#lifetime.owners.size > 0 || this.#lifetime.reads.size === 0) return false
     for (const read of this.#lifetime.reads.values()) {
       if (read.status === 'pending') return false
     }
+    return true
+  }
+
+  evictAbandonedRead(): boolean {
+    if (!this.canEvictAbandonedRead()) return false
     this.#cleanup()
     return true
   }
