@@ -1254,9 +1254,10 @@ export class RelationalQueryRef<
       return
     }
 
-    if (existing) this.#disposeRelationSub(existing, key)
+    if (existing && existing.kind !== 'perParent') this.#disposeRelationSub(existing, key)
 
     if (uniqueValues.length === 0) {
+      if (existing?.kind === 'perParent') this.#disposeRelationSub(existing, key)
       this.#relationSubs.set(key, { kind: 'empty', sourceKey: newSourceKey })
       return
     }
@@ -1275,14 +1276,24 @@ export class RelationalQueryRef<
       )
     }
 
-    const entry: RelationSub<S, TParams, TMeta, TQuery> = {
-      kind: 'perParent',
-      sourceKey: newSourceKey,
-      children: new Map(),
-    }
+    const entry: Extract<
+      RelationSub<S, TParams, TMeta, TQuery>,
+      { kind: 'perParent' }
+    > = existing?.kind === 'perParent'
+      ? existing
+      : { kind: 'perParent', sourceKey: newSourceKey, children: new Map() }
+    entry.sourceKey = newSourceKey
+    const previousChildren = entry.children
+    entry.children = new Map()
     this.#relationSubs.set(key, entry)
 
     for (const sourceValue of uniqueValues) {
+      const childKey = sourceValueKey(sourceValue)
+      const retained = previousChildren.get(childKey)
+      if (retained) {
+        entry.children.set(childKey, retained)
+        continue
+      }
       const queryRef = this.#buildSingleParentRelationQueryRef(
         relDef.destService,
         relDef,
@@ -1299,9 +1310,12 @@ export class RelationalQueryRef<
         { staleTime: this.#staleTime, graph: this.#graph(key) },
       )
 
-      entry.children.set(sourceValueKey(sourceValue), { queryRef, unsub, sourceValue })
+      entry.children.set(childKey, { queryRef, unsub, sourceValue })
     }
 
+    for (const [childKey, child] of previousChildren) {
+      if (!entry.children.has(childKey)) child.unsub()
+    }
     this.#syncNestedWindowedRelationIfReady(entry, relAST, key)
   }
 

@@ -2777,7 +2777,7 @@ it('useQuery: limited sorted relation refetches its server window after a visibl
 
 it('useQuery: limited sorted many relation applies the window per parent', async t => {
   const { render, unmount, flush, $ } = dom()
-  const { App, figbird } = createWindowQueryApp()
+  const { App, figbird, feathers } = createWindowQueryApp()
 
   function CompaniesView() {
     const data = useQuery(
@@ -2789,6 +2789,7 @@ it('useQuery: limited sorted many relation applies the window per parent', async
           .limit(2)
           .related('currentEmployment', e => e.where({ effectiveAt: '2025-04-23' })),
       ),
+      { staleTime: 0 },
     )
 
     return (
@@ -2818,6 +2819,22 @@ it('useQuery: limited sorted many relation applies the window per parent', async
   await flush()
 
   t.truthy($('.companies'))
+  t.is($('.companies')!.getAttribute('data-people'), 'Acme:Alice,Bob|Globex:Eve,Finn')
+  t.is(
+    $('.companies')!.getAttribute('data-employment'),
+    'Acme:Alice role,Bob role|Globex:Eve role,Finn role',
+  )
+
+  const initialPeopleFinds = feathers.service('people').counts.find
+  await flush(async () => {
+    await feathers.service('companies').create({ id: 3, name: 'Newco' })
+  })
+  t.is(feathers.service('people').counts.find, initialPeopleFinds + 1)
+  t.is($('.companies')!.getAttribute('data-people'), 'Acme:Alice,Bob|Globex:Eve,Finn|Newco:')
+  await flush(async () => {
+    await feathers.service('companies').remove(3)
+  })
+  t.is(feathers.service('people').counts.find, initialPeopleFinds + 1)
   t.is($('.companies')!.getAttribute('data-people'), 'Acme:Alice,Bob|Globex:Eve,Finn')
   t.is(
     $('.companies')!.getAttribute('data-employment'),
