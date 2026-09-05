@@ -3294,43 +3294,62 @@ test('staleTime: public entry points reject invalid durations', t => {
   t.throws(() => figbird.prefetch(builder, { staleTime: Number.MAX_SAFE_INTEGER }))
 })
 
-test('prepared result adoption covers one subscriber wave, not the retained pin lifetime', async t => {
-  const { figbird, feathers } = createApp()
-  const { q } = createHooks(schema)
-  const issueDetail = defineQuery('preparedIssueStaleTime', ({ id }: { id: number }) =>
-    q.issues.get(id).related('creator'),
-  )
-  const request = issueDetail({ id: 1 })
-
-  figbird.prefetch(request)
-  const prepared = figbird.prepare(request)
-  await prepared.promise
-  const ref = figbird.query(request)
-  const first = ref.subscribe(() => {}, { staleTime: 0 })
-  const sibling = ref.subscribe(() => {}, { staleTime: 0 })
-  first()
-  sibling()
-  const strictModeReplay = ref.subscribe(() => {}, { staleTime: 0 })
-  await new Promise<void>(resolve => queueMicrotask(resolve))
-
-  t.is(feathers.service('issues').counts.get, 1, 'the initial subscriber wave adopts the root')
-  t.is(feathers.service('users').counts.find, 1, 'the initial subscriber wave adopts the relation')
-
-  strictModeReplay()
-  let releaseLaterMount = () => {}
-  await new Promise<void>(resolve => {
-    releaseLaterMount = ref.subscribe(
-      state => {
-        if (state.status === 'success' && !state.isFetching) resolve()
-      },
-      { staleTime: 0 },
+test('prefetched result adoption covers one preparation and subscriber wave', async t => {
+  for (const completePrefetch of [false, true]) {
+    const { adapter, feathers } = createApp()
+    const figbird = new Figbird({ schema, adapter, staleTime: 0 })
+    const { q } = createHooks(schema)
+    const issueDetail = defineQuery('preparedIssueStaleTime', ({ id }: { id: number }) =>
+      q.issues.get(id).related('creator'),
     )
-  })
+    const request = issueDetail({ id: 1 })
 
-  t.is(feathers.service('issues').counts.get, 2, 'a later mount revalidates the root')
-  t.is(feathers.service('users').counts.find, 2, 'a later mount revalidates the relation')
-  prepared.release()
-  releaseLaterMount()
+    figbird.prefetch(request)
+    if (completePrefetch) {
+      await figbird.query(request).suspensePromise()
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const prepared = figbird.prepare(request)
+    await prepared.promise
+    await new Promise(resolve => setTimeout(resolve, 10))
+    const ref = figbird.query(request)
+    const first = ref.subscribe(() => {}, { staleTime: 0 })
+    const sibling = ref.subscribe(() => {}, { staleTime: 0 })
+    first()
+    sibling()
+    const strictModeReplay = ref.subscribe(() => {}, { staleTime: 0 })
+    await new Promise<void>(resolve => queueMicrotask(resolve))
+
+    t.is(feathers.service('issues').counts.get, 1, 'the initial subscriber wave adopts the root')
+    t.is(
+      feathers.service('users').counts.find,
+      1,
+      'the initial subscriber wave adopts the relation',
+    )
+
+    strictModeReplay()
+    let releaseLaterMount = () => {}
+    await new Promise<void>(resolve => {
+      releaseLaterMount = ref.subscribe(
+        state => {
+          if (state.status === 'success' && !state.isFetching) resolve()
+        },
+        { staleTime: 0 },
+      )
+    })
+
+    t.is(feathers.service('issues').counts.get, 2, 'a later mount revalidates the root')
+    t.is(feathers.service('users').counts.find, 2, 'a later mount revalidates the relation')
+    prepared.release()
+    releaseLaterMount()
+
+    const laterPreparation = figbird.prepare(request)
+    await laterPreparation.promise
+    await new Promise(resolve => setTimeout(resolve, 10))
+    t.is(feathers.service('issues').counts.get, 3, 'a later preparation revalidates the root')
+    t.is(feathers.service('users').counts.find, 3, 'a later preparation revalidates the relation')
+    laterPreparation.release()
+  }
 })
 
 test('prepared result adoption orders overlapping and cancelled generations', async t => {

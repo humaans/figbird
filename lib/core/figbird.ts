@@ -512,6 +512,8 @@ export class Figbird<
    * preparation is an earlier read, not a different read. Keep the handle active through
    * the destination's first subscriber commit. That subscriber wave adopts the prepared
    * result without revalidation; retaining the handle longer only keeps the query pinned.
+   * An active prefetch can be adopted by one preparation, even with a zero instance
+   * staleTime. An explicit preparation staleTime overrides this handover.
    *
    * @example
    * ```ts
