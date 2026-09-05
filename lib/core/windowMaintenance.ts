@@ -1,3 +1,5 @@
+import { sameValue } from './valueEquality.js'
+import { commitQuery } from './queryResults.js'
 /**
  * Window maintenance and realtime event application — the pure algebra the query
  * store orchestrates. Everything here is a plain function over explicit inputs
@@ -25,22 +27,15 @@ import {
   type ServiceState,
 } from './queryTypes.js'
 
-export function createServiceState<TMeta = Record<string, unknown>>(): ServiceState<TMeta> {
+export function createServiceState<TMeta = Record<string, unknown>>(
+  getId: (item: unknown) => ItemId | undefined,
+): ServiceState<TMeta> {
   return {
+    getId,
     entities: new Map(),
     queries: new Map(),
     itemQueryIndex: new Map(),
   }
-}
-
-function getQueryItems<TMeta = Record<string, unknown>>(
-  query: Query<unknown, TMeta, unknown>,
-): unknown[] {
-  return Array.isArray(query.state.data)
-    ? query.state.data
-    : query.state.data
-      ? [query.state.data]
-      : []
 }
 
 function itemHasKey(
@@ -50,51 +45,6 @@ function itemHasKey(
 ): boolean {
   const id = getId(item)
   return id !== undefined && entityKey(id) === key
-}
-
-export function addQueryToItemIndex<TMeta>(
-  service: ServiceState<TMeta>,
-  itemId: ItemId,
-  queryId: string,
-): void {
-  const key = entityKey(itemId)
-  if (!service.itemQueryIndex.has(key)) {
-    service.itemQueryIndex.set(key, new Set())
-  }
-  service.itemQueryIndex.get(key)!.add(queryId)
-}
-
-export function removeQueryFromItemIndex<TMeta>({
-  service,
-  query,
-  queryId,
-  getId,
-}: {
-  service: ServiceState<TMeta>
-  query: Query<unknown, TMeta, unknown>
-  queryId: string
-  getId: (item: unknown) => ItemId | undefined
-}): void {
-  for (const item of getQueryItems(query)) {
-    const id = getId(item)
-    if (id !== undefined) {
-      removeQueryFromItemIndexById(service, id, queryId)
-    }
-  }
-}
-
-export function removeQueryFromItemIndexById<TMeta>(
-  service: ServiceState<TMeta>,
-  itemId: ItemId,
-  queryId: string,
-): void {
-  const key = entityKey(itemId)
-  const queryIds = service.itemQueryIndex.get(key)
-  if (!queryIds) return
-  queryIds.delete(queryId)
-  if (queryIds.size === 0) {
-    service.itemQueryIndex.delete(key)
-  }
 }
 
 // `$sort` doesn't affect which rows are fetched, so a sorted-but-unfiltered
@@ -169,64 +119,23 @@ export function applyEventsToService<TMeta>({
   processedEvents: ProcessedCacheEvent[]
 }): void {
   for (const event of events) {
-    const { type, item, cause } = event
-    if (type === 'created') {
-      const incomingId = getId(item)
-      if (incomingId !== undefined) {
-        const itemId = entityKey(incomingId)
-        const previousItem = service.entities.get(itemId) ?? null
-        service.entities.set(itemId, item)
-        processedEvents.push({
-          serviceName,
-          type,
-          item,
-          previousItem,
-          itemId,
-          ...(cause === undefined ? {} : { cause }),
-          ...(event.mode === 'optimistic'
-            ? { mode: event.mode, mutationLaneKey: event.mutationLaneKey }
-            : { mode: event.mode, source: event.source }),
-        })
-      }
-    } else if (type === 'updated' || type === 'patched') {
-      const incomingId = getId(item)
-      if (incomingId !== undefined) {
-        const itemId = entityKey(incomingId)
-        const currItem = service.entities.get(itemId)
-        if (event.mode !== 'server' || !currItem || !isItemStale(currItem, item)) {
-          service.entities.set(itemId, item)
-          processedEvents.push({
-            serviceName,
-            type,
-            item,
-            previousItem: currItem ?? null,
-            itemId,
-            ...(cause === undefined ? {} : { cause }),
-            ...(event.mode === 'optimistic'
-              ? { mode: event.mode, mutationLaneKey: event.mutationLaneKey }
-              : { mode: event.mode, source: event.source }),
-          })
-        }
-      }
-    } else if (type === 'removed') {
-      const incomingId = getId(item)
-      if (incomingId !== undefined) {
-        const itemId = entityKey(incomingId)
-        const previousItem = service.entities.get(itemId) ?? null
-        service.entities.delete(itemId)
-        processedEvents.push({
-          serviceName,
-          type,
-          item,
-          previousItem,
-          itemId,
-          ...(cause === undefined ? {} : { cause }),
-          ...(event.mode === 'optimistic'
-            ? { mode: event.mode, mutationLaneKey: event.mutationLaneKey }
-            : { mode: event.mode, source: event.source }),
-        })
-      }
-    }
+    const id = getId(event.item)
+    if (id === undefined) continue
+    const itemId = entityKey(id)
+    const previousItem = service.entities.get(itemId) ?? null
+    if (
+      event.mode === 'server' &&
+      previousItem &&
+      (event.type === 'updated' || event.type === 'patched') &&
+      isItemStale(previousItem, event.item)
+    )
+      continue
+    if (event.mode === 'server' && event.source === 'fetch' && sameValue(previousItem, event.item))
+      continue
+
+    if (event.type === 'removed') service.entities.delete(itemId)
+    else service.entities.set(itemId, event.item)
+    processedEvents.push({ ...event, serviceName, previousItem, itemId })
   }
 }
 
@@ -339,15 +248,14 @@ function applyVisibleEventEffect<TMeta>(
             meta: itemRemoved(query.state.meta),
             data: (query.state.data as unknown[]).filter(item => !itemHasKey(item, itemId, getId)),
           }
-    service.queries.set(queryId, { ...query, state: nextState })
-    removeQueryFromItemIndexById(service, itemId, queryId)
+    commitQuery(service, { ...query, state: nextState })
     touch(queryId)
     return true
   }
 
   const item = service.entities.get(itemId) ?? event.item
   if (query.desc.method === 'get') {
-    service.queries.set(queryId, {
+    commitQuery(service, {
       ...query,
       state: {
         status: 'success',
@@ -357,7 +265,6 @@ function applyVisibleEventEffect<TMeta>(
         error: null,
       },
     })
-    addQueryToItemIndex(service, itemId, queryId)
     touch(queryId)
     return true
   }
@@ -369,7 +276,7 @@ function applyVisibleEventEffect<TMeta>(
   if (query.classification === 'local-exact') {
     sortQueryRows(data, query, context.defaultSort)
   }
-  service.queries.set(queryId, {
+  commitQuery(service, {
     ...query,
     state: { ...query.state, data },
   })
@@ -450,7 +357,7 @@ function applyMergeEventToQuery<TMeta>(
     if (result.action === 'refetch') return 'reconcile'
     if (result.action === 'noop' || query.state.status !== 'success') return 'ignored'
 
-    service.queries.set(queryId, {
+    commitQuery(service, {
       ...query,
       state: {
         ...query.state,
@@ -463,11 +370,6 @@ function applyMergeEventToQuery<TMeta>(
         data: result.data,
       },
     })
-    if (result.enteredWindow) addQueryToItemIndex(service, itemId, queryId)
-    if (result.leftWindow) removeQueryFromItemIndexById(service, itemId, queryId)
-    if (result.evictedId !== undefined) {
-      removeQueryFromItemIndexById(service, result.evictedId, queryId)
-    }
     touch(queryId)
     return 'applied'
   }
@@ -481,7 +383,7 @@ function applyMergeEventToQuery<TMeta>(
   }
 
   if (matches && query.desc.method === 'find' && query.state.status === 'success') {
-    service.queries.set(queryId, {
+    commitQuery(service, {
       ...query,
       state: {
         ...query.state,
@@ -489,7 +391,6 @@ function applyMergeEventToQuery<TMeta>(
         data: sortQueryRows((query.state.data as unknown[]).concat(item), query, defaultSort),
       },
     })
-    addQueryToItemIndex(service, itemId, queryId)
     touch(queryId)
     return 'applied'
   }
@@ -558,10 +459,19 @@ export function updateQueriesFromEvents<TMeta>({
           onEffect?.(queryId, 'reconcile')
           continue
         }
-        // A fetched row supplies values, not another server query's membership.
-        // Preserve projections and avoid fetch-to-fetch reconciliation cycles.
-        if (
-          !isProjectionQuery(queryOfParams(query.desc.params)) &&
+        // New fetch rows may already be counted in another server page's total.
+        // Only reconcile known membership when a previously visible row changes.
+        const visible = service.itemQueryIndex.get(event.itemId)?.has(queryId) ?? false
+        if (!visible || isProjectionQuery(queryOfParams(query.desc.params))) continue
+        if (query.classification === 'server-window' && event.type !== 'created') {
+          const result = applyMergeEventToQuery(context, queryId, event)
+          if (result === 'reconcile') {
+            serverMaintainedQueriesToRefetch.add(queryId)
+            onEffect?.(queryId, 'reconcile')
+          } else if (result === 'applied') {
+            onEffect?.(queryId, 'merged')
+          }
+        } else if (
           applyVisibleEventEffect(
             context,
             queryId,
@@ -653,18 +563,10 @@ export function reapplyQueryFromEntities<TMeta>({
     previousRows.some((item, index) => item !== nextRows[index])
   if (!dataChanged && added.length === 0 && removed.length === 0) return 'ignored'
 
-  for (const key of removed) {
-    removeQueryFromItemIndexById(service, key, queryId)
-  }
-  for (const key of added) {
-    const candidate = candidates.get(key)
-    if (candidate) addQueryToItemIndex(service, candidate.id, queryId)
-  }
-
   let meta = query.state.meta
   for (let index = 0; index < added.length; index += 1) meta = itemAdded(meta)
   for (let index = 0; index < removed.length; index += 1) meta = itemRemoved(meta)
-  service.queries.set(queryId, {
+  commitQuery(service, {
     ...query,
     state: { ...query.state, data: nextRows, meta },
   })
@@ -731,12 +633,6 @@ type WindowMergeResult =
       action: 'merge'
       data: unknown[]
       metaOp: 'added' | 'removed' | null
-      /** The event item entered the visible window — add it to the query index. */
-      enteredWindow: boolean
-      /** The event item left the visible window — drop it from the query index. */
-      leftWindow: boolean
-      /** A row evicted to make room — its query-index entry must be dropped too. */
-      evictedId?: ItemId
     }
 
 /**
@@ -815,8 +711,6 @@ function mergeEventIntoWindow<TMeta>({
           action: 'merge',
           data: rows,
           metaOp: 'removed',
-          enteredWindow: false,
-          leftWindow: false,
         }
       }
       // Left the result set from before the window — the page shifts.
@@ -838,7 +732,7 @@ function mergeEventIntoWindow<TMeta>({
     if (full && rows.length === 0) {
       // `$limit: 0` — a count-only window.
       if (metaOp === null) return { action: 'noop' }
-      return { action: 'merge', data: rows, metaOp, enteredWindow: false, leftWindow: false }
+      return { action: 'merge', data: rows, metaOp }
     }
     if (!cmp) {
       if (skip > 0 || full) return { action: 'refetch' }
@@ -848,13 +742,11 @@ function mergeEventIntoWindow<TMeta>({
         action: 'merge',
         data: [...rows, item],
         metaOp,
-        enteredWindow: true,
-        leftWindow: false,
       }
     }
     if (rows.length === 0) {
       if (skip > 0) return { action: 'refetch' }
-      return { action: 'merge', data: [item], metaOp, enteredWindow: true, leftWindow: false }
+      return { action: 'merge', data: [item], metaOp }
     }
     const i = findInsertIndex(rows, item, cmp)
     if (i === 0 && skip > 0) return { action: 'refetch' } // sorts before the page
@@ -865,8 +757,6 @@ function mergeEventIntoWindow<TMeta>({
           action: 'merge',
           data: [...rows, item],
           metaOp,
-          enteredWindow: true,
-          leftWindow: false,
         }
       }
       if (cmp(item, rows[rows.length - 1]!) === 0) {
@@ -874,21 +764,16 @@ function mergeEventIntoWindow<TMeta>({
       }
       // Strictly past a full window: the total changes, the visible rows don't.
       if (metaOp === null) return { action: 'noop' }
-      return { action: 'merge', data: rows, metaOp, enteredWindow: false, leftWindow: false }
+      return { action: 'merge', data: rows, metaOp }
     }
     const data = [...rows.slice(0, i), item, ...rows.slice(i)]
-    let evictedId: ItemId | undefined
     if (limit !== undefined && data.length > limit) {
-      const evicted = data.pop()
-      evictedId = evicted !== undefined ? getId(evicted) : undefined
+      data.pop()
     }
     return {
       action: 'merge',
       data,
       metaOp,
-      enteredWindow: true,
-      leftWindow: false,
-      ...(evictedId !== undefined ? { evictedId } : {}),
     }
   }
 
@@ -899,8 +784,6 @@ function mergeEventIntoWindow<TMeta>({
       action: 'merge',
       data: rows.filter(row => !itemHasKey(row, itemId, getId)),
       metaOp: 'removed',
-      enteredWindow: false,
-      leftWindow: true,
     }
   }
 
@@ -913,14 +796,14 @@ function mergeEventIntoWindow<TMeta>({
       action: 'merge',
       data: rows.map(row => (itemHasKey(row, itemId, getId) ? item : row)),
       metaOp: null,
-      enteredWindow: false,
-      leftWindow: false,
     }
   }
   // The row moved: re-place it within the contiguous run.
   const without = rows.filter(row => !itemHasKey(row, itemId, getId))
   if (without.length === 0) {
-    return { action: 'merge', data: [item], metaOp: null, enteredWindow: false, leftWindow: false }
+    return full || skip > 0
+      ? { action: 'refetch' }
+      : { action: 'merge', data: [item], metaOp: null }
   }
   const i = findInsertIndex(without, item, cmp)
   if (i === 0 && skip > 0) return { action: 'refetch' } // may move before the page
@@ -932,7 +815,5 @@ function mergeEventIntoWindow<TMeta>({
     action: 'merge',
     data: [...without.slice(0, i), item, ...without.slice(i)],
     metaOp: null,
-    enteredWindow: false,
-    leftWindow: false,
   }
 }

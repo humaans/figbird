@@ -120,16 +120,18 @@ test('patch moving a visible row within the window re-places it locally', async 
 })
 
 test('patch moving a visible row past a full window refetches', async t => {
-  const { figbird, notes } = createApp()
-  const { texts, unsub } = await watch(figbird, { $sort: { rank: 1 }, $limit: 3 })
-  const finds = notes.counts.find
+  for (const limit of [1, 3]) {
+    const { figbird, notes } = createApp()
+    const { texts, unsub } = await watch(figbird, { $sort: { rank: 1 }, $limit: limit })
+    const finds = notes.counts.find
 
-  serverPatch(notes, { id: 1, text: 'a2', rank: 99, tag: 'x', updatedAt: 2 })
-  await settle()
+    serverPatch(notes, { id: 1, text: 'a2', rank: 99, tag: 'x', updatedAt: 2 })
+    await settle()
 
-  t.is(notes.counts.find, finds + 1)
-  t.deepEqual(texts(), ['b', 'c', 'd'])
-  unsub()
+    t.is(notes.counts.find, finds + 1)
+    t.deepEqual(texts(), ['b', 'c', 'd'].slice(0, limit))
+    unsub()
+  }
 })
 
 test('underfilled window: creates insert at their sorted position', async t => {

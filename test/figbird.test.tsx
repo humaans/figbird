@@ -2038,6 +2038,21 @@ it('subscribeToStateChanges', async t => {
     await feathers.service('notes').patch(2, { content: 'doc 2 updated' })
   })
 
+  for (const cached of figbird.getState().values()) {
+    for (const query of cached.queries.values()) {
+      if (query.rows.kind !== 'entities' || query.state.status !== 'success') continue
+      const data = Array.isArray(query.state.data) ? query.state.data : [query.state.data]
+      t.deepEqual(
+        data,
+        query.rows.ids.map(id => cached.entities.get(id)),
+      )
+      for (const [index, id] of query.rows.ids.entries()) {
+        t.is(data[index], cached.entities.get(id), 'live snapshots use canonical entity values')
+        t.true(cached.itemQueryIndex.get(id)?.has(query.queryId))
+      }
+    }
+  }
+
   t.snapshot(state)
 
   unsub()
@@ -2651,6 +2666,7 @@ it('mutate methods return the mutated item', async t => {
 it('realtime events are batched to reduce re-renders', async t => {
   const { render, flush, unmount, $all } = dom()
   let renderLog: string[][] = []
+  let total: number | undefined
 
   // Create custom figbird with specific event batching interval
   const feathers = createFeathers()
@@ -2664,6 +2680,7 @@ it('realtime events are batched to reduce re-renders', async t => {
 
     // Track renders with data snapshots
     useEffect(() => {
+      total = notes.meta.total
       if (notes.data) {
         renderLog.push(notes.data.map(n => n.content))
       }
@@ -2718,6 +2735,7 @@ it('realtime events are batched to reduce re-renders', async t => {
       feathers
         .service('notes')
         .emit('created', { id: 4, content: 'batch 4', updatedAt: Date.now() + 3 })
+      feathers.service('notes').emit('removed', { id: 2, content: 'batch 2' })
     })
   })
 
@@ -2740,12 +2758,13 @@ it('realtime events are batched to reduce re-renders', async t => {
   })
 
   t.is(renderLog.length, 1, 'First event in batch should process immediately')
-  t.deepEqual(renderLog[0], ['batch 1', 'batch 2', 'batch 3', 'batch 4'])
+  t.deepEqual(renderLog[0], ['batch 1', 'batch 3', 'batch 4'])
+  t.is(total, 3, 'a mixed batch applies each membership change to pagination totals')
 
   // Verify final DOM state
   t.deepEqual(
     $all('.note').map(n => n.innerHTML),
-    ['batch 1', 'batch 2', 'batch 3', 'batch 4'],
+    ['batch 1', 'batch 3', 'batch 4'],
   )
 
   unmount()

@@ -1,3 +1,4 @@
+import { commitQuery, deleteQuery } from './queryResults.js'
 import { QueryRetention } from './queryRetention.js'
 import {
   locallySupportedOperators,
@@ -35,7 +36,6 @@ import {
   type ProjectionChange,
 } from './mutationLanes.js'
 import {
-  addQueryToItemIndex,
   applyEventsToService,
   applyVisibleEventToQuery,
   createServiceState,
@@ -44,7 +44,6 @@ import {
   isUnfilteredFindQuery,
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
-  removeQueryFromItemIndex,
   splitWindow,
   updateQueriesFromEvents,
 } from './windowMaintenance.js'
@@ -570,7 +569,7 @@ export class QueryStore<
       })
 
       this.#transactOverService(queryId, service => {
-        service.queries.set(queryId, {
+        commitQuery(service, {
           queryId,
           desc,
           config: config as QueryConfig<unknown, unknown>,
@@ -750,7 +749,7 @@ export class QueryStore<
     } else {
       // Mark as dirty to refetch after current fetch completes
       this.#transactOverService(queryId, (service, query) => {
-        service.queries.set(queryId, {
+        commitQuery(service, {
           ...query!,
           dirty: true,
         })
@@ -1855,7 +1854,7 @@ export class QueryStore<
       this.#transactOverService(queryId, (service, query) => {
         if (!query) return
 
-        service.queries.set(queryId, {
+        commitQuery(service, {
           ...query,
           pending: false,
           dirty: false,
@@ -1975,40 +1974,34 @@ export class QueryStore<
       })
       const nextItemIds = new Set(rebasedResponse.itemIds)
 
-      // Replace this query's index entries directly from its previous and next
-      // rows. This avoids scanning every id ever seen on the service per fetch.
-      removeQueryFromItemIndex({ service, query, queryId, getId })
-
       // Projected (`$select`) rows are correct for this query's own result but are
       // not full entities — never write them to the entity cache, which must hold
       // only complete rows for the materialized local-answer paths to be sound
       // (isItemStale can't catch a projection: same updatedAt as the row it shadows).
       const fetchedEvents: ProcessedCacheEvent[] = []
-      for (const item of rebasedResponse.items) {
-        const itemId = getId(item)
-        if (itemId !== undefined) {
-          const key = entityKey(itemId)
-          if (!isProjection && !journaledItemIds.has(key)) {
-            const currentItem = service.entities.get(key)
-            if (!currentItem || !this.#adapter.isItemStale(currentItem, item)) {
-              service.entities.set(key, item)
-              if (!isCompleteSet && currentItem !== item) {
-                fetchedEvents.push({
-                  mode: 'server',
-                  source: 'fetch',
-                  serviceName: query.desc.serviceName,
-                  type: currentItem === undefined ? 'created' : 'updated',
-                  item,
-                  previousItem: currentItem ?? null,
-                  itemId: key,
-                  ...(cause === undefined ? {} : { cause }),
-                })
-              }
-            }
-          }
-          addQueryToItemIndex(service, itemId, queryId)
+      const fetchedRows: QueuedEvent[] = []
+      if (!isProjection) {
+        for (const item of rebasedResponse.items) {
+          const id = getId(item)
+          if (id === undefined || journaledItemIds.has(entityKey(id))) continue
+          fetchedRows.push({
+            mode: 'server',
+            source: 'fetch',
+            serviceName: query.desc.serviceName,
+            type: service.entities.has(entityKey(id)) ? 'updated' : 'created',
+            item,
+            ...(cause === undefined ? {} : { cause }),
+          })
         }
       }
+      applyEventsToService({
+        service,
+        serviceName: query.desc.serviceName,
+        events: fetchedRows,
+        getId,
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+        processedEvents: fetchedEvents,
+      })
 
       // `nextItemIds` is also the complete-set diff input. Rebase its membership
       // to the last in-flight event so a stale root response cannot delete a
@@ -2036,7 +2029,7 @@ export class QueryStore<
         service.materialized = { queryId, fetchedAt: Date.now() }
       }
 
-      service.queries.set(queryId, {
+      commitQuery(service, {
         ...query,
         fetchedAt: Date.now(),
         state: {
@@ -2083,6 +2076,16 @@ export class QueryStore<
         })
       }
     })
+    // Discovering a row in another query does not establish that it was created
+    // during this fetch. Only revisions of already-known entities belong in replay.
+    this.#fetchEventJournal.record(
+      eventEffects
+        .map(({ event }) => event)
+        .filter(
+          event =>
+            !(event.mode === 'server' && event.source === 'fetch' && event.previousItem === null),
+        ),
+    )
     this.#notify(touched)
 
     // Fetch diffs share event publication with realtime, except they cannot
@@ -2126,7 +2129,7 @@ export class QueryStore<
 
       shouldRefetch = query.dirty
 
-      service.queries.set(queryId, {
+      commitQuery(service, {
         ...query!,
         state: {
           status: 'error' as const,
@@ -2151,7 +2154,7 @@ export class QueryStore<
   #discardFetchedResponse(queryId: string): void {
     const touched = this.#transactOverService(queryId, (service, query) => {
       if (!query) return
-      service.queries.set(queryId, {
+      commitQuery(service, {
         ...query,
         state: { ...query.state, isFetching: false },
       })
@@ -2965,7 +2968,7 @@ export class QueryStore<
     this.#transactOverService(queryId, (service, query) => {
       if (!query) return
 
-      service.queries.set(queryId, {
+      commitQuery(service, {
         ...query,
         pending: true,
       })
@@ -3080,7 +3083,7 @@ export class QueryStore<
 
     // initialise the service structure if needed
     if (!this.getState().get(serviceName)) {
-      this.getState().set(serviceName, createServiceState())
+      this.getState().set(serviceName, createServiceState(this.#getIdReader(serviceName)))
     }
 
     const modifiedQueries = new Set<string>()
@@ -3099,11 +3102,7 @@ export class QueryStore<
     this.#clearReconcileState(queryId)
     this.#transactOverService(queryId, (service, query) => {
       if (query) {
-        if (query.state.data) {
-          const getId = this.#getIdReader(query.desc.serviceName)
-          removeQueryFromItemIndex({ service, query, queryId, getId })
-        }
-        service.queries.delete(queryId)
+        deleteQuery(service, queryId)
         this.#serviceNamesByQueryId.delete(queryId)
         this.#queryGenerations.delete(queryId)
         this.#queryStats.delete(queryId)
