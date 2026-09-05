@@ -12,8 +12,13 @@ interface Entry {
 
 type Decision = 'inactive' | 'deferred-hidden' | 'fetch-now' | 'coalesced'
 
+export type ReconcilePreparation =
+  | { kind: 'local'; changed: boolean }
+  | { kind: 'missing' | 'inactive' | 'hidden' | 'network' }
+
 interface SchedulerHost {
-  prepare(queryId: string, force: boolean): 'missing' | 'inactive' | 'hidden' | 'local' | 'network'
+  prepare(queryId: string, force: boolean): ReconcilePreparation
+  notify(queryId: string): void
   fetch(queryId: string, causes: readonly TraceCause[] | undefined): void
   pendingChanged(queryId: string, pending: boolean): void
   decision(queryId: string, decision: Decision, causes: readonly TraceCause[] | undefined): void
@@ -60,11 +65,13 @@ export class ReconcileScheduler {
     const entry = this.#entries.get(queryId)
     const merged = this.#host.merge(entry?.request?.causes, causes)
     force ||= entry?.request?.force ?? false
-    const disposition = this.#host.prepare(queryId, force)
-    if (disposition === 'missing' || disposition === 'local') {
+    const prepared = this.#host.prepare(queryId, force)
+    if (prepared.kind === 'missing' || prepared.kind === 'local') {
       this.forget(queryId)
+      if (prepared.kind === 'local' && prepared.changed) this.#host.notify(queryId)
       return
     }
+    const disposition = prepared.kind
     if (disposition === 'inactive' || disposition === 'hidden') {
       this.#set(queryId, {
         lastAt: entry?.lastAt,

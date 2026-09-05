@@ -1,4 +1,4 @@
-import { ReconcileScheduler } from './reconcileScheduler.js'
+import { ReconcileScheduler, type ReconcilePreparation } from './reconcileScheduler.js'
 import { commitQuery, deleteQuery } from './queryResults.js'
 import { QueryRetention } from './queryRetention.js'
 import {
@@ -331,6 +331,7 @@ export class QueryStore<
     this.#mutations = new MutationTracker()
     this.#reconciliation = new ReconcileScheduler(reconcileCooldown, {
       prepare: (queryId, force) => this.#prepareReconcile(queryId, force),
+      notify: queryId => this.#notify(new Set([queryId])),
       fetch: (queryId, causes) => {
         this.#emitReconcileStarted(queryId, causes)
         this.refetch(queryId, { reason: 'reconcile', ...(causes ? { causes: [...causes] } : {}) })
@@ -2710,26 +2711,20 @@ export class QueryStore<
    *   edge — isolated changes stay as fast as today); further events within
    *   `reconcileCooldown` coalesce into one guaranteed trailing refetch.
    */
-  #prepareReconcile(
-    queryId: string,
-    force: boolean,
-  ): 'missing' | 'inactive' | 'local' | 'hidden' | 'network' {
-    if (!this.#getQuery(queryId)) return 'missing'
-    if (!force && this.#listenerCount(queryId) === 0) return 'inactive'
+  #prepareReconcile(queryId: string, force: boolean): ReconcilePreparation {
+    if (!this.#getQuery(queryId)) return { kind: 'missing' }
+    if (!force && this.#listenerCount(queryId) === 0) return { kind: 'inactive' }
 
     let selected = false
     let changed = false
-    const touched = this.#transactOverService(queryId, (service, query) => {
+    this.#transactOverService(queryId, (service, query) => {
       if (!query) return
       const result = this.#reapplyMaterializedFind(service, query)
       selected = result !== 'unavailable'
       changed = result === 'changed'
     })
-    if (selected) {
-      if (changed) this.#notify(touched)
-      return 'local'
-    }
-    return this.#visibility.isHidden() ? 'hidden' : 'network'
+    if (selected) return { kind: 'local', changed }
+    return { kind: this.#visibility.isHidden() ? 'hidden' : 'network' }
   }
 
   #emitReconcileDecision(

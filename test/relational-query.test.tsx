@@ -3206,6 +3206,29 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   t.is(exhaustive.getSnapshot(), beforeEnsureFresh)
   t.is(exhaustiveNotifications, 0)
 
+  let selectedStatus = 'open'
+  const reentrant = figbird.queryDesc(
+    { serviceName: 'issues', method: 'find', params: { query: { $sort: { id: 1 } } } },
+    { matcherKey: 'reentrant-local', matcher: () => issue => issue.status === selectedStatus },
+  )
+  let invalidateOnChange = false
+  const unsubReentrant = reentrant.subscribe(() => {
+    if (!invalidateOnChange) return
+    invalidateOnChange = false
+    unsubReentrant()
+    figbird.refetch('issues')
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  selectedStatus = 'closed'
+  invalidateOnChange = true
+  figbird.queryStore.reconcile(reentrant.details().queryId)
+  t.is(
+    figbird.getState().get('issues')?.queries.get(reentrant.details().queryId)?.pending,
+    true,
+    'a subscriber can invalidate the query after local reconciliation settles',
+  )
+  await new Promise(resolve => setTimeout(resolve, 20))
+
   unsubExhaustive()
   unsubLocal()
   unsubServerAll()
