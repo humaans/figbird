@@ -26,9 +26,10 @@ Adapters can opt into atomic multi-service transactions. `figbird.transaction()`
 schema-typed CRUD calls, projects and rolls them back as one cache update, and coordinates the
 affected record lanes before making one adapter request. Operations execute in collection
 order, so records created with client-generated ids can be referenced by later writes.
-The Feathers adapter includes an
-opt-in `feathersBatchTransactions()` transport for `api/batch`-style services; adapters without
-an atomic capability never fall back to sequential requests.
+The Feathers adapter includes an opt-in `feathersTransactions()` transport for an
+application-provided `api/transactions` service. Existing endpoints such as `api/batch` can
+be selected through `serviceName`. Adapters without an atomic capability never fall back to
+sequential requests.
 
 Writes can use `optimisticPatch` when the local projection differs from the server payload.
 Relational filters apply projected changes locally, then reconcile once after the record's

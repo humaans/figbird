@@ -106,7 +106,7 @@ export type { RelationalQueryState } from './core/figbird.js'
 export {
   cursorPagination,
   FeathersAdapter,
-  feathersBatchTransactions,
+  feathersTransactions,
   FeathersTransactionError,
   offsetPagination,
 } from './adapters/feathers.js'
@@ -116,11 +116,11 @@ export type {
   CustomOperatorContext,
   CustomOperatorRegistration,
   FeathersAdapterOptions,
-  FeathersBatchTransactionsOptions,
   FeathersCursorPagination,
   FeathersOffsetPagination,
   FeathersPagination,
   FeathersTransaction,
+  FeathersTransactionsOptions,
 } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 

@@ -314,22 +314,22 @@ export type FeathersTransaction = (
   operations: readonly AdapterTransactionOperation[],
 ) => Promise<readonly unknown[]>
 
-export interface FeathersBatchTransactionsOptions {
-  /** Feathers service implementing the batch contract. Defaults to `api/batch`. */
+export interface FeathersTransactionsOptions {
+  /** Application-provided atomic transaction service. Defaults to `api/transactions`. */
   serviceName?: string
-  /** Params passed to the batch service's `create` call. */
+  /** Params passed to the transaction service's `create` call. */
   params?: FeathersParams
 }
 
-interface FeathersBatchResult {
+interface FeathersTransactionResult {
   data: Array<{ status: 'fulfilled'; value?: unknown } | { status: 'rejected'; reason: unknown }>
 }
 
-/** Error returned when an atomic Feathers batch contains rejected operations. */
+/** Error returned when a Feathers transaction contains rejected operations. */
 export class FeathersTransactionError extends Error {
-  readonly result: FeathersBatchResult
+  readonly result: FeathersTransactionResult
 
-  constructor(result: FeathersBatchResult) {
+  constructor(result: FeathersTransactionResult) {
     const rejected = result.data.filter(entry => entry.status === 'rejected').length
     super(`Feathers transaction rejected ${rejected} operation${rejected === 1 ? '' : 's'}`)
     this.name = 'FeathersTransactionError'
@@ -338,15 +338,16 @@ export class FeathersTransactionError extends Error {
 }
 
 /**
- * Adapt a Feathers `api/batch`-style service to Figbird's atomic transaction
- * capability. The service must return ordered `{ status, value/reason }`
- * entries, honor serial execution, and roll the entire batch back when any
- * entry rejects.
+ * Adapt an application-provided Feathers service to Figbird's atomic transaction
+ * capability. The service receives `{ serial: true, calls }` with method/path/args
+ * tuples and returns `{ data }` with ordered `{ status, value/reason }` entries.
+ * It must honor serial execution and roll the entire transaction back when any
+ * entry rejects. This helper does not create the server endpoint.
  */
-export function feathersBatchTransactions({
-  serviceName = 'api/batch',
+export function feathersTransactions({
+  serviceName = 'api/transactions',
   params,
-}: FeathersBatchTransactionsOptions = {}): FeathersTransaction {
+}: FeathersTransactionsOptions = {}): FeathersTransaction {
   return async (feathers, operations) => {
     const result = await feathers.service(serviceName).create(
       {
@@ -359,7 +360,7 @@ export function feathersBatchTransactions({
       },
       params,
     )
-    if (!isFeathersBatchResult(result) || result.data.length !== operations.length) {
+    if (!isFeathersTransactionResult(result) || result.data.length !== operations.length) {
       throw new Error(`Feathers transaction service "${serviceName}" returned an invalid result`)
     }
     if (result.data.some(entry => entry.status === 'rejected')) {
@@ -369,11 +370,15 @@ export function feathersBatchTransactions({
   }
 }
 
-function isFeathersBatchResult(value: unknown): value is FeathersBatchResult {
-  if (!value || typeof value !== 'object' || !Array.isArray((value as FeathersBatchResult).data)) {
+function isFeathersTransactionResult(value: unknown): value is FeathersTransactionResult {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    !Array.isArray((value as FeathersTransactionResult).data)
+  ) {
     return false
   }
-  return (value as FeathersBatchResult).data.every(
+  return (value as FeathersTransactionResult).data.every(
     entry =>
       entry &&
       typeof entry === 'object' &&

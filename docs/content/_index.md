@@ -723,22 +723,35 @@ confirmed creates. An explicit `optimisticItem` must preserve that id. Multi-rec
 needs an identity before dispatch. The transaction DSL is
 CRUD-only; custom methods have adapter-specific argument and cache semantics.
 
-For Feathers, opt into the `api/batch` tuple contract explicitly:
+Bulk operations affect multiple records; transactions commit multiple operations atomically.
+For Feathers, configure an application-provided transaction endpoint. The recommended service
+name, and the helper's default, is `api/transactions`:
 
 ```ts
-import { FeathersAdapter, feathersBatchTransactions } from 'figbird'
+import { FeathersAdapter, feathersTransactions } from 'figbird'
 
 const adapter = new FeathersAdapter(feathers, {
-  transactions: feathersBatchTransactions(), // defaults to api/batch
+  transactions: feathersTransactions(),
 })
 ```
 
-The batch service must return one ordered `{ status: 'fulfilled', value }` or
-`{ status: 'rejected', reason }` entry per call and guarantee that any rejection rolls back the
-whole batch. `feathersBatchTransactions()` sends `serial: true` and rejects the Figbird
-transaction if any entry rejects. The service must honor serial execution inside its
-atomic transaction. Partial-success batches are outside this API.
-Use `serviceName` and `params` options when the batch endpoint differs.
+The helper does not create the server endpoint. It calls the service's `create` method with
+`{ serial: true, calls }`, where each call is a `[method, serviceName, ...args]` tuple.
+The service must return `{ data: [...] }` with one ordered `{ status: 'fulfilled', value }` or
+`{ status: 'rejected', reason }` entry per call. It must execute calls sequentially inside one
+atomic transaction and roll back every write if any call fails. `feathersTransactions()`
+rejects the Figbird transaction if any entry rejects. Partial success is outside this API.
+
+Existing endpoints can keep their names. For example, Humaans uses `api/batch` for this
+transaction contract:
+
+```ts
+const adapter = new FeathersAdapter(feathers, {
+  transactions: feathersTransactions({ serviceName: 'api/batch' }),
+})
+```
+
+Use the `params` option to pass Feathers params to the transaction service's `create` call.
 
 ### Ordered autosave with mutation queues
 
@@ -1942,7 +1955,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
   - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
-  - `transactions` — optional atomic transaction transport; use `feathersBatchTransactions()` for an `api/batch`-style service
+  - `transactions` — optional atomic transaction transport; use `feathersTransactions()` for an application-provided `api/transactions` service, or set `serviceName` for an existing endpoint
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
 

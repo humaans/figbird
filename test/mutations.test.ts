@@ -1,6 +1,6 @@
 import test from 'ava'
 import {
-  feathersBatchTransactions,
+  feathersTransactions,
   FeathersTransactionError,
   type FigbirdEvent,
   type QueryState,
@@ -21,7 +21,7 @@ import {
 test('m: write policies and ordered transactions share record lanes', async t => {
   const { figbird, adapter, feathers } = createTestApp(schema, {
     ...services(),
-    'api/batch': { data: {} },
+    'api/transactions': { data: {} },
   })
   const { m } = figbird
   const events = collectEvents(figbird, 'mutate:')
@@ -38,11 +38,11 @@ test('m: write policies and ordered transactions share record lanes', async t =>
   let transactionCalls = 0
   const parent = { id: 10, content: 'parent' }
   const child = { id: 11, content: 'child', parentId: parent.id }
-  let batchPayload: unknown
-  feathers.service('api/batch').create = ((data: unknown) => {
-    batchPayload = data
+  let transactionPayload: unknown
+  feathers.service('api/transactions').create = ((data: unknown) => {
+    transactionPayload = data
     return Promise.resolve({
-      id: 'batch_1',
+      id: 'transaction_1',
       data: [
         { status: 'fulfilled', value: { id: 1, content: 'transactional' } },
         { status: 'fulfilled', value: { id: 1, name: 'Grace' } },
@@ -51,7 +51,7 @@ test('m: write policies and ordered transactions share record lanes', async t =>
       ],
     })
   }) as never
-  const transact = feathersBatchTransactions()
+  const transact = feathersTransactions()
   adapter.transaction = operations => {
     transactionCalls += 1
     transactionOperations = operations
@@ -69,7 +69,7 @@ test('m: write policies and ordered transactions share record lanes', async t =>
     { serviceName: 'notes', method: 'create', args: [parent] },
     { serviceName: 'notes', method: 'create', args: [child] },
   ])
-  t.deepEqual(batchPayload, {
+  t.deepEqual(transactionPayload, {
     serial: true,
     calls: [
       ['patch', 'notes', 1, { content: 'transactional' }],
@@ -214,7 +214,7 @@ test('transactions: commit, cascading cancellation and rollback publish grouped 
         { status: 'rejected', reason: 'Permission denied' },
       ],
     })) as never
-  const transact = feathersBatchTransactions()
+  const transact = feathersTransactions({ serviceName: 'api/batch' })
   adapter.transaction = operations => transact(feathers, operations)
   await t.throwsAsync(
     figbird.transaction(tx => {
