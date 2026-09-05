@@ -136,30 +136,31 @@ export function TimelineActivityTable({
   )
   const totalWidth = renderedColumnWidths.reduce((sum, width) => sum + width, 0)
 
-  useEffect(() => {
-    if (follow) setRange(null)
-  }, [follow])
+  if (follow && range !== null) setRange(null)
+  if (selectedId && !activities.some(activity => activity.id === selectedId)) setSelectedId(null)
+  if (relatedOnly && !activities.some(activity => activityHasGraph(activity, relatedOnly))) {
+    setRelatedOnly(null)
+  }
 
-  useEffect(() => {
-    if (selectedId && !activities.some(activity => activity.id === selectedId)) setSelectedId(null)
-  }, [activities, selectedId])
-
-  useEffect(() => setSelectedId(null), [filter, visibility])
-
-  useEffect(() => {
-    if (relatedOnly && !activities.some(activity => activityHasGraph(activity, relatedOnly))) {
-      setRelatedOnly(null)
+  const [previousFilter, setPreviousFilter] = useState({ filter, visibility })
+  if (previousFilter.filter !== filter || previousFilter.visibility !== visibility) {
+    setPreviousFilter({ filter, visibility })
+    setSelectedId(null)
+  }
+  const [previousRequest, setPreviousRequest] = useState<string | undefined>(undefined)
+  const requestedActivity = activities.find(activity => activity.id === requestedActivityId)
+  if (requestedActivityId !== previousRequest && (!requestedActivityId || requestedActivity)) {
+    setPreviousRequest(requestedActivityId)
+    if (requestedActivityId) {
+      setRange(null)
+      setSelectedId(requestedActivityId)
     }
-  }, [activities, relatedOnly])
-
+  }
   useEffect(() => {
-    if (!requestedActivityId) return
-    if (!activities.some(activity => activity.id === requestedActivityId)) return
-    setRange(null)
-    setSelectedId(requestedActivityId)
+    if (!requestedActivity) return
     onFollowChange(false)
     onRequestedActivityHandled?.()
-  }, [activities, onFollowChange, onRequestedActivityHandled, requestedActivityId])
+  }, [onFollowChange, onRequestedActivityHandled, requestedActivity])
 
   useLayoutEffect(() => {
     const row = selectedRowRef.current

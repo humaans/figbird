@@ -512,7 +512,7 @@ class FigbirdCollector implements Collector {
   #timelineConnection: CappedBuffer<TimelineConnectionEvent>
   #timelineTraces = new TimelineTraceStore()
   #wallClockOffset = now() - Date.now()
-  #timelineStartedAt = now()
+  #timelineStartedAt = Date.now() + this.#wallClockOffset
   #timelineEvictedCount = 0
   #timelinePayloadsEvicted = 0
   #nextEventId = 1
@@ -652,7 +652,7 @@ class FigbirdCollector implements Collector {
     this.#timelineConnection.clear()
     this.#timelineTraces.clear()
     this.#clearSettledWrites()
-    this.#timelineStartedAt = now()
+    this.#timelineStartedAt = Date.now() + this.#wallClockOffset
     this.#timelineEvictedCount = 0
     this.#timelinePayloadsEvicted = 0
     for (const record of this.#queries.values()) {
@@ -675,7 +675,7 @@ class FigbirdCollector implements Collector {
     this.#timelineRealtime.clear()
     this.#timelineConnection.clear()
     this.#timelineTraces.clear()
-    this.#timelineStartedAt = now()
+    this.#timelineStartedAt = Date.now() + this.#wallClockOffset
     this.#timelineEvictedCount = 0
     this.#timelinePayloadsEvicted = 0
     this.#nextEventId = 1

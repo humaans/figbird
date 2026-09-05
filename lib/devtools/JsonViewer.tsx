@@ -204,7 +204,11 @@ function JsonNode({
   const { colors } = useDevtoolsTheme()
   const expandable = isContainer(value) && childEntries(value).length > 0
   const [open, setOpen] = useState(expandAll || defaultOpen)
-  useEffect(() => setOpen(expandAll || defaultOpen), [defaultOpen, expandAll])
+  const [previousOptions, setPreviousOptions] = useState({ expandAll, defaultOpen })
+  if (previousOptions.expandAll !== expandAll || previousOptions.defaultOpen !== defaultOpen) {
+    setPreviousOptions({ expandAll, defaultOpen })
+    setOpen(expandAll || defaultOpen)
+  }
   const key = (
     <>
       <span style={{ color: arrayItem ? colors.faint : colors.blue }}>{name}</span>

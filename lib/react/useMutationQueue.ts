@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import {
   defineMutationQueue,
   MutationQueue,
@@ -55,35 +55,18 @@ export function useMutationQueueImpl<S extends Schema>(
     throw new Error('figbird: a keyed mutation queue requires a definition')
   }
   const resolvedDefinition = definition ?? DEFAULT_MUTATION_QUEUE
-  const ref = useRef<{
-    host: MutationQueueHost<S>
-    definition: MutationQueueDefinition
-    key: string | undefined
-    queue: MutationQueue<S>
-  } | null>(null)
+  const queue = useMemo(
+    () =>
+      key === undefined
+        ? figbird.createMutationQueue(mutationQueueDefinitionConfig(resolvedDefinition))
+        : figbird.getMutationQueue(resolvedDefinition, key),
+    [figbird, resolvedDefinition, key],
+  )
   const mountedQueues = useRef(new Set<MutationQueue<S>>())
-  if (
-    !ref.current ||
-    ref.current.host !== figbird ||
-    ref.current.definition !== resolvedDefinition ||
-    ref.current.key !== key
-  ) {
-    ref.current = {
-      host: figbird,
-      definition: resolvedDefinition,
-      key,
-      queue:
-        key === undefined
-          ? figbird.createMutationQueue(mutationQueueDefinitionConfig(resolvedDefinition))
-          : figbird.getMutationQueue(resolvedDefinition, key),
-    }
-  }
-
-  const queue = ref.current.queue
-  const activeQueues = mountedQueues.current
   useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot)
   useEffect(() => {
     if (key !== undefined) return figbird.retainMutationQueue(resolvedDefinition, key, queue)
+    const activeQueues = mountedQueues.current
     activeQueues.add(queue)
     return () => {
       activeQueues.delete(queue)
@@ -91,6 +74,6 @@ export function useMutationQueueImpl<S extends Schema>(
         if (!activeQueues.has(queue)) queue.detach()
       })
     }
-  }, [activeQueues, figbird, key, queue, resolvedDefinition])
+  }, [figbird, key, queue, resolvedDefinition])
   return queue
 }

@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react'
 /**
  * Custom operator registry — teaching the client to evaluate app-specific query
  * operators (e.g. `$asOf` on effective-dated services) so queries using them stay
@@ -16,7 +17,8 @@ import {
   type FeathersFindMeta,
   type FeathersParams,
 } from '../lib/index.js'
-import { createTestApp, dom, mockFeathers } from './helpers.js'
+import { dom, it } from './dom.js'
+import { createTestApp, mockFeathers } from './helpers.js'
 
 interface Person {
   id: number
@@ -83,7 +85,7 @@ test('classification: a registered operator keeps the query realtime-mergeable',
   t.deepEqual(remote.reasons, [{ code: 'server-only-operator', detail: '$asOf' }])
 })
 
-test('realtime events merge through the operator predicate without refetching', async t => {
+it('realtime events merge through the operator predicate without refetching', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services(), {
     operators,
     queryAwareFind: true,
@@ -144,7 +146,7 @@ test('realtime events merge through the operator predicate without refetching', 
   unmount()
 })
 
-test('a relation refined with a registered operator merges realtime events', async t => {
+it('a relation refined with a registered operator merges realtime events', async t => {
   const { App, figbird, feathers } = createTestApp(schema, services(), {
     operators,
     queryAwareFind: true,
@@ -300,7 +302,7 @@ test('service-scoped registration classifies and matches only the current servic
   t.regex(error.message, /service-scoped.*without a serviceName context/)
 })
 
-test('legacy useFind and builder useQuery share scoped matching and classification', async t => {
+it('legacy useFind and builder useQuery share scoped matching and classification', async t => {
   const { App, figbird, feathers } = createTestApp(scopedSchema, scopedServices(false), {
     operators: serviceScopedOperators(),
   })
@@ -313,12 +315,14 @@ test('legacy useFind and builder useQuery share scoped matching and classificati
     const builder = useQueryResult(figbird.q.jobRoles.where({ $asOf: 'current' }), {
       suspense: false,
     })
-    if (legacy.status === 'success') {
-      legacyIds = (legacy.data as ScopedItem[]).map(item => item.id).sort()
-    }
-    if (builder.status === 'success') {
-      builderIds = builder.data.map(item => item.id).sort()
-    }
+    useLayoutEffect(() => {
+      if (legacy.status === 'success') {
+        legacyIds = (legacy.data as ScopedItem[]).map(item => item.id).sort()
+      }
+      if (builder.status === 'success') {
+        builderIds = builder.data.map(item => item.id).sort()
+      }
+    })
     return null
   }
 
@@ -352,7 +356,7 @@ test('legacy useFind and builder useQuery share scoped matching and classificati
   unmount()
 })
 
-test('an unsupported service reconciles from the server instead of merging', async t => {
+it('an unsupported service reconciles from the server instead of merging', async t => {
   const { App, figbird, feathers } = createTestApp(scopedSchema, scopedServices(false), {
     operators: {
       $asOf: {
@@ -389,7 +393,7 @@ test('an unsupported service reconciles from the server instead of merging', asy
   unmount()
 })
 
-test('materialized services evaluate scoped operators with their canonical path', async t => {
+it('materialized services evaluate scoped operators with their canonical path', async t => {
   const contexts: string[] = []
   const { App, figbird, feathers } = createTestApp(scopedSchema, scopedServices(), {
     operators: serviceScopedOperators(contexts),
@@ -422,7 +426,7 @@ test('materialized services evaluate scoped operators with their canonical path'
   unmount()
 })
 
-test('relations use the destination service registration at runtime and in explain', async t => {
+it('relations use the destination service registration at runtime and in explain', async t => {
   const { App, figbird, feathers } = createTestApp(scopedSchema, scopedServices(false), {
     operators: serviceScopedOperators(),
     queryAwareFind: true,

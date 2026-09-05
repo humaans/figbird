@@ -23,7 +23,7 @@
  * the data is connected, prefer a single builder with `.related()`.
  */
 
-import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { RelationalQueryState } from '../core/figbird.js'
 import type { QueryInput, QueryInputBuilder } from '../core/queryDefinition.js'
 import { suspensePromiseAll } from '../core/relationalQuery.js'
@@ -200,19 +200,12 @@ export function useQueryResultsImpl(
   return results
 }
 
-/**
- * Pin an array's identity while its elements stay reference-equal, so callbacks and
- * memos keyed on it don't churn when only the array literal is new. Written during
- * render — the same pattern as a getSnapshot cache: idempotent for equal inputs, and
- * the committed render's value wins.
- */
+/** Keep equal query lists stable without mutating refs during render. */
 function useStableArray<T>(next: T[]): T[] {
-  const pinned = useRef(next)
-  if (
-    pinned.current !== next &&
-    (pinned.current.length !== next.length || next.some((value, i) => value !== pinned.current[i]))
-  ) {
-    pinned.current = next
+  const [pinned, setPinned] = useState(next)
+  if (pinned.length !== next.length || next.some((value, i) => value !== pinned[i])) {
+    setPinned(next)
+    return next
   }
-  return pinned.current
+  return pinned
 }

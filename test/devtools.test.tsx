@@ -18,7 +18,8 @@ import { ExtensionSession } from '../extensions/src/remote.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
 import { buildActivities, buildTraceIndex, eventPayload } from '../lib/devtools/eventModel.js'
 import { buildTimelineActivities } from '../lib/devtools/timelineModel.js'
-import { createTestApp, dom } from './helpers.js'
+import { dom, it } from './dom.js'
+import { createTestApp } from './helpers.js'
 
 interface Note {
   id: number
@@ -684,8 +685,8 @@ test('collector bounds inactive query and settled write history', t => {
   t.is(activeSpan?.fetchId, 99)
   t.is(activeSpan?.endAt, undefined)
   t.is(activeSpan?.reason, 'retry')
-  const timelineClearStartedAt = performance.now()
   collector.clearTimeline()
+  const timelineClearStartedAt = collector.getSnapshot().timeline.startedAt
   listeners.event?.({
     kind: 'fetch:end',
     queryId: 'live-3',
@@ -868,7 +869,7 @@ test('devtools model keeps operation identity separate from shared fetch identit
   )
 })
 
-test('query details show a cursor operation as one inspectable page chain', t => {
+it('query details show a cursor operation as one inspectable page chain', t => {
   const { render, unmount, click, $, $all } = dom()
   const first = queryRecord('cursor-page-1', 'issues', {
     classification: 'server-authoritative',
@@ -960,7 +961,7 @@ test('query details show a cursor operation as one inspectable page chain', t =>
   unmount()
 })
 
-test('extension bridge starts debug collection only while connected', async t => {
+it('extension bridge starts debug collection only while connected', async t => {
   dom()
   const { figbird } = app()
   const inspect = figbird.inspect.bind(figbird)
@@ -1228,7 +1229,7 @@ test('extension inspection serializes stop before restarting the picker', async 
   t.is(inspection.getSnapshot().kind, 'picking')
 })
 
-test('panel shows root queries and nests relation fetches in details', async t => {
+it('panel shows root queries and nests relation fetches in details', async t => {
   const { figbird } = app()
   const { render, unmount, click, $, $all, act } = dom()
   const inspectedRef = figbird.query(figbird.q.notes)

@@ -1,4 +1,4 @@
-import test from 'ava'
+import { useLayoutEffect } from 'react'
 import React from 'react'
 import {
   createSchema,
@@ -8,7 +8,9 @@ import {
   useQueries,
   useQueryResults,
 } from '../lib'
-import { createTestApp, dom } from './helpers'
+import { dom, it } from './dom.js'
+import { createTestApp } from './helpers'
+import { deferred } from './mutation-test-helpers'
 
 interface Issue {
   id: number
@@ -61,7 +63,7 @@ class ErrorBoundary extends React.Component<
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
-test('useQueries: fetches all queries in parallel under a single suspension', async t => {
+it('useQueries: fetches all queries in parallel under a single suspension', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
   const openIssues = defineQuery(({ status }: { status: string }) =>
@@ -69,16 +71,14 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
   )
   const allUsers = defineQuery(() => figbird.q.users)
 
-  // Record when each service's find is *issued* and delay resolution, so a
-  // sequential waterfall would be observable: with per-query suspension, `users`
-  // would only be called ~20ms after `issues` resolved.
   const calls: string[] = []
+  const response = deferred<void>()
   for (const name of ['issues', 'users'] as const) {
     const svc = feathers.service(name)
-    svc.setDelay(20)
     const origFind = svc.find.bind(svc)
-    svc.find = (params: Parameters<typeof origFind>[0]) => {
+    svc.find = async (params: Parameters<typeof origFind>[0]) => {
       calls.push(name)
+      await response.promise
       return origFind(params)
     }
   }
@@ -106,12 +106,11 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
 
   t.truthy($('.fallback'))
 
-  // Well before either 20ms delay elapses, both fetches must already be in flight.
-  await flush(() => sleep(5))
+  await flush()
   t.deepEqual([...new Set(calls)].sort(), ['issues', 'users'], 'both fetches started in parallel')
   t.truthy($('.fallback'), 'still suspended while both are in flight')
 
-  await flush(() => sleep(30))
+  await flush(() => response.resolve())
   t.falsy($('.fallback'))
   t.is($('.issues')!.innerHTML, 'First issue,Second issue')
   t.is($('.users')!.innerHTML, 'Alice,Bob')
@@ -119,7 +118,7 @@ test('useQueries: fetches all queries in parallel under a single suspension', as
   unmount()
 })
 
-test('useQueries: kit-bound variant works and an empty array resolves immediately', async t => {
+it('useQueries: kit-bound variant works and an empty array resolves immediately', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App } = createApp()
   const hooks = createHooks(schema)
@@ -153,7 +152,7 @@ test('useQueries: kit-bound variant works and an empty array resolves immediatel
   unmount()
 })
 
-test('useQueries: a cold error on any query throws to the ErrorBoundary', async t => {
+it('useQueries: a cold error on any query throws to the ErrorBoundary', async t => {
   const caughtErrors: unknown[] = []
   const { render, unmount, flush, $ } = dom({
     onCaughtError: error => caughtErrors.push(error),
@@ -196,7 +195,7 @@ test('useQueries: a cold error on any query throws to the ErrorBoundary', async 
   unmount()
 })
 
-test('useQueryResults: refetch on one element refetches only that query', async t => {
+it('useQueryResults: refetch on one element refetches only that query', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
 
@@ -204,7 +203,9 @@ test('useQueryResults: refetch on one element refetches only that query', async 
 
   function Dashboard() {
     const [issues, users] = useQueryResults([figbird.q.issues, figbird.q.users])
-    refetchUsers = users.refetch
+    useLayoutEffect(() => {
+      refetchUsers = users.refetch
+    })
     return (
       <div className='dashboard'>
         <div className='issues'>{issues.data.map(i => i.title).join(',')}</div>
@@ -235,7 +236,7 @@ test('useQueryResults: refetch on one element refetches only that query', async 
   unmount()
 })
 
-test('useQueries: warm cache renders synchronously without re-suspending', async t => {
+it('useQueries: warm cache renders synchronously without re-suspending', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createApp()
 
@@ -277,7 +278,7 @@ test('useQueries: warm cache renders synchronously without re-suspending', async
   unmount()
 })
 
-test('useQueryResults: a paginated element widens with loadMore; siblings stay plain', async t => {
+it('useQueryResults: a paginated element widens with loadMore; siblings stay plain', async t => {
   const { render, unmount, flush, $ } = dom()
   // Inline index signature so the rows satisfy the mock's TestItem shape without
   // loosening the shared `Issue` interface the other tests type-assert against.
@@ -302,9 +303,10 @@ test('useQueryResults: a paginated element widens with loadMore; siblings stay p
       figbird.q.issues.orderBy('id', 'asc').paginate({ pageSize: 2 }),
       figbird.q.users,
     ])
-    loadMoreIssues = issues.loadMore
-    // The plain sibling carries no loadMore — a compile-time and runtime check.
-    userHasLoadMore = 'loadMore' in users
+    useLayoutEffect(() => {
+      loadMoreIssues = issues.loadMore
+      userHasLoadMore = 'loadMore' in users
+    })
     return (
       <div className='dashboard'>
         <div className='issues' data-has-more={String(issues.hasMore)}>

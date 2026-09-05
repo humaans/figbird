@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { DevtoolsEvent } from './collector.js'
 import type { EventVisibility } from './Devtools.js'
 import {
@@ -99,19 +99,16 @@ export function EventsTab({
     [events, selectedTraceId, traceIndex],
   )
 
-  useEffect(() => {
-    if (!selectedTraceId || traceEvents.length === 0) return
-    if (
-      selectedEvent &&
-      traceIdsForEvent(selectedEvent.event, traceIndex).includes(selectedTraceId)
-    ) {
-      return
-    }
+  if (
+    selectedTraceId &&
+    traceEvents.length > 0 &&
+    (!selectedEvent || !traceIdsForEvent(selectedEvent.event, traceIndex).includes(selectedTraceId))
+  ) {
     const activity = activities.find(item => item.traceId === selectedTraceId)
     setSelectedEventId(
       visibility === 'groups' && activity ? activity.representative.id : traceEvents.at(-1)!.id,
     )
-  }, [activities, selectedEvent, selectedTraceId, traceEvents, traceIndex, visibility])
+  }
 
   return (
     <section style={{ height: '100%', display: 'flex', minWidth: 0 }}>

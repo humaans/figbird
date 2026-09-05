@@ -1,7 +1,8 @@
-import test from 'ava'
+import { useLayoutEffect } from 'react'
 import { useState } from 'react'
 import { useFind } from '../lib'
-import { dom, mockFeathers } from './helpers'
+import { dom, it } from './dom.js'
+import { mockFeathers } from './helpers'
 import { createSchema, service, FeathersAdapter, Figbird, FigbirdProvider } from '../lib'
 
 interface Thing {
@@ -18,7 +19,7 @@ const schema = createSchema({
 
 // Regression: calling refetch() and changing the hook's query params in the
 // same tick must still issue a fetch for the new params (worked in 0.20).
-test('useFind refetches when params change right after refetch()', async t => {
+it('useFind refetches when params change right after refetch()', async t => {
   const { render, flush, unmount, $, act } = dom()
 
   const feathers = mockFeathers({
@@ -48,9 +49,13 @@ test('useFind refetches when params change right after refetch()', async t => {
 
   function Things() {
     const [fk, _setFk] = useState('A')
-    setFk = _setFk
+    useLayoutEffect(() => {
+      setFk = _setFk
+    }, [_setFk])
     const things = useFind('things', { query: { fk }, allPages: true, skip: !fk })
-    refetch = things.refetch
+    useLayoutEffect(() => {
+      refetch = things.refetch
+    })
     return (
       <div className='data'>
         {things.status === 'success' ? JSON.stringify(things.data.map(x => x.id)) : things.status}
@@ -90,7 +95,7 @@ test('useFind refetches when params change right after refetch()', async t => {
 // Same flow, but the service is materialized by an unfiltered allPages query
 // (the "fetch all core data" bootstrap pattern) — finds are then answered
 // locally from the entity cache via the local find path.
-test('materialized service: refetch() then params change still yields fresh data', async t => {
+it('materialized service: refetch() then params change still yields fresh data', async t => {
   const { render, flush, unmount, $, act } = dom()
 
   const feathers = mockFeathers({
@@ -122,15 +127,21 @@ test('materialized service: refetch() then params change still yields fresh data
 
   function AllThings() {
     const things = useFind('things', { allPages: true })
-    refetchAll = things.refetch
+    useLayoutEffect(() => {
+      refetchAll = things.refetch
+    })
     return null
   }
 
   function Things() {
     const [fk, _setFk] = useState('A')
-    setFk = _setFk
+    useLayoutEffect(() => {
+      setFk = _setFk
+    }, [_setFk])
     const things = useFind('things', { query: { fk }, allPages: true, skip: !fk })
-    refetch = things.refetch
+    useLayoutEffect(() => {
+      refetch = things.refetch
+    })
     return (
       <div className='data'>
         {things.status === 'success' ? JSON.stringify(things.data.map(x => x.id)) : things.status}

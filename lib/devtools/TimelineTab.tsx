@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { DevtoolsSnapshot } from './collector.js'
 import { now } from './format.js'
+import { useClock } from './useClock.js'
 import type { DevtoolsModel } from './model.js'
 import { TimelineActivityTable, type TimelineVisibility } from './TimelineActivityTable.js'
 import { buildTimelineActivities, timelineExtent } from './timelineModel.js'
@@ -74,8 +75,8 @@ export function TimelineTab({
   const hasInFlight =
     snapshot.queries.some(query => query.spans.some(span => span.endAt === undefined)) ||
     snapshot.writes.some(write => write.status === 'in-flight')
-  const nowPoint = useTimelineNow(hasInFlight)
-  const wallClockOffset = Date.now() - now()
+  const { now: nowPoint } = useClock(hasInFlight)
+  const [wallClockOffset] = useState(() => Date.now() - now())
   const activities = useMemo(
     () => buildTimelineActivities(snapshot, model, nowPoint),
     [model, nowPoint, snapshot],
@@ -103,15 +104,4 @@ export function TimelineTab({
       />
     </section>
   )
-}
-
-function useTimelineNow(running: boolean): number {
-  const [value, setValue] = useState(now)
-  useEffect(() => {
-    setValue(now())
-    if (!running) return
-    const interval = setInterval(() => setValue(now()), 1_000)
-    return () => clearInterval(interval)
-  }, [running])
-  return value
 }

@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react'
 import test from 'ava'
 import { useEffect, useState } from 'react'
 import {
@@ -12,7 +13,8 @@ import {
   useGet as useUntypedGet,
   useMutation as useUntypedMutation,
 } from '../lib'
-import { dom, mockFeathers } from './helpers'
+import { dom, it } from './dom.js'
+import { mockFeathers } from './helpers'
 
 // Define typed entities
 interface Person {
@@ -73,7 +75,7 @@ const schema = createSchema({
 
 type AppSchema = typeof schema
 
-test('schema-based type inference', t => {
+it('schema-based type inference', t => {
   const { render, unmount, flush, $, $all } = dom()
 
   const feathers = mockFeathers({
@@ -301,7 +303,7 @@ test('schema-based type inference', t => {
   })
 })
 
-test('schema with array of services', t => {
+it('schema with array of services', t => {
   const { render, unmount, flush, $ } = dom()
 
   // Services are defined in an object map
@@ -400,7 +402,7 @@ test('schema validates transport paths while materializing declarations', t => {
   )
 })
 
-test('path APIs do not reinterpret transport paths as schema names', async t => {
+it('path APIs do not reinterpret transport paths as schema names', async t => {
   const { render, unmount, flush, $ } = dom()
 
   interface NamedUser {
@@ -436,9 +438,14 @@ test('path APIs do not reinterpret transport paths as schema names', async t => 
   function App() {
     const result = useFind('users')
     const client = useFeathers()
-    directClient = client
-    directService = client.service('users')
-    patch = useMutation('users').patch
+    useLayoutEffect(() => {
+      directClient = client
+      directService = client.service('users')
+    })
+    const currentPatch = useMutation('users').patch
+    useLayoutEffect(() => {
+      patch = currentPatch
+    })
 
     return <div className='kind'>{result.data?.[0]?.kind ?? 'Loading...'}</div>
   }
@@ -461,7 +468,7 @@ test('path APIs do not reinterpret transport paths as schema names', async t => 
   unmount()
 })
 
-test('backward compatibility - untyped usage still works', t => {
+it('backward compatibility - untyped usage still works', t => {
   const { render, unmount, flush, $ } = dom()
 
   // Use the untyped hooks for backward compatibility
@@ -538,7 +545,7 @@ test('type extraction utilities', t => {
   t.truthy(query.$asOf)
 })
 
-test('query type inference is strict - no extra properties allowed', t => {
+it('query type inference is strict - no extra properties allowed', t => {
   const { render, unmount, flush } = dom()
 
   const feathers = mockFeathers({

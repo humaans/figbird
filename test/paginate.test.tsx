@@ -1,7 +1,9 @@
+import { useLayoutEffect } from 'react'
 import test from 'ava'
 import React from 'react'
 import { createSchema, service, useQuery, useQueryResult } from '../lib'
-import { createTestApp, dom } from './helpers'
+import { dom, it } from './dom.js'
+import { createTestApp } from './helpers'
 
 // ============================================================================
 // Test types & schema
@@ -143,7 +145,7 @@ test('QueryBuilder.paginate: hash differs by pageSize and includeTotal', t => {
 // Hook integration tests
 // ============================================================================
 
-test('useQueryResult + paginate: first page renders, hasMore reflects whether the server returned a full page', async t => {
+it('useQueryResult + paginate: first page renders, hasMore reflects whether the server returned a full page', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 7 })
 
@@ -178,7 +180,7 @@ test('useQueryResult + paginate: first page renders, hasMore reflects whether th
   unmount()
 })
 
-test('useQueryResult + paginate: loadMore appends the next page and flips hasMore false on partial page', async t => {
+it('useQueryResult + paginate: loadMore appends the next page and flips hasMore false on partial page', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 7 })
 
@@ -188,7 +190,9 @@ test('useQueryResult + paginate: loadMore appends the next page and flips hasMor
     const { data, hasMore, loadMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
-    loadMoreFn = loadMore
+    useLayoutEffect(() => {
+      loadMoreFn = loadMore
+    })
     return (
       <div
         className='issues'
@@ -233,7 +237,7 @@ test('useQueryResult + paginate: loadMore appends the next page and flips hasMor
   unmount()
 })
 
-test('useQueryResult + paginate: includeTotal exposes total from the first page meta', async t => {
+it('useQueryResult + paginate: includeTotal exposes total from the first page meta', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 12 })
 
@@ -258,7 +262,7 @@ test('useQueryResult + paginate: includeTotal exposes total from the first page 
   unmount()
 })
 
-test('useQueryResult + paginate: total is undefined when adapter omits it', async t => {
+it('useQueryResult + paginate: total is undefined when adapter omits it', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 12, skipTotal: true })
 
@@ -283,7 +287,7 @@ test('useQueryResult + paginate: total is undefined when adapter omits it', asyn
   unmount()
 })
 
-test('useQueryResult + paginate: refetch drops follow-up pages and re-fetches page 0 in place', async t => {
+it('useQueryResult + paginate: refetch drops follow-up pages and re-fetches page 0 in place', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, issuesService } = createPaginateApp({ totalIssues: 9 })
 
@@ -294,8 +298,10 @@ test('useQueryResult + paginate: refetch drops follow-up pages and re-fetches pa
     const { data, loadMore, refetch, hasMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
     )
-    loadMoreFn = loadMore
-    refetchFn = refetch
+    useLayoutEffect(() => {
+      loadMoreFn = loadMore
+      refetchFn = refetch
+    })
     return (
       <div className='issues' data-count={String(data.length)} data-has-more={String(hasMore)} />
     )
@@ -327,7 +333,7 @@ test('useQueryResult + paginate: refetch drops follow-up pages and re-fetches pa
   unmount()
 })
 
-test('useQueryResult + paginate: composes with .related() — relations attach to every page', async t => {
+it('useQueryResult + paginate: composes with .related() — relations attach to every page', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 4 })
 
@@ -337,7 +343,9 @@ test('useQueryResult + paginate: composes with .related() — relations attach t
     const { data, loadMore } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 2 }).related('comments'),
     )
-    loadMoreFn = loadMore
+    useLayoutEffect(() => {
+      loadMoreFn = loadMore
+    })
     return (
       <div
         className='issues'
@@ -364,7 +372,7 @@ test('useQueryResult + paginate: composes with .related() — relations attach t
   unmount()
 })
 
-test('useQueryResult + paginate: realtime create that provably sorts into a page merges locally', async t => {
+it('useQueryResult + paginate: realtime create that provably sorts into a page merges locally', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 5 })
 
@@ -423,7 +431,7 @@ test('useQueryResult + paginate: realtime create that provably sorts into a page
   unmount()
 })
 
-test('useQuery + paginate: .server() makes an offset page refetch on realtime', async t => {
+it('useQuery + paginate: .server() makes an offset page refetch on realtime', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 5 })
 
