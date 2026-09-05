@@ -8,10 +8,6 @@ on:
       - extensions/version.json
   workflow_dispatch:
     inputs:
-      sign_firefox:
-        description: Submit an unlisted build to Mozilla and download the signed XPI
-        type: boolean
-        default: true
       upload_chrome:
         description: Upload the Chrome ZIP without submitting it for review
         type: boolean
@@ -65,48 +61,6 @@ jobs:
               --title "Figbird Devtools ${version}" \
               --notes "Browser extension builds for developer distribution. Load the Chrome ZIP unpacked in developer mode, or install the Mozilla-signed Firefox XPI."
           fi
-
-  firefox:
-    name: Sign and publish Firefox
-    if: github.event_name == 'push' || inputs.sign_firefox
-    needs: build
-    environment: extension-release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          cache: npm
-          node-version: 22
-      - run: npm ci
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: figbird-devtools-release-inputs
-          path: extensions/build
-      - name: Extract the unsigned Firefox extension
-        run: unzip -q extensions/build/figbird-devtools-firefox-unsigned.zip -d extensions/build/firefox
-      - name: Sign the unlisted Firefox extension
-        env:
-          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
-        run: node tasks/sign-firefox-devtools.js
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          if-no-files-found: error
-          name: figbird-devtools-firefox-signed
-          path: extensions/build/firefox-signed/*.xpi
-      - name: Publish the signed Firefox extension
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          signed_xpi=$(find extensions/build/firefox-signed -maxdepth 1 -type f -name '*.xpi' -print -quit)
-          test -n "$signed_xpi"
-          asset=extensions/build/figbird-devtools-firefox-signed.xpi
-          cp "$signed_xpi" "$asset"
-
-          version=$(node -p "require('./extensions/version.json').version")
-          tag="devtools-v${version}"
-          gh release upload "$tag" "$asset" --clobber
 
   chrome:
     name: Upload and publish Chrome

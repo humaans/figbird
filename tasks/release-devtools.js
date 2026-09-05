@@ -31,10 +31,8 @@ async function prepareRelease() {
   const version = requestedVersion(currentVersion)
   const tag = `devtools-v${version}`
   const branch = `release/${tag}`
-  const secrets = listNames('secret', repository)
   const variables = listNames('variable', repository)
   const problems = [
-    ...missingNames('GitHub environment secret', secrets, ['AMO_JWT_ISSUER', 'AMO_JWT_SECRET']),
     ...missingNames('GitHub environment variable', variables, [
       'CHROME_EXTENSION_ID',
       'CHROME_PUBLISHER_ID',
@@ -72,7 +70,9 @@ async function prepareRelease() {
   run('gh', ['workflow', 'view', releaseWorkflow, '--repo', repository])
   const pullRequest = await createVersionPullRequest({ branch, repository, version })
   console.log(`\nFigbird Devtools ${version}: ${pullRequest}`)
-  console.log('Approve and merge this PR to release Firefox and submit Chrome for review.')
+  console.log(
+    'Approve and merge this PR to submit Chrome for review, then run make upload-firefox-extension locally.',
+  )
 }
 
 async function createVersionPullRequest({ branch, repository, version }) {
@@ -102,7 +102,7 @@ async function createVersionPullRequest({ branch, repository, version }) {
       '--title',
       `Release Figbird Devtools ${version}`,
       '--body',
-      `Bump the shared browser extension version to ${version}.\n\nMerging this PR automatically signs and publishes the Firefox XPI, then submits the private Chrome extension for review.`,
+      `Bump the shared browser extension version to ${version}.\n\nMerging this PR submits the private Chrome extension for review. After merging, run make upload-firefox-extension locally to sign and publish Firefox.`,
     ])
     return output.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0] ?? output
   } finally {
