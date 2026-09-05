@@ -44,6 +44,9 @@ export type {
   ReconnectJitter,
   RetryDelay,
   StandardSchemaV1,
+  TransactionContext,
+  TransactionMutationsHandle,
+  TransactionMutationsProxy,
   VisibilitySource,
   WriteMutationOptions,
 } from './core/figbird.js'
@@ -100,7 +103,13 @@ export { RelationalQueryRef } from './core/figbird.js'
 export type { RelationalQueryState } from './core/figbird.js'
 
 // adapters
-export { cursorPagination, FeathersAdapter, offsetPagination } from './adapters/feathers.js'
+export {
+  cursorPagination,
+  FeathersAdapter,
+  feathersTransactions,
+  FeathersTransactionError,
+  offsetPagination,
+} from './adapters/feathers.js'
 export type {
   CursorPaginationOptions,
   CustomOperator,
@@ -110,6 +119,8 @@ export type {
   FeathersCursorPagination,
   FeathersOffsetPagination,
   FeathersPagination,
+  FeathersTransaction,
+  FeathersTransactionsOptions,
 } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
 
@@ -119,6 +130,7 @@ export type {
   AdapterFindMeta,
   AdapterParams,
   AdapterQuery,
+  AdapterTransactionOperation,
   EventHandlers,
   MatcherContext,
   PageCursor,

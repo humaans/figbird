@@ -142,6 +142,22 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     entry: TEntry,
     outcome: MutationOutcome,
   ): LaneSettlement<TEntry> | null {
+    return this.#complete(lane, entry, outcome)
+  }
+
+  /**
+   * Remove an entry that will never reach the adapter while preserving the
+   * create/remove lifetime rules that apply to an ordinary failed mutation.
+   */
+  abort(lane: MutationLane, entry: TEntry, error: Error): LaneSettlement<TEntry> | null {
+    return this.#complete(lane, entry, { ok: false, error })
+  }
+
+  #complete(
+    lane: MutationLane,
+    entry: TEntry,
+    outcome: MutationOutcome,
+  ): LaneSettlement<TEntry> | null {
     const state = this.#lanes.get(lane.key)
     if (state !== lane) return null
     const index = state.entries.indexOf(entry)
@@ -149,18 +165,22 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     if (index === -1) return null
 
     state.entries.splice(index, 1)
-    state.running = false
+    if (index === 0) state.running = false
 
     let cancelled: TEntry[] = []
     if (!outcome.ok && entry.desc.method === 'create') {
-      cancelled = state.entries.splice(0)
+      cancelled = state.entries.splice(index)
     } else if (!outcome.ok && entry.desc.method === 'remove') {
-      const nextCreate = state.entries.findIndex(queued => queued.desc.method === 'create')
+      const nextCreate = state.entries.findIndex(
+        (queued, queuedIndex) => queuedIndex >= index && queued.desc.method === 'create',
+      )
       if (nextCreate !== -1) cancelled = state.entries.splice(nextCreate)
     } else if (outcome.ok && entry.desc.method === 'remove') {
-      const nextCreate = state.entries.findIndex(queued => queued.desc.method === 'create')
+      const nextCreate = state.entries.findIndex(
+        (queued, queuedIndex) => queuedIndex >= index && queued.desc.method === 'create',
+      )
       const end = nextCreate === -1 ? state.entries.length : nextCreate
-      cancelled = state.entries.splice(0, end)
+      cancelled = state.entries.splice(index, end - index)
     }
     let authoritativeEvent: ProcessedServerEvent | null = null
 
