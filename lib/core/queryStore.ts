@@ -79,6 +79,7 @@ import {
 import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
 import { normalizeError } from './errors.js'
 import { isWithinStaleTime } from './staleTime.js'
+import { sameValue } from './valueEquality.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -1835,15 +1836,26 @@ export class QueryStore<
     }
   }
 
-  #reapplyMaterializedFind(service: ServiceState<TMeta>, query: Query<unknown, TMeta>): boolean {
-    if (query.config.realtime !== 'merge' || query.state.status !== 'success') return false
+  #reapplyMaterializedFind(
+    service: ServiceState<TMeta>,
+    query: Query<unknown, TMeta>,
+  ): 'unavailable' | 'unchanged' | 'changed' {
+    if (query.config.realtime !== 'merge' || query.state.status !== 'success') return 'unavailable'
     const local = this.#selectMaterializedFind(query)
-    if (!local) return false
+    if (!local) return 'unavailable'
+    const previous = query.state.data
+    if (
+      Array.isArray(previous) &&
+      previous.length === local.data.length &&
+      previous.every((row, index) => row === local.data[index]) &&
+      sameValue(query.state.meta, local.meta)
+    )
+      return 'unchanged'
     commitQuery(service, {
       ...query,
       state: { ...query.state, data: local.data, meta: local.meta },
     })
-    return true
+    return 'changed'
   }
 
   #fetching({ queryId }: { queryId: string }): void {
@@ -2405,17 +2417,23 @@ export class QueryStore<
   }): AppliedEventEffect[] {
     if (processedEvents.length === 0) return []
     const selectedQueries = new Set<string>()
+    const changedQueries = new Set<string>()
     for (const [queryId, query] of service.queries) {
-      if (queryId === excludeQueryId || !this.#reapplyMaterializedFind(service, query)) continue
+      if (queryId === excludeQueryId) continue
+      const result = this.#reapplyMaterializedFind(service, query)
+      if (result === 'unavailable') continue
       selectedQueries.add(queryId)
-      touch(queryId)
+      if (result === 'changed') {
+        changedQueries.add(queryId)
+        touch(queryId)
+      }
     }
     const getId = this.#getIdReader(serviceName)
     return processedEvents.map(event => {
       const reconcileQueryIds = new Set<string>()
       const queryEffects = this.#telemetry.active
         ? new Map<string, 'merged' | 'reconcile'>(
-            [...selectedQueries].map(queryId => [queryId, 'merged']),
+            [...changedQueries].map(queryId => [queryId, 'merged']),
           )
         : undefined
       updateQueriesFromEvents({
@@ -2695,12 +2713,20 @@ export class QueryStore<
     }
 
     let selected = false
+    let changed = false
     const touched = this.#transactOverService(queryId, (service, query) => {
-      if (query) selected = this.#reapplyMaterializedFind(service, query)
+      if (!query) return
+      const result = this.#reapplyMaterializedFind(service, query)
+      selected = result !== 'unavailable'
+      changed = result === 'changed'
+      const current = service.queries.get(queryId)
+      if (selected && current?.pending) {
+        commitQuery(service, { ...current, pending: false })
+      }
     })
     if (selected) {
       this.#clearReconcileState(queryId)
-      this.#notify(touched)
+      if (changed) this.#notify(touched)
       return
     }
 

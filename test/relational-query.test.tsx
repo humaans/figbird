@@ -3056,12 +3056,15 @@ test('inspect: stable read-only projection of live queries', async t => {
 
 test('.all(): materialized reads stay local only when their ordering is knowable', async t => {
   const { feathers } = createApp()
+  const reconnectEvents = new EventEmitter()
+  ;(feathers as ReturnType<typeof mockFeathers> & { io: EventEmitter }).io = reconnectEvents
   let hidden = false
   const figbird = new Figbird({
     schema,
     adapter: new FeathersAdapter(feathers),
     eventBatchInterval: 0,
     retry: false,
+    reconnectJitter: 0,
     visibility: { isHidden: () => hidden, onChange: () => () => {} },
   })
 
@@ -3106,12 +3109,22 @@ test('.all(): materialized reads stay local only when their ordering is knowable
     },
     { allPages: true },
   )
-  const unsubExhaustive = exhaustive.subscribe(() => {})
+  let exhaustiveNotifications = 0
+  const unsubExhaustive = exhaustive.subscribe(() => {
+    exhaustiveNotifications++
+  })
   await new Promise(resolve => setTimeout(resolve, 10))
   t.deepEqual(
     exhaustive.getSnapshot()?.data?.map(issue => issue.id),
     [1, 3],
   )
+
+  const beforeUnrelatedPatch = exhaustive.getSnapshot()
+  exhaustiveNotifications = 0
+  await figbird.m.issues.patch(2, { title: 'Closed issue updated' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(exhaustive.getSnapshot(), beforeUnrelatedPatch)
+  t.is(exhaustiveNotifications, 0)
 
   // Realtime maintains the set; the windowed subset recomputes locally — still no fetch.
   await feathers.service('issues').create({ id: 9, title: 'Newest', status: 'open', creatorId: 1 })
@@ -3180,6 +3193,18 @@ test('.all(): materialized reads stay local only when their ordering is knowable
     [1],
   )
   t.is(feathers.service('issues').counts.find, findsBeforeHiddenChanges)
+
+  hidden = false
+  reconnectEvents.emit('reconnect')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const settled = figbird.getState().get('issues')?.queries.get(exhaustive.details().queryId)
+  t.is(settled?.pending, false, 'local reconciliation settles pending work')
+  const beforeEnsureFresh = exhaustive.getSnapshot()
+  exhaustiveNotifications = 0
+  exhaustive.ensureFresh({ staleTime: Infinity })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(exhaustive.getSnapshot(), beforeEnsureFresh)
+  t.is(exhaustiveNotifications, 0)
 
   unsubExhaustive()
   unsubLocal()
