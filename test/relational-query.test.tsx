@@ -3038,7 +3038,15 @@ test('inspect: stable read-only projection of live queries', async t => {
 })
 
 test('.all(): materialized reads stay local only when their ordering is knowable', async t => {
-  const { figbird, feathers } = createApp()
+  const { feathers } = createApp()
+  let hidden = false
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    retry: false,
+    visibility: { isHidden: () => hidden, onChange: () => () => {} },
+  })
 
   // Preload the complete set ($sort doesn't affect completeness, so it still materializes).
   const allRef = figbird.query(figbird.q.issues.orderBy('title').all())
@@ -3072,6 +3080,21 @@ test('.all(): materialized reads stay local only when their ordering is knowable
     [3, 2],
   )
   t.is(feathers.service('issues').counts.find, findsAfterUnsorted, 'window computed locally')
+
+  const exhaustive = figbird.queryDesc(
+    {
+      serviceName: 'issues',
+      method: 'find',
+      params: { query: { status: 'open', $sort: { id: 1 }, $limit: 1 } },
+    },
+    { allPages: true },
+  )
+  const unsubExhaustive = exhaustive.subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    exhaustive.getSnapshot()?.data?.map(issue => issue.id),
+    [1, 3],
+  )
 
   // Realtime maintains the set; the windowed subset recomputes locally — still no fetch.
   await feathers.service('issues').create({ id: 9, title: 'Newest', status: 'open', creatorId: 1 })
@@ -3122,6 +3145,26 @@ test('.all(): materialized reads stay local only when their ordering is knowable
     local.getSnapshot().data?.map(issue => issue.id),
     [1, 2, 3, 10],
   )
+  const findsBeforeHiddenChanges = feathers.service('issues').counts.find
+  hidden = true
+  await figbird.m.issues.remove(10)
+  t.deepEqual(
+    winRef.getSnapshot().data?.map(issue => issue.id),
+    [3, 2],
+  )
+  await figbird.m.issues.remove(3)
+  t.deepEqual(
+    winRef.getSnapshot().data?.map(issue => issue.id),
+    [2, 1],
+  )
+  t.is(winRef.rootMetadata().total, 2)
+  t.deepEqual(
+    exhaustive.getSnapshot()?.data?.map(issue => issue.id),
+    [1],
+  )
+  t.is(feathers.service('issues').counts.find, findsBeforeHiddenChanges)
+
+  unsubExhaustive()
   unsubLocal()
   unsubServerAll()
   unsubDetail()
@@ -3130,6 +3173,7 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   unsubOpen()
   unsubWin()
   unsubAll()
+  figbird.dispose()
 })
 
 test('.all(): accepts filters — complete slice, no materialization; rejects windowing', async t => {

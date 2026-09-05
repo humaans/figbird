@@ -1291,6 +1291,11 @@ you searched".
 
 ### Exhaustive reads: .all()
 
+Live finds with a known sort order over a fully materialized service recompute locally
+after data changes. They do not wait for the network reconciliation cooldown or tab
+visibility. Snapshot queries and reads requiring server evaluation keep their existing
+behavior.
+
 `.all()` fetches **every row matching the query**. All pages are drained, so the server's
 default page cap never silently truncates the result. Without it, an unwindowed find returns a
 single server page; that cap is the safety mechanism (an unbounded query shouldn't slurp the
