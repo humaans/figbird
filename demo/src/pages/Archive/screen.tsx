@@ -187,6 +187,12 @@ function ArchiveWindow({
         <span>Deleted</span>
       </div>
 
+      {total === 0 ? (
+        <p className='empty-line' role='status'>
+          No archived issues match your search.
+        </p>
+      ) : null}
+
       <div ref={scrollRef} className='archive-scroll' role='list' aria-label='Archived issues'>
         <div className='archive-virtual-space' style={{ height: virtualizer.getTotalSize() }}>
           {virtualRows.map(virtualRow => {

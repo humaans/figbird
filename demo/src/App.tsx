@@ -32,7 +32,7 @@ function EmptyDetail() {
  * viewing keeps the last data and surfaces ItemRemoved, which the screen handles.
  */
 class DetailErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null }
+  state: { error: Error | null } = { error: null }
 
   static getDerivedStateFromError(error: Error) {
     return { error }
@@ -43,10 +43,15 @@ class DetailErrorBoundary extends Component<{ children: ReactNode }, { error: Er
       return (
         <main className='detail'>
           <div className='detail-empty'>
-            <div className='detail-empty-title'>Issue not found</div>
-            <div className='detail-empty-hint'>
-              It may have been removed, or the id doesn't exist on the server.
+            <div className='detail-empty-title'>
+              {'code' in this.state.error && this.state.error.code === 404
+                ? 'Issue not found'
+                : 'Could not load issue'}
             </div>
+            <div className='detail-empty-hint'>{this.state.error.message}</div>
+            <button className='link' onClick={() => window.location.reload()}>
+              Try again
+            </button>
           </div>
         </main>
       )

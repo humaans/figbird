@@ -927,7 +927,8 @@ export class QueryStore<
     })
 
     try {
-      const result = await this.#fetch(queryId)
+      const local = this.#tryLocalGet(query) ?? this.#selectMaterializedFind(query)
+      const result = await (local ?? this.#fetch(queryId))
       const endedAt = this.#clock.now()
       const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
@@ -940,6 +941,7 @@ export class QueryStore<
           this.#fetched({
             queryId,
             result,
+            source: local ? 'cache' : 'server',
             journalEvents: journal.events,
             ...(cacheCause === undefined ? {} : { cause: cacheCause }),
           })
@@ -1048,8 +1050,6 @@ export class QueryStore<
     const { desc, config } = query
 
     if (desc.method === 'get') {
-      const local = this.#tryLocalGet(query)
-      if (local) return Promise.resolve(local)
       return this.#adapter.get(desc.serviceName, desc.resourceId, desc.params as TParams)
     } else {
       if (desc.page) {
@@ -1064,8 +1064,6 @@ export class QueryStore<
           return result
         })
       }
-      const local = this.#selectMaterializedFind(query)
-      if (local) return Promise.resolve(local)
       const findConfig = config as FindQueryConfig<unknown, unknown>
       return findConfig.allPages
         ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
@@ -1074,7 +1072,8 @@ export class QueryStore<
   }
 
   /**
-   * Answer a get locally when the service is fully materialized (an `.all()` query
+   * Pending optimistic creates are readable before the server acknowledges them.
+   * Otherwise, answer a get locally when the service is fully materialized (an `.all()` query
    * succeeded): the entity cache is the complete row set, so a present entity is
    * the answer with no roundtrip — realtime events, the reconnect sweep, and
    * complete-set fetch diffs keep it fresh, the same soundness argument local finds
@@ -1097,7 +1096,13 @@ export class QueryStore<
     // materialize time (see classifyStoredQuery) — never answered locally.
     if (query.maintenance.classification !== 'get') return null
     const service = this.#state.get(desc.serviceName)
-    if (!service?.materialized) return null
+    if (!service) return null
+    if (
+      !service.materialized &&
+      (query.config.realtime !== 'merge' ||
+        !this.#mutationExecutor.hasOptimisticCreate(desc.serviceName, desc.resourceId))
+    )
+      return null
 
     const config = query.config as GetQueryConfig<unknown, unknown>
     if (config.server) return null
@@ -1206,11 +1211,13 @@ export class QueryStore<
   #fetched({
     queryId,
     result,
+    source,
     journalEvents,
     cause,
   }: {
     queryId: string
     result: StoreResponse<TMeta>
+    source: 'cache' | 'server'
     journalEvents: readonly ProcessedCacheEvent[]
     cause?: TraceCause
   }): void {
@@ -1237,7 +1244,7 @@ export class QueryStore<
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
       const fetchedProjectionEvents: QueuedEvent[] = []
-      if (responseMode === 'entity') {
+      if (source === 'server' && responseMode === 'entity') {
         for (const item of responseItems) {
           const itemId = getId(item)
           if (itemId === undefined || rebasePlan.itemIds.has(entityKey(itemId))) continue
@@ -1309,7 +1316,7 @@ export class QueryStore<
       // (isItemStale can't catch a projection: same updatedAt as the row it shadows).
       const fetchedEvents: ProcessedCacheEvent[] = []
       const fetchedRows: QueuedEvent[] = []
-      if (!isProjection) {
+      if (source === 'server' && !isProjection) {
         for (const item of rebasedResponse.items) {
           const id = getId(item)
           if (id === undefined || journaledItemIds.has(entityKey(id))) continue

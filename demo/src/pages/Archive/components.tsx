@@ -66,13 +66,13 @@ export function ArchiveToolbar({
       </div>
       <div className='archive-stat archive-stat-wide'>
         <span className='archive-stat-value'>
-          {visibleStart + 1}–{Math.min(visibleEnd + 1, total ?? Infinity)}
+          {total === 0 ? '0' : `${visibleStart + 1}–${Math.min(visibleEnd + 1, total ?? Infinity)}`}
         </span>
         <span>of {total?.toLocaleString() ?? 'unknown'}</span>
       </div>
       <StatusDot active={isFetching} />
       <span className='archive-prefetch-state'>
-        {isFetching ? 'fetching window…' : 'adjacent pages ready'}
+        {isFetching ? 'fetching window…' : total === 0 ? 'no matches' : 'adjacent pages ready'}
       </span>
       <button className='link archive-top-button' onClick={onJumpToTop}>
         ↑ Top

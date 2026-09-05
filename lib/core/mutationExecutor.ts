@@ -132,6 +132,10 @@ export class MutationExecutor {
     return this.#mutationLanes.get(serviceName, id) !== undefined
   }
 
+  hasOptimisticCreate(serviceName: string, id: ItemId): boolean {
+    return this.#mutationLanes.hasOptimisticCreate(serviceName, id)
+  }
+
   acceptAuthoritative(
     serviceName: string,
     type: Event['type'],
