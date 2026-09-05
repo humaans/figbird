@@ -193,6 +193,7 @@ export interface QueryFetchHistoryEntry {
 
 export const QUERY_FETCH_HISTORY_LIMIT = 50
 export const DEFAULT_STALE_TIME = 5 * 60_000
+export const DEFAULT_GC_TIME = 30 * 60_000
 
 export interface DevtoolsCacheEditResult {
   ok: boolean
@@ -280,7 +281,7 @@ export class QueryStore<
     adapter,
     eventBatchInterval = 100,
     staleTime = DEFAULT_STALE_TIME,
-    gcTime = DEFAULT_STALE_TIME,
+    gcTime = DEFAULT_GC_TIME,
     reconcileCooldown = 2000,
     retry = DEFAULT_RETRIES,
     retryDelay = defaultRetryDelay,

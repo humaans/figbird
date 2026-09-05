@@ -1264,8 +1264,9 @@ fetch and error counts in `inspect()`.
 
 ### Cache retention and instance disposal
 
-`new Figbird({ adapter, schema, gcTime: 300_000 })` retains idle query results for five
-minutes after their last reader releases them. A returning reader cancels eviction.
+By default, idle query results are retained for thirty minutes after their last reader
+releases them. Configure this with `new Figbird({ adapter, schema, gcTime: 30 * 60_000 })`.
+A returning reader cancels eviction.
 `gcTime` controls memory retention independently of `staleTime`, which controls freshness.
 Set `gcTime: Infinity` to keep idle results for the instance's lifetime, or `0` to evict
 on the next timer turn. Unreferenced entities and unused service subscriptions are

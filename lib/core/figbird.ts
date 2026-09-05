@@ -40,6 +40,7 @@ import {
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
 import { QueryRef } from './queryRef.js'
 import {
+  DEFAULT_GC_TIME,
   DEFAULT_STALE_TIME,
   QueryStore,
   type DevtoolsCacheEditResult,
@@ -264,7 +265,7 @@ export class Figbird<
     eventBatchInterval,
     schema,
     staleTime = DEFAULT_STALE_TIME,
-    gcTime = DEFAULT_STALE_TIME,
+    gcTime = DEFAULT_GC_TIME,
     reconcileCooldown,
     retry,
     retryDelay,
@@ -276,7 +277,7 @@ export class Figbird<
     eventBatchInterval?: number
     schema?: S
     staleTime?: number
-    /** Idle cache retention in ms. Defaults to five minutes; Infinity disables eviction. */
+    /** Idle cache retention in ms. Defaults to thirty minutes; Infinity disables eviction. */
     gcTime?: number
     reconcileCooldown?: number
     retry?: number | false
