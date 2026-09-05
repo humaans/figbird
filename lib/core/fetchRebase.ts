@@ -43,6 +43,10 @@ export class FetchEventJournal {
     this.#maxEvents = maxEvents
   }
 
+  clear(): void {
+    this.#services.clear()
+  }
+
   begin(serviceName: string): FetchJournalCursor {
     let journal = this.#services.get(serviceName)
     if (!journal) {

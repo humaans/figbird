@@ -71,7 +71,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
     isObservabilityActive(): boolean
     subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void
     subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
-    ensureRealtimeSubscription(serviceName: string): void
+    ensureRealtimeSubscription(serviceName: string): () => void
     reapplyQuery(queryId: string, mutationLaneKeys: ReadonlySet<string>): void
   }
   getState(): Map<string, ServiceState<TMeta>>
@@ -1536,9 +1536,9 @@ export class RelationalQueryRef<
     const dependencies = collectRelationalFilterDependencies(this.#schema, this.#ast, paths)
     if (dependencies.length === 0) return
 
-    for (const dependency of dependencies) {
-      this.#host.queryStore.ensureRealtimeSubscription(dependency.serviceName)
-    }
+    const releaseDependencies = dependencies.map(dependency =>
+      this.#host.queryStore.ensureRealtimeSubscription(dependency.serviceName),
+    )
 
     const affectsFilter = (event: ProcessedCacheEvent) =>
       shouldRefetchRelationalFilterQuery(
@@ -1568,6 +1568,7 @@ export class RelationalQueryRef<
     this.#processedEventUnsub = () => {
       unsubscribeEvents()
       unsubscribeSettlements()
+      for (const release of releaseDependencies) release()
     }
   }
 
@@ -1678,6 +1679,13 @@ export class RelationalQueryRef<
       this.#settleSuspense(this.getSnapshot())
     }
     return this.#suspensePromise
+  }
+
+  /** @internal Release readers and pending Suspense work when the instance closes. */
+  dispose(): void {
+    this.#rejectSuspense?.(new Error('figbird: instance has been disposed'))
+    this.#listeners.clear()
+    this.#cleanup()
   }
 
   #cleanup(): void {

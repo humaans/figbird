@@ -208,6 +208,9 @@ export class Figbird<
   queryStore: QueryStore<S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>
   schema: S | undefined
   #staleTime: number
+  #disposed = false
+  #mutationQueues = new Set<MutationQueue<S>>()
+  #unregisterDevtools: () => void
 
   // Cache of active RelationalQueryRef instances, keyed by AST hash. This is critical for
   // React 18 Suspense interop: on suspense retries React discards render-state (including
@@ -261,6 +264,7 @@ export class Figbird<
     eventBatchInterval,
     schema,
     staleTime = DEFAULT_STALE_TIME,
+    gcTime = DEFAULT_STALE_TIME,
     reconcileCooldown,
     retry,
     retryDelay,
@@ -272,6 +276,8 @@ export class Figbird<
     eventBatchInterval?: number
     schema?: S
     staleTime?: number
+    /** Idle cache retention in ms. Defaults to five minutes; Infinity disables eviction. */
+    gcTime?: number
     reconcileCooldown?: number
     retry?: number | false
     retryDelay?: RetryDelay
@@ -287,6 +293,7 @@ export class Figbird<
       adapter,
       eventBatchInterval,
       staleTime,
+      gcTime,
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
       ...(retry !== undefined ? { retry } : {}),
       ...(retryDelay !== undefined ? { retryDelay } : {}),
@@ -294,7 +301,33 @@ export class Figbird<
       ...(visibility !== undefined ? { visibility } : {}),
       ...(defaultSort !== undefined ? { defaultSort } : {}),
     })
-    registerDevtoolsInstance(this)
+    this.#unregisterDevtools = registerDevtoolsInstance(this)
+  }
+
+  /** Release this instance after unmounting its readers. Registered writes finish normally. */
+  dispose(): void {
+    if (this.#disposed) return
+    this.#disposed = true
+    for (const prefetch of this.#prefetches.values()) {
+      clearTimeout(prefetch.timer)
+      prefetch.release()
+    }
+    this.#prefetches.clear()
+    for (const ref of this.#windowQueryCache.values()) ref.dispose()
+    for (const ref of this.#relationalQueryCache.values()) ref.dispose()
+    this.#windowQueryCache.clear()
+    this.#relationalQueryCache.clear()
+    for (const queues of this.#keyedMutationQueues.values()) {
+      for (const entry of queues.values()) {
+        if (entry.evictionTimer) clearTimeout(entry.evictionTimer)
+        entry.unsubscribe()
+      }
+    }
+    this.#keyedMutationQueues.clear()
+    for (const queue of this.#mutationQueues) queue.detach()
+    this.#mutationQueues.clear()
+    this.#unregisterDevtools()
+    this.queryStore.dispose()
   }
 
   /**
@@ -390,6 +423,7 @@ export class Figbird<
     AdapterFindMeta<A>,
     AdapterQuery<A>
   > {
+    this.queryStore.assertActive()
     type T = QueryBuilderResult<B>
     if (!this.schema) {
       throw new Error(
@@ -442,6 +476,7 @@ export class Figbird<
     queryOrBuilder: QueryInput<B, Args>,
     config: WindowQueryConfig,
   ): WindowQueryRef<QueryBuilderItem<B>, S, AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>> {
+    this.queryStore.assertActive()
     type T = QueryBuilderItem<B>
     if (!this.schema) {
       throw new Error(
@@ -842,6 +877,7 @@ export class Figbird<
   }
 
   #createMutationQueue(config: MutationQueueConfig): MutationQueue<S> {
+    this.queryStore.assertActive()
     const host: MutationQueueHost = {
       registerMutation: (desc, control) => {
         const resolve = (value: MutationDescriptor): MutationDescriptor => ({
@@ -863,11 +899,17 @@ export class Figbird<
           control,
         ),
     }
-    return new MutationQueue<S>(host, config)
+    const queue = new MutationQueue<S>(host, config)
+    queue.subscribe(() => {
+      if (queue.pending > 0 && !this.#disposed) this.#mutationQueues.add(queue)
+      else this.#mutationQueues.delete(queue)
+    })
+    return queue
   }
 
   /** Return one reconnectable instance of an immutable queue definition. @internal */
   getMutationQueue(definition: MutationQueueDefinition, key: string): MutationQueue<S> {
+    this.queryStore.assertActive()
     if (key.length === 0) throw new Error('figbird: mutation queue key must not be empty')
     let queues = this.#keyedMutationQueues.get(definition)
     const existing = queues?.get(key)

@@ -26,7 +26,7 @@ const schema = createSchema({
   },
 })
 
-test('Figbird instance can be created', t => {
+test('Figbird instance retains idle queries and releases owned resources on disposal', async t => {
   const feathers = mockFeathers({
     notes: {
       data: {
@@ -40,9 +40,69 @@ test('Figbird instance can be created', t => {
     },
   })
   const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  let realtimeSubscriptions = 0
+  let visibilitySubscriptions = 0
+  let connectionSubscriptions = 0
+  const subscribe = adapter.subscribe.bind(adapter)
+  adapter.subscribe = (name, handlers) => {
+    realtimeSubscriptions++
+    const unsubscribe = subscribe(name, handlers)
+    return () => {
+      realtimeSubscriptions--
+      unsubscribe()
+    }
+  }
+  adapter.subscribeToConnectionEvents = () => {
+    connectionSubscriptions++
+    return () => {
+      connectionSubscriptions--
+    }
+  }
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    gcTime: 10,
+    visibility: {
+      isHidden: () => false,
+      onChange: () => {
+        visibilitySubscriptions++
+        return () => {
+          visibilitySubscriptions--
+        }
+      },
+    },
+  })
+  const ref = figbird.query(figbird.q.notes)
+  const unsubscribe = ref.subscribe(() => {})
+  await ref.suspensePromise()
+  unsubscribe()
+  t.true(figbird.inspect().length > 0, 'idle cache survives immediate unmount')
+  await new Promise(resolve => setTimeout(resolve, 30))
+  t.is(figbird.inspect().length, 0, 'idle queries expire')
+  t.is(figbird.getState().size, 0, 'unreferenced entities and services expire')
+  t.is(realtimeSubscriptions, 0)
 
-  t.truthy(figbird)
+  const all = figbird.query(figbird.q.notes.all())
+  const releaseAll = all.subscribe(() => {})
+  await all.suspensePromise()
+  releaseAll()
+  await new Promise(resolve => setTimeout(resolve, 30))
+  t.true(figbird.getState().has('notes'), 'complete materializations remain available')
+
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const pending = queue.m.notes.patch(1, { content: 'saved during disposal' })
+  const second = queue.m.notes.patch(1, { content: 'second write' })
+  figbird.dispose()
+  figbird.dispose()
+  await Promise.all([pending, second])
+  t.is(feathers.service('notes').data[1]?.content, 'second write')
+  t.is(figbird.getState().size, 0, 'late writes cannot resurrect the disposed cache')
+  t.is(realtimeSubscriptions, 0)
+  t.is(visibilitySubscriptions, 0)
+  t.is(connectionSubscriptions, 0)
+  t.throws(() => figbird.query(figbird.q.notes), { message: /disposed/ })
+  t.throws(() => figbird.m.notes.patch(1, { content: 'too late' }), { message: /disposed/ })
+  t.throws(() => new Figbird({ adapter, schema, gcTime: -1 }), { message: /gcTime/ })
 })
 
 test('figbird.query with get returns typed data', async t => {

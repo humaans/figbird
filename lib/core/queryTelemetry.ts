@@ -20,6 +20,12 @@ export class QueryTelemetry {
   #nextFetchId = 1
   readonly #activeFetchGraphs = new Map<string, Map<string, QueryGraphRef>>()
 
+  dispose(): void {
+    this.#events.dispose()
+    for (const graph of this.#activeFetchGraphs.values()) graph.clear()
+    this.#activeFetchGraphs.clear()
+  }
+
   get events(): FigbirdEventEmitter {
     return this.#events
   }

@@ -101,15 +101,15 @@ interface DevtoolsPageBridge {
     itemJson: string,
   ): string
   readJson(sessionId: string, version: number | null): string | null
-  register(source: DevtoolsSource): void
+  register(source: DevtoolsSource): (() => void) | void
 }
 
 let fallbackBridge: DevtoolsPageBridge | undefined
 
 /** Register a Figbird instance for browser extensions without starting collection. */
-export function registerDevtoolsInstance(source: DevtoolsSource): void {
-  if (typeof window === 'undefined' || typeof WeakRef === 'undefined') return
-  getPageBridge().register(source)
+export function registerDevtoolsInstance(source: DevtoolsSource): () => void {
+  if (typeof window === 'undefined' || typeof WeakRef === 'undefined') return () => {}
+  return getPageBridge().register(source) ?? (() => {})
 }
 
 function getPageBridge(): DevtoolsPageBridge {
@@ -184,14 +184,22 @@ function createPageBridge(): DevtoolsPageBridge {
       const instanceId = nextInstanceId++
       instances.set(instanceId, new WeakRef(source))
       const captureUntil = startupCaptureUntil()
-      if (captureUntil <= Date.now()) return
-      const events = new CappedBuffer<FigbirdEvent>(EVENT_LIMIT)
-      const unsubscribe = source.events.subscribe(event => events.push(event))
-      const expires = setTimeout(
-        () => closeStartupCapture(instanceId),
-        Math.max(0, captureUntil - Date.now()),
-      )
-      startupCaptures.set(instanceId, { events, expires, unsubscribe })
+      if (captureUntil > Date.now()) {
+        const events = new CappedBuffer<FigbirdEvent>(EVENT_LIMIT)
+        const unsubscribe = source.events.subscribe(event => events.push(event))
+        const expires = setTimeout(
+          () => closeStartupCapture(instanceId),
+          Math.max(0, captureUntil - Date.now()),
+        )
+        startupCaptures.set(instanceId, { events, expires, unsubscribe })
+      }
+      return () => {
+        instances.delete(instanceId)
+        closeStartupCapture(instanceId)
+        for (const [sessionId, session] of sessions) {
+          if (session.source === source) closeSession(sessionId)
+        }
+      }
     },
 
     connect(instanceId) {

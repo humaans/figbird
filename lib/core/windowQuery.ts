@@ -570,6 +570,15 @@ export class WindowQueryRef<
     if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#scheduleCleanup()
   }
 
+  /** @internal Release readers and pending Suspense work when the instance closes. */
+  dispose(): void {
+    for (const read of this.#coldReads.values()) {
+      if (read.status === 'pending') read.reject(new Error('figbird: instance has been disposed'))
+    }
+    this.#subscribers.clear()
+    this.#cleanup()
+  }
+
   #cleanup(): void {
     for (const page of this.#pages.values()) page.unsubscribe()
     this.#pages.clear()
