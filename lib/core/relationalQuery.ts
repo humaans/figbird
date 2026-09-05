@@ -588,11 +588,11 @@ export class RelationalQueryRef<
     const becameComplete = this.#lastGatherWasPartial && gathered.kind === 'ready'
     const isFetching = root.isFetching || gathered.isFetching
     const error =
-      gathered.kind === 'error'
-        ? gathered.error
-        : gathered.kind === 'loading' && this.#lastSnapshot?.status === 'success'
-          ? this.#lastSnapshot.error
-          : null
+      root.error ??
+      gathered.error ??
+      (gathered.kind === 'loading' && this.#lastSnapshot?.status === 'success'
+        ? this.#lastSnapshot.error
+        : null)
 
     // Decide whether the assembled output could have changed. Reassemble if root data
     // or any relation data ref has changed. This is what lets realtime events on
@@ -805,6 +805,7 @@ export class RelationalQueryRef<
             failed(s.error)
             continue
           }
+          acc.error ??= s.error
           acc.isFetching ||= s.isFetching
           acc.dataRefs.set(key, s.data as unknown[])
           acc.assembly.set(key, { kind: 'fanIn', items: s.data as unknown[] })
@@ -825,6 +826,7 @@ export class RelationalQueryRef<
             failed(js.error)
             continue
           }
+          acc.error ??= js.error
           acc.isFetching ||= js.isFetching
           acc.dataRefs.set(`${key}#junction`, js.data as unknown[])
 
@@ -859,6 +861,7 @@ export class RelationalQueryRef<
             failed(ds.error)
             continue
           }
+          acc.error ??= ds.error
           acc.isFetching ||= ds.isFetching
           acc.dataRefs.set(key, ds.data as unknown[])
           acc.assembly.set(key, {
@@ -889,6 +892,7 @@ export class RelationalQueryRef<
               failed(s.error)
               continue
             }
+            acc.error ??= s.error
             acc.isFetching ||= s.isFetching
             acc.dataRefs.set(`${key}#parent:${childKey}`, s.data as unknown[])
             byParent.set(childKey, s.data as unknown[])
@@ -1052,7 +1056,7 @@ export class RelationalQueryRef<
         : { serviceName, method: 'find', params: { query: this.#ast.query } }
 
     const rootGraph = this.#graph('(root)')
-    this.#root = new SingleQueryRoot<S, TParams, TMeta, TQuery>({
+    this.#root = new SingleQueryRoot<TMeta>({
       queryRef: this.#query(rootDesc, {
         realtime: this.#realtimeMode,
         fetchPolicy: 'swr',
@@ -1063,7 +1067,6 @@ export class RelationalQueryRef<
         ...(this.#ast.server ? { server: true } : {}),
         ...this.#rootOverride?.config,
       }),
-      isGet: this.#ast.kind === 'get',
       onRows,
       onChange,
       staleTime: this.#staleTime,

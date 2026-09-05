@@ -99,6 +99,12 @@ export class QueryRef<
     return this.#queryStore.getQueryState<T>(this.#queryId)
   }
 
+  /** Canonical rows for internal assembly; public get snapshots remain scalar. @internal */
+  getRows(): unknown[] {
+    this.#queryStore.materialize(this)
+    return this.#queryStore.getQueryRows(this.#queryId)
+  }
+
   /** Triggers a refetch for this query. */
   refetch(options?: Omit<QueryExecutionOptions, 'staleTime'>): void {
     this.#queryStore.materialize(this)

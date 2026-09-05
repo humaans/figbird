@@ -8,16 +8,10 @@ import {
 } from './queryTypes.js'
 
 /** Live queries own membership; detached results own their server-returned values. */
-export type QueryRows =
-  | { kind: 'entities'; ids: readonly EntityKey[] }
-  | { kind: 'values'; ids: readonly EntityKey[] }
-
-function queryRowsData<TMeta>(service: ServiceState<TMeta>, query: Query<unknown, TMeta>): unknown {
-  const previous = Array.isArray(query.state.data) ? query.state.data : [query.state.data]
-  // A batch removes entities before queries process their removal events. Keep
-  // each owned row until that event updates its membership and pagination meta.
-  const items = query.rows.ids.map((id, index) => service.entities.get(id) ?? previous[index])
-  return query.desc.method === 'get' ? (items[0] ?? null) : items
+export interface QueryRows {
+  kind: 'entities' | 'values'
+  ids: readonly EntityKey[]
+  data: unknown[]
 }
 
 /**
@@ -53,7 +47,7 @@ export function commitQuery<TMeta>(
     next.config.fetchPolicy === 'network-only' ||
     isProjectionQuery(queryOfParams(next.desc.params)) ||
     ids.length !== items.length
-  const rows: QueryRows = ownsValues ? { kind: 'values', ids } : { kind: 'entities', ids }
+  const rows: QueryRows = { kind: ownsValues ? 'values' : 'entities', ids, data: items }
 
   const sameMembership =
     previous?.rows.ids.length === ids.length &&
@@ -81,17 +75,24 @@ export function commitQuery<TMeta>(
   }
 
   const query = { ...next, rows }
-  if (query.state.status === 'success' && rows.kind === 'entities') {
-    const data = queryRowsData(service, query)
-    const previousData = previous?.state.data
-    const shared =
-      Array.isArray(data) &&
-      Array.isArray(previousData) &&
+  if (query.state.status === 'success') {
+    // Removed entities remain in the previous row position until their event
+    // updates membership at this same commit boundary.
+    const data =
+      rows.kind === 'entities'
+        ? rows.ids.map((id, index) => service.entities.get(id) ?? items[index])
+        : items
+    const previousData = previous?.rows.data
+    rows.data =
+      previousData &&
       data.length === previousData.length &&
       data.every((item, index) => item === previousData[index])
         ? previousData
         : data
-    query.state = { ...query.state, data: shared }
+    query.state = {
+      ...query.state,
+      data: query.desc.method === 'get' ? (rows.data[0] ?? null) : rows.data,
+    }
   }
   service.queries.set(next.queryId, query)
 }

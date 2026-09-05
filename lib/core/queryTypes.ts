@@ -137,7 +137,8 @@ export type QueryState<T, TMeta = Record<string, unknown>> =
       meta: TMeta
       pageInfo?: PageInfo
       isFetching: boolean
-      error: null
+      /** Most recent background fetch failure; successful data remains usable. */
+      error: Error | null
     }
   | {
       status: 'error'
@@ -163,7 +164,6 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   classification: StoredQueryClass
   /** Diagnostic projection of the reconciliation scheduler; only the scheduler updates it. */
   pending: boolean
-  dirty: boolean
   filterItem: (item: ElementType<T>) => boolean
   /** Immutable reader snapshot, derived when query membership or values commit. */
   readonly state: QueryState<T, TMeta>

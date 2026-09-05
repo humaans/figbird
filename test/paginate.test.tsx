@@ -335,20 +335,23 @@ it('useQueryResult + paginate: refetch drops follow-up pages and re-fetches page
 
 it('useQueryResult + paginate: composes with .related() — relations attach to every page', async t => {
   const { render, unmount, flush, $ } = dom()
-  const { App, figbird } = createPaginateApp({ totalIssues: 4 })
+  const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 4 })
 
+  let refetchFn: (() => void) | null = null
   let loadMoreFn: (() => void) | null = null
 
   function IssueList() {
-    const { data, loadMore } = useQueryResult(
+    const { data, loadMore, refetch, error } = useQueryResult(
       figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 2 }).related('comments'),
     )
     useLayoutEffect(() => {
       loadMoreFn = loadMore
+      refetchFn = refetch
     })
     return (
       <div
         className='issues'
+        data-error={error?.message ?? ''}
         data-rows={data.map(issue => `${issue.title}:${issue.comments.length}`).join('|')}
       />
     )
@@ -368,6 +371,26 @@ it('useQueryResult + paginate: composes with .related() — relations attach to 
 
   await flush(() => loadMoreFn!())
   t.is($('.issues')!.getAttribute('data-rows'), 'Issue 1:1|Issue 2:1|Issue 3:1|Issue 4:1')
+
+  const find = issuesService.find
+  issuesService.find = async () => {
+    throw new Error('refresh failed')
+  }
+  await flush(() => refetchFn!())
+  t.is($('.issues')!.getAttribute('data-error'), 'refresh failed')
+
+  await flush(async () => {
+    await feathers.service('comments').create({ id: 99, issueId: 99, body: 'Inserted comment' })
+    await issuesService.create({ id: 99, title: 'Inserted', status: 'open', rank: 0 })
+  })
+  t.is($('.issues')!.getAttribute('data-rows'), 'Inserted:1|Issue 1:1')
+  t.is($('.issues')!.getAttribute('data-error'), 'refresh failed')
+  t.falsy($('.fallback'), 'relation synchronization preserves the visible result')
+
+  issuesService.find = find
+  await flush(() => refetchFn!())
+  t.is($('.issues')!.getAttribute('data-rows'), 'Inserted:1|Issue 1:1')
+  t.is($('.issues')!.getAttribute('data-error'), '')
 
   unmount()
 })

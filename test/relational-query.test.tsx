@@ -2241,6 +2241,7 @@ it('suspense: refetch failure keeps previous data, exposes error, clears on reco
       <div className='issue-detail' data-error={error ? error.message : ''}>
         <div className='title'>{issue.title}</div>
         <div className='raw-title'>{rawData?.title}</div>
+        <div className='creator'>{issue.creator?.name}</div>
       </div>
     )
   }
@@ -2275,13 +2276,27 @@ it('suspense: refetch failure keeps previous data, exposes error, clears on reco
   t.is($('.raw-title')!.innerHTML, 'First issue')
   t.is($('.issue-detail')!.getAttribute('data-error'), 'network down')
 
+  const stored = figbird.queryDesc({ serviceName: 'issues', method: 'get', resourceId: 1 })
+  const state = stored.getSnapshot()
+  t.is(state?.status, 'success', 'background failures retain the store result')
+  t.is(state?.error?.message, 'network down')
+  t.is(stored.getRows()[0], state?.data, 'get snapshots and normalized rows share the entity')
+
+  await flush(async () => {
+    await feathers.service('issues').patch(1, { title: 'Edited while offline' })
+    await feathers.service('users').patch(1, { name: 'Updated creator' })
+  })
+  t.is($('.title')!.innerHTML, 'Edited while offline')
+  t.is($('.creator')!.innerHTML, 'Updated creator')
+  t.is($('.issue-detail')!.getAttribute('data-error'), 'network down')
+
   // Heal the service and refetch again — the error clears on the next successful fetch.
   feathers.service('issues').get = originalGet
   await flush(() => {
     refetchFn!()
   })
 
-  t.is($('.title')!.innerHTML, 'First issue')
+  t.is($('.title')!.innerHTML, 'Edited while offline')
   t.is($('.issue-detail')!.getAttribute('data-error'), '')
 
   unmount()

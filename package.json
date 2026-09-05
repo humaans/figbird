@@ -16,11 +16,6 @@
       "types": "./dist/esm/testing.d.ts",
       "require": "./dist/cjs/testing.js",
       "import": "./dist/esm/testing.js"
-    },
-    "./*": {
-      "types": "./dist/esm/*.d.ts",
-      "require": "./dist/cjs/*.js",
-      "import": "./dist/esm/*.js"
     }
   },
   "files": [
@@ -53,7 +48,8 @@
     "release:next": "np --tag=next --any-branch --no-publish && npm publish --tag=next",
     "docs": "hugo server -s docs",
     "docs:build": "hugo -s docs",
-    "docs:release": "hugo -s docs && gh-pages -d docs/public"
+    "docs:release": "hugo -s docs && gh-pages -d docs/public",
+    "package:check": "npm run build && node tasks/check-package.js"
   },
   "engines": {
     "node": ">=20.0.0"

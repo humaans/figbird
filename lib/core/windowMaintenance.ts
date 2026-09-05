@@ -246,7 +246,7 @@ function applyVisibleEventEffect<TMeta>(
         : {
             ...query.state,
             meta: itemRemoved(query.state.meta),
-            data: (query.state.data as unknown[]).filter(item => !itemHasKey(item, itemId, getId)),
+            data: query.rows.data.filter(item => !itemHasKey(item, itemId, getId)),
           }
     commitQuery(service, { ...query, state: nextState })
     touch(queryId)
@@ -257,22 +257,23 @@ function applyVisibleEventEffect<TMeta>(
   if (query.desc.method === 'get') {
     commitQuery(service, {
       ...query,
-      state: {
-        status: 'success',
-        data: item,
-        meta: query.state.meta,
-        isFetching: false,
-        error: null,
-      },
+      state:
+        query.state.status === 'success'
+          ? { ...query.state, data: item }
+          : {
+              status: 'success',
+              data: item,
+              meta: query.state.meta,
+              isFetching: query.state.isFetching,
+              error: null,
+            },
     })
     touch(queryId)
     return true
   }
 
   if (!hasItem || query.state.status !== 'success') return false
-  const data = (query.state.data as unknown[]).map(current =>
-    itemHasKey(current, itemId, getId) ? item : current,
-  )
+  const data = query.rows.data.map(current => (itemHasKey(current, itemId, getId) ? item : current))
   if (query.classification === 'local-exact') {
     sortQueryRows(data, query, context.defaultSort)
   }
@@ -388,7 +389,7 @@ function applyMergeEventToQuery<TMeta>(
       state: {
         ...query.state,
         meta: itemAdded(query.state.meta),
-        data: sortQueryRows((query.state.data as unknown[]).concat(item), query, defaultSort),
+        data: sortQueryRows(query.rows.data.concat(item), query, defaultSort),
       },
     })
     touch(queryId)
@@ -531,7 +532,7 @@ export function reapplyQueryFromEntities<TMeta>({
     candidates.set(storedId, { id: storedId, item })
   }
 
-  const previousRows = query.state.data as unknown[]
+  const previousRows = query.rows.data
   const previousKeys = new Set<EntityKey>()
   for (const item of previousRows) {
     const itemId = getId(item)
@@ -688,7 +689,7 @@ function mergeEventIntoWindow<TMeta>({
   const { sort, limit, skip } = splitWindow(q)
   const effectiveSort = sort ?? defaultSort
   const cmp = effectiveSort ? buildComparator(effectiveSort) : null
-  const rows = state.data as unknown[]
+  const rows = query.rows.data
   const full = limit !== undefined && rows.length >= limit
   const matches = type !== 'removed' && query.filterItem(item)
   const last = rows.length > 0 ? rows[rows.length - 1] : undefined

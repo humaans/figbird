@@ -177,17 +177,21 @@ export function useQueryByDescImpl<
   const queryResult = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   return useMemo(() => {
-    // Project the store state onto the hook shape: data only on success, error only
-    // on error, meta passed through when the store carries it.
+    // Preserve the legacy error contract while the store retains warm rows.
+    const status = queryResult.error
+      ? queryResult.isFetching
+        ? 'loading'
+        : 'error'
+      : queryResult.status
     const result: UntypedData = {
-      status: queryResult.status,
-      data: queryResult.status === 'success' ? queryResult.data : null,
+      status,
+      data: status === 'success' ? queryResult.data : null,
       isFetching: queryResult.isFetching,
-      error: queryResult.status === 'error' ? queryResult.error : null,
+      error: status === 'error' ? queryResult.error : null,
       refetch,
     }
     if ('meta' in queryResult) {
-      result.meta = queryResult.meta
+      result.meta = queryResult.error ? emptyMetaRef.current : queryResult.meta
     }
     return result as QueryResult<T, TMeta>
   }, [queryResult, refetch])

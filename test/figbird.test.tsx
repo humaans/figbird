@@ -2018,6 +2018,8 @@ it('subscribeToStateChanges', async t => {
         Object.values(notesState.queries as Record<string, Record<string, unknown>>).forEach(
           query => {
             delete query.fetchedAt
+            const rows = query.rows as { data: Record<string, unknown>[] }
+            for (const item of rows.data) delete item.updatedAt
             const data =
               query?.state && typeof query.state === 'object'
                 ? (query.state as Record<string, unknown>).data
