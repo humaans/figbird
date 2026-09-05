@@ -1,3 +1,4 @@
+import type { QueryRows } from './queryResults.js'
 import type { AnySchema, Schema, ServiceDefinitionByPath, ServicePaths } from './schema.js'
 import type { StoredQueryClass } from './queryClassification.js'
 import type { PageInfo, PageRequest } from '../adapters/adapter.js'
@@ -60,7 +61,7 @@ interface QueuedEventBase {
 
 /** Internal entity changes waiting at the store's atomic event boundary. */
 export type QueuedEvent =
-  | (QueuedEventBase & { mode: 'server'; source: 'realtime' | 'mutation' })
+  | (QueuedEventBase & { mode: 'server'; source: 'realtime' | 'mutation' | 'fetch' })
   | (QueuedEventBase & { mode: 'optimistic'; mutationLaneKey: string })
 
 /**
@@ -163,7 +164,9 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   pending: boolean
   dirty: boolean
   filterItem: (item: ElementType<T>) => boolean
-  state: QueryState<T, TMeta>
+  /** Immutable reader snapshot, derived when query membership or values commit. */
+  readonly state: QueryState<T, TMeta>
+  readonly rows: QueryRows
   /** Epoch ms of the last successful fetch — the seed of staleness decisions. */
   fetchedAt?: number
 }
@@ -172,6 +175,7 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
  * Service state in the store
  */
 export interface ServiceState<TMeta = Record<string, unknown>> {
+  getId: (item: unknown) => ItemId | undefined
   entities: Map<EntityKey, unknown>
   queries: Map<string, Query<unknown, TMeta, unknown>>
   itemQueryIndex: Map<EntityKey, Set<string>>

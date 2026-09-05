@@ -2038,6 +2038,21 @@ it('subscribeToStateChanges', async t => {
     await feathers.service('notes').patch(2, { content: 'doc 2 updated' })
   })
 
+  for (const cached of figbird.getState().values()) {
+    for (const query of cached.queries.values()) {
+      if (query.rows.kind !== 'entities' || query.state.status !== 'success') continue
+      const data = Array.isArray(query.state.data) ? query.state.data : [query.state.data]
+      t.deepEqual(
+        data,
+        query.rows.ids.map(id => cached.entities.get(id)),
+      )
+      for (const [index, id] of query.rows.ids.entries()) {
+        t.is(data[index], cached.entities.get(id), 'live snapshots use canonical entity values')
+        t.true(cached.itemQueryIndex.get(id)?.has(query.queryId))
+      }
+    }
+  }
+
   t.snapshot(state)
 
   unsub()
