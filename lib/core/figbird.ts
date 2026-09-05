@@ -1,3 +1,4 @@
+import { explainQuery } from './relationPlan.js'
 import {
   locallySupportedOperators,
   type Adapter,
@@ -30,7 +31,6 @@ import {
 } from './queryBuilder.js'
 import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
 import {
-  explainQuery,
   explainQueryNode,
   isServerMaintained,
   type ClassificationReason,
@@ -1025,11 +1025,11 @@ export class Figbird<
    */
   explain<Args, B extends AnyQueryBuilder<S>>(queryOrBuilder: QueryInput<B, Args>): ExplainReport {
     // Resolved without interning — explain never materializes a query. The walk
-    // itself lives in queryClassification.ts, next to the plans it reports on.
+    // itself consumes the compiled relation plan used by query execution.
     const { builder } = resolveQueryInput(queryOrBuilder)
     const nodes = explainQuery(
       builder.toAST(),
-      this.schema?.relationships,
+      this.schema ?? { services: {} },
       serviceName =>
         locallySupportedOperators(this.adapter, resolveServicePath(this.schema, serviceName)),
       serviceName =>

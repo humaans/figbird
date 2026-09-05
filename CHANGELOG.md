@@ -4,6 +4,12 @@
 
 The relational rewrite.
 
+Sort-only relations now batch parents into one `IN (...)` query and fetch all server
+pages. Previously, sorting a `many` relation fetched one page per parent and could
+truncate children at the server page limit. Explicit relation limits and offsets
+continue to select a window; schema-defined limits and offsets now participate in
+that decision too.
+
 Figbird already made it easy to fetch lists and records and keep them live. But joining data across services was still left to you. You either had to over-fetch whole datasets so everything was available locally, or make several fetches per screen and stitch the results together by hand.
 
 This release makes joins a first-class part of Figbird. Each screen can now ask for the minimum data it needs — a window of records and their relations, declared as a single query. Figbird keeps that query fully realtime-reactive, merging events locally whenever it can safely determine the result, and refetching when it can’t.

@@ -1101,42 +1101,95 @@ it('useRelationalQuery: with relations', async t => {
   unmount()
 })
 
-it('useRelationalQuery: with many relation', async t => {
+it('useQuery: sorted many relations batch all pages and retain nested live data', async t => {
   const { render, unmount, flush, $ } = dom()
-  const { App, figbird } = createApp()
+  const comments = Array.from({ length: 210 }, (_, index) => ({
+    id: index + 1,
+    issueId: (index % 2) + 1,
+    authorId: 1,
+    body: `Comment ${index + 1}`,
+  }))
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second issue', status: 'open', creatorId: 1 },
+        },
+      },
+      comments: { data: Object.fromEntries(comments.map(comment => [comment.id, comment])) },
+      users: { data: { 1: { id: 1, name: 'Alice', email: 'alice@example.com' } } },
+    },
+    { queryAwareFind: true },
+  )
 
-  function IssueWithComments() {
-    const issue = useStatusQuery(figbird.q.issues.get(1).related('comments'))
-
-    if (issue.status === 'loading') {
-      return <div className='loading'>Loading...</div>
-    }
-
-    if (issue.status === 'error') {
-      return <div className='error'>{issue.error.message}</div>
-    }
-
-    const data = issue.data as Issue & { comments: Comment[] }
-
+  function IssuesWithComments() {
+    const issues = useQuery(
+      figbird.q.issues
+        .orderBy('id', 'asc')
+        .related('comments', c => c.orderBy('id', 'desc').related('author')),
+    )
     return (
-      <div className='issue-detail'>
-        <div className='title'>{data.title}</div>
-        <div className='comment-count'>{data.comments.length}</div>
+      <div>
+        {issues.map(issue => (
+          <div
+            key={issue.id}
+            className={`issue-${issue.id}`}
+            data-comments={issue.comments.map(comment => comment.id).join(',')}
+            data-authors={issue.comments.map(comment => comment.author?.name).join(',')}
+          />
+        ))}
       </div>
     )
   }
 
   render(
     <App>
-      <IssueWithComments />
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <IssuesWithComments />
+      </React.Suspense>
     </App>,
   )
-
   await flush()
 
-  t.truthy($('.issue-detail'))
-  t.is($('.comment-count')!.innerHTML, '2') // Issue 1 has 2 comments
+  for (const issueId of [1, 2]) {
+    t.is(
+      $(`.issue-${issueId}`)!.getAttribute('data-comments'),
+      comments
+        .filter(comment => comment.issueId === issueId)
+        .reverse()
+        .map(comment => comment.id)
+        .join(','),
+    )
+    t.is($(`.issue-${issueId}`)!.getAttribute('data-authors'), Array(105).fill('Alice').join(','))
+  }
+  t.is(
+    feathers.service('comments').counts.find,
+    3,
+    'one batched relation drains three server pages',
+  )
+  t.is(feathers.service('users').counts.find, 1, 'nested relations share the batched authors')
 
+  await feathers.service('comments').create({ id: 211, issueId: 1, authorId: 1, body: 'Newest' })
+  await feathers.service('users').patch(1, { name: 'Alicia' })
+  await flush()
+  t.is(
+    $('.issue-1')!.getAttribute('data-comments'),
+    [
+      211,
+      ...comments
+        .filter(comment => comment.issueId === 1)
+        .reverse()
+        .map(comment => comment.id),
+    ].join(','),
+  )
+  t.is($('.issue-1')!.getAttribute('data-authors'), Array(106).fill('Alicia').join(','))
+  t.is(
+    feathers.service('comments').counts.find,
+    3,
+    'sort-only relations merge realtime events locally',
+  )
   unmount()
 })
 
@@ -3007,6 +3060,15 @@ test('explain: classifies nodes with structured reasons', t => {
   t.is(comments.service, 'comments')
   t.is(comments.class, 'local-exact')
   t.is(comments.realtime, 'merge')
+
+  const sorted = figbird.explain(figbird.q.issues.related('comments', c => c.orderBy('id', 'desc')))
+  t.is(sorted.nodes[1]!.class, 'local-exact')
+  t.is(sorted.nodes[1]!.realtime, 'merge')
+  const limited = figbird.explain(
+    figbird.q.issues.related('comments', c => c.orderBy('id', 'desc').limit(2)),
+  )
+  t.is(limited.nodes[1]!.class, 'server-window')
+  t.true(limited.nodes[1]!.reasons.some(reason => reason.detail?.includes('per-parent')))
 
   // A paginated root is a window even without explicit $limit in the builder query.
   const paginated = figbird.explain(figbird.q.issues.paginate({ pageSize: 10 }))

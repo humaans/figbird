@@ -28,7 +28,6 @@ import {
 import {
   createRelationAssembler,
   getFieldValueAsList,
-  relationKey,
   sourceSet,
   sourceValueKey,
   uniqueSourceValues,
@@ -657,7 +656,7 @@ export class RelationalQueryRef<
   }
 
   #assemble(rootRows: unknown[], assembly: Map<string, AssembledRelationData>): T {
-    this.#assembleRelations ??= createRelationAssembler(this.#ast, this.#schema)
+    this.#assembleRelations ??= createRelationAssembler(this.#relationPlans)
     const assembled = this.#assembleRelations(rootRows, assembly)
     return this.#ast.kind !== 'paginate' && this.#ast.cardinality === 'one'
       ? ((assembled[0] ?? null) as T)
@@ -714,15 +713,14 @@ export class RelationalQueryRef<
   }
 
   /**
-   * Walk the query AST collecting every relation's current data. Loading and errors
+   * Walk the compiled plan collecting every relation's current data. Loading and errors
    * are aggregate state, not short-circuits: ready siblings and parent edges remain
    * available for assembly while one leaf settles. The caller overlays this partial
    * assembly onto the previous one, giving relational queries node-level SWR rather
    * than rolling the entire graph back.
    */
   #gatherRelationData(
-    ast: QueryAST = this.#ast,
-    parentKey: string | null = null,
+    plans: RelationPlan[] = this.#relationPlans,
     acc: {
       kind: GatherResult['kind']
       error: Error | null
@@ -745,12 +743,11 @@ export class RelationalQueryRef<
       acc.kind = 'error'
       acc.error ??= error
     }
-    const relationships = this.#schema.relationships?.[ast.service] ?? {}
-    for (const [relName, relAST] of Object.entries(ast.related)) {
-      const key = relationKey(parentKey, relName)
+    for (const plan of plans) {
+      const { key } = plan
       const sub = this.#relationSubs.get(key)
 
-      if (!relationships[relName]) {
+      if (plan.kind === 'missing') {
         // Missing relationship definition was warned about in sync, which parks an
         // 'empty' sub so rendering doesn't block on it.
         if (sub) {
@@ -791,7 +788,7 @@ export class RelationalQueryRef<
           acc.isFetching ||= s.isFetching
           acc.dataRefs.set(key, s.data as unknown[])
           acc.assembly.set(key, { kind: 'fanIn', items: s.data as unknown[] })
-          this.#gatherRelationData(relAST, key, acc)
+          this.#gatherRelationData(plan.children, acc)
           break
         }
         case 'junction': {
@@ -851,7 +848,7 @@ export class RelationalQueryRef<
             items: ds.data as unknown[],
             junctionItems: js.data as unknown[],
           })
-          this.#gatherRelationData(relAST, key, acc)
+          this.#gatherRelationData(plan.children, acc)
           break
         }
         case 'perParent': {
@@ -880,7 +877,7 @@ export class RelationalQueryRef<
             byParent.set(childKey, s.data as unknown[])
           }
           acc.assembly.set(key, { kind: 'perParent', byParent })
-          this.#gatherRelationData(relAST, key, acc)
+          this.#gatherRelationData(plan.children, acc)
           break
         }
       }
@@ -1203,7 +1200,7 @@ export class RelationalQueryRef<
       console.warn(
         `figbird: windowed relation "${key}" on service "${this.#ast.service}" is fanning out ` +
           `${uniqueValues.length} per-parent queries (one per parent, because per-parent ` +
-          '$limit/$sort windows cannot be expressed as a single find). For list screens, ' +
+          '$limit/$skip windows cannot be expressed as a single find). For list screens, ' +
           'consider a server-materialized id-list field declared with the `embed` relation ' +
           'kind instead — it collapses this to one batched IN(...) fetch.',
       )

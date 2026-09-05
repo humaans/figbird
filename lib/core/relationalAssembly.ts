@@ -1,29 +1,19 @@
 /**
- * Pure relational assembly. Given root rows, the query AST, the schema, and a map of
+ * Pure relational assembly. Given root rows, a compiled relation plan, and a map of
  * already-gathered relation data (one entry per dotted relation key), produce the
  * denormalized tree. This module never reads live query state — the caller
  * (RelationalQueryRef) gathers a coherent snapshot of every relation's data first
  * and passes it in, which is what makes assembly independently testable.
  */
 
-import type { QueryAST } from './queryBuilder.js'
+import type { RelationPlan } from './relationPlan.js'
 import { getFieldValue } from './relationalFilters.js'
-import type { RelationshipDef, Schema } from './schema.js'
 
 export type AssembledRelationData =
   | { kind: 'none' }
   | { kind: 'fanIn'; items: unknown[] }
   | { kind: 'junction'; items: unknown[]; junctionItems: unknown[] }
   | { kind: 'perParent'; byParent: Map<string, unknown[]> }
-
-/**
- * The dotted key identifying one relation node across the engine (`"comments"`,
- * `"comments.reactions"`). Every walk — sync, gather, assembly — must key
- * identically, or relation subscriptions and their gathered data disconnect.
- */
-export function relationKey(parentKey: string | null, relName: string): string {
-  return parentKey ? `${parentKey}.${relName}` : relName
-}
 
 /**
  * Dedupe + sort + stable-encode a set of key values. The encoded key is what relation
@@ -85,19 +75,15 @@ interface CachedRelationIndex {
 }
 
 function buildIndexes(
-  ast: QueryAST,
-  parentKey: string | null,
-  relationships: Record<string, RelationshipDef>,
+  plans: RelationPlan[],
   relationData: Map<string, AssembledRelationData>,
   cache: Map<string, CachedRelationIndex>,
 ): Map<string, RelationIndex> {
   const indexes = new Map<string, RelationIndex>()
 
-  for (const relName of Object.keys(ast.related)) {
-    const relDef = relationships[relName]
-    if (!relDef) continue
-
-    const key = relationKey(parentKey, relName)
+  for (const plan of plans) {
+    if (plan.kind === 'missing') continue
+    const { name: relName, definition: relDef, key } = plan
     const rel = relationData.get(key)
     // Per-parent data is already keyed by parent; 'none' has nothing to index.
     if (!rel || rel.kind === 'none' || rel.kind === 'perParent') {
@@ -166,7 +152,6 @@ function firstMatchIndex(items: unknown[], destField: string): Map<string | numb
  * field expands into the materialized entities under the same key.
  */
 interface AssemblyContext {
-  schema: Schema
   relationData: Map<string, AssembledRelationData>
   indexCache: Map<string, CachedRelationIndex>
   indexesByPath: Map<string | null, Map<string, RelationIndex>>
@@ -175,16 +160,15 @@ interface AssemblyContext {
 
 function assembleRelations(
   items: unknown[],
-  ast: QueryAST,
+  plans: RelationPlan[],
   parentKey: string | null,
   context: AssemblyContext,
 ): unknown[] {
-  const { schema, relationData, indexesByPath, previousByPath } = context
-  const relationships = schema.relationships?.[ast.service] ?? {}
-  if (Object.keys(ast.related).length === 0) return items
+  const { relationData, indexesByPath, previousByPath } = context
+  if (plans.length === 0) return items
   let indexes = indexesByPath.get(parentKey)
   if (!indexes) {
-    indexes = buildIndexes(ast, parentKey, relationships, relationData, context.indexCache)
+    indexes = buildIndexes(plans, relationData, context.indexCache)
     indexesByPath.set(parentKey, indexes)
   }
   let previousRows = previousByPath.get(parentKey)
@@ -199,14 +183,13 @@ function assembleRelations(
     const previous = cache.get(item)
     const result = { ...item } as Record<string, unknown>
 
-    for (const [relName, relAST] of Object.entries(ast.related)) {
-      const key = relationKey(parentKey, relName)
-      const relDef = relationships[relName]
-      if (!relDef) continue
+    for (const plan of plans) {
+      if (plan.kind === 'missing') continue
+      const { name: relName, definition: relDef, key, children } = plan
 
       const rel = relationData.get(key)
       const index = indexes.get(relName)
-      const hasNested = Object.keys(relAST.related).length > 0
+      const hasNested = children.length > 0
 
       let matchedItems: unknown[]
 
@@ -244,7 +227,7 @@ function assembleRelations(
         if (relDef.cardinality === 'one') {
           let found: unknown = matchedItems[0] ?? null
           if (hasNested && found) {
-            found = assembleRelations([found], relAST, key, context)[0] ?? null
+            found = assembleRelations([found], children, key, context)[0] ?? null
           }
           result[relName] = found
           continue
@@ -254,7 +237,7 @@ function assembleRelations(
         const found = sourceValue === undefined ? null : (index?.byKey?.get(sourceValue) ?? null)
         result[relName] = found
         if (hasNested && found) {
-          const assembled = assembleRelations([found], relAST, key, context)
+          const assembled = assembleRelations([found], children, key, context)
           result[relName] = assembled[0] ?? null
         }
         continue
@@ -265,7 +248,7 @@ function assembleRelations(
       }
 
       if (hasNested && matchedItems.length > 0) {
-        matchedItems = assembleRelations(matchedItems, relAST, key, context)
+        matchedItems = assembleRelations(matchedItems, children, key, context)
       }
       result[relName] = reuseArray(previous?.[relName], matchedItems)
     }
@@ -291,7 +274,7 @@ function reuseArray(previous: unknown, next: unknown[]): unknown[] {
 }
 
 /** Each query retains row identities and indexes for the latest relation arrays. */
-export function createRelationAssembler(ast: QueryAST, schema: Schema) {
+export function createRelationAssembler(plans: RelationPlan[]) {
   const previousByPath = new Map<string | null, WeakMap<object, Record<string, unknown>>>()
   const indexCache = new Map<string, CachedRelationIndex>()
   let previous: unknown[] = []
@@ -310,8 +293,7 @@ export function createRelationAssembler(ast: QueryAST, schema: Schema) {
     }
     previous = reuseArray(
       previous,
-      assembleRelations(items, ast, null, {
-        schema,
+      assembleRelations(items, plans, null, {
         relationData,
         indexesByPath: new Map(),
         indexCache,
