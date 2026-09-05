@@ -10,13 +10,9 @@ import {
 /** Live queries own membership; detached results own their server-returned values. */
 export type QueryRows =
   | { kind: 'entities'; ids: readonly EntityKey[] }
-  | { kind: 'values'; ids: readonly EntityKey[]; data: unknown }
+  | { kind: 'values'; ids: readonly EntityKey[] }
 
-export function queryRowsData<TMeta>(
-  service: ServiceState<TMeta>,
-  query: Query<unknown, TMeta>,
-): unknown {
-  if (query.rows.kind === 'values') return query.rows.data
+function queryRowsData<TMeta>(service: ServiceState<TMeta>, query: Query<unknown, TMeta>): unknown {
   const previous = Array.isArray(query.state.data) ? query.state.data : [query.state.data]
   // A batch removes entities before queries process their removal events. Keep
   // each owned row until that event updates its membership and pagination meta.
@@ -57,9 +53,7 @@ export function commitQuery<TMeta>(
     next.config.fetchPolicy === 'network-only' ||
     isProjectionQuery(queryOfParams(next.desc.params)) ||
     ids.length !== items.length
-  const rows: QueryRows = ownsValues
-    ? { kind: 'values', ids, data: next.state.data }
-    : { kind: 'entities', ids }
+  const rows: QueryRows = ownsValues ? { kind: 'values', ids } : { kind: 'entities', ids }
 
   const sameMembership =
     previous?.rows.ids.length === ids.length &&

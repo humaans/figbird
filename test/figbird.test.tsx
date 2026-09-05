@@ -2677,10 +2677,10 @@ it('realtime events are batched to reduce re-renders', async t => {
 
   function Notes() {
     const notes = useFind('notes')
-    total = notes.meta.total
 
     // Track renders with data snapshots
     useEffect(() => {
+      total = notes.meta.total
       if (notes.data) {
         renderLog.push(notes.data.map(n => n.content))
       }

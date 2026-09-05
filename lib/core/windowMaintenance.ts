@@ -1,5 +1,5 @@
 import { sameValue } from './valueEquality.js'
-import { commitQuery, queryRowsData } from './queryResults.js'
+import { commitQuery } from './queryResults.js'
 /**
  * Window maintenance and realtime event application — the pure algebra the query
  * store orchestrates. Everything here is a plain function over explicit inputs
@@ -270,12 +270,9 @@ function applyVisibleEventEffect<TMeta>(
   }
 
   if (!hasItem || query.state.status !== 'success') return false
-  const data =
-    query.rows.kind === 'entities'
-      ? (queryRowsData(service, query) as unknown[])
-      : (query.state.data as unknown[]).map(current =>
-          itemHasKey(current, itemId, getId) ? item : current,
-        )
+  const data = (query.state.data as unknown[]).map(current =>
+    itemHasKey(current, itemId, getId) ? item : current,
+  )
   if (query.classification === 'local-exact') {
     sortQueryRows(data, query, context.defaultSort)
   }
