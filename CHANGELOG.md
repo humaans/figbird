@@ -10,6 +10,11 @@ which defaults to `false`. Public query and mutation result inference is preserv
 while internal query references no longer carry schema or transport type parameters.
 Offset and cursor pagination share a normalized internal page view, including live
 totals. In-flight fetch journals use bounded rings with absolute event positions.
+Query maintenance compiles window rules, comparators, projection detection, and
+matchers once per cached query. Junction subscriptions own both relation hops,
+and window configuration shares one normalizer across React and core callers.
+Raw store query records now expose classification and matchers under `maintenance`;
+`inspect()` keeps its existing shape.
 
 Sort-only relations now batch parents into one `IN (...)` query and fetch all server
 pages. Previously, sorting a `many` relation fetched one page per parent and could

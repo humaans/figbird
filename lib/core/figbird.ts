@@ -1059,12 +1059,13 @@ export class Figbird<
                 },
               }
             : {}),
-          classification: query.classification,
+          classification: query.maintenance.classification,
           classificationReasons: explanation?.reasons ?? [],
           realtimeStrategy:
             query.config.realtime === 'disabled'
               ? 'manual'
-              : query.config.realtime === 'refetch' || isServerMaintained(query.classification)
+              : query.config.realtime === 'refetch' ||
+                  isServerMaintained(query.maintenance.classification)
                 ? 'refetch'
                 : 'merge',
           skipped: query.config.skip === true,

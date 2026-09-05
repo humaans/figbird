@@ -4100,7 +4100,15 @@ it('junction: useQuery returns dest items via the junction transparently', async
   t.is(byRole.get('Editor'), 'Bob,Cara')
   t.is(byRole.get('Viewer'), '')
 
+  const active = figbird.inspect()
+  t.true(active.some(row => row.serviceName === 'roleMembers' && row.subscriberCount > 0))
+  t.true(active.some(row => row.serviceName === 'users2' && row.subscriberCount > 0))
   unmount()
+  await flush()
+  t.true(
+    figbird.inspect().every(row => row.subscriberCount === 0),
+    'both junction hops release their subscribers',
+  )
 })
 
 it('junction: realtime — adding a roleMember row appears under the right role', async t => {

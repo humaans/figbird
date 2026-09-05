@@ -25,6 +25,29 @@ export interface WindowQueryConfig {
   maxPages: number
 }
 
+export function normalizeWindowConfig({
+  pageSize,
+  preloadPages = 1,
+  maxPages = 5,
+}: {
+  pageSize: number
+  preloadPages?: number
+  maxPages?: number
+}): WindowQueryConfig {
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    throw new Error(`useWindowQuery(): pageSize must be a positive integer, got ${pageSize}`)
+  }
+  if (!Number.isInteger(preloadPages) || preloadPages < 0) {
+    throw new Error(
+      `useWindowQuery(): preloadPages must be a non-negative integer, got ${preloadPages}`,
+    )
+  }
+  if (!Number.isInteger(maxPages) || maxPages <= 0) {
+    throw new Error(`useWindowQuery(): maxPages must be a positive integer, got ${maxPages}`)
+  }
+  return { pageSize, preloadPages, maxPages }
+}
+
 export type WindowQueryState<T> =
   | {
       status: 'loading'
@@ -134,21 +157,7 @@ export class WindowQueryRef<
     config: WindowQueryConfig,
     options?: WindowQueryOptions,
   ) {
-    if (!Number.isInteger(config.pageSize) || config.pageSize <= 0) {
-      throw new Error(
-        `useWindowQuery(): pageSize must be a positive integer, got ${config.pageSize}`,
-      )
-    }
-    if (!Number.isInteger(config.preloadPages) || config.preloadPages < 0) {
-      throw new Error(
-        `useWindowQuery(): preloadPages must be a non-negative integer, got ${config.preloadPages}`,
-      )
-    }
-    if (!Number.isInteger(config.maxPages) || config.maxPages <= 0) {
-      throw new Error(
-        `useWindowQuery(): maxPages must be a positive integer, got ${config.maxPages}`,
-      )
-    }
+    config = normalizeWindowConfig(config)
     this.#host = host
     this.#ast = ast
     this.#schema = schema

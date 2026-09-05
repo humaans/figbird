@@ -1,3 +1,4 @@
+import { compileQueryMaintenance } from './queryMaintenance.js'
 import { queryPage, EMPTY_PAGE, type QueryPage } from '../adapters/queryPage.js'
 import { ReconcileScheduler, type ReconcilePreparation } from './reconcileScheduler.js'
 import { commitQuery, deleteQuery } from './queryResults.js'
@@ -14,7 +15,6 @@ import { QueryTelemetry } from './queryTelemetry.js'
 import type { MutationActivity } from './mutationTracker.js'
 import { MutationExecutor } from './mutationExecutor.js'
 import { type RegisteredMutation, type ScheduledMutationControl } from './mutationQueue.js'
-import { sortRowsLocally } from './sort.js'
 import {
   FetchEventJournal,
   planFetchRebase,
@@ -31,24 +31,16 @@ import {
   isUnfilteredFindQuery,
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
-  splitWindow,
   updateQueriesFromEvents,
 } from './windowMaintenance.js'
-import {
-  classifyStoredQuery,
-  isProjectionQuery,
-  isServerMaintained,
-  type StoredQueryClass,
-} from './queryClassification.js'
+import { isServerMaintained } from './queryClassification.js'
 import {
   entityKey,
   queryOfParams,
-  type ElementType,
   type Event,
   type FindQueryConfig,
   type GetQueryConfig,
   type ItemId,
-  type ItemMatcher,
   type MutationDescriptor,
   type ProcessedProjectionEvent,
   type ProcessedCacheEvent,
@@ -456,7 +448,6 @@ export class QueryStore<
           getId,
           itemAdded: meta => this.#adapter.itemAdded(meta),
           itemRemoved: meta => this.#adapter.itemRemoved(meta),
-          defaultSort: this.#defaultSort,
         })
         if (result === 'applied') {
           queryEffects?.set(queryId, 'merged')
@@ -545,10 +536,13 @@ export class QueryStore<
         listeners: new Set(),
       })
 
-      const classification = classifyStoredQuery(desc.method, queryOfParams(desc.params), {
-        server: (config as { server?: boolean }).server,
-        allPages: (config as { allPages?: boolean }).allPages,
+      const maintenance = compileQueryMaintenance({
+        desc,
+        config: config as QueryConfig<unknown, unknown>,
+        defaultSort: this.#defaultSort,
         localOperators: locallySupportedOperators(this.#adapter, desc.serviceName),
+        matcher: filters =>
+          this.#resolveMatcher(desc.serviceName, config as QueryConfig<unknown, unknown>, filters),
       })
 
       if (!config.skip) this.#reconciliation.markPending(queryId)
@@ -557,13 +551,8 @@ export class QueryStore<
           queryId,
           desc,
           config: config as QueryConfig<unknown, unknown>,
-          classification,
+          maintenance,
           pending: this.#reconciliation.isPending(queryId),
-          filterItem: this.#createItemFilter<unknown, unknown>(
-            desc,
-            config as QueryConfig<unknown, unknown>,
-            classification,
-          ) as (item: unknown) => boolean,
           state: {
             status: 'loading' as const,
             data: null,
@@ -643,7 +632,6 @@ export class QueryStore<
         getId: this.#getIdReader(serviceName),
         itemAdded: meta => this.#adapter.itemAdded(meta),
         itemRemoved: meta => this.#adapter.itemRemoved(meta),
-        defaultSort: this.#defaultSort,
       })
     })
     for (const modifiedQueryId of modified) this.#invokeListeners(modifiedQueryId)
@@ -1093,7 +1081,7 @@ export class QueryStore<
     if (desc.method !== 'get') return null
     // Gets with non-local conditions stored as 'server-authoritative' at
     // materialize time (see classifyStoredQuery) — never answered locally.
-    if (query.classification !== 'get') return null
+    if (query.maintenance.classification !== 'get') return null
     const service = this.#state.get(desc.serviceName)
     if (!service?.materialized) return null
 
@@ -1107,7 +1095,7 @@ export class QueryStore<
     const q = queryOfParams(desc.params)
     if (q && Object.keys(q).length > 0) {
       // classification === 'get' guarantees the conditions are locally evaluable.
-      if (!this.#resolveMatcher(desc.serviceName, config, q)(entity)) return null
+      if (!query.maintenance.matchesLocal(entity)) return null
     }
 
     return { data: entity } as QueryResponse<unknown, TMeta | undefined>
@@ -1130,20 +1118,14 @@ export class QueryStore<
     // ($select, $regex, custom operators, .server()) survive allPages-neutralization,
     // while window filters don't — windows are computed locally below. So
     // 'server-authoritative' is exactly "not locally answerable".
-    if (query.classification === 'server-authoritative') return null
+    if (query.maintenance.classification === 'server-authoritative') return null
 
-    const q = queryOfParams(query.desc.params)
-    const { filters, sort, ...window } = splitWindow(q)
-    const limit = config.allPages ? undefined : window.limit
-    const skip = config.allPages ? 0 : window.skip
-    const effectiveSort = sort ?? this.#defaultSort
-    // A complete entity set proves membership, but it does not reveal the
-    // backend's implicit order. Without an explicit or configured sort, serving
-    // insertion order from the cache would be permanently approximate.
-    if (!effectiveSort) return null
-    const match = this.#resolveMatcher(query.desc.serviceName, config, filters)
-    let rows = [...service.entities.values()].filter(match)
-    rows = sortRowsLocally(rows, effectiveSort)
+    const { compare, matchesLocal, limit: windowLimit, skip: windowSkip } = query.maintenance
+    const limit = config.allPages ? undefined : windowLimit
+    const skip = config.allPages ? 0 : windowSkip
+    // Complete membership alone does not prove the backend's implicit order.
+    if (!compare) return null
+    const rows = [...service.entities.values()].filter(matchesLocal).sort(compare)
     const total = rows.length
     const data = rows.slice(skip, limit !== undefined ? skip + limit : undefined)
     // The adapter owns the meta envelope — the store only knows the window numbers.
@@ -1231,7 +1213,7 @@ export class QueryStore<
       const getId = this.#getIdReader(query.desc.serviceName)
       const data = result.data
       const responseItems = Array.isArray(data) ? data : data == null ? [] : [data]
-      const isProjection = isProjectionQuery(queryOfParams(query.desc.params))
+      const isProjection = query.maintenance.isProjection
       const responseMode: FetchResponseMode =
         query.config.realtime === 'disabled' ? 'snapshot' : isProjection ? 'projection' : 'entity'
       const rebasePlan = planFetchRebase({
@@ -1301,8 +1283,8 @@ export class QueryStore<
           !(
             query.desc.method === 'find' &&
             query.config.realtime === 'merge' &&
-            !isServerMaintained(query.classification) &&
-            !query.filterItem(item)
+            !isServerMaintained(query.maintenance.classification) &&
+            !query.maintenance.matches(item)
           ),
       })
       const nextItemIds = new Set(rebasedResponse.itemIds)
@@ -1405,7 +1387,6 @@ export class QueryStore<
           getId,
           itemAdded: meta => this.#adapter.itemAdded(meta),
           itemRemoved: meta => this.#adapter.itemRemoved(meta),
-          defaultSort: this.#defaultSort,
         })
       }
     })
@@ -1772,7 +1753,6 @@ export class QueryStore<
             }
           : {}),
         ...(excludeQueryId ? { excludeQueryId } : {}),
-        defaultSort: this.#defaultSort,
       })
       return { event, reconcileQueryIds, ...(queryEffects ? { queryEffects } : {}) }
     })
@@ -2391,38 +2371,6 @@ export class QueryStore<
   }
 
   // Internal helpers
-  #createItemFilter<T, TQueryType>(
-    desc: QueryDescriptor,
-    config: QueryConfig<T, TQueryType>,
-    classification: StoredQueryClass,
-  ): ItemMatcher<ElementType<T>> {
-    // if this query is not using the realtime mode
-    // we will never be merging events into the cache
-    // and will never call the matcher, so to avoid
-    // the issue where custom query filters or operators
-    // cause the default matcher to throw an error without
-    // additional configuration, let's avoid creating a matcher
-    // altogether
-    if (config.realtime !== 'merge') {
-      return () => false
-    }
-
-    // Server-authoritative queries never merge events locally — they refetch, and
-    // their predicates ($regex, unknown operators) would throw in the default
-    // matcher anyway. Server-window predicates are locally evaluable by
-    // construction (anything non-local classifies authoritative), and window
-    // maintenance needs them to judge event membership — build the real matcher.
-    if (classification === 'server-authoritative') {
-      return () => false
-    }
-
-    return this.#resolveMatcher(
-      desc.serviceName,
-      config as QueryConfig<unknown, unknown>,
-      queryOfParams(desc.params),
-    )
-  }
-
   /**
    * The effective matcher for a query: the per-query `matcher` factory from config
    * wins, else the adapter's. The casts across the typed-factory/unknown-item

@@ -1,11 +1,4 @@
-import { isProjectionQuery } from './queryClassification.js'
-import {
-  entityKey,
-  queryOfParams,
-  type EntityKey,
-  type Query,
-  type ServiceState,
-} from './queryTypes.js'
+import { entityKey, type EntityKey, type Query, type ServiceState } from './queryTypes.js'
 
 /** Live queries own membership; detached results own their server-returned values. */
 export interface QueryRows {
@@ -45,7 +38,7 @@ export function commitQuery<TMeta>(
     next.state.status !== 'success' ||
     next.config.realtime === 'disabled' ||
     next.config.fetchPolicy === 'network-only' ||
-    isProjectionQuery(queryOfParams(next.desc.params)) ||
+    next.maintenance.isProjection ||
     ids.length !== items.length
   const rows: QueryRows = { kind: ownsValues ? 'values' : 'entities', ids, data: items }
 
