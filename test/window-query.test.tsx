@@ -297,26 +297,33 @@ it('useWindowQuery: each hook gets an independent first-window Suspense lifecycl
   })
   const { render, flush, act, $, unmount } = dom()
   let showSecond = () => {}
+  let moveFirst = () => {}
+  const query = figbird.q.items.orderBy('rank', 'asc')
+  const config = { pageSize: 10, preloadPages: 0, maxPages: 3 }
+  const ref = figbird.window(query, config)
 
   function Reader({ className, range }: { className: string; range: WindowRange }) {
-    const { data } = useWindowQuery(figbird.q.items.orderBy('rank', 'asc'), {
-      range,
-      pageSize: 10,
-      preloadPages: 0,
-      maxPages: 3,
-    })
-    return <div className={className}>{Array.from(data.values(), row => row.id).join(',')}</div>
+    const options = { ...config, range }
+    const tagged = useWindowQuery(query, { ...options, suspense: false })
+    const { data, error } = useWindowQuery(query, options)
+    return (
+      <div className={className} data-status={tagged.status} data-error={error?.message}>
+        {Array.from(data.values(), row => row.id).join(',')}
+      </div>
+    )
   }
 
   function Harness() {
     const [second, setSecond] = useState(false)
+    const [firstStart, setFirstStart] = useState(0)
     useLayoutEffect(() => {
       showSecond = () => setSecond(true)
+      moveFirst = () => setFirstStart(20)
     })
     return (
       <>
         <Suspense fallback={<div className='first-loading' />}>
-          <Reader className='first' range={{ start: 0, end: 5 }} />
+          <Reader className='first' range={{ start: firstStart, end: firstStart + 5 }} />
         </Suspense>
         {second ? (
           <Suspense fallback={<div className='second-loading' />}>
@@ -343,6 +350,47 @@ it('useWindowQuery: each hook gets an independent first-window Suspense lifecycl
   await flush(() => new Promise(resolve => setTimeout(resolve, 60)))
   t.truthy($('.second'))
   t.falsy($('.second-loading'))
+  const items = feathers.service('items')
+  const workingFind = items.find.bind(items)
+  const failure = new Error('window refresh failed')
+  items.find = () => Promise.reject(failure)
+  await flush(() => ref.refetch())
+  const warm = ref.getSnapshot({ start: 0, end: 5 })
+  t.is(warm.status, 'success')
+  t.is(warm.error, failure)
+  t.false(warm.isFetching)
+  t.is(warm.data.get(0)?.id, 1)
+  t.is($('.first')?.getAttribute('data-status'), 'success')
+  t.is($('.first')?.getAttribute('data-error'), failure.message)
+  t.falsy($('.first-loading'))
+  await ref.suspensePromise({ start: 0, end: 5 })
+
+  items.find = workingFind
+  const crossingRange = { start: 5, end: 15 }
+  t.is(ref.getSnapshot(crossingRange).status, 'loading')
+  await flush(async () => {
+    await ref.suspensePromise(crossingRange)
+  })
+  const crossing = ref.getSnapshot(crossingRange)
+  t.is(crossing.status, 'success')
+  t.is(crossing.error, failure)
+  t.is(crossing.data.get(14)?.id, 15)
+  ref.releaseColdStart(crossingRange)
+
+  await flush(async () => {
+    ref.refetch()
+    await new Promise(resolve => setTimeout(resolve, 60))
+  })
+  t.is(ref.getSnapshot({ start: 0, end: 5 }).error, null)
+  t.is($('.first')?.getAttribute('data-error'), null)
+
+  act(moveFirst)
+  t.truthy($('.first'))
+  t.falsy($('.first-loading'))
+  t.is($('.first')?.getAttribute('data-status'), 'loading')
+  await flush(() => new Promise(resolve => setTimeout(resolve, 60)))
+  t.is($('.first')?.getAttribute('data-status'), 'success')
+  t.is(ref.getSnapshot({ start: 20, end: 25 }).data.get(20)?.id, 21)
   unmount()
 })
 
@@ -353,6 +401,7 @@ interface CursorCall {
 
 function createCursorWindowApp(initialRows: Item[]) {
   let rows = initialRows
+  let failure: Error | null = null
   const calls: CursorCall[] = []
   const listeners = new Map<string, Set<(item: unknown) => void>>()
   const cursorService = {
@@ -361,6 +410,7 @@ function createCursorWindowApp(initialRows: Item[]) {
       const after = (query.$after as string | null) ?? null
       const requestedLimit = query.$limit as number
       calls.push({ after, limit: requestedLimit })
+      if (failure) throw failure
       const start = after ? Number(after.slice('cursor:'.length)) : 0
       // Deliberately return short, non-terminal pages to prove that absolute
       // checkpoints follow actual row counts rather than requested page size.
@@ -395,6 +445,9 @@ function createCursorWindowApp(initialRows: Item[]) {
   return {
     calls,
     figbird,
+    failWith(error: Error | null) {
+      failure = error
+    },
     replaceRows(next: Item[]) {
       rows = next
     },
@@ -443,5 +496,29 @@ test('window query: cursor strategy walks short pages and rebuilds invalid check
   t.is(ref.getSnapshot(range).data.get(5)?.id, 5)
   t.true(app.calls.slice(callsBeforeRefetch).some(call => call.after === null))
   t.true(app.calls.slice(callsBeforeRefetch).some(call => call.after === 'cursor:4'))
+  const failure = new Error('cursor refresh failed')
+  app.failWith(failure)
+  const refresh = new Promise<void>(resolve => {
+    const unsubscribe = ref.subscribe(
+      state => {
+        if (state.error === failure && !state.isFetching) {
+          unsubscribe()
+          resolve()
+        }
+      },
+      { range },
+    )
+  })
+  ref.refetch()
+  await refresh
+  t.is(ref.getSnapshot(range).status, 'success')
+
+  app.failWith(null)
+  const seek = { start: 7, end: 8 }
+  t.is(ref.getSnapshot(seek).status, 'loading')
+  await ref.suspensePromise(seek)
+  t.is(ref.getSnapshot(seek).status, 'success')
+  t.is(ref.getSnapshot(seek).data.get(7)?.id, 7)
+  ref.releaseColdStart(seek)
   read.unsubscribe()
 })

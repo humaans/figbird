@@ -1688,6 +1688,12 @@ keeps the previous window mounted during later movement; pass `{ suspense: false
 for the tagged-union form. It accepts the same `skip` and `staleTime` options and the
 same builder, bound-request, and argumentless-definition inputs as `useQuery`.
 
+When the requested range has data, a background fetch failure preserves `status: 'success'`
+and exposes `error`, both through `figbird.window(...).getSnapshot(range)` and the hook.
+In non-Suspense mode, moving to an unloaded range returns `status: 'loading'` with the
+retained sparse map; a failed range returns `status: 'error'`. Suspense mode keeps an
+already-settled reader mounted during those range changes.
+
 Offset adapters jump directly; cursor adapters advance sequentially and reuse cursor
 checkpoints. Relations, filtering, and sorting are part of each fetched block. See
 [Virtualized windows](#virtualized-windows) for lifecycle and restoration semantics.

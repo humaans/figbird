@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react'
 import type { AnyWindowQueryBuilder, QueryBuilderItem } from '../core/queryBuilder.js'
 import type { QueryInput, QueryRequest } from '../core/queryDefinition.js'
 import type { Schema } from '../core/schema.js'
@@ -75,51 +75,6 @@ interface WindowQueryRefLike<T> {
   releaseColdStart(range: WindowRange): void
 }
 
-/**
- * Reader-local projection of a shared window ref. A later viewport keeps the
- * reader's committed sparse map mounted, but a second hook using the same ref
- * still gets its own cold-start Suspense and error lifecycle.
- */
-class WindowQueryReader<T> {
-  #ref: WindowQueryRefLike<T>
-  #settled = false
-  #lastSource: WindowQueryState<T> | null = null
-  #lastProjection: WindowQueryState<T> | null = null
-
-  constructor(ref: WindowQueryRefLike<T>) {
-    this.#ref = ref
-  }
-
-  getSnapshot(range: WindowRange): WindowQueryState<T> {
-    const source = this.#ref.getSnapshot(range)
-    if (source === this.#lastSource) return this.#lastProjection!
-
-    let projection = source
-    if (source.status === 'success') {
-      this.#settled = true
-    } else if (this.#settled) {
-      projection = {
-        status: 'success',
-        data: source.data,
-        total: source.total,
-        error: source.status === 'error' ? source.error : null,
-        isFetching: source.status === 'loading',
-      }
-    }
-    this.#lastSource = source
-    this.#lastProjection = projection
-    return projection
-  }
-
-  suspensePromise(range: WindowRange): Promise<void> {
-    return this.#ref.suspensePromise(range)
-  }
-
-  releaseColdStart(range: WindowRange): void {
-    this.#ref.releaseColdStart(range)
-  }
-}
-
 interface FigbirdWindowLike {
   window<Args, B extends AnyWindowQueryBuilder>(
     query: QueryInput<B, Args>,
@@ -190,7 +145,7 @@ export function useWindowQueryImpl(
       : validateStaleTime(options.staleTime, 'useWindowQuery(): staleTime')
   const config = normalizeConfig(options)
   const qRef = skip || query === null ? null : figbird.window(query, config)
-  const reader = useMemo(() => (qRef ? new WindowQueryReader(qRef) : null), [qRef])
+  const [reader, setReader] = useState({ query: qRef, settled: false })
   const stableRange = useMemo(
     () => ({ start: range.start, end: range.end }),
     [range.start, range.end],
@@ -207,8 +162,8 @@ export function useWindowQueryImpl(
     [qRef, stableRange, staleTime],
   )
   const getSnapshot = useCallback(
-    () => (reader ? reader.getSnapshot(stableRange) : idleState),
-    [reader, stableRange],
+    () => (qRef ? qRef.getSnapshot(stableRange) : idleState),
+    [qRef, stableRange],
   )
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
@@ -217,6 +172,11 @@ export function useWindowQueryImpl(
     () => ({ ...state, refetch }) as WindowQueryResult<unknown>,
     [state, refetch],
   )
+  // Remember only whether this reader has settled, without rewriting the shared snapshot.
+  const settled = state.status === 'success' || (reader.query === qRef && reader.settled)
+  if (reader.query !== qRef || reader.settled !== settled) {
+    setReader({ query: qRef, settled })
+  }
   if (!suspense) return taggedResult
 
   if (!qRef) {
@@ -228,11 +188,13 @@ export function useWindowQueryImpl(
       refetch,
     }
   }
-  if (state.status === 'error') {
-    reader!.releaseColdStart(stableRange)
-    throw state.error
+  if (!settled) {
+    if (state.status === 'error') {
+      qRef.releaseColdStart(stableRange)
+      throw state.error
+    }
+    throw qRef.suspensePromise(stableRange)
   }
-  if (state.status !== 'success') throw reader!.suspensePromise(stableRange)
 
   return {
     data: state.data,

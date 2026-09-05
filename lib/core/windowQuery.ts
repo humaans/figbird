@@ -1,3 +1,4 @@
+import { QueryLifetime } from './queryLifetime.js'
 import { hashObject } from './hash.js'
 import type { QueryAST } from './queryBuilder.js'
 import { RelationalQueryRef, type RelationalQueryHost } from './relationalQuery.js'
@@ -61,23 +62,6 @@ interface WindowPage<T, S extends Schema, TParams, TMeta extends Record<string, 
   lastUsed: number
 }
 
-interface PendingColdRead {
-  status: 'pending'
-  range: WindowRange
-  promise: Promise<void>
-  resolve: () => void
-  reject: (error: Error) => void
-}
-
-interface SettledColdRead {
-  status: 'settled'
-  range: WindowRange
-  promise: Promise<void>
-  lastUsed: number
-}
-
-type ColdRead = PendingColdRead | SettledColdRead
-
 interface WindowQueryOptions {
   defaultStaleTime?: number
   onEvict?: () => void
@@ -130,9 +114,11 @@ export class WindowQueryRef<
   #onIdle: (() => void) | null
 
   #pages = new Map<number, WindowPage<T, S, TParams, TMeta, TQuery>>()
-  #subscribers = new Map<(state: WindowQueryState<T>) => void, WindowSubscriber<T>>()
-  #coldReads = new Map<string, ColdRead>()
-  #cleanupScheduled = false
+  #lifetime = new QueryLifetime<
+    (state: WindowQueryState<T>) => void,
+    WindowSubscriber<T>,
+    WindowRange
+  >()
   #syncScheduled = false
   #notifyScheduled = false
   #clock = 0
@@ -211,21 +197,22 @@ export class WindowQueryRef<
       options.staleTime === undefined
         ? this.#defaultStaleTime
         : validateStaleTime(options.staleTime, 'useWindowQuery(): staleTime')
-    this.#subscribers.set(listener, {
+    this.#lifetime.acquire(listener, {
       listener,
       range,
       staleTime,
     })
-    const coldRead = this.#coldReads.get(rangeKey(range))
+    const coldRead = this.#lifetime.reads.get(rangeKey(range))
     if (coldRead?.status === 'settled') {
-      this.#releaseColdRead(rangeKey(range), coldRead)
+      this.#releaseColdRead(rangeKey(range))
     }
     this.#syncPages()
 
     return () => {
-      this.#subscribers.delete(listener)
+      this.#lifetime.release(listener)
       this.#scheduleSync()
-      if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#scheduleCleanup()
+      if (this.#lifetime.owners.size === 0 && this.#lifetime.reads.size === 0)
+        this.#scheduleCleanup()
     }
   }
 
@@ -241,24 +228,25 @@ export class WindowQueryRef<
     })
     const missing = !this.#pager.rangeReady(range)
     let isFetching = false
-    let error: Error | null = null
+    let coldError: Error | null = null
+    let backgroundError: Error | null = null
     for (const page of required) {
       const state = page.ref.getSnapshot()
       if (state.isFetching) isFetching = true
-      if (state.status === 'error') error ??= state.error
-      if (state.status === 'success' && state.error) error ??= state.error
+      if (state.status === 'error') coldError ??= state.error
+      if (state.status === 'success') backgroundError ??= state.error
     }
     for (const start of this.#pager.fetchingStarts(range, this.#config.preloadPages)) {
       if (this.#pages.get(start)?.ref.getSnapshot().isFetching) isFetching = true
     }
 
     let state: WindowQueryState<T>
-    if (error) {
+    if (coldError) {
       state = {
         status: 'error',
         data: this.#data,
         total: this.#total,
-        error,
+        error: coldError,
         isFetching: false,
       }
     } else if (missing) {
@@ -274,7 +262,7 @@ export class WindowQueryRef<
         status: 'success',
         data: this.#data,
         total: this.#total,
-        error: null,
+        error: backgroundError,
         isFetching,
       }
     }
@@ -293,28 +281,10 @@ export class WindowQueryRef<
     if (state.status === 'error') return Promise.reject(state.error)
 
     const key = rangeKey(range)
-    const existing = this.#coldReads.get(key)
-    if (existing) {
-      if (existing.status === 'settled') existing.lastUsed = ++this.#clock
-      return existing.promise
-    }
-
-    let resolve = () => {}
-    let reject = (_error: Error) => {}
-    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise
-      reject = rejectPromise
+    return this.#lifetime.read(key, range, () => {
+      this.#syncPages()
+      this.#settleColdReads()
     })
-    this.#coldReads.set(key, {
-      status: 'pending',
-      range,
-      promise,
-      resolve,
-      reject,
-    })
-    this.#syncPages()
-    this.#settleColdReads()
-    return promise
   }
 
   releaseColdStart(rangeInput: WindowRange): void {
@@ -325,8 +295,8 @@ export class WindowQueryRef<
 
   /** @internal Evicts an abandoned render-phase read under Figbird cache pressure. */
   evictAbandonedRead(): boolean {
-    if (this.#subscribers.size > 0 || this.#coldReads.size === 0) return false
-    for (const read of this.#coldReads.values()) {
+    if (this.#lifetime.owners.size > 0 || this.#lifetime.reads.size === 0) return false
+    for (const read of this.#lifetime.reads.values()) {
       if (read.status === 'pending') return false
     }
     this.#cleanup()
@@ -335,13 +305,13 @@ export class WindowQueryRef<
 
   #desiredStarts(): Set<number> {
     const starts = new Set<number>()
-    for (const subscriber of this.#subscribers.values()) {
+    for (const subscriber of this.#lifetime.owners.values()) {
       for (const start of this.#pager.targetStarts(subscriber.range, this.#config.preloadPages)) {
         starts.add(start)
       }
     }
-    for (const read of this.#coldReads.values()) {
-      for (const start of this.#pager.targetStarts(read.range, this.#config.preloadPages)) {
+    for (const read of this.#lifetime.reads.values()) {
+      for (const start of this.#pager.targetStarts(read.value, this.#config.preloadPages)) {
         starts.add(start)
       }
     }
@@ -378,7 +348,7 @@ export class WindowQueryRef<
       },
     )
     ref.setDisplayName(this.#name ? `${this.#name} [${start}]` : undefined)
-    const staleTime = this.#currentStaleTime()
+    const staleTime = this.#lifetime.staleTime()
     const page: WindowPage<T, S, TParams, TMeta, TQuery> = {
       start,
       ref,
@@ -428,57 +398,24 @@ export class WindowQueryRef<
 
   #settleColdReads(): void {
     let settled = false
-    for (const [key, read] of this.#coldReads) {
+    for (const [key, read] of this.#lifetime.reads) {
       if (read.status === 'settled') continue
-      const required = this.#pager.requiredStarts(read.range).flatMap(start => {
-        const page = this.#pages.get(start)
-        return page ? [page] : []
-      })
-      let error: Error | null = null
-      for (const page of required) {
-        const state = page.ref.getSnapshot()
-        if (state.status === 'error') error ??= state.error
-      }
-      if (error) {
-        this.#coldReads.set(key, {
-          status: 'settled',
-          range: read.range,
-          promise: read.promise,
-          lastUsed: ++this.#clock,
-        })
-        read.reject(error)
-      } else if (this.#pager.rangeReady(read.range)) {
-        this.#coldReads.set(key, {
-          status: 'settled',
-          range: read.range,
-          promise: read.promise,
-          lastUsed: ++this.#clock,
-        })
-        read.resolve()
-      } else {
-        continue
-      }
+      const state = this.getSnapshot(read.value)
+      if (state.status === 'loading') continue
+      this.#lifetime.settle(key, read.value, state.status === 'error' ? state.error : null)
       settled = true
     }
     if (settled) {
       // Settled render-phase reads stay warm independently of maxPages so
       // concurrent Suspense retries cannot evict one another. The separate cap
       // bounds abandoned renders until React commits and subscribes a reader.
-      this.#pruneSettledColdReads()
+      this.#lifetime.pruneSettledReads(MAX_SETTLED_COLD_READS)
       this.#onIdle?.()
     }
   }
 
-  #pruneSettledColdReads(): void {
-    const reads = Array.from(this.#coldReads.entries())
-      .filter((entry): entry is [string, SettledColdRead] => entry[1].status === 'settled')
-      .sort((a, b) => b[1].lastUsed - a[1].lastUsed)
-
-    for (const [key] of reads.slice(MAX_SETTLED_COLD_READS)) this.#coldReads.delete(key)
-  }
-
   #syncPageFreshness(): void {
-    const staleTime = this.#currentStaleTime()
+    const staleTime = this.#lifetime.staleTime()
     for (const page of this.#pages.values()) {
       if (page.staleTime === staleTime) continue
       const unsubscribe = page.ref.subscribe(() => this.#pageChanged(page.start), { staleTime })
@@ -486,15 +423,6 @@ export class WindowQueryRef<
       page.unsubscribe = unsubscribe
       page.staleTime = staleTime
     }
-  }
-
-  #currentStaleTime(): number {
-    if (this.#subscribers.size === 0) return 0
-    let staleTime = Infinity
-    for (const subscriber of this.#subscribers.values()) {
-      staleTime = Math.min(staleTime, subscriber.staleTime)
-    }
-    return staleTime
   }
 
   #pagerPage(start: number): PagerPage | undefined {
@@ -548,34 +476,28 @@ export class WindowQueryRef<
     this.#notifyScheduled = true
     queueMicrotask(() => {
       this.#notifyScheduled = false
-      for (const subscriber of this.#subscribers.values()) {
+      for (const subscriber of this.#lifetime.owners.values()) {
         subscriber.listener(this.getSnapshot(subscriber.range))
       }
     })
   }
 
   #scheduleCleanup(): void {
-    if (this.#cleanupScheduled) return
-    this.#cleanupScheduled = true
-    queueMicrotask(() => {
-      this.#cleanupScheduled = false
-      if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#cleanup()
-    })
+    this.#lifetime.scheduleCleanup(
+      () => this.#lifetime.reads.size === 0,
+      () => this.#cleanup(),
+    )
   }
 
-  #releaseColdRead(key: string, expected?: ColdRead): void {
-    const read = this.#coldReads.get(key)
-    if (!read || (expected && read !== expected)) return
-    this.#coldReads.delete(key)
-    if (this.#subscribers.size === 0 && this.#coldReads.size === 0) this.#scheduleCleanup()
+  #releaseColdRead(key: string): void {
+    if (!this.#lifetime.reads.has(key)) return
+    this.#lifetime.releaseRead(key)
+    this.#scheduleCleanup()
   }
 
   /** @internal Release readers and pending Suspense work when the instance closes. */
   dispose(): void {
-    for (const read of this.#coldReads.values()) {
-      if (read.status === 'pending') read.reject(new Error('figbird: instance has been disposed'))
-    }
-    this.#subscribers.clear()
+    this.#lifetime.dispose()
     this.#cleanup()
   }
 
@@ -586,7 +508,7 @@ export class WindowQueryRef<
     this.#data = EMPTY_DATA
     this.#total = undefined
     this.#snapshotCache.clear()
-    this.#coldReads.clear()
+    this.#lifetime.reset()
     this.#onEvict?.()
   }
 }
