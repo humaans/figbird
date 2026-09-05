@@ -165,7 +165,8 @@ type GatherResult = {
 }
 
 type RelationalListener =
-  | { source: 'subscriber' | 'prefetch'; staleTime: number }
+  | { source: 'subscriber'; staleTime: number }
+  | { source: 'prefetch'; staleTime: number; adoptableUntil: number | null }
   | { source: 'prepare'; staleTime: number; preparationGeneration: number }
 
 type PreparedAdoption =
@@ -423,11 +424,14 @@ export class RelationalQueryRef<
             staleTime,
             preparationGeneration: ++this.#nextPreparationGeneration,
           }
-        : { source, staleTime }
+        : source === 'prefetch'
+          ? { source, staleTime, adoptableUntil: Date.now() + staleTime }
+          : { source, staleTime }
     // Preparation makes one freshness decision for the destination's initial React
     // commit. Every subscriber in that synchronous wave adopts it; later mounts use
     // their own staleTime even if the router keeps the preparation pinned.
     const adoptsPreparation = source === 'subscriber' && this.#claimPreparedAdoption()
+    const adoptsPrefetch = source === 'prepare' && this.#claimPrefetch()
     const claimsColdStart = this.#coldStartAwaitingSubscriber
     this.#listeners.set(fn, listener)
     this.#staleTime = this.#currentStaleTime()
@@ -444,7 +448,9 @@ export class RelationalQueryRef<
           this.#coldStartAwaitingSubscriber = false
         })
       } else if (!adoptsPreparation) {
-        this.#ensureFresh(staleTime)
+        // Adopt the speculative read once, but still retry errors and pending
+        // invalidations. An explicit preparation staleTime takes precedence.
+        this.#ensureFresh(adoptsPrefetch && options?.staleTime === undefined ? Infinity : staleTime)
       }
     }
 
@@ -496,6 +502,18 @@ export class RelationalQueryRef<
     }
 
     return this.#preparedAdoption.kind === 'wave'
+  }
+
+  #claimPrefetch(): boolean {
+    const now = Date.now()
+    let claimed = false
+    for (const listener of this.#listeners.values()) {
+      if (listener.source === 'prefetch' && listener.adoptableUntil !== null) {
+        claimed ||= now < listener.adoptableUntil
+        listener.adoptableUntil = null
+      }
+    }
+    return claimed
   }
 
   #beginGraphRun(): string | null {

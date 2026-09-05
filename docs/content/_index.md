@@ -949,6 +949,12 @@ result without another freshness check, even when other queries or code took lon
 The adoption window then closes: retaining the handle longer only keeps the query pinned,
 and later mounts use the ordinary `staleTime` policy again.
 
+If an active `prefetch(request)` already warmed the query, the first `prepare(request)`
+adopts that read without fetching again, even with global `staleTime: 0`. This handover
+expires with the speculative pin and can be used only once. Later preparations use the
+ordinary freshness policy. An explicit `prepare(request, { staleTime })` overrides the
+handover, and errors and explicit refetches are still handled normally.
+
 ### prefetch
 
 `prefetch()` is the idempotent, fire-and-forget sibling of `prepare()`, built for "the user will probably need this" moments like hover or viewport entry:
