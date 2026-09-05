@@ -4,127 +4,63 @@
 
 The relational rewrite.
 
-Ordinary relational queries now bound settled, unowned Suspense reads under cache
-pressure, matching window-query retention. Eviction releases root and relation
-subscriptions; active consumers, preparation pins, and unresolved reads stay live.
-Recent abandoned reads remain warm for retries. Parallel `useQueries` reads retain
-and evict as a group so batches larger than the retention budget can still commit. Query and mutation policy timers
-share an internal clock so retention, cooldown, freshness, and retry tests can
-advance exact deadlines without replacing global time or sleeping.
+Each screen can now ask for the records and relations it needs in a single typed
+query. Figbird joins data across services and keeps the result live, merging
+realtime events locally when it can safely determine the result and refetching
+when it needs the server.
 
-Query ASTs now require the fields associated with each operation: gets carry an ID,
-and paginated queries carry a page size and an explicit `includeTotal` boolean,
-which defaults to `false`. Public query and mutation result inference is preserved
-while internal query references no longer carry schema or transport type parameters.
-Offset and cursor pagination share a normalized internal page view, including live
-totals. In-flight fetch journals use bounded rings with absolute event positions.
-Query maintenance compiles window rules, comparators, projection detection, and
-matchers once per cached query. Junction subscriptions own both relation hops,
-and window configuration shares one normalizer across React and core callers.
-Raw store query records now expose classification and matchers under `maintenance`;
-`inspect()` keeps its existing shape.
+- Suspense-native `useQuery` and the `q` builder for relational reads, `useQueries`
+  for parallel reads, and `useQueryResult` / `useQueryResults` for result objects
+  with query status and controls.
+- Offset and native cursor pagination, plus `useWindowQuery` for virtualized lists.
+- Reusable `defineQuery` factories with validated arguments, and `figbird.prepare`
+  for route prefetching.
+- Optimistic-by-default writes through `m`, with `useAction` and `useMutating` for
+  tracking activity. Writes to the same record run in order and rebase optimistic
+  changes over server responses and failures. Use `optimisticPatch` when the local
+  projection differs from the server payload.
+- Explicit mutation queues for ordered writes across records and services, with
+  scheduling, patch coalescing, retries, flush, and discard.
+- Atomic multi-service transactions through `figbird.transaction()` when supported
+  by the adapter. `feathersTransactions()` connects to an application-provided
+  transaction service.
+- Queries stay fresh for five minutes by default, configurable with `staleTime`.
+  Prepared queries can hand data to the destination without another fetch.
+  Stale queries refresh on tab visibility recovery; `reconnectJitter` staggers
+  reconnect refetches.
+- Transient query failures retry up to three times with exponential backoff.
+  Configure or disable this with `retry` and `retryDelay`.
+- Safer realtime updates across both new and legacy APIs: fetch responses preserve
+  newer events and optimistic writes, and disabled realtime queries stay fixed
+  snapshots. Removed records produce `ItemRemovedError`, detectable with
+  `isItemRemovedError()`.
+- Chrome and Firefox DevTools for inspecting queries, cache data, realtime events,
+  and writes, plus `figbird.events` for application-level diagnostics.
+- A `figbird/testing` in-memory client for tests.
 
-Sort-only relations now batch parents into one `IN (...)` query and fetch all server
-pages. Previously, sorting a `many` relation fetched one page per parent and could
-truncate children at the server page limit. Explicit relation limits and offsets
-continue to select a window; schema-defined limits and offsets now participate in
-that decision too.
+Breaking changes from 0.23:
 
-Figbird already made it easy to fetch lists and records and keep them live. But joining data across services was still left to you. You either had to over-fetch whole datasets so everything was available locally, or make several fetches per screen and stitch the results together by hand.
+- Replace `defineSchema` service-definition maps with `createSchema`, `service`,
+  and typed relationship helpers. Use the `ServiceItem<S, N>` family instead of
+  the old `Item` / `Create` / `Update` / `Patch` / `Query` / `Methods` extractors.
+- Replace `createHooks(figbird)` with `createHooks(schema)`. Hooks resolve the
+  runtime instance from `FigbirdProvider`; imperative code uses instance methods.
+- Services separate schema names from transport paths, configured with
+  `service<T>().at(path)`. Builders, relationships, `m`, and `useMutating` take
+  schema names; descriptor APIs, `useFeathers`, and deprecated hooks take paths.
+- Rename `figbird.query(desc)` to `figbird.queryDesc(desc)` and
+  `figbird.mutate(desc)` to `figbird.mutateDesc(desc)`. `figbird.query()` now accepts
+  query builders and bound requests.
+- Rename constructor option `eventBatchProcessingInterval` to `eventBatchInterval`.
+- Replace `useService` and `useMethod` with `m.<service>` handles.
+- Internal deep imports are no longer exported. Use `figbird` or `figbird/testing`;
+  `figbird/package.json` and `figbird/tsconfig.json` remain available.
 
-This release makes joins a first-class part of Figbird. Each screen can now ask for the minimum data it needs — a window of records and their relations, declared as a single query. Figbird keeps that query fully realtime-reactive, merging events locally whenever it can safely determine the result, and refetching when it can’t.
+Deprecated: `useFind` / `useGet` in favor of `useQuery` and builders, and
+`useMutation` in favor of `m`, `useAction`, and `useMutating`. These hooks remain
+available for gradual migration.
 
-This also introduces a new API: Suspense-native `useQuery` with the `q` builder for reads, `useQueries` for suspending on several independent queries in parallel, `m` handles for optimistic-by-default writes, query preparation for route prefetching, and a `figbird/testing` in-memory client.
-
-Figbird serializes keyed writes to the same record. Optimistic changes appear immediately,
-while adapter calls run in order and rebase over each server response or failure. Active
-optimistic state survives fetches. Queries that need the server to decide membership or
-ordering reconcile after the record's writes settle.
-
-Explicit mutation queues provide ordered writes across records and services through
-`figbird.createMutationQueue()` and `useMutationQueue()`. Queues project every call
-immediately, preserve call order, coalesce compatible unsent patches, and support
-scheduling, retries, flush, and discard. `defineMutationQueue()` gives reconnectable React
-queues a stable policy and key namespace. Queue writes and ordinary writes share the same
-per-record ordering.
-
-Adapters can opt into atomic multi-service transactions. `figbird.transaction()` collects
-schema-typed CRUD calls, projects and rolls them back as one cache update, and coordinates the
-affected record lanes before making one adapter request. Operations execute in collection
-order, so records created with client-generated ids can be referenced by later writes.
-The Feathers adapter includes an opt-in `feathersTransactions()` transport for an
-application-provided `api/transactions` service. Existing endpoints such as `api/batch` can
-be selected through `serviceName`. Adapters without an atomic capability never fall back to
-sequential requests.
-
-Writes can use `optimisticPatch` when the local projection differs from the server payload.
-Relational filters apply projected changes locally, then reconcile once after the record's
-writes settle.
-
-Query definitions are callable factories: `definition(args)` validates and binds concrete
-inputs into an inert request, preserving a Standard Schema's input and normalized output types.
-Core methods and React hooks share one `QueryInput` contract and runtime resolution path for
-builders, bound requests, and argumentless definitions. The exported `AnyQueryInput<Schema>`
-erases result types at adapter boundaries, so routers never need to know Figbird's definition,
-argument, or internal builder shape.
-
-Realtime handling is safer across all APIs. Fetches and overlapping refetches no
-longer overwrite newer event or mutation data, while `realtime: 'disabled'` queries
-remain fixed snapshots. When an item being viewed is removed, `useGet` and `useQuery`
-return `ItemRemovedError`; use `isItemRemovedError()` to handle this case.
-
-Also included:
-
-- Successful query results now remain fresh for five minutes by default. Configure
-  `staleTime` once on `new Figbird(...)` or override it per reader. Active route
-  preparations hand their result to the destination's first subscriber wave without
-  another revalidation; reconnects mark inactive cache entries pending, and returning
-  from a hidden tab after `staleTime` reconciles active queries. Invalid durations now
-  fail at the API boundary, while visibility recovery skips queries refreshed while
-  hidden and retains its cause in telemetry.
-- Import-safe schema bindings through `createHooks(schema)`. The generated hooks resolve their
-  runtime from `FigbirdProvider`, and `useMutations()` returns that instance's typed write proxy.
-  Imperative code uses `figbird.m`, `figbird.prepare`, and other instance methods directly, so
-  importing hooks never constructs a client, opens a connection, or starts a timer. Provider-bound
-  APIs and schema-built queries reject a different schema object.
-- Native cursor pagination for `.paginate()` and `.all()`, configured per Feathers
-  service without adding cursor controls to logical queries.
-- Chrome and Firefox DevTools extensions for inspecting queries, fetches, realtime events,
-  and writes. Debug collection runs while the panel is connected. `figbird.events` exposes
-  the same lifecycle and payload details to application code.
-- `matcherKey` for explicitly sharing queries that use equivalent custom matchers.
-- `reconnectJitter` for staggering reconnect refetches, defaulting to `[0, 3000]` ms.
-- Reliable ordering for materialized finds: queries use the network unless `$sort` or
-  `defaultSort` defines the order.
-- Package builds that no longer require a global React shim.
-- Subscriber errors no longer interrupt updates to other consumers.
-- Retry failed query fetches up to three times with exponential backoff before exposing
-  the error. Configure the instance with `retry` and `retryDelay`; descriptor queries can
-  override both or disable retries with `retry: false`. Network errors, timeouts, `408`,
-  `429`, and `5xx` responses retry; other `4xx` responses fail immediately.
-
-See the [docs](https://humaans.github.io/figbird) for the full story. The old hooks still work — see Deprecated below — so you can migrate gradually.
-
-Breaking:
-
-- `defineSchema` service-definition maps are replaced by `createSchema` + `service` +
-  relationship helpers.
-- Services now separate schema names from transport paths. Builders, relationships, `m`, and
-  `useMutating` take names; descriptor APIs, `useFeathers`, and deprecated hooks take paths.
-  `service<T>({ path })` becomes `service<T>().at(path)`; generated catalogs use
-  `service.from<TCatalog>()`.
-- `figbird.query(desc)` → `figbird.queryDesc(desc)`
-- `figbird.mutate(desc)` → `figbird.mutateDesc(desc)`
-- `figbird.query(builder | request)` is now the non-React mirror of `useQuery`
-- Constructor option `eventBatchProcessingInterval` renamed to `eventBatchInterval`.
-- Removed `useService` and `useMethod` — services and custom methods live on `m.<service>` handles.
-- Removed orphaned exports: the `Item`/`Create`/`Update`/`Patch`/`Query`/`Methods`/
-  `UntypedService` type extractors (use the `ServiceItem<S, N>` family), bare
-  `one`/`many`/`embed` (reachable only via the typed relationships factories),
-  `createQueryBuilderProxy`, and classification internals (use `figbird.explain()`).
-
-Deprecated (still fully functional): `useFind`/`useGet` in favor of
-`useQuery` + builders, and `useMutation` in favor of `m` + `useAction` + `useMutating`.
+See the [docs](https://humaans.github.io/figbird) for usage and migration details.
 
 ## 0.23.0
 
