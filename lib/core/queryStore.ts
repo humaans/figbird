@@ -1470,6 +1470,7 @@ export class QueryStore<
     const promise = run(context).then(
       result => {
         hooks?.onSuccess?.(result, context)
+        this.#pruneService(serviceName)
         this.#mutations.end(mutationId)
         this.#telemetry.emit({
           kind: 'mutate:end',
@@ -1486,6 +1487,7 @@ export class QueryStore<
       (err: unknown) => {
         const error = normalizeError(err)
         hooks?.onError?.(error, context)
+        this.#pruneService(serviceName)
         this.#mutations.end(mutationId)
         this.#telemetry.emit({
           kind: 'mutate:error',

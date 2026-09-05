@@ -75,12 +75,23 @@ test('Figbird instance retains idle queries and releases owned resources on disp
   const ref = figbird.query(figbird.q.notes)
   const unsubscribe = ref.subscribe(() => {})
   await ref.suspensePromise()
+  const idleQueue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const idleWrite = idleQueue.m.notes.patch(1, { content: 'saved after expiry' })
   unsubscribe()
   t.true(figbird.inspect().length > 0, 'idle cache survives immediate unmount')
   await new Promise(resolve => setTimeout(resolve, 30))
   t.is(figbird.inspect().length, 0, 'idle queries expire')
+  t.is(figbird.getState().get('notes')?.entities.size, 1, 'pending mutation retains its row')
+  t.is(realtimeSubscriptions, 1)
+  idleQueue.flush()
+  await idleWrite
   t.is(figbird.getState().size, 0, 'unreferenced entities and services expire')
   t.is(realtimeSubscriptions, 0)
+
+  await figbird.m.notes.patch(1, { content: 'written without a query' })
+  t.is(figbird.getState().size, 0, 'settled writes release services recreated after expiry')
+  await figbird.m.notes.create([{ id: 2, content: 'created without a query' }])
+  t.is(figbird.getState().size, 0, 'unkeyed writes release unreferenced entities too')
 
   const all = figbird.query(figbird.q.notes.all())
   const releaseAll = all.subscribe(() => {})
