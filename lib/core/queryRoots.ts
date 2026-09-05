@@ -315,10 +315,7 @@ export class PagedQueryRoot<
         } else if (this.#reconcile.phase === 'running') {
           this.#abortReconcile()
         }
-        return
-      }
-
-      if (state?.status === 'success') {
+      } else if (state?.status === 'success') {
         const pageData = (state.data ?? []) as unknown[]
         if (pendingSettle && !state.isFetching) {
           pendingSettle = undefined
@@ -328,14 +325,17 @@ export class PagedQueryRoot<
         } else if (!this.#isLoadingMore && !state.isFetching) {
           this.#hasMoreSticky = this.#pageHasMore(state, pageData)
         }
-        this.#onRows(this.#allPagesData())
-        if (
-          this.#reconcile.phase === 'running' &&
-          !state.isFetching &&
-          pageIndex === this.#pageRefs.length - 1
-        ) {
-          this.#advanceReconcile(pageIndex, state)
-        }
+      }
+
+      if (state?.status !== 'success') return
+      this.#onRows(this.#allPagesData())
+      if (
+        !state.error &&
+        !state.isFetching &&
+        this.#reconcile.phase === 'running' &&
+        pageIndex === this.#pageRefs.length - 1
+      ) {
+        this.#advanceReconcile(pageIndex, state)
       }
     }
 
