@@ -1,3 +1,4 @@
+import { QueryRetention } from './queryRetention.js'
 import {
   locallySupportedOperators,
   type Adapter,
@@ -192,6 +193,7 @@ export interface QueryFetchHistoryEntry {
 
 export const QUERY_FETCH_HISTORY_LIMIT = 50
 export const DEFAULT_STALE_TIME = 5 * 60_000
+export const DEFAULT_GC_TIME = 30 * 60_000
 
 export interface DevtoolsCacheEditResult {
   ok: boolean
@@ -223,7 +225,13 @@ export class QueryStore<
   #telemetry: QueryTelemetry
   #mutations: MutationTracker
 
-  #realtime: Set<string> = new Set()
+  #realtime = new Map<string, () => void>()
+  #connectionUnsub: (() => void) | undefined
+  #visibilityUnsub: () => void
+  #retention: QueryRetention
+  #disposed = false
+  #retryWaits = new Set<() => void>()
+  #dependencyOwners = new Map<string, number>()
   #listeners: Map<string, Set<(state: QueryState<unknown, TMeta>) => void>> = new Map()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
   #processedEventListeners: Set<(event: ProcessedCacheEvent) => void> = new Set()
@@ -273,6 +281,7 @@ export class QueryStore<
     adapter,
     eventBatchInterval = 100,
     staleTime = DEFAULT_STALE_TIME,
+    gcTime = DEFAULT_GC_TIME,
     reconcileCooldown = 2000,
     retry = DEFAULT_RETRIES,
     retryDelay = defaultRetryDelay,
@@ -284,6 +293,7 @@ export class QueryStore<
     eventBatchInterval?: number | undefined
     /** Default age (ms) for skipping mount-time revalidation. */
     staleTime?: number
+    gcTime?: number
     /**
      * Minimum interval (ms) between event-driven refetches of one query — burst
      * safety for server-window/server-authoritative reconciliation. The first
@@ -308,6 +318,16 @@ export class QueryStore<
      */
     defaultSort?: Record<string, number>
   }) {
+    this.#retention = new QueryRetention(gcTime, queryId => {
+      const serviceName = this.#serviceNamesByQueryId.get(queryId)
+      if (
+        this.#listenerCount(queryId) > 0 ||
+        (serviceName !== undefined &&
+          this.#state.get(serviceName)?.materialized?.queryId === queryId)
+      )
+        return
+      this.#vacuum({ queryId })
+    })
     this.#adapter = adapter
     this.#mutationLanes = new MutationLanes(item => this.#peekId(item))
     this.#defaultSort = defaultSort
@@ -321,9 +341,9 @@ export class QueryStore<
     this.#reconnectJitter = this.#normalizeReconnectJitter(reconnectJitter)
     this.#visibility = visibility ?? documentVisibility()
     this.#hiddenAt = this.#visibility.isHidden() ? Date.now() : null
-    this.#visibility.onChange(() => this.#visibilityChanged())
+    this.#visibilityUnsub = this.#visibility.onChange(() => this.#visibilityChanged())
     if (this.#adapter.subscribeToConnectionEvents) {
-      this.#adapter.subscribeToConnectionEvents(event => {
+      this.#connectionUnsub = this.#adapter.subscribeToConnectionEvents(event => {
         const traceId = this.#telemetry.nextTraceId()
         switch (event.type) {
           case 'connected':
@@ -370,10 +390,45 @@ export class QueryStore<
         }
       })
     } else {
-      this.#adapter.subscribeToReconnect?.(() =>
+      this.#connectionUnsub = this.#adapter.subscribeToReconnect?.(() =>
         this.#scheduleReconnectSweep(this.#telemetry.nextTraceId()),
       )
     }
+  }
+
+  assertActive(): void {
+    if (this.#disposed) throw new Error('figbird: instance has been disposed')
+  }
+
+  dispose(): void {
+    if (this.#disposed) return
+    this.#disposed = true
+    this.#retention.dispose()
+    this.#visibilityUnsub()
+    this.#connectionUnsub?.()
+    for (const unsubscribe of this.#realtime.values()) unsubscribe()
+    this.#realtime.clear()
+    for (const queryId of this.#reconcileWindows.keys()) this.#clearReconcileState(queryId)
+    if (this.#reconnectSweepTimer) clearTimeout(this.#reconnectSweepTimer)
+    if (this.#eventBatchProcessingTimer) clearTimeout(this.#eventBatchProcessingTimer)
+    for (const cancel of this.#retryWaits) cancel()
+    this.#state.clear()
+    this.#serviceNamesByQueryId.clear()
+    this.#queryGenerations.clear()
+    this.#queryStats.clear()
+    this.#followupFetchContexts.clear()
+    this.#deferredWhileHidden.clear()
+    this.#reconnectQueryIds.clear()
+    this.#dependencyOwners.clear()
+    this.#eventQueue = []
+    this.#appliedEventQueue = []
+    this.#listeners.clear()
+    this.#globalListeners.clear()
+    this.#processedEventListeners.clear()
+    this.#projectionSettlementListeners.clear()
+    this.#fetchEventJournal.clear()
+    this.#telemetry.dispose()
+    this.#mutations.dispose()
   }
 
   // Public store API
@@ -500,9 +555,11 @@ export class QueryStore<
    * service/query structures on first use.
    */
   materialize<T, TQueryType>(queryRef: QueryRef<T, TQueryType, S, TParams, TMeta, TQuery>): void {
+    this.assertActive()
     const { queryId, desc, config } = queryRef.details()
 
     if (!this.#getQuery(queryId)) {
+      this.#retention.retain(queryId)
       this.#serviceNamesByQueryId.set(queryId, desc.serviceName)
       this.#queryGenerations.set(queryId, this.#nextQueryGeneration++)
 
@@ -549,6 +606,7 @@ export class QueryStore<
     const q = this.#getQuery(queryId)
     if (!q) return () => {}
 
+    this.#retention.cancel(queryId)
     this.ensureFresh(queryId, options)
 
     const removeListener = this.#addListener(queryId, fn)
@@ -558,8 +616,9 @@ export class QueryStore<
     const shouldVacuum = isEphemeralQuery(q.config)
     return () => {
       removeListener()
-      if (shouldVacuum && this.#listenerCount(queryId) === 0) {
-        this.#vacuum({ queryId })
+      if (this.#listenerCount(queryId) === 0) {
+        if (shouldVacuum) this.#vacuum({ queryId })
+        else this.#retention.retain(queryId)
       }
     }
   }
@@ -621,8 +680,19 @@ export class QueryStore<
    * against it is subscribed. Used by relational-filter invalidation, which needs
    * events from dependency services the consumer never queries directly.
    */
-  ensureRealtimeSubscription(serviceName: string): void {
+  ensureRealtimeSubscription(serviceName: string): () => void {
+    this.assertActive()
+    this.#dependencyOwners.set(serviceName, (this.#dependencyOwners.get(serviceName) ?? 0) + 1)
     this.#subscribeToRealtimeService(serviceName)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const count = (this.#dependencyOwners.get(serviceName) ?? 1) - 1
+      if (count > 0) this.#dependencyOwners.set(serviceName, count)
+      else this.#dependencyOwners.delete(serviceName)
+      this.#pruneService(serviceName)
+    }
   }
 
   /** Number of active subscribers for a query — powers figbird.inspect(). */
@@ -730,6 +800,7 @@ export class QueryStore<
 
   /** Commit several keyed CRUD mutations through the adapter's atomic capability. */
   transaction(descs: readonly MutationDescriptor[]): Promise<void> {
+    this.assertActive()
     if (!this.#adapter.transaction) {
       throw new Error('figbird: the configured adapter does not support transactions')
     }
@@ -833,6 +904,7 @@ export class QueryStore<
    * request and start another request for the same record. @internal
    */
   mutateConfirmedDirect<D extends MutationDescriptor>(desc: D): Promise<InferMutationData<S, D>> {
+    this.assertActive()
     const { serviceName, method } = desc
     const id = method === 'create' ? this.#peekId(desc.data) : desc.id
     const args = this.#buildMutationArgs(desc)
@@ -859,6 +931,7 @@ export class QueryStore<
     desc: MutationDescriptor,
     control?: ScheduledMutationControl,
   ): RegisteredMutation {
+    this.assertActive()
     const { serviceName, method, optimistic } = desc
     const optimisticItem = method === 'create' ? resolveCreateOptimisticItem(desc) : undefined
     // For creates, track by the client-generated id — this is what lets
@@ -1270,6 +1343,7 @@ export class QueryStore<
   }
 
   #applyProjection(change: ProjectionChange, immediate: boolean, cause?: TraceCause): boolean {
+    if (this.#disposed) return false
     const event = this.#queuedProjectionEvent(change, cause)
     if (!event) return false
     this.#eventQueue.push(event)
@@ -1377,6 +1451,7 @@ export class QueryStore<
     run: (context: MutationTrackingContext) => Promise<T>,
     hooks?: MutationTrackingHooks<T>,
   ): TrackedMutation<T> {
+    this.assertActive()
     const { serviceName, method, id, optimistic, args } = entry
     const idField = id !== undefined ? { id } : {}
     const startedAt = Date.now()
@@ -1396,6 +1471,7 @@ export class QueryStore<
     const promise = run(context).then(
       result => {
         hooks?.onSuccess?.(result, context)
+        this.#pruneService(serviceName)
         this.#mutations.end(mutationId)
         this.#telemetry.emit({
           kind: 'mutate:end',
@@ -1412,6 +1488,7 @@ export class QueryStore<
       (err: unknown) => {
         const error = normalizeError(err)
         hooks?.onError?.(error, context)
+        this.#pruneService(serviceName)
         this.#mutations.end(mutationId)
         this.#telemetry.emit({
           kind: 'mutate:error',
@@ -1475,7 +1552,15 @@ export class QueryStore<
         retryAttempt++
         const configuredDelay = query.config.retryDelay ?? this.#retryDelay
         const delay = this.#resolveRetryDelay(configuredDelay, retryAttempt, outcome.error)
-        await new Promise<void>(resolve => setTimeout(resolve, delay))
+        await new Promise<void>(resolve => {
+          const cancel = () => {
+            clearTimeout(timer)
+            this.#retryWaits.delete(cancel)
+            resolve()
+          }
+          const timer = setTimeout(cancel, delay)
+          this.#retryWaits.add(cancel)
+        })
 
         if (this.#queryGenerations.get(queryId) !== generation) return
         if (!this.#hasRetryOwner(queryId)) {
@@ -1944,6 +2029,10 @@ export class QueryStore<
       // allPages fetch is complete only for its own filter — it must not materialize
       // the service.
       if (isCompleteSet) {
+        const previousRoot = service.materialized?.queryId
+        if (previousRoot && previousRoot !== queryId && this.#listenerCount(previousRoot) === 0) {
+          this.#retention.retain(previousRoot)
+        }
         service.materialized = { queryId, fetchedAt: Date.now() }
       }
 
@@ -2107,7 +2196,7 @@ export class QueryStore<
 
   #subscribeToRealtimeService(serviceName: string): void {
     // check if already subscribed to the events of this service
-    if (this.#realtime.has(serviceName)) return
+    if (this.#disposed || this.#realtime.has(serviceName)) return
     if (!this.#adapter.subscribe) return // Real-time not supported by this adapter
 
     const created = (item: unknown) => this.#queueEvent(serviceName, { type: 'created', item })
@@ -2115,13 +2204,13 @@ export class QueryStore<
     const patched = (item: unknown) => this.#queueEvent(serviceName, { type: 'patched', item })
     const removed = (item: unknown) => this.#queueEvent(serviceName, { type: 'removed', item })
 
-    this.#adapter.subscribe(serviceName, {
+    const unsubscribe = this.#adapter.subscribe(serviceName, {
       created,
       updated,
       patched,
       removed,
     })
-    this.#realtime.add(serviceName)
+    this.#realtime.set(serviceName, unsubscribe)
   }
 
   #emitRealtime(serviceName: string, type: Event['type'], item: unknown): TraceCause | undefined {
@@ -2192,6 +2281,7 @@ export class QueryStore<
       | { immediate: false; source: 'realtime' }
       | { immediate: true; source: 'mutation'; cause?: TraceCause },
   ): void {
+    if (this.#disposed) return
     const items = Array.isArray(event.item) ? event.item : [event.item]
     for (const item of items) {
       const cause =
@@ -2986,7 +3076,7 @@ export class QueryStore<
     serviceName: string,
     fn: (service: ServiceState<TMeta>, touch: (queryId: string) => void) => void,
   ): Set<string> {
-    if (!serviceName) return new Set()
+    if (this.#disposed || !serviceName) return new Set()
 
     // initialise the service structure if needed
     if (!this.getState().get(serviceName)) {
@@ -3003,6 +3093,9 @@ export class QueryStore<
   }
 
   #vacuum({ queryId }: { queryId: string }): void {
+    const serviceName = this.#serviceNamesByQueryId.get(queryId)
+    this.#retention.cancel(queryId)
+    this.#followupFetchContexts.delete(queryId)
     this.#clearReconcileState(queryId)
     this.#transactOverService(queryId, (service, query) => {
       if (query) {
@@ -3019,6 +3112,23 @@ export class QueryStore<
         }
       }
     })
+    if (serviceName) this.#pruneService(serviceName)
+  }
+
+  #pruneService(serviceName: string): void {
+    const service = this.#state.get(serviceName)
+    if (service?.materialized || this.#dependencyOwners.has(serviceName)) return
+    if (service) {
+      for (const key of service.entities.keys()) {
+        if (!service.itemQueryIndex.has(key) && !this.#mutationLanes.get(serviceName, key)) {
+          service.entities.delete(key)
+        }
+      }
+      if (service.queries.size > 0 || service.entities.size > 0) return
+      this.#state.delete(serviceName)
+    }
+    this.#realtime.get(serviceName)?.()
+    this.#realtime.delete(serviceName)
   }
 
   // Internal helpers

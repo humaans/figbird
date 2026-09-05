@@ -225,6 +225,11 @@ export class FigbirdEventEmitter implements FigbirdEvents {
   }> = []
   #flushScheduled = false
 
+  dispose(): void {
+    this.#listeners.clear()
+    this.#queue = []
+  }
+
   get hasListeners(): boolean {
     return this.#listeners.size > 0
   }

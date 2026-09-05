@@ -1262,6 +1262,25 @@ figbird.queryDesc(desc, { retry: 1, retryDelay: 250 })
 Each network attempt emits its own fetch lifecycle events and contributes to the query's
 fetch and error counts in `inspect()`.
 
+### Cache retention and instance disposal
+
+By default, idle query results are retained for thirty minutes after their last reader
+releases them. Configure this with `new Figbird({ adapter, schema, gcTime: 30 * 60_000 })`.
+A returning reader cancels eviction.
+`gcTime` controls memory retention independently of `staleTime`, which controls freshness.
+Set `gcTime: Infinity` to keep idle results for the instance's lifetime, or `0` to evict
+on the next timer turn. Unreferenced entities and unused service subscriptions are
+released when queries expire. Complete unfiltered `.all()` materializations remain
+retained because other queries use them for local reads.
+
+After unmounting an instance's readers, call `figbird.dispose()` to release its cache,
+realtime and connection subscriptions, visibility listener, speculative reads, and
+devtools sessions. Calling it twice is harmless. New queries and mutations are rejected.
+Already registered writes finish in order; owned mutation queues flush their pending work
+and discard after a terminal failure instead of waiting for an owner to retry. Late fetch
+and mutation responses cannot repopulate the disposed cache. Disposal does not disconnect
+the adapter's shared transport.
+
 ### Freezing a query: .snapshot()
 
 `.snapshot()` fetches once and then ignores realtime entirely, for the root and every

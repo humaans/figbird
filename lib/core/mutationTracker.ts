@@ -41,6 +41,11 @@ export class MutationTracker implements MutationActivity {
   #nextId = 1
   #snapshot: readonly InFlightMutation[] = []
 
+  /** Pending writes can still settle; external owners no longer receive updates. */
+  dispose(): void {
+    this.#listeners.clear()
+  }
+
   start(entry: { serviceName: string; method: string; id?: string | number }): number {
     const mutationId = this.#nextId++
     this.#inFlight.set(mutationId, { mutationId, ...entry })
