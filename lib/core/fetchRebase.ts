@@ -149,7 +149,7 @@ export interface RebasedResponse {
   readonly itemIds: ReadonlySet<EntityKey>
 }
 
-export type FetchResponseMode = 'entity' | 'projection' | 'snapshot'
+export type FetchResponseMode = 'entity' | 'projection' | 'snapshot' | 'refetch'
 
 function overlayProjectionItem(
   responseItem: unknown,
@@ -211,6 +211,15 @@ export function rebaseResponseData({
     const journalEvent = latestEventById.get(key)
     if (mode === 'projection') {
       return journalEvent ? overlayProjectionItem(item, journalEvent) : item
+    }
+
+    // Refetch subscriptions treat realtime events as invalidations. Their payloads
+    // may be partial, so they must not replace complete server response rows.
+    if (
+      mode === 'refetch' &&
+      (!journalEvent || (journalEvent.mode === 'server' && journalEvent.source === 'realtime'))
+    ) {
+      return item
     }
 
     const currentItem = entities.get(key)

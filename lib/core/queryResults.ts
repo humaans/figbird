@@ -37,6 +37,7 @@ export function commitQuery<TMeta>(
   const ownsValues =
     next.state.status !== 'success' ||
     next.config.realtime === 'disabled' ||
+    next.config.realtime === 'refetch' ||
     next.config.fetchPolicy === 'network-only' ||
     next.maintenance.isProjection ||
     ids.length !== items.length

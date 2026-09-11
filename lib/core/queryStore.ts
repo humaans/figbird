@@ -1236,7 +1236,13 @@ export class QueryStore<
       const responseItems = Array.isArray(data) ? data : data == null ? [] : [data]
       const isProjection = query.maintenance.isProjection
       const responseMode: FetchResponseMode =
-        query.config.realtime === 'disabled' ? 'snapshot' : isProjection ? 'projection' : 'entity'
+        query.config.realtime === 'disabled'
+          ? 'snapshot'
+          : isProjection
+            ? 'projection'
+            : query.config.realtime === 'refetch'
+              ? 'refetch'
+              : 'entity'
       const rebasePlan = planFetchRebase({
         responseItems,
         journalEvents,
@@ -1244,7 +1250,7 @@ export class QueryStore<
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
       const fetchedProjectionEvents: QueuedEvent[] = []
-      if (source === 'server' && responseMode === 'entity') {
+      if (source === 'server' && (responseMode === 'entity' || responseMode === 'refetch')) {
         for (const item of responseItems) {
           const itemId = getId(item)
           if (itemId === undefined || rebasePlan.itemIds.has(entityKey(itemId))) continue
@@ -1399,11 +1405,19 @@ export class QueryStore<
         }),
       )
 
-      if (effectiveJournalEvents.length > 0 && responseMode === 'entity') {
+      if (
+        effectiveJournalEvents.length > 0 &&
+        (responseMode === 'entity' || responseMode === 'refetch')
+      ) {
         replayFetchedQueryFromEvents({
           service,
           queryId,
-          events: effectiveJournalEvents,
+          events:
+            responseMode === 'refetch'
+              ? effectiveJournalEvents.filter(
+                  event => event.mode !== 'server' || event.source !== 'realtime',
+                )
+              : effectiveJournalEvents,
           touch,
           getId,
           itemAdded: meta => this.#adapter.itemAdded(meta),
