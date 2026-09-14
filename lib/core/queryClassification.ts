@@ -263,6 +263,21 @@ export function isServerMaintained(classification: StoredQueryClass): boolean {
   return classification === 'server-window' || classification === 'server-authoritative'
 }
 
+/**
+ * Whether realtime payloads only invalidate this query's fetched result. Explicit
+ * refetch queries opt into that behavior; server-authoritative queries require it
+ * because their membership, ordering, or values cannot be reproduced locally.
+ */
+export function usesInvalidationOnlyRealtime(
+  classification: StoredQueryClass,
+  realtime: 'merge' | 'refetch' | 'disabled' | undefined,
+): boolean {
+  return (
+    realtime === 'refetch' ||
+    ((realtime === undefined || realtime === 'merge') && classification === 'server-authoritative')
+  )
+}
+
 /** One node of a `figbird.explain()` report. */
 export interface ExplainNode {
   /** Root, dotted relation, or internal junction path (`'members#junction'`). */

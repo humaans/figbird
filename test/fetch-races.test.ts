@@ -388,7 +388,7 @@ test('a mutation acknowledgement survives an in-flight complete-set fetch', asyn
   unsub()
 })
 
-test('snapshot and refetch queries retain fetched rows when realtime events race the response', async t => {
+test('snapshot and invalidation-only queries retain fetched rows when realtime events race the response', async t => {
   const original = { id: 1, content: 'original', rank: 1, updatedAt: 1 }
   const { figbird, notes } = createApp({ 1: original })
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { realtime: 'disabled' })
@@ -408,41 +408,50 @@ test('snapshot and refetch queries retain fetched rows when realtime events race
   t.is(notes.counts.find, 2)
   unsub()
 
-  for (const event of ['created', 'patched', 'removed']) {
-    const { figbird, notes } = createApp({})
-    const pending: Array<(rows: Note[]) => void> = []
-    notes.find = () =>
-      new Promise(resolve => {
-        pending.push(rows => resolve({ data: rows, total: rows.length, limit: 100, skip: 0 }))
+  for (const strategy of ['explicit-refetch', 'server-authoritative'] as const) {
+    for (const event of ['created', 'patched', 'removed']) {
+      const { figbird, notes } = createApp({})
+      const pending: Array<(rows: Note[]) => void> = []
+      notes.find = () =>
+        new Promise(resolve => {
+          pending.push(rows => resolve({ data: rows, total: rows.length, limit: 100, skip: 0 }))
+        })
+      const ref =
+        strategy === 'explicit-refetch'
+          ? figbird.queryDesc(
+              { serviceName: 'notes', method: 'find' },
+              { realtime: 'refetch', allPages: true },
+            )
+          : figbird.query(figbird.q.notes.all().server())
+      const visibleRows: unknown[] = []
+      const unsub = ref.subscribe(state => {
+        if (state.status === 'success') visibleRows.push(...state.data)
       })
-    const ref = figbird.queryDesc(
-      { serviceName: 'notes', method: 'find' },
-      { realtime: 'refetch', allPages: true },
-    )
-    const visibleRows: unknown[] = []
-    const unsub = ref.subscribe(state => {
-      if (state.status === 'success') visibleRows.push(...state.data)
-    })
-    t.teardown(unsub)
-    await flushTasks()
-    pending.shift()!([])
-    await flushTasks()
+      t.teardown(unsub)
+      await flushTasks()
+      pending.shift()!([])
+      await flushTasks()
 
-    // The first notification starts a fetch; the next races its complete response.
-    notes.emit('created', { id: 1 })
-    await flushTasks()
-    notes.emit(event, { id: 1 })
-    pending.shift()!([original])
-    await flushTasks()
-    t.deepEqual(ref.getSnapshot()!.data, [original], `${event} must not replace fetched rows`)
+      // The first notification starts a fetch; the next races its complete response.
+      notes.emit('created', { id: 1 })
+      await flushTasks()
+      notes.emit(event, { id: 1 })
+      pending.shift()!([original])
+      await flushTasks()
+      t.deepEqual(
+        ref.getSnapshot()!.data,
+        [original],
+        `${strategy}: ${event} must not replace fetched rows`,
+      )
 
-    const finalRows = event === 'removed' ? [] : [original]
-    t.is(pending.length, 1, 'the race schedules a trailing server reconciliation')
-    pending.shift()!(finalRows)
-    await flushTasks()
-    t.deepEqual(ref.getSnapshot()!.data, finalRows)
-    for (const row of visibleRows) t.deepEqual(row, original)
-    unsub()
+      const finalRows = event === 'removed' ? [] : [original]
+      t.is(pending.length, 1, `${strategy}: the race schedules a trailing reconciliation`)
+      pending.shift()!(finalRows)
+      await flushTasks()
+      t.deepEqual(ref.getSnapshot()!.data, finalRows)
+      for (const row of visibleRows) t.deepEqual(row, original)
+      unsub()
+    }
   }
 })
 

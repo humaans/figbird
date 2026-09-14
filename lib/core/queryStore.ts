@@ -34,7 +34,7 @@ import {
   reapplyQueryFromEntities,
   updateQueriesFromEvents,
 } from './windowMaintenance.js'
-import { isServerMaintained } from './queryClassification.js'
+import { isServerMaintained, usesInvalidationOnlyRealtime } from './queryClassification.js'
 import {
   entityKey,
   queryOfParams,
@@ -1240,7 +1240,7 @@ export class QueryStore<
           ? 'snapshot'
           : isProjection
             ? 'projection'
-            : query.config.realtime === 'refetch'
+            : usesInvalidationOnlyRealtime(query.maintenance.classification, query.config.realtime)
               ? 'refetch'
               : 'entity'
       const rebasePlan = planFetchRebase({

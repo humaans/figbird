@@ -1,6 +1,7 @@
 import { entityKey, type EntityKey, type Query, type ServiceState } from './queryTypes.js'
+import { usesInvalidationOnlyRealtime } from './queryClassification.js'
 
-/** Live queries own membership; detached results own their server-returned values. */
+/** Query membership is indexed by ID; fetch-owned results retain their returned values. */
 export interface QueryRows {
   kind: 'entities' | 'values'
   ids: readonly EntityKey[]
@@ -37,7 +38,7 @@ export function commitQuery<TMeta>(
   const ownsValues =
     next.state.status !== 'success' ||
     next.config.realtime === 'disabled' ||
-    next.config.realtime === 'refetch' ||
+    usesInvalidationOnlyRealtime(next.maintenance.classification, next.config.realtime) ||
     next.config.fetchPolicy === 'network-only' ||
     next.maintenance.isProjection ||
     ids.length !== items.length
