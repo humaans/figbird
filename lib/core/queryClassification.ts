@@ -264,11 +264,11 @@ export function isServerMaintained(classification: StoredQueryClass): boolean {
 }
 
 /**
- * Whether realtime payloads only invalidate this query's fetched result. Explicit
- * refetch queries opt into that behavior; server-authoritative queries require it
+ * Whether the query must retain the values returned by its own fetch. Explicit
+ * refetch queries opt into that ownership; server-authoritative queries require it
  * because their membership, ordering, or values cannot be reproduced locally.
  */
-export function usesInvalidationOnlyRealtime(
+export function usesFetchOwnedRows(
   classification: StoredQueryClass,
   realtime: 'merge' | 'refetch' | 'disabled' | undefined,
 ): boolean {

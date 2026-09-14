@@ -34,7 +34,7 @@ import {
   reapplyQueryFromEntities,
   updateQueriesFromEvents,
 } from './windowMaintenance.js'
-import { isServerMaintained, usesInvalidationOnlyRealtime } from './queryClassification.js'
+import { isServerMaintained, usesFetchOwnedRows } from './queryClassification.js'
 import {
   entityKey,
   queryOfParams,
@@ -96,6 +96,8 @@ function isIdOnlyRealtimePayload(item: unknown, itemId: ItemId | undefined): boo
 type StoreResponse<TMeta> =
   | QueryResponse<unknown, TMeta | undefined>
   | PageResponse<unknown[], TMeta>
+
+type QueuedStoreEvent = QueuedEvent | RealtimeInvalidation
 
 interface AppliedEventEffect {
   event: ProcessedCacheEvent
@@ -208,8 +210,7 @@ export class QueryStore<
   #reconnectQueryIds: Set<string> = new Set()
   #warnedMissingIdServices: Set<string> = new Set()
 
-  #eventQueue: QueuedEvent[] = []
-  #invalidationQueue: RealtimeInvalidation[] = []
+  #eventQueue: QueuedStoreEvent[] = []
   // Lane bases already contain these acknowledgements; only query publication remains.
   #appliedEventQueue: ProcessedCacheEvent[] = []
   #eventBatchProcessingTimer: ClockTimer | null = null
@@ -402,7 +403,6 @@ export class QueryStore<
     this.#reconnectQueryIds.clear()
     this.#dependencyOwners.clear()
     this.#eventQueue = []
-    this.#invalidationQueue = []
     this.#appliedEventQueue = []
     this.#globalListeners.clear()
     this.#processedEventListeners.clear()
@@ -1263,7 +1263,7 @@ export class QueryStore<
           ? 'snapshot'
           : isProjection
             ? 'projection'
-            : usesInvalidationOnlyRealtime(query.maintenance.classification, query.config.realtime)
+            : usesFetchOwnedRows(query.maintenance.classification, query.config.realtime)
               ? 'fetch-owned'
               : 'entity'
       const rebasePlan = planFetchRebase({
@@ -1677,7 +1677,8 @@ export class QueryStore<
           (isIdOnlyRealtimePayload(item, itemId) ||
             this.#adapter.isInvalidationEvent?.(realtimeEvent) === true)
         ) {
-          this.#invalidationQueue.push({
+          this.#eventQueue.push({
+            mode: 'invalidation',
             serviceName,
             itemId: entityKey(itemId),
             ...(cause === undefined ? {} : { cause }),
@@ -1704,7 +1705,7 @@ export class QueryStore<
       if (accepted.projection) this.#applyProjection(accepted.projection, false, cause)
     }
 
-    if (this.#eventQueue.length === 0 && this.#invalidationQueue.length === 0) return
+    if (this.#eventQueue.length === 0) return
 
     if (context.immediate) {
       this.#processQueuedEvents()
@@ -1935,25 +1936,17 @@ export class QueryStore<
   #processQueuedEvents(): void {
     if (
       this.#processingEventQueue ||
-      (this.#eventQueue.length === 0 &&
-        this.#invalidationQueue.length === 0 &&
-        this.#appliedEventQueue.length === 0)
+      (this.#eventQueue.length === 0 && this.#appliedEventQueue.length === 0)
     ) {
       return
     }
 
     this.#processingEventQueue = true
     try {
-      while (
-        this.#eventQueue.length > 0 ||
-        this.#invalidationQueue.length > 0 ||
-        this.#appliedEventQueue.length > 0
-      ) {
+      while (this.#eventQueue.length > 0 || this.#appliedEventQueue.length > 0) {
         const eventsByService = groupEventsByService(this.#eventQueue)
-        const invalidationsByService = groupEventsByService(this.#invalidationQueue)
         const appliedEventsByService = groupEventsByService(this.#appliedEventQueue)
         this.#eventQueue = []
-        this.#invalidationQueue = []
         this.#appliedEventQueue = []
 
         const touchedQueryIds = new Set<string>()
@@ -1970,12 +1963,15 @@ export class QueryStore<
         // the intermediate state.
         const serviceNames = new Set([
           ...Object.keys(eventsByService),
-          ...Object.keys(invalidationsByService),
           ...Object.keys(appliedEventsByService),
         ])
         for (const serviceName of serviceNames) {
-          const events = eventsByService[serviceName] ?? []
-          const invalidations = invalidationsByService[serviceName] ?? []
+          const events: QueuedEvent[] = []
+          const invalidations: RealtimeInvalidation[] = []
+          for (const event of eventsByService[serviceName] ?? []) {
+            if (event.mode === 'invalidation') invalidations.push(event)
+            else events.push(event)
+          }
           const appliedEvents = appliedEventsByService[serviceName] ?? []
           let effects: AppliedEventEffect[] = []
           let appliedEffects: AppliedEventEffect[] = []

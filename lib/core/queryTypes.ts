@@ -98,6 +98,7 @@ export type ProcessedCacheEvent =
 
 /** A realtime notification that carries identity but no cacheable entity value. */
 export interface RealtimeInvalidation {
+  mode: 'invalidation'
   serviceName: string
   itemId: EntityKey
   cause?: TraceCause
