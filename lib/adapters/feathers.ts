@@ -10,6 +10,7 @@ import type {
   PageResponse,
   PageSource,
   QueryResponse,
+  RealtimeEventContext,
 } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type { Schema, ServiceDefinitionByPath, ServicePaths } from '../core/schema.js'
@@ -416,6 +417,8 @@ export interface FeathersAdapterOptions {
   pagination?: Record<string, FeathersPagination>
   /** Opt-in atomic transaction transport. Omit when the backend has no such capability. */
   transactions?: FeathersTransaction
+  /** Classify application-specific notification payloads that must not enter the entity cache. */
+  isInvalidationEvent?: (event: RealtimeEventContext) => boolean
 }
 
 /**
@@ -443,6 +446,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #operators: Record<string, CustomOperatorRegistration>
   #defaultPagination: FeathersPagination | undefined
   #pagination: Record<string, FeathersPagination>
+  #isInvalidationEvent: ((event: RealtimeEventContext) => boolean) | undefined
   transaction?: Adapter['transaction']
 
   /** Names of custom operators registered for every service. */
@@ -492,6 +496,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       defaultPagination,
       pagination = {},
       transactions,
+      isInvalidationEvent,
     }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
@@ -502,9 +507,14 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#operators = operators
     this.#defaultPagination = defaultPagination
     this.#pagination = pagination
+    this.#isInvalidationEvent = isInvalidationEvent
     if (transactions) {
       this.transaction = operations => transactions(this.feathers, operations)
     }
+  }
+
+  isInvalidationEvent(event: RealtimeEventContext): boolean {
+    return this.#isInvalidationEvent?.(event) ?? false
   }
 
   #paginationFor(serviceName: string): FeathersPagination | undefined {

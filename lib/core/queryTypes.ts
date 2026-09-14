@@ -96,6 +96,14 @@ export type ProcessedCacheEvent =
   | ProcessedProjectionEvent
   | (ProcessedEventBase & { mode: 'local' })
 
+/** A realtime notification that carries identity but no cacheable entity value. */
+export interface RealtimeInvalidation {
+  mode: 'invalidation'
+  serviceName: string
+  itemId: EntityKey
+  cause?: TraceCause
+}
+
 export type QueryStatus = 'loading' | 'success' | 'error'
 
 type QueryStatusState = {

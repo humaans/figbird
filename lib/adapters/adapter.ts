@@ -61,6 +61,13 @@ export interface EventHandlers {
   removed: (item: unknown) => void
 }
 
+/** A transport event before Figbird decides whether its payload is a complete entity. */
+export interface RealtimeEventContext {
+  serviceName: string
+  type: keyof EventHandlers
+  item: unknown
+}
+
 /** Transport lifecycle facts an adapter can expose for observability. */
 export type AdapterConnectionEvent =
   | { type: 'connected'; transport?: string; connectionId?: string }
@@ -133,6 +140,13 @@ export interface Adapter<
 
   // Optional real-time support
   subscribe?(serviceName: string, handlers: EventHandlers): () => void
+
+  /**
+   * Return true for application-specific notification payloads that invalidate an
+   * entity without containing its complete value. ID-only create/update/patch
+   * payloads are invalidations automatically and do not need to be classified here.
+   */
+  isInvalidationEvent?(event: RealtimeEventContext): boolean
 
   // Optional reconnect support. Adapters should call the handler when the transport
   // reconnects after a period where realtime events may have been missed.

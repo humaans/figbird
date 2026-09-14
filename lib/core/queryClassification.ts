@@ -263,6 +263,21 @@ export function isServerMaintained(classification: StoredQueryClass): boolean {
   return classification === 'server-window' || classification === 'server-authoritative'
 }
 
+/**
+ * Whether the query must retain the values returned by its own fetch. Explicit
+ * refetch queries opt into that ownership; server-authoritative queries require it
+ * because their membership, ordering, or values cannot be reproduced locally.
+ */
+export function usesFetchOwnedRows(
+  classification: StoredQueryClass,
+  realtime: 'merge' | 'refetch' | 'disabled' | undefined,
+): boolean {
+  return (
+    realtime === 'refetch' ||
+    ((realtime === undefined || realtime === 'merge') && classification === 'server-authoritative')
+  )
+}
+
 /** One node of a `figbird.explain()` report. */
 export interface ExplainNode {
   /** Root, dotted relation, or internal junction path (`'members#junction'`). */
