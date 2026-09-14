@@ -52,6 +52,7 @@ import {
   type QueryGraphRef,
   type QueryState,
   type QueuedEvent,
+  type RealtimeInvalidation,
   type ServiceState,
 } from './queryTypes.js'
 import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
@@ -81,6 +82,16 @@ type FetchAttemptOutcome =
   | { kind: 'failed'; error: Error }
 
 const DEFAULT_RETRIES = 3
+
+function isIdOnlyRealtimePayload(item: unknown, itemId: ItemId | undefined): boolean {
+  return (
+    itemId !== undefined &&
+    typeof item === 'object' &&
+    item !== null &&
+    !Array.isArray(item) &&
+    Object.keys(item).length === 1
+  )
+}
 
 type StoreResponse<TMeta> =
   | QueryResponse<unknown, TMeta | undefined>
@@ -174,6 +185,7 @@ export class QueryStore<
   #dependencyOwners = new Map<string, number>()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
   #processedEventListeners: Set<(event: ProcessedCacheEvent) => void> = new Set()
+  #invalidationListeners: Set<(event: RealtimeInvalidation) => void> = new Set()
   #projectionSettlementListeners: Set<(event: ProcessedProjectionEvent) => void> = new Set()
 
   #state: Map<string, ServiceState<TMeta>> = new Map()
@@ -197,6 +209,7 @@ export class QueryStore<
   #warnedMissingIdServices: Set<string> = new Set()
 
   #eventQueue: QueuedEvent[] = []
+  #invalidationQueue: RealtimeInvalidation[] = []
   // Lane bases already contain these acknowledgements; only query publication remains.
   #appliedEventQueue: ProcessedCacheEvent[] = []
   #eventBatchProcessingTimer: ClockTimer | null = null
@@ -389,9 +402,11 @@ export class QueryStore<
     this.#reconnectQueryIds.clear()
     this.#dependencyOwners.clear()
     this.#eventQueue = []
+    this.#invalidationQueue = []
     this.#appliedEventQueue = []
     this.#globalListeners.clear()
     this.#processedEventListeners.clear()
+    this.#invalidationListeners.clear()
     this.#projectionSettlementListeners.clear()
     this.#fetchEventJournal.clear()
     this.#telemetry.dispose()
@@ -622,6 +637,14 @@ export class QueryStore<
     this.#processedEventListeners.add(fn)
     return () => {
       this.#processedEventListeners.delete(fn)
+    }
+  }
+
+  /** Subscribe to realtime notifications that deliberately bypassed the entity cache. */
+  subscribeToRealtimeInvalidations(fn: (event: RealtimeInvalidation) => void): () => void {
+    this.#invalidationListeners.add(fn)
+    return () => {
+      this.#invalidationListeners.delete(fn)
     }
   }
 
@@ -1241,7 +1264,7 @@ export class QueryStore<
           : isProjection
             ? 'projection'
             : usesInvalidationOnlyRealtime(query.maintenance.classification, query.config.realtime)
-              ? 'refetch'
+              ? 'fetch-owned'
               : 'entity'
       const rebasePlan = planFetchRebase({
         responseItems,
@@ -1250,7 +1273,7 @@ export class QueryStore<
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
       const fetchedProjectionEvents: QueuedEvent[] = []
-      if (source === 'server' && (responseMode === 'entity' || responseMode === 'refetch')) {
+      if (source === 'server' && (responseMode === 'entity' || responseMode === 'fetch-owned')) {
         for (const item of responseItems) {
           const itemId = getId(item)
           if (itemId === undefined || rebasePlan.itemIds.has(entityKey(itemId))) continue
@@ -1407,13 +1430,13 @@ export class QueryStore<
 
       if (
         effectiveJournalEvents.length > 0 &&
-        (responseMode === 'entity' || responseMode === 'refetch')
+        (responseMode === 'entity' || responseMode === 'fetch-owned')
       ) {
         replayFetchedQueryFromEvents({
           service,
           queryId,
           events:
-            responseMode === 'refetch'
+            responseMode === 'fetch-owned'
               ? effectiveJournalEvents.filter(
                   event => event.mode !== 'server' || event.source !== 'realtime',
                 )
@@ -1645,6 +1668,23 @@ export class QueryStore<
         context.source === 'realtime'
           ? this.#emitRealtime(serviceName, event.type, item)
           : context.cause
+      if (context.source === 'realtime') {
+        const itemId = this.#getIdWarn(serviceName, item)
+        const realtimeEvent = { serviceName, type: event.type, item }
+        if (
+          event.type !== 'removed' &&
+          itemId !== undefined &&
+          (isIdOnlyRealtimePayload(item, itemId) ||
+            this.#adapter.isInvalidationEvent?.(realtimeEvent) === true)
+        ) {
+          this.#invalidationQueue.push({
+            serviceName,
+            itemId: entityKey(itemId),
+            ...(cause === undefined ? {} : { cause }),
+          })
+          continue
+        }
+      }
       const accepted = this.#acceptLaneAuthoritative(
         serviceName,
         event.type,
@@ -1664,7 +1704,7 @@ export class QueryStore<
       if (accepted.projection) this.#applyProjection(accepted.projection, false, cause)
     }
 
-    if (this.#eventQueue.length === 0) return
+    if (this.#eventQueue.length === 0 && this.#invalidationQueue.length === 0) return
 
     if (context.immediate) {
       this.#processQueuedEvents()
@@ -1895,23 +1935,32 @@ export class QueryStore<
   #processQueuedEvents(): void {
     if (
       this.#processingEventQueue ||
-      (this.#eventQueue.length === 0 && this.#appliedEventQueue.length === 0)
+      (this.#eventQueue.length === 0 &&
+        this.#invalidationQueue.length === 0 &&
+        this.#appliedEventQueue.length === 0)
     ) {
       return
     }
 
     this.#processingEventQueue = true
     try {
-      while (this.#eventQueue.length > 0 || this.#appliedEventQueue.length > 0) {
+      while (
+        this.#eventQueue.length > 0 ||
+        this.#invalidationQueue.length > 0 ||
+        this.#appliedEventQueue.length > 0
+      ) {
         const eventsByService = groupEventsByService(this.#eventQueue)
+        const invalidationsByService = groupEventsByService(this.#invalidationQueue)
         const appliedEventsByService = groupEventsByService(this.#appliedEventQueue)
         this.#eventQueue = []
+        this.#invalidationQueue = []
         this.#appliedEventQueue = []
 
         const touchedQueryIds = new Set<string>()
         const followups: Array<{
           serviceName: string
           effects: AppliedEventEffect[]
+          invalidations: RealtimeInvalidation[]
         }> = []
 
         // Apply every service's events before notifying anyone — the batch is the
@@ -1921,10 +1970,12 @@ export class QueryStore<
         // the intermediate state.
         const serviceNames = new Set([
           ...Object.keys(eventsByService),
+          ...Object.keys(invalidationsByService),
           ...Object.keys(appliedEventsByService),
         ])
         for (const serviceName of serviceNames) {
           const events = eventsByService[serviceName] ?? []
+          const invalidations = invalidationsByService[serviceName] ?? []
           const appliedEvents = appliedEventsByService[serviceName] ?? []
           let effects: AppliedEventEffect[] = []
           let appliedEffects: AppliedEventEffect[] = []
@@ -1955,7 +2006,11 @@ export class QueryStore<
           for (const queryId of modifiedQueries) {
             touchedQueryIds.add(queryId)
           }
-          followups.push({ serviceName, effects: [...effects, ...appliedEffects] })
+          followups.push({
+            serviceName,
+            effects: [...effects, ...appliedEffects],
+            invalidations,
+          })
         }
 
         // Notify once per batch, after all services have applied.
@@ -1966,7 +2021,7 @@ export class QueryStore<
           this.#invokeGlobalListeners()
         }
 
-        for (const { serviceName, effects } of followups) {
+        for (const { serviceName, effects, invalidations } of followups) {
           const publishedEffects = this.#publishServiceEventEffects(
             serviceName,
             effects,
@@ -1982,6 +2037,7 @@ export class QueryStore<
                 : {}),
             })
           }
+          this.#publishRealtimeInvalidations(serviceName, invalidations)
         }
       }
     } finally {
@@ -1991,6 +2047,61 @@ export class QueryStore<
 
   #emitProcessedEvent(event: ProcessedCacheEvent): void {
     for (const listener of this.#processedEventListeners) {
+      try {
+        listener(event)
+      } catch {
+        // Internal invalidation listeners should not break the event loop.
+      }
+    }
+  }
+
+  #publishRealtimeInvalidations(
+    serviceName: string,
+    invalidations: readonly RealtimeInvalidation[],
+  ): void {
+    if (invalidations.length === 0) return
+    const service = this.#state.get(serviceName)
+
+    const requests = new Map<string, { force: boolean; causes?: TraceCause[] }>()
+    if (service) {
+      for (const invalidation of invalidations) {
+        for (const query of service.queries.values()) {
+          if (query.config.skip || query.config.realtime === 'disabled') continue
+          if (
+            query.desc.method === 'get' &&
+            entityKey(query.desc.resourceId) !== invalidation.itemId
+          ) {
+            continue
+          }
+          const current = requests.get(query.queryId)
+          const causes = this.#telemetry.merge(
+            current?.causes,
+            invalidation.cause ? [invalidation.cause] : undefined,
+          )
+          requests.set(query.queryId, {
+            force: current?.force === true || service.materialized?.queryId === query.queryId,
+            ...(causes ? { causes: [...causes] } : {}),
+          })
+        }
+      }
+    }
+
+    for (const [queryId, request] of requests) {
+      this.#reconciliation.request(queryId, {
+        force: request.force,
+        ...(request.causes ? { causes: request.causes } : {}),
+      })
+    }
+
+    // Give cache-owning reconciliations the first opportunity to refresh the
+    // entity before dependent query graphs react to the invalidation.
+    for (const invalidation of invalidations) {
+      this.#emitRealtimeInvalidation(invalidation)
+    }
+  }
+
+  #emitRealtimeInvalidation(event: RealtimeInvalidation): void {
+    for (const listener of this.#invalidationListeners) {
       try {
         listener(event)
       } catch {

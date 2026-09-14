@@ -1850,6 +1850,20 @@ it('realtime: relation-path filters match root events through cached relations',
     'filter-field changes on a leaf relation should refetch relation-filtered roots',
   )
 
+  feathers.service('orgUnits').data[2] = { id: 2, label: 'People' }
+  feathers.service('orgUnits').emit('patched', { id: 2 })
+  await flush()
+
+  t.true(
+    feathers.service('documents').counts.find > findCountAfterRootEvents + 2,
+    'an invalidated dependency should refetch relation-filtered roots',
+  )
+  t.deepEqual(
+    figbird.getState().get('orgUnits')!.entities.get('2'),
+    { id: 2, label: 'People' },
+    'the invalidation should refresh the relation cache before the root graph reacts',
+  )
+
   unmount()
 })
 

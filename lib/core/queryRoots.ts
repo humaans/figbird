@@ -207,6 +207,7 @@ export class PagedQueryRoot<
   #reconcile: SequentialReconcileState = { phase: 'idle' }
   #lastPagination: RelationalPaginationState | null = null
   #cursorEventUnsub: (() => void) | null = null
+  #cursorInvalidationUnsub: (() => void) | null = null
   #cursorReconnectUnsub: (() => void) | null = null
 
   constructor({
@@ -229,6 +230,7 @@ export class PagedQueryRoot<
     onChange: () => void
     cursorRealtime?: {
       subscribe(fn: (event: ProcessedCacheEvent) => void): () => void
+      subscribeToInvalidations(fn: () => void): () => void
       canKeepPrefix(event: ProcessedCacheEvent): boolean
     }
     realtime: InspectedPagination['realtime']
@@ -252,6 +254,9 @@ export class PagedQueryRoot<
         } else {
           this.#pageRefs[0]?.reconcile()
         }
+      })
+      this.#cursorInvalidationUnsub = cursorRealtime.subscribeToInvalidations(() => {
+        this.#pageRefs[0]?.reconcile()
       })
     }
   }
@@ -457,6 +462,8 @@ export class PagedQueryRoot<
   teardown(): void {
     this.#cursorEventUnsub?.()
     this.#cursorEventUnsub = null
+    this.#cursorInvalidationUnsub?.()
+    this.#cursorInvalidationUnsub = null
     this.#cursorReconnectUnsub?.()
     this.#cursorReconnectUnsub = null
     for (const unsub of this.#pageUnsubs) unsub()

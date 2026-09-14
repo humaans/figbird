@@ -138,6 +138,7 @@ export type {
   PageRequest,
   PageResponse,
   PageSource,
+  RealtimeEventContext,
 } from './adapters/adapter.js'
 
 // react hooks

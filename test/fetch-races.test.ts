@@ -1,6 +1,13 @@
 import { TestClock, flushTasks } from './clock.js'
 import test from 'ava'
-import { FeathersAdapter, Figbird, createSchema, service, type RetryDelay } from '../lib'
+import {
+  FeathersAdapter,
+  Figbird,
+  createSchema,
+  service,
+  type RealtimeEventContext,
+  type RetryDelay,
+} from '../lib'
 import { FetchEventJournal, MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
 import type { ProcessedCacheEvent } from '../lib/core/queryTypes'
 import { mockFeathers, type TestItem } from './helpers'
@@ -35,18 +42,22 @@ function createApp(
     retry,
     retryDelay,
     clock,
+    isInvalidationEvent,
   }: {
     eventBatchInterval?: number
     retry?: number | false
     retryDelay?: RetryDelay
     clock?: TestClock
+    isInvalidationEvent?: (event: RealtimeEventContext) => boolean
   } = {},
 ) {
   const feathers = mockFeathers({ notes: { data } }, { queryAwareFind: true })
   const figbird = new Figbird({
     schema,
     ...(clock ? { clock } : {}),
-    adapter: new FeathersAdapter(feathers),
+    adapter: new FeathersAdapter(feathers, {
+      ...(isInvalidationEvent ? { isInvalidationEvent } : {}),
+    }),
     eventBatchInterval,
     reconcileCooldown: 0,
     reconnectJitter: 0,
@@ -452,6 +463,70 @@ test('snapshot and invalidation-only queries retain fetched rows when realtime e
       for (const row of visibleRows) t.deepEqual(row, original)
       unsub()
     }
+  }
+})
+
+test('realtime invalidations preserve canonical entities and reconcile ordinary queries', async t => {
+  const original = { id: 1, content: 'original', rank: 1, updatedAt: 1 }
+  const revised = { ...original, content: 'revised', updatedAt: 2 }
+
+  for (const source of ['id-only', 'adapter-classified'] as const) {
+    const { figbird, notes } = createApp(
+      { 1: original },
+      source === 'adapter-classified'
+        ? {
+            isInvalidationEvent: ({ item }) =>
+              typeof item === 'object' && item !== null && 'refresh' in item,
+          }
+        : {},
+    )
+    const getRef = figbird.queryDesc({
+      serviceName: 'notes',
+      method: 'get',
+      resourceId: 1,
+    })
+    const findRef = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+    const visibleItems: unknown[] = []
+    const unsubGet = getRef.subscribe(state => {
+      if (state.status === 'success') visibleItems.push(state.data)
+    })
+    const unsubFind = findRef.subscribe(state => {
+      if (state.status === 'success') visibleItems.push(...state.data)
+    })
+    await waitFor(
+      () =>
+        getRef.getSnapshot()?.status === 'success' && findRef.getSnapshot()?.status === 'success',
+      `${source} initial queries`,
+    )
+
+    notes.data = { 1: revised }
+    notes.emit('patched', source === 'id-only' ? { id: 1 } : { id: 1, refresh: true })
+
+    t.deepEqual(figbird.getState().get('notes')!.entities.get('1'), original)
+    t.deepEqual(getRef.getSnapshot()!.data, original)
+    t.deepEqual(findRef.getSnapshot()!.data, [original])
+
+    await waitFor(
+      () =>
+        !getRef.getSnapshot()?.isFetching &&
+        !findRef.getSnapshot()?.isFetching &&
+        notes.counts.get >= 2 &&
+        notes.counts.find >= 2,
+      `${source} reconciliation`,
+    )
+    t.true(notes.counts.get >= 2)
+    t.true(notes.counts.find >= 2)
+    t.deepEqual(getRef.getSnapshot()!.data, revised)
+    t.deepEqual(findRef.getSnapshot()!.data, [revised])
+    for (const item of visibleItems) {
+      t.true(
+        typeof item === 'object' && item !== null && 'content' in item,
+        `${source} never publishes an incomplete entity`,
+      )
+    }
+
+    unsubGet()
+    unsubFind()
   }
 })
 

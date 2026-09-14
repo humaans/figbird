@@ -14,6 +14,7 @@ import type {
   QueryConfig,
   QueryDescriptor,
   QueryGraphRef,
+  RealtimeInvalidation,
   ServiceState,
 } from './queryTypes.js'
 import {
@@ -73,6 +74,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   queryStore: {
     isObservabilityActive(): boolean
     subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void
+    subscribeToRealtimeInvalidations(fn: (event: RealtimeInvalidation) => void): () => void
     subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
     ensureRealtimeSubscription(serviceName: string): () => void
     reapplyQuery(queryId: string, mutationLaneKeys: ReadonlySet<string>): void
@@ -962,6 +964,10 @@ export class RelationalQueryRef<
                 this.#host.queryStore.subscribeToProcessedEvents(event => {
                   if (event.serviceName === serviceName) fn(event)
                 }),
+              subscribeToInvalidations: (fn: () => void) =>
+                this.#host.queryStore.subscribeToRealtimeInvalidations(event => {
+                  if (event.serviceName === serviceName) fn()
+                }),
               canKeepPrefix: (event: ProcessedCacheEvent) =>
                 !this.#ast.server &&
                 (event.type === 'patched' || event.type === 'updated') &&
@@ -1397,11 +1403,19 @@ export class RelationalQueryRef<
       }
       this.#queueRelationalFilterRefetch()
     })
+    const dependencyServices = new Set(dependencies.map(dependency => dependency.serviceName))
+    const unsubscribeInvalidations = this.#host.queryStore.subscribeToRealtimeInvalidations(
+      event => {
+        if (!dependencyServices.has(event.serviceName)) return
+        this.#queueRelationalFilterRefetch()
+      },
+    )
     const unsubscribeSettlements = this.#host.queryStore.subscribeToProjectionSettlements(event => {
       if (affectsFilter(event)) this.#queueRelationalFilterRefetch()
     })
     this.#processedEventUnsub = () => {
       unsubscribeEvents()
+      unsubscribeInvalidations()
       unsubscribeSettlements()
       for (const release of releaseDependencies) release()
     }

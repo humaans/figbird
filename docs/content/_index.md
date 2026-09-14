@@ -1089,6 +1089,32 @@ Use `.server()` on a builder when a query _looks_ locally provable but isn't, sa
 q.documents.where({ visibleTo: userId }).server()
 ```
 
+### Invalidation-only events
+
+A `created`, `updated`, or `patched` realtime payload containing only the configured
+entity ID is an invalidation, not an entity. Figbird keeps the complete cached entity
+in place and reconciles affected active queries from the server; inactive queries are
+marked pending for their next subscriber. An ID-only `removed` event is different: the
+ID is the complete information needed to remove the entity, so removal applies
+immediately.
+
+Adapters can recognize application-specific invalidation payloads with
+`isInvalidationEvent`. This is useful when a notification carries an ID plus a marker
+or other routing metadata but still does not contain the entity's complete value:
+
+```ts
+const adapter = new FeathersAdapter(feathers, {
+  isInvalidationEvent: ({ type, item }) =>
+    type !== 'removed' &&
+    typeof item === 'object' &&
+    item !== null &&
+    '_invalidation' in item,
+})
+```
+
+Full entity payloads keep the normal classification-driven merge behavior. The
+callback is ignored for `removed` events, which remain authoritative removals.
+
 ### Window maintenance
 
 Server-window doesn't mean every event costs a roundtrip. The visible rows are a
@@ -1988,6 +2014,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
   - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
+  - `isInvalidationEvent` — identifies application-specific realtime notifications that carry an entity ID but no complete entity value; see [Invalidation-only events](#invalidation-only-events)
   - `transactions` — optional atomic transaction transport; use `feathersTransactions()` for an application-provided `api/transactions` service, or set `serviceName` for an existing endpoint
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
