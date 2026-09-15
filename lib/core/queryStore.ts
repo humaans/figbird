@@ -1144,31 +1144,46 @@ export class QueryStore<
     return { data: entity } as QueryResponse<unknown, TMeta | undefined>
   }
 
-  /** Select a deterministically ordered find from a complete local service. */
-  #selectMaterializedFind(
-    query: Query<unknown, TMeta, unknown>,
-  ): { data: unknown[]; meta: TMeta } | null {
+  #materializedFindSource(query: Query<unknown, TMeta, unknown>): {
+    service: ServiceState<TMeta>
+    root: Query<unknown, TMeta, unknown>
+    compare: NonNullable<Query<unknown, TMeta, unknown>['maintenance']['compare']>
+  } | null {
     if (query.desc.method !== 'find' || query.desc.page) return null
     const service = this.#state.get(query.desc.serviceName)
     if (!service?.materialized) return null
     if (service.materialized.queryId === query.queryId) return null
 
     const config = query.config as FindQueryConfig<unknown, unknown>
-    // Honor the documented fetchPolicy contract ("always fetch on mount"), same
-    // as #tryLocalGet — a materialized cache doesn't override an explicit opt-out.
     if (config.fetchPolicy === 'network-only') return null
-    // Stored classification is the single source of truth: authoritative reasons
-    // ($select, $regex, custom operators, .server()) survive allPages-neutralization,
-    // while window filters don't — windows are computed locally below. So
-    // 'server-authoritative' is exactly "not locally answerable".
     if (query.maintenance.classification === 'server-authoritative') return null
+    const compare = query.maintenance.compare
+    if (!compare) return null
 
-    const { compare, matchesLocal, limit: windowLimit, skip: windowSkip } = query.maintenance
+    const root = service.queries.get(service.materialized.queryId)
+    return root?.state.status === 'success' ? { service, root, compare } : null
+  }
+
+  /** Select a deterministically ordered find from a complete local service. */
+  #selectMaterializedFind(
+    query: Query<unknown, TMeta, unknown>,
+  ): { data: unknown[]; meta: TMeta } | null {
+    const source = this.#materializedFindSource(query)
+    if (!source) return null
+    const { service, root, compare } = source
+    const config = query.config as FindQueryConfig<unknown, unknown>
+
+    const { matchesLocal, limit: windowLimit, skip: windowSkip } = query.maintenance
     const limit = config.allPages ? undefined : windowLimit
     const skip = config.allPages ? 0 : windowSkip
-    // Complete membership alone does not prove the backend's implicit order.
-    if (!compare) return null
-    const rows = [...service.entities.values()].filter(matchesLocal).sort(compare)
+    const rows: unknown[] = []
+    // The root owns exhaustive membership. The entity cache may also contain rows
+    // discovered by sibling queries, which must not widen derived local finds.
+    for (const id of root.rows.ids) {
+      const entity = service.entities.get(id)
+      if (entity !== undefined && matchesLocal(entity)) rows.push(entity)
+    }
+    rows.sort(compare)
     const total = rows.length
     const data = rows.slice(skip, limit !== undefined ? skip + limit : undefined)
     // The adapter owns the meta envelope — the store only knows the window numbers.
@@ -1800,26 +1815,23 @@ export class QueryStore<
     excludeQueryId?: string
   }): AppliedEventEffect[] {
     if (processedEvents.length === 0) return []
-    const selectedQueries = new Set<string>()
-    const changedQueries = new Set<string>()
-    for (const [queryId, query] of service.queries) {
-      if (queryId === excludeQueryId) continue
-      const result = this.#reapplyMaterializedFind(service, query)
-      if (result === 'unavailable') continue
-      selectedQueries.add(queryId)
-      if (result === 'changed') {
-        changedQueries.add(queryId)
-        touch(queryId)
-      }
-    }
     const getId = this.#getIdReader(serviceName)
     return processedEvents.map(event => {
       const reconcileQueryIds = new Set<string>()
       const queryEffects = this.#telemetry.active
-        ? new Map<string, 'merged' | 'reconcile'>(
-            [...changedQueries].map(queryId => [queryId, 'merged']),
-          )
+        ? new Map<string, 'merged' | 'reconcile'>()
         : undefined
+      const selectedQueries = new Set<string>()
+      for (const [queryId, query] of service.queries) {
+        if (
+          queryId !== excludeQueryId &&
+          query.config.realtime === 'merge' &&
+          query.state.status === 'success' &&
+          this.#materializedFindSource(query)
+        ) {
+          selectedQueries.add(queryId)
+        }
+      }
       updateQueriesFromEvents({
         service,
         appliedItems: [event],
@@ -1838,6 +1850,12 @@ export class QueryStore<
           : {}),
         ...(excludeQueryId ? { excludeQueryId } : {}),
       })
+      for (const queryId of selectedQueries) {
+        const query = service.queries.get(queryId)
+        if (!query || this.#reapplyMaterializedFind(service, query) !== 'changed') continue
+        touch(queryId)
+        queryEffects?.set(queryId, 'merged')
+      }
       return { event, reconcileQueryIds, ...(queryEffects ? { queryEffects } : {}) }
     })
   }

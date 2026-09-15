@@ -442,6 +442,11 @@ export function updateQueriesFromEvents<TMeta>({
         // New fetch rows may already be counted in another server page's total.
         // Only reconcile known membership when a previously visible row changes.
         if (!visible || query.maintenance.isProjection) continue
+        // Server-authoritative rows belong to the fetch that produced them. A
+        // sibling fetch may update the canonical entity, but it cannot replace a
+        // query-specific representation. Complete-set removals remain universal.
+        if (query.maintenance.classification === 'server-authoritative' && event.type !== 'removed')
+          continue
         if (query.maintenance.classification === 'server-window' && event.type !== 'created') {
           const result = applyMergeEventToQuery(context, queryId, event)
           if (result === 'reconcile') {
