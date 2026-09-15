@@ -184,9 +184,11 @@ export interface ServiceState<TMeta = Record<string, unknown>> {
   itemQueryIndex: Map<EntityKey, Set<string>>
   /**
    * Set when an unfiltered allPages fetch (a filterless `.all()`) succeeded: the
-   * complete row set is in the entity cache, realtime maintains it, and matcher-
-   * decidable finds are answered locally without a roundtrip. A *filtered* `.all()`
-   * is complete only for its own query and never sets this.
+   * root query owns the complete row membership, realtime maintains it, and
+   * matcher-decidable finds are answered locally without a roundtrip. The entity
+   * cache may also contain rows fetched by unrelated queries, so it is not itself
+   * the membership source. A *filtered* `.all()` is complete only for its own query
+   * and never sets this.
    */
   materialized?: { queryId: string; fetchedAt: number }
 }

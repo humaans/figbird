@@ -17,6 +17,7 @@ interface Note extends TestItem {
   content: string
   rank: number
   updatedAt?: number
+  computed?: string
 }
 
 const schema = createSchema({
@@ -399,7 +400,7 @@ test('a mutation acknowledgement survives an in-flight complete-set fetch', asyn
   unsub()
 })
 
-test('snapshot and invalidation-only queries retain fetched rows when realtime events race the response', async t => {
+test('snapshot and fetch-owned queries retain their own fetched rows', async t => {
   const original = { id: 1, content: 'original', rank: 1, updatedAt: 1 }
   const { figbird, notes } = createApp({ 1: original })
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { realtime: 'disabled' })
@@ -464,6 +465,53 @@ test('snapshot and invalidation-only queries retain fetched rows when realtime e
       unsub()
     }
   }
+
+  const serverOwned = { ...original, computed: 'server-only' }
+  const { figbird: ownedFigbird, notes: ownedNotes } = createApp({ 1: original })
+  const find = ownedNotes.find.bind(ownedNotes)
+  ownedNotes.find = async params => {
+    const result = await find(params)
+    return { ...result, data: result.data.map(item => ({ ...item, computed: 'server-only' })) }
+  }
+  const authoritative = ownedFigbird.query(ownedFigbird.q.notes.where({ id: 1 }).server())
+  const unsubscribeAuthoritative = authoritative.subscribe(() => {})
+  await waitFor(() => authoritative.getSnapshot().status === 'success', 'server-owned find')
+  t.deepEqual(authoritative.getSnapshot().data, [serverOwned])
+
+  const sibling = ownedFigbird.queryDesc(
+    { serviceName: 'notes', method: 'get', resourceId: 1 },
+    { fetchPolicy: 'network-only' },
+  )
+  const unsubscribeSibling = sibling.subscribe(() => {})
+  await waitFor(() => sibling.getSnapshot()?.status === 'success', 'sibling get')
+  t.deepEqual(
+    authoritative.getSnapshot().data,
+    [serverOwned],
+    'a sibling fetch must not replace values owned by a server-authoritative query',
+  )
+
+  const complete = ownedFigbird.queryDesc(
+    { serviceName: 'notes', method: 'find' },
+    { allPages: true, fetchPolicy: 'network-only' },
+  )
+  const unsubscribeComplete = complete.subscribe(() => {})
+  await waitFor(() => complete.getSnapshot()?.status === 'success', 'complete-set preload')
+  ownedNotes.data = {}
+  const previousFindCount = ownedNotes.counts.find
+  complete.refetch()
+  await waitFor(
+    () => ownedNotes.counts.find > previousFindCount && !complete.getSnapshot()?.isFetching,
+    'complete-set removal',
+  )
+  t.deepEqual(
+    authoritative.getSnapshot().data,
+    [],
+    'an exhaustive fetch may still remove a server-authoritative row',
+  )
+  unsubscribeComplete()
+  unsubscribeSibling()
+  unsubscribeAuthoritative()
+  ownedFigbird.dispose()
 })
 
 test('realtime invalidations preserve canonical entities and reconcile ordinary queries', async t => {
@@ -530,9 +578,10 @@ test('realtime invalidations preserve canonical entities and reconcile ordinary 
   }
 })
 
-test('ordinary fetches do not add rows to unrelated queries', async t => {
+test('ordinary fetches do not add rows to unrelated or materialized queries', async t => {
   for (const initialCache of ['empty', 'populated'] as const) {
-    const template = { id: 1, content: 'workflow', rank: 0 }
+    const template: Note = { id: 1, content: 'workflow', rank: 0 }
+    let expectedTemplate = template
     const { figbird, notes } = createApp({ 1: template })
     const find = notes.find.bind(notes)
     notes.find = params => {
@@ -554,6 +603,24 @@ test('ordinary fetches do not add rows to unrelated queries', async t => {
       await waitFor(() => templates.getSnapshot()?.status === 'success', 'template preload')
     }
 
+    const materializedRoot = figbird.queryDesc(
+      { serviceName: 'notes', method: 'find' },
+      { allPages: true },
+    )
+    const unsubscribeRoot = materializedRoot.subscribe(() => {})
+    await waitFor(() => materializedRoot.getSnapshot()?.status === 'success', 'materialized root')
+    const materializedWorkflows = figbird.queryDesc({
+      serviceName: 'notes',
+      method: 'find',
+      params: { query: { content: 'workflow', $sort: { id: 1 } } },
+    })
+    const unsubscribeMaterialized = materializedWorkflows.subscribe(() => {})
+    await waitFor(
+      () => materializedWorkflows.getSnapshot()?.status === 'success',
+      'materialized workflows',
+    )
+    t.deepEqual(materializedWorkflows.getSnapshot()!.data, [])
+
     const companyWorkflows = figbird.queryDesc({
       serviceName: 'notes',
       method: 'find',
@@ -567,7 +634,8 @@ test('ordinary fetches do not add rows to unrelated queries', async t => {
       unsubscribeTemplates = templates.subscribe(() => {})
       await waitFor(() => templates.getSnapshot()?.status === 'success', 'template fetch')
     } else {
-      notes.data = { 1: { ...template, content: 'workflow updated' } }
+      expectedTemplate = { ...template, computed: 'updated' }
+      notes.data = { 1: expectedTemplate }
       const previousFindCount = notes.counts.find
       templates.refetch()
       await waitFor(
@@ -576,13 +644,33 @@ test('ordinary fetches do not add rows to unrelated queries', async t => {
       )
     }
 
+    const previousRootFetchCount = notes.counts.find
+    materializedRoot.refetch()
+    await waitFor(
+      () =>
+        notes.counts.find > previousRootFetchCount && !materializedRoot.getSnapshot()?.isFetching,
+      'materialized root refetch',
+    )
+
     t.deepEqual(
       companyWorkflows.getSnapshot()!.data,
       [],
       `${initialCache} cache must not turn fetch discovery into query membership`,
     )
+    t.deepEqual(
+      materializedWorkflows.getSnapshot()!.data,
+      [],
+      `${initialCache} cache must not bypass materialized-root membership`,
+    )
+    t.deepEqual(
+      templates.getSnapshot()!.data,
+      [expectedTemplate],
+      `${initialCache} cache must retain sibling-owned rows across a root refetch`,
+    )
     unsubscribeTemplates?.()
     unsubscribeCompany()
+    unsubscribeMaterialized()
+    unsubscribeRoot()
     figbird.dispose()
   }
 })
