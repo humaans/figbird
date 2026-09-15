@@ -39,6 +39,7 @@ import { isServerMaintained, usesFetchOwnedRows } from './queryClassification.js
 import {
   entityKey,
   queryOfParams,
+  type EntityKey,
   type Event,
   type FindQueryConfig,
   type GetQueryConfig,
@@ -1335,7 +1336,13 @@ export class QueryStore<
         query.desc.method === 'find' &&
         Boolean(findConfig.allPages) &&
         isUnfilteredFindQuery(query.desc.params)
-      const previousEntities = isCompleteSet ? new Map(service.entities) : null
+      const previousRootEntities: Map<EntityKey, unknown> | null = isCompleteSet ? new Map() : null
+      if (previousRootEntities) {
+        for (const itemId of query.rows.ids) {
+          const entity = service.entities.get(itemId)
+          if (entity !== undefined) previousRootEntities.set(itemId, entity)
+        }
+      }
       const meta = (result as { meta?: TMeta }).meta
       const pageInfo = 'pageInfo' in result ? result.pageInfo : undefined
       const rebasedResponse = rebaseResponseData({
@@ -1423,11 +1430,11 @@ export class QueryStore<
         },
       })
 
-      const changes = previousEntities
+      const changes = previousRootEntities
         ? diffCompleteSet({
             service,
             serviceName: query.desc.serviceName,
-            previousEntities,
+            previousEntities: previousRootEntities,
             nextItemIds,
             ignoredItemIds: journaledItemIds,
           })
@@ -1441,7 +1448,7 @@ export class QueryStore<
           ),
           // A normal fetch proves the returned entity value, but not that it belongs
           // to another query. A complete-set diff does prove service membership.
-          membershipScope: previousEntities ? 'all-matching' : 'visible-only',
+          membershipScope: previousRootEntities ? 'all-matching' : 'visible-only',
           touch,
           excludeQueryId: queryId,
         }),

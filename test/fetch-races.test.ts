@@ -490,13 +490,19 @@ test('snapshot and fetch-owned queries retain their own fetched rows', async t =
     'a sibling fetch must not replace values owned by a server-authoritative query',
   )
 
-  ownedNotes.data = {}
   const complete = ownedFigbird.queryDesc(
     { serviceName: 'notes', method: 'find' },
     { allPages: true, fetchPolicy: 'network-only' },
   )
   const unsubscribeComplete = complete.subscribe(() => {})
-  await waitFor(() => complete.getSnapshot()?.status === 'success', 'complete-set removal')
+  await waitFor(() => complete.getSnapshot()?.status === 'success', 'complete-set preload')
+  ownedNotes.data = {}
+  const previousFindCount = ownedNotes.counts.find
+  complete.refetch()
+  await waitFor(
+    () => ownedNotes.counts.find > previousFindCount && !complete.getSnapshot()?.isFetching,
+    'complete-set removal',
+  )
   t.deepEqual(
     authoritative.getSnapshot().data,
     [],
@@ -574,7 +580,8 @@ test('realtime invalidations preserve canonical entities and reconcile ordinary 
 
 test('ordinary fetches do not add rows to unrelated or materialized queries', async t => {
   for (const initialCache of ['empty', 'populated'] as const) {
-    const template = { id: 1, content: 'workflow', rank: 0 }
+    const template: Note = { id: 1, content: 'workflow', rank: 0 }
+    let expectedTemplate = template
     const { figbird, notes } = createApp({ 1: template })
     const find = notes.find.bind(notes)
     notes.find = params => {
@@ -627,7 +634,8 @@ test('ordinary fetches do not add rows to unrelated or materialized queries', as
       unsubscribeTemplates = templates.subscribe(() => {})
       await waitFor(() => templates.getSnapshot()?.status === 'success', 'template fetch')
     } else {
-      notes.data = { 1: { ...template, content: 'workflow updated' } }
+      expectedTemplate = { ...template, computed: 'updated' }
+      notes.data = { 1: expectedTemplate }
       const previousFindCount = notes.counts.find
       templates.refetch()
       await waitFor(
@@ -635,6 +643,14 @@ test('ordinary fetches do not add rows to unrelated or materialized queries', as
         'template refetch',
       )
     }
+
+    const previousRootFetchCount = notes.counts.find
+    materializedRoot.refetch()
+    await waitFor(
+      () =>
+        notes.counts.find > previousRootFetchCount && !materializedRoot.getSnapshot()?.isFetching,
+      'materialized root refetch',
+    )
 
     t.deepEqual(
       companyWorkflows.getSnapshot()!.data,
@@ -645,6 +661,11 @@ test('ordinary fetches do not add rows to unrelated or materialized queries', as
       materializedWorkflows.getSnapshot()!.data,
       [],
       `${initialCache} cache must not bypass materialized-root membership`,
+    )
+    t.deepEqual(
+      templates.getSnapshot()!.data,
+      [expectedTemplate],
+      `${initialCache} cache must retain sibling-owned rows across a root refetch`,
     )
     unsubscribeTemplates?.()
     unsubscribeCompany()
