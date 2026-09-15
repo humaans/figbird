@@ -26,6 +26,8 @@ import {
   type ServiceState,
 } from './queryTypes.js'
 
+export type QueryMembershipScope = 'all-matching' | 'visible-only'
+
 export function createServiceState<TMeta = Record<string, unknown>>(
   getId: (item: unknown) => ItemId | undefined,
 ): ServiceState<TMeta> {
@@ -386,6 +388,7 @@ function applyMergeEventToQuery<TMeta>(
 export function updateQueriesFromEvents<TMeta>({
   service,
   appliedItems,
+  membershipScope,
   touch,
   getId,
   itemAdded,
@@ -397,6 +400,7 @@ export function updateQueriesFromEvents<TMeta>({
 }: {
   service: ServiceState<TMeta>
   appliedItems: readonly ProcessedCacheEvent[]
+  membershipScope: QueryMembershipScope
   touch: (queryId: string) => void
   getId: (item: unknown) => ItemId | undefined
   itemAdded: (meta: TMeta) => TMeta
@@ -419,6 +423,8 @@ export function updateQueriesFromEvents<TMeta>({
       if (queryId === excludeQueryId || excludeQueryIds?.has(queryId)) continue
       if (query.config.realtime !== 'merge') continue
       if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') continue
+      const visible = service.itemQueryIndex.get(event.itemId)?.has(queryId) ?? false
+      if (membershipScope === 'visible-only' && !visible) continue
       if (
         isServerMaintained(query.maintenance.classification) &&
         event.mode === 'server' &&
@@ -435,7 +441,6 @@ export function updateQueriesFromEvents<TMeta>({
         }
         // New fetch rows may already be counted in another server page's total.
         // Only reconcile known membership when a previously visible row changes.
-        const visible = service.itemQueryIndex.get(event.itemId)?.has(queryId) ?? false
         if (!visible || query.maintenance.isProjection) continue
         if (query.maintenance.classification === 'server-window' && event.type !== 'created') {
           const result = applyMergeEventToQuery(context, queryId, event)

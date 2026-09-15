@@ -33,6 +33,7 @@ import {
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
   updateQueriesFromEvents,
+  type QueryMembershipScope,
 } from './windowMaintenance.js'
 import { isServerMaintained, usesFetchOwnedRows } from './queryClassification.js'
 import {
@@ -1423,6 +1424,9 @@ export class QueryStore<
           processedEvents: changes.map(event =>
             cause === undefined ? event : { ...event, cause },
           ),
+          // A normal fetch proves the returned entity value, but not that it belongs
+          // to another query. A complete-set diff does prove service membership.
+          membershipScope: previousEntities ? 'all-matching' : 'visible-only',
           touch,
           excludeQueryId: queryId,
         }),
@@ -1774,6 +1778,7 @@ export class QueryStore<
       service,
       serviceName,
       processedEvents,
+      membershipScope: 'all-matching',
       touch,
       ...(excludeQueryId ? { excludeQueryId } : {}),
     })
@@ -1783,12 +1788,14 @@ export class QueryStore<
     service,
     serviceName,
     processedEvents,
+    membershipScope,
     touch,
     excludeQueryId,
   }: {
     service: ServiceState<TMeta>
     serviceName: string
     processedEvents: readonly ProcessedCacheEvent[]
+    membershipScope: QueryMembershipScope
     touch: (queryId: string) => void
     excludeQueryId?: string
   }): AppliedEventEffect[] {
@@ -1816,6 +1823,7 @@ export class QueryStore<
       updateQueriesFromEvents({
         service,
         appliedItems: [event],
+        membershipScope,
         excludeQueryIds: selectedQueries,
         touch,
         getId,
@@ -1990,6 +1998,7 @@ export class QueryStore<
                 service,
                 serviceName,
                 processedEvents: appliedEvents,
+                membershipScope: 'all-matching',
                 touch,
               })
             }

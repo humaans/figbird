@@ -530,6 +530,63 @@ test('realtime invalidations preserve canonical entities and reconcile ordinary 
   }
 })
 
+test('ordinary fetches do not add rows to unrelated queries', async t => {
+  for (const initialCache of ['empty', 'populated'] as const) {
+    const template = { id: 1, content: 'workflow', rank: 0 }
+    const { figbird, notes } = createApp({ 1: template })
+    const find = notes.find.bind(notes)
+    notes.find = params => {
+      const query = params?.query ?? {}
+      return find({
+        ...params,
+        query: Object.prototype.hasOwnProperty.call(query, 'rank') ? query : { ...query, rank: 1 },
+      })
+    }
+
+    const templates = figbird.queryDesc({
+      serviceName: 'notes',
+      method: 'find',
+      params: { query: { content: 'workflow', rank: 0 } },
+    })
+    let unsubscribeTemplates: (() => void) | undefined
+    if (initialCache === 'populated') {
+      unsubscribeTemplates = templates.subscribe(() => {})
+      await waitFor(() => templates.getSnapshot()?.status === 'success', 'template preload')
+    }
+
+    const companyWorkflows = figbird.queryDesc({
+      serviceName: 'notes',
+      method: 'find',
+      params: { query: { content: 'workflow' } },
+    })
+    const unsubscribeCompany = companyWorkflows.subscribe(() => {})
+    await waitFor(() => companyWorkflows.getSnapshot()?.status === 'success', 'company workflows')
+    t.deepEqual(companyWorkflows.getSnapshot()!.data, [])
+
+    if (initialCache === 'empty') {
+      unsubscribeTemplates = templates.subscribe(() => {})
+      await waitFor(() => templates.getSnapshot()?.status === 'success', 'template fetch')
+    } else {
+      notes.data = { 1: { ...template, content: 'workflow updated' } }
+      const previousFindCount = notes.counts.find
+      templates.refetch()
+      await waitFor(
+        () => notes.counts.find > previousFindCount && !templates.getSnapshot()?.isFetching,
+        'template refetch',
+      )
+    }
+
+    t.deepEqual(
+      companyWorkflows.getSnapshot()!.data,
+      [],
+      `${initialCache} cache must not turn fetch discovery into query membership`,
+    )
+    unsubscribeTemplates?.()
+    unsubscribeCompany()
+    figbird.dispose()
+  }
+})
+
 test('an overrun fetch response is discarded and reconciled', async t => {
   const original = { id: 1, content: 'original', rank: 1, updatedAt: 1 }
   const { figbird, notes } = createApp({ 1: original }, { eventBatchInterval: 10 })
