@@ -483,6 +483,20 @@ test('id contract: optimistic creates without a client id throw synchronously', 
   t.throws(() => m.notes.create([{ id: 7, content: 'ok' }, { content: 'no id' }]))
 })
 
+test('id contract: an optimisticItem id must be the id the payload sends', t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const { m } = figbird
+
+  const idless = t.throws(() =>
+    m.notes.create({ content: 'server assigns' }, { optimisticItem: { id: 10, content: '' } }),
+  )
+  t.regex(idless!.message, /optimistic item's id/)
+  t.throws(() =>
+    m.notes.create({ id: 10, content: '' }, { optimisticItem: { id: 11, content: '' } }),
+  )
+  t.is(feathers.service('notes').counts.create, 0, 'nothing hit the wire')
+})
+
 test('id contract: keyed optimistic mutations serialize and rebase over each acknowledgement', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const { m } = figbird

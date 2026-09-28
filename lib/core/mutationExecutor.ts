@@ -326,6 +326,20 @@ export class MutationExecutor {
             'a confirmed create to wait for the server-assigned id.',
         )
       }
+      // An explicit optimisticItem is cache-only: the payload must carry the same
+      // id, or the server assigns another and the optimistic row is never replaced.
+      const payloads: unknown[] = Array.isArray(desc.data) ? desc.data : [desc.data]
+      if (
+        items.some((item, index) => {
+          const payloadId = this.#peekId(payloads[index])
+          return payloadId === undefined || entityKey(payloadId) !== entityKey(this.#peekId(item)!)
+        })
+      ) {
+        throw new Error(
+          `figbird: optimistic creates on "${serviceName}" must send the optimistic item's id ` +
+            'in the payload, so the server creates the record the cache already shows.',
+        )
+      }
     }
 
     const args = this.#buildMutationArgs(desc)

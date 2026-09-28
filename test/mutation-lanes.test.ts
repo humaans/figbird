@@ -288,7 +288,7 @@ test('mutation lanes: explicit optimistic create ids serialize dependent patches
   }) as never
 
   const created = figbird.m.notes.create(
-    { content: 'wire create' },
+    { id: 10, content: 'wire create' },
     { optimisticItem: { id: 10, content: 'optimistic create' } },
   )
   const patched = figbird.m.notes.patch(10, { content: 'dependent patch' })
