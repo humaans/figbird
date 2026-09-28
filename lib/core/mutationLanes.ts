@@ -142,6 +142,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     const index = state.entries.indexOf(entry)
     if (index === -1) return null
     state.entries.splice(index, 1)
+    if (state.removedDuring === entry) state.removedDuring = undefined
     return this.#reproject(state)
   }
 
@@ -248,12 +249,13 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     }
 
     // A removal that takes the row away while a write is in flight happened after
-    // that write succeeded, so its acknowledgement must not bring the row back. A
-    // removal of an already-absent row (the echo of our own earlier remove, ahead of
-    // a re-create) says nothing about the running write. Any other accepted event
-    // clears the mark: the row is back.
-    state.removedDuring =
-      type === 'removed' && state.running && state.base !== ABSENT ? state.entries[0] : undefined
+    // that write succeeded, so its acknowledgement is older than everything from
+    // here on — including a re-create — and must not replace it. The mark holds
+    // until that write settles. A removal of an already-absent row (the echo of our
+    // own earlier remove, ahead of a re-create) says nothing about the running write.
+    if (type === 'removed' && state.running && state.base !== ABSENT) {
+      state.removedDuring = state.entries[0]
+    }
     this.#setBase(state, type, item)
     return {
       projection: this.#reproject(state),

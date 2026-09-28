@@ -146,6 +146,30 @@ test('mutation lanes: the echo of our own remove does not swallow a re-create', 
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'again')
 })
 
+test('mutation lanes: a re-create after a mid-flight removal outranks the older acknowledgement', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  // No updatedAt anywhere, so staleness can't decide; event order must.
+  const ack = deferred<MockItem>()
+  notes.patch = (() => ack.promise) as never
+  const patching = figbird.m.notes.patch(2, { content: 'mine' })
+  notes.emit('removed', { id: 2, content: 'world' })
+  notes.emit('created', { id: 2, content: 'recreated elsewhere' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  ack.resolve({ id: 2, content: 'mine' })
+  await patching
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(latest?.data?.find(note => note.id === 2)?.content, 'recreated elsewhere')
+})
+
 test('mutation lanes: batch create acknowledgements advance lanes opened by later patches', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
