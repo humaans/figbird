@@ -24,6 +24,11 @@ export interface ChangeEntry {
 export interface ChangeLog {
   append(entry: ChangeEntry): void | Promise<void>
   since(seq: number): ChangeEntry[] | 'truncated' | Promise<ChangeEntry[] | 'truncated'>
+  /**
+   * Record that the change at `seq` committed but could not be appended: from
+   * then on `since` must answer `'truncated'` for any `seq` at or before it.
+   */
+  lost(seq: number): void | Promise<void>
 }
 
 export interface MemoryChangeLogOptions {
@@ -44,8 +49,8 @@ export function memoryChangeLog({ size = 10_000 }: MemoryChangeLogOptions = {}):
   const entries: ChangeEntry[] = []
   let next = 0
   // Entries are appended in commit order, which is not quite sequence order, so
-  // track the highest evicted sequence rather than the oldest retained one.
-  let highestEvicted = -Infinity
+  // track the highest evicted or lost sequence rather than the oldest retained one.
+  let highestMissing = -Infinity
 
   return {
     append(entry) {
@@ -53,12 +58,15 @@ export function memoryChangeLog({ size = 10_000 }: MemoryChangeLogOptions = {}):
         entries.push(entry)
         return
       }
-      highestEvicted = Math.max(highestEvicted, entries[next]!.seq)
+      highestMissing = Math.max(highestMissing, entries[next]!.seq)
       entries[next] = entry
       next = (next + 1) % size
     },
+    lost(seq) {
+      highestMissing = Math.max(highestMissing, seq)
+    },
     since(seq) {
-      if (highestEvicted >= seq) return 'truncated'
+      if (highestMissing >= seq) return 'truncated'
       const result: ChangeEntry[] = []
       for (let i = 0; i < entries.length; i++) {
         const entry = entries[(next + i) % entries.length]!

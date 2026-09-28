@@ -119,13 +119,19 @@ export function versioned({
       const id = row[idField]
       if (seq === undefined || (typeof id !== 'string' && typeof id !== 'number')) continue
       const entryScope = scope?.(row, context)
-      await log.append({
-        seq,
-        service: context.path,
-        id,
-        type,
-        ...(entryScope === undefined ? {} : { scope: entryScope }),
-      })
+      try {
+        await log.append({
+          seq,
+          service: context.path,
+          id,
+          type,
+          ...(entryScope === undefined ? {} : { scope: entryScope }),
+        })
+      } catch {
+        // The write has committed: failing it now would invite a retry that
+        // duplicates it. Replays that would need the entry fall back instead.
+        await log.lost(seq)
+      }
     }
   }
 

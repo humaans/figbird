@@ -400,6 +400,24 @@ test('a refetch recovers a row whose last commit carries the lower version', asy
   client.dispose()
 })
 
+test('a change that fails to log keeps the write and truncates the log', async t => {
+  const inner = memoryChangeLog()
+  let failing = false
+  const log: ChangeLog = {
+    ...inner,
+    append: entry => {
+      if (failing) throw new Error('log unavailable')
+      return inner.append(entry)
+    },
+  }
+  const people = (await createServer({ log })).service('people')
+  const ada = await people.create({ id: 1, name: 'Ada', team: 'a' })
+
+  failing = true
+  await t.notThrowsAsync(people.patch(1, { name: 'Ada Lovelace' }))
+  t.is(await inner.since(ada._v!), 'truncated')
+})
+
 test('in database mode the hooks only log the version the database assigned', async t => {
   const log = memoryChangeLog()
   const app = feathers()
