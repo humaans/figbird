@@ -68,7 +68,7 @@ function Root() {
 ```
 
 `createHooks(schema)` is pure and safe to evaluate at import time. The provider selects the
-runtime instance, so tests, stories, and SSR requests can inject their own client. Imperative
+runtime instance, so tests and stories can inject their own client. Imperative
 code outside React uses the instance directly: `figbird.m`, `figbird.prepare`, and
 `figbird.prefetch`. Construct each injected instance with the same schema object passed to
 `createHooks`; provider-bound APIs and schema-built queries throw when the schemas differ.
@@ -78,10 +78,6 @@ Transient fetch failures retry up to three times with exponential backoff before
 Successful results stay fresh for five minutes by default, so short remounts reuse the
 cache without another request. Set `staleTime` on `new Figbird(...)` to change the app-wide
 default, or pass it to an individual query reader.
-
-Server rendering needs a streaming renderer (`renderToPipeableStream`) and a per-request
-instance, disposed after the render. The server's cache is not handed to the client, so the client
-refetches during hydration.
 
 ## Features
 
