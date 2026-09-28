@@ -720,6 +720,72 @@ test('id contract: a write that references a pending create waits for it and fai
   )
 })
 
+test('id contract: transactions, batch creates, and coalesced patches hold for referenced creates', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers, adapter } = createTestApp(related, services())
+  const { m } = figbird
+  const sent: string[] = []
+  const parents = new Map<number, ReturnType<typeof deferred<MockItem>>>()
+  const notes = feathers.service('notes')
+  const create = notes.create.bind(notes)
+  const patch = notes.patch.bind(notes)
+  notes.create = ((data: MockItem | MockItem[]) => {
+    if (Array.isArray(data)) sent.push('batch')
+    else if (parents.has(data.id)) return parents.get(data.id)!.promise
+    return create(data as never)
+  }) as never
+  notes.patch = ((id: number, data: Partial<MockItem>) => {
+    sent.push('patch')
+    return patch(id, data)
+  }) as never
+  adapter.transaction = operations => {
+    sent.push('transaction')
+    return Promise.resolve(operations.map(operation => operation.args[0]))
+  }
+
+  // Creates inside one transaction commit together; they do not hold for each other.
+  await figbird.transaction(tx => {
+    tx.m.notes.create({ id: 5, content: 'parent' })
+    tx.m.notes.create({ id: 6, content: 'child', parentId: 5 })
+  })
+  sent.length = 0
+
+  parents.set(10, deferred<MockItem>())
+  const parent = m.notes.create({ id: 10, content: 'parent' })
+  const batch = m.notes.create([{ id: 12, content: 'batch', parentId: 10 }])
+  const transaction = figbird.transaction(tx => {
+    tx.m.notes.create({ id: 13, content: 'transaction', parentId: 10 })
+  })
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const coalesced = queue.m.notes.patch(1, { content: 'moved' })
+  void queue.m.notes.patch(1, { parentId: 10 })
+  queue.flush()
+  await new Promise(r => setTimeout(r, 10))
+  t.deepEqual(sent, [], 'every write waits for the record it references')
+  parents.get(10)!.resolve({ id: 10, content: 'parent' })
+  await Promise.all([parent, batch, transaction, coalesced])
+  t.deepEqual(sent.sort(), ['batch', 'patch', 'transaction'])
+
+  parents.set(20, deferred<MockItem>())
+  const doomed = t.throwsAsync(m.notes.create({ id: 20, content: 'doomed' }))
+  const batchOrphan = t.throwsAsync(m.notes.create([{ id: 22, content: 'x', parentId: 20 }]), {
+    message: /references failed/,
+  })
+  const transactionOrphan = t.throwsAsync(
+    figbird.transaction(tx => {
+      tx.m.notes.create({ id: 23, content: 'x', parentId: 20 })
+    }),
+    { message: /references failed/ },
+  )
+  parents.get(20)!.reject(new Error('rejected'))
+  await Promise.all([doomed, batchOrphan, transactionOrphan])
+})
+
 test('id contract: a write holds for its referenced create before observers see it', async t => {
   const related = createSchema({
     services: { notes: service<{ item: Note }>() },

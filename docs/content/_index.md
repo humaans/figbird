@@ -695,7 +695,8 @@ record's create is pending. `m.comments.create({ id, issueId })` reaches the ser
 after the `m.issues.create({ id: issueId })` before it succeeds, and it rolls back with
 the issue if that create fails. Figbird follows only the written record's own relation
 fields, not relations further along the path, and only relations that name the other
-record by its id.
+record by its id. Batch creates, transactions, and coalesced queue patches wait the same
+way; creates inside one transaction commit together and do not wait for each other.
 
 Confirmed writes with the same service and id follow the same ordering, so they cannot
 overtake optimistic writes. Id-less confirmed creates, batch creates, and custom methods

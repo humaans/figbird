@@ -675,13 +675,17 @@ as its base and folds the remaining create/update/patch/remove intents over that
 acknowledgement or failure. This prevents an older response from replacing newer optimistic state
 and makes rollback compositional: remove only the failed intent, then replay what remains. A failed
 create cancels the queued writes that depended on the identity. Different records stay parallel,
-except that a keyed write whose data names a record with a pending create (through one of the
-schema's direct `one` relations to the destination's id field) waits for that create's
-acknowledgement; otherwise a child row could reach the server before its parent. If the create
-fails, the write is aborted inside the create's settlement, so its optimism rolls back in the same
-cache transition and no view shows the child outliving a parent that never existed. Only the
-written record's own foreign keys are followed. Id-less confirmed creates, batch creates, and opaque custom methods have no record key
-and keep the direct path.
+except that a write whose data names a record with a pending create (through one of the schema's
+direct `one` relations to the destination's id field) waits for that create's acknowledgement;
+otherwise a child row could reach the server before its parent. If the create fails, a keyed write
+is aborted inside the create's settlement, so its optimism rolls back in the same cache transition
+and no view shows the child outliving a parent that never existed. Only the written record's own
+foreign keys are followed. Id-less confirmed creates, batch creates, and opaque custom methods have
+no record key and keep the direct path; the creates still hold for the records they reference, and
+a failed reference cancels them through their ordinary failure path. Transaction entries hold too,
+except for creates in the same transaction, which commit with them; a queued patch whose coalesced
+data gains a reference adds the hold before it is sent. A hold only ever targets a create already
+queued, while nothing waits on the holding write, so holds cannot deadlock.
 
 The active intent overlay participates in fetch rebasing even when it predates the fetch cursor.
 Locally exact query nodes consume projected entity events immediately. Reconciliation that needs
