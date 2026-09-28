@@ -40,7 +40,10 @@ export function queryPage({
         : { kind: 'done' },
     }
   }
-  const limit = query?.$limit ?? ('limit' in metadata ? metadata.limit : undefined)
+  // The server's reported limit is the page size it actually served: Feathers
+  // caps a requested $limit at paginate.max, and a full capped page has more after it.
+  const reportedLimit = 'limit' in metadata ? metadata.limit : undefined
+  const limit = typeof reportedLimit === 'number' ? reportedLimit : query?.$limit
   const offset = typeof query?.$skip === 'number' ? query.$skip : 0
   return {
     rows,

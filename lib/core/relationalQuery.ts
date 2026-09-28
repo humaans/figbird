@@ -1009,7 +1009,7 @@ export class RelationalQueryRef<
                     query: {
                       ...this.#ast.query,
                       $limit: pageSize,
-                      $skip: pageIndex * pageSize,
+                      $skip: typeof after === 'number' ? after : pageIndex * pageSize,
                     },
                   },
                 },

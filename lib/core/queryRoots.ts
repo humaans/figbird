@@ -225,6 +225,7 @@ export class PagedQueryRoot<
     pageSize: number
     includeTotal: boolean
     sequential: boolean
+    /** `after` is the native cursor for sequential pages, the row offset for offset pages. */
     makePageRef: (pageIndex: number, after?: PageCursor) => QueryRef<unknown[], unknown, TMeta>
     onRows: (rows: unknown[]) => void
     onChange: () => void
@@ -349,7 +350,9 @@ export class PagedQueryRoot<
     if (!previousPageState || previousPageState.status !== 'success') return
     const continuation = this.#pageRefs.at(-1)!.getPage().continuation
     if (continuation.kind === 'done') return
-    const after = continuation.kind === 'cursor' ? continuation.cursor : undefined
+    // Offset pages start where the previous page ended — the server may serve
+    // fewer rows per page than pageSize when it caps $limit.
+    const after = continuation.kind === 'cursor' ? continuation.cursor : continuation.offset
 
     this.#isLoadingMore = true
     this.#loadMoreError = null
