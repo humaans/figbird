@@ -74,6 +74,11 @@ export class FetchEventJournal {
     }
   }
 
+  /** Whether any fetch against the service is in flight and recording events. */
+  isRecording(serviceName: string): boolean {
+    return this.#services.has(serviceName)
+  }
+
   end(cursor: FetchJournalCursor): void {
     const journal = this.#services.get(cursor.serviceName)
     if (!journal) return

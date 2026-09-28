@@ -1373,7 +1373,9 @@ A returning reader cancels eviction.
 `gcTime` controls memory retention independently of `staleTime`, which controls freshness.
 Set `gcTime: Infinity` to keep idle results for the instance's lifetime, or `0` to evict
 on the next timer turn. Unreferenced entities and unused service subscriptions are
-released when queries expire. Complete unfiltered `.all()` materializations follow the
+released when queries expire. Realtime events for rows no query references keep only the
+1,000 most recently changed such rows per service, so a busy service cannot grow the cache
+without bound. Complete unfiltered `.all()` materializations follow the
 same retention policy. After one expires, remaining queries fetch from the server until
 a new `.all()` read completes. To keep a full service available for local reads, hold
 `const prepared = figbird.prepare(figbird.q.notes.all())` and call `prepared.release()`

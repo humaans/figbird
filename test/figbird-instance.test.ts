@@ -2,6 +2,7 @@ import { TestClock } from './clock.js'
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
+import { MAX_RETAINED_UNREFERENCED_ENTITIES } from '../lib/core/queryStore'
 import { createSchema, service } from '../lib/core/schema'
 import type { FindResult } from '../lib/testing'
 import { mockFeathers } from './helpers'
@@ -508,4 +509,35 @@ test('figbird.query keeps $sort precedence in query identity', t => {
     figbird.query(figbird.q.notes.where({ content: 'b', tag: 'a' }).orderBy('tag')),
     'filter key order still does not affect identity',
   )
+})
+
+test('realtime events for rows no query references leave the entity cache bounded', async t => {
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'kept', tag: 'narrow' } } },
+    posts: { data: { 1: { id: 1, title: 'first', body: 'kept' } } },
+  })
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+  })
+  const narrow = figbird.query(figbird.q.notes.where({ tag: 'narrow' }))
+  const releaseNarrow = narrow.subscribe(() => {})
+  const all = figbird.query(figbird.q.posts.all())
+  const releaseAll = all.subscribe(() => {})
+  await Promise.all([narrow.suspensePromise(), all.suspensePromise()])
+
+  const events = MAX_RETAINED_UNREFERENCED_ENTITIES * 2
+  for (let id = 2; id <= events + 1; id++) {
+    feathers.service('notes').emit('created', { id, content: 'unrelated', tag: 'other' })
+    feathers.service('posts').emit('created', { id, title: 'new', body: 'kept' })
+  }
+
+  const notes = figbird.getState().get('notes')!.entities
+  t.is(notes.size, 1 + MAX_RETAINED_UNREFERENCED_ENTITIES, 'unreferenced rows are bounded')
+  t.true(notes.has('1'), 'the referenced row stays')
+  t.true(notes.has(String(events + 1)), 'the most recently touched rows stay')
+  t.is(figbird.getState().get('posts')!.entities.size, events + 1, 'materialized keeps every row')
+  releaseNarrow()
+  releaseAll()
 })

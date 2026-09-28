@@ -156,6 +156,16 @@ export const QUERY_FETCH_HISTORY_LIMIT = 50
 export const DEFAULT_STALE_TIME = 5 * 60_000
 export const DEFAULT_GC_TIME = 30 * 60_000
 
+/**
+ * Realtime-touched rows no query references that a service keeps anyway (see
+ * #trimUnreferencedEntities). A cached row is the event's known previous value:
+ * window merges use it to prove an entering row is new, and relational filters to
+ * skip refetches when a dependency's filtered fields didn't change, or to match a
+ * root row against its related row. Without it both fall back to a refetch, so the
+ * most recently changed rows are worth keeping — but only up to a bound.
+ */
+export const MAX_RETAINED_UNREFERENCED_ENTITIES = 1000
+
 export interface DevtoolsCacheEditResult {
   ok: boolean
   error?: string
@@ -192,6 +202,8 @@ export class QueryStore<
   #retention: QueryRetention
   #disposed = false
   #dependencyOwners = new Map<string, number>()
+  /** Per service, realtime-touched keys nothing referenced, oldest touch first. */
+  #unreferencedEntities = new Map<string, Set<EntityKey>>()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
   #processedEventListeners: Set<(event: ProcessedCacheEvent) => void> = new Set()
   #invalidationListeners: Set<(event: RealtimeInvalidation) => void> = new Set()
@@ -422,6 +434,7 @@ export class QueryStore<
     this.#executions.clear()
     this.#reconnectQueryIds.clear()
     this.#dependencyOwners.clear()
+    this.#unreferencedEntities.clear()
     this.#eventQueue = []
     this.#appliedEventQueue = []
     this.#globalListeners.clear()
@@ -1070,6 +1083,7 @@ export class QueryStore<
       return isCurrent ? { kind: 'failed', error } : { kind: 'stale' }
     } finally {
       this.#fetchEventJournal.end(journalCursor)
+      this.#trimUnreferencedEntities(trace.serviceName)
     }
   }
 
@@ -2126,6 +2140,15 @@ export class QueryStore<
           }
           this.#publishRealtimeInvalidations(serviceName, invalidations)
         }
+
+        // Trim only after every listener has seen the batch: relational filters
+        // resolve rows of other services from the cache while reacting.
+        for (const { serviceName, effects } of followups) {
+          this.#trimUnreferencedEntities(
+            serviceName,
+            effects.map(({ event }) => event.itemId),
+          )
+        }
       }
     } finally {
       this.#processingEventQueue = false
@@ -2589,18 +2612,55 @@ export class QueryStore<
     if (service?.materialized || this.#dependencyOwners.has(serviceName)) return
     if (service) {
       for (const key of service.entities.keys()) {
-        if (
-          !service.itemQueryIndex.has(key) &&
-          !this.#mutationExecutor.hasPending(serviceName, key)
-        ) {
-          service.entities.delete(key)
-        }
+        if (this.#isUnreferenced(service, serviceName, key)) service.entities.delete(key)
       }
       if (service.queries.size > 0 || service.entities.size > 0) return
       this.#state.delete(serviceName)
     }
+    this.#unreferencedEntities.delete(serviceName)
     this.#realtime.get(serviceName)?.()
     this.#realtime.delete(serviceName)
+  }
+
+  /**
+   * The per-batch counterpart of #pruneService: of the rows a realtime batch touched
+   * that no query references, keep the most recently touched
+   * MAX_RETAINED_UNREFERENCED_ENTITIES and drop the rest, visiting only the touched
+   * keys and the evicted ones. Eviction waits while a fetch against the service is in
+   * flight — its response rebases journaled rows over the cached entity. A
+   * materialized service keeps everything.
+   */
+  #trimUnreferencedEntities(serviceName: string, touched: readonly EntityKey[] = []): void {
+    const service = this.#state.get(serviceName)
+    if (!service || service.materialized) {
+      this.#unreferencedEntities.delete(serviceName)
+      return
+    }
+    let keys = this.#unreferencedEntities.get(serviceName)
+    for (const key of touched) {
+      if (!this.#isUnreferenced(service, serviceName, key)) continue
+      keys ??= new Set()
+      // Re-insert so iteration order stays oldest touch first.
+      keys.delete(key)
+      keys.add(key)
+    }
+    if (!keys) return
+    this.#unreferencedEntities.set(serviceName, keys)
+    if (this.#fetchEventJournal.isRecording(serviceName)) return
+
+    for (const key of keys) {
+      if (keys.size <= MAX_RETAINED_UNREFERENCED_ENTITIES) break
+      keys.delete(key)
+      if (this.#isUnreferenced(service, serviceName, key)) service.entities.delete(key)
+    }
+  }
+
+  #isUnreferenced(service: ServiceState<TMeta>, serviceName: string, key: EntityKey): boolean {
+    return (
+      service.entities.has(key) &&
+      !service.itemQueryIndex.has(key) &&
+      !this.#mutationExecutor.hasPending(serviceName, key)
+    )
   }
 
   // Internal helpers
