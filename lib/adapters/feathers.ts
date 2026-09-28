@@ -187,6 +187,9 @@ export function cursorPagination({
 
 const OFFSET_PAGINATION: FeathersOffsetPagination = { kind: 'offset' }
 
+/** Offset walks retried before findAll gives up on reading a consistent set. */
+const FIND_ALL_ATTEMPTS = 3
+
 /** Explicitly keep one Feathers service on the built-in `$limit`/`$skip` path. */
 export function offsetPagination(): FeathersOffsetPagination {
   return OFFSET_PAGINATION
@@ -648,30 +651,72 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
         ? this.#mergeQueryParams(params, { $limit: defaultPageSize })
         : params || {}
 
+    for (let attempt = 1; ; attempt++) {
+      const { result, consistent } = await this.#walkOffsetPages(serviceName, baseParams)
+      if (consistent) return result
+      if (attempt === FIND_ALL_ATTEMPTS) {
+        throw new Error(
+          `findAll for "${serviceName}" read inconsistent pages ${attempt} times in a row: rows shifted between pages, or the service ignores $skip`,
+        )
+      }
+    }
+  }
+
+  /**
+   * Read every page by `$skip`. A write landing between pages shifts the offsets:
+   * rows repeat after a create and are skipped after a remove. The walk is
+   * consistent only when no row repeats and the reported total holds steady and
+   * matches the rows read — an inconsistent walk must not be trusted as the
+   * complete set, where a skipped row would read as removed.
+   */
+  async #walkOffsetPages(
+    serviceName: string,
+    params: FeathersParams<TQuery>,
+  ): Promise<{ result: QueryResponse<unknown[], FeathersFindMeta>; consistent: boolean }> {
     const result: QueryResponse<unknown[], FeathersFindMeta> = {
       data: [],
       meta: { total: -1, limit: 0, skip: 0 },
     }
+    const seen = new Set<string | number>()
+    let consistent = true
+    let firstTotal: number | undefined
     let $skip = 0
 
     while (true) {
       const { data, meta } = await this.#_find(
         serviceName,
-        this.#mergeQueryParams(baseParams, { $skip }),
+        this.#mergeQueryParams(params, { $skip }),
       )
 
       result.meta = { ...result.meta, ...meta }
-      result.data.push(...data)
+      firstTotal ??= meta.total
+      if (meta.total !== firstTotal) consistent = false
+      let progressed = false
+      for (const item of data) {
+        const id = this.getId(item)
+        if (id !== undefined && seen.has(id)) {
+          consistent = false
+          continue
+        }
+        if (id !== undefined) seen.add(id)
+        result.data.push(item)
+        progressed = true
+      }
 
       const done =
         data.length === 0 ||
         data.length < meta.limit ||
+        // a service that ignores $skip returns the same page forever
+        !progressed ||
         // allow total to be -1 to indicate that total will not be available on this endpoint
         (meta.total > 0 && result.data.length >= meta.total)
 
-      if (done) return result
+      if (done) {
+        if (meta.total >= 0 && result.data.length !== meta.total) consistent = false
+        return { result, consistent }
+      }
 
-      $skip = result.data.length
+      $skip += data.length
     }
   }
 

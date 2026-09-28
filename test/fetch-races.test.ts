@@ -45,12 +45,14 @@ function createApp(
     retryDelay,
     clock,
     isInvalidationEvent,
+    pageSizeWhenFetchingAll,
   }: {
     eventBatchInterval?: number
     retry?: number | false
     retryDelay?: RetryDelay
     clock?: TestClock
     isInvalidationEvent?: (event: RealtimeEventContext) => boolean
+    pageSizeWhenFetchingAll?: number
   } = {},
 ) {
   const feathers = mockFeathers({ notes: { data } }, { queryAwareFind: true })
@@ -59,6 +61,9 @@ function createApp(
     ...(clock ? { clock } : {}),
     adapter: new FeathersAdapter(feathers, {
       ...(isInvalidationEvent ? { isInvalidationEvent } : {}),
+      ...(pageSizeWhenFetchingAll
+        ? { defaultPageSizeWhenFetchingAll: pageSizeWhenFetchingAll }
+        : {}),
     }),
     eventBatchInterval,
     reconcileCooldown: 0,
@@ -382,6 +387,98 @@ test('a complete-set refetch does not delete a row created during the fetch', as
   t.false(processed.some(event => event.type === 'removed' && event.itemId === '2'))
   unsub()
   unsubProcessed()
+})
+
+test('a create landing between findAll pages does not duplicate rows', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        10: { id: 10, content: 'ten', rank: 10 },
+        11: { id: 11, content: 'eleven', rank: 11 },
+        12: { id: 12, content: 'twelve', rank: 12 },
+        13: { id: 13, content: 'thirteen', rank: 13 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === 1) {
+      notes.data = { ...notes.data, 5: { id: 5, content: 'five', rank: 5 } }
+    }
+    return page
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  const result = await adapter.findAll('notes')
+  t.deepEqual(ids(result.data), [5, 10, 11, 12, 13])
+})
+
+test('a remove landing between findAll pages does not delete the skipped row', async t => {
+  const { figbird, notes } = createApp(
+    {
+      1: { id: 1, content: 'one', rank: 1 },
+      2: { id: 2, content: 'two', rank: 2 },
+      3: { id: 3, content: 'three', rank: 3 },
+      4: { id: 4, content: 'four', rank: 4 },
+    },
+    { pageSizeWhenFetchingAll: 2 },
+  )
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { allPages: true })
+  const processed: ProcessedCacheEvent[] = []
+  const unsubProcessed = figbird.queryStore.subscribeToProcessedEvents(event => {
+    processed.push(event)
+  })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial complete fetch')
+
+  // Removing row 1 after the refetch's first page shifts row 3 onto the page
+  // already read, so the next `$skip` steps over it.
+  const find = notes.find.bind(notes)
+  const firstRefetchPage = notes.counts.find + 1
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === firstRefetchPage) {
+      const removed = notes.data[1]!
+      notes.data = { ...notes.data }
+      delete notes.data[1]
+      notes.emit('removed', removed)
+    }
+    return page
+  }
+  ref.refetch()
+
+  await waitFor(
+    () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
+    'the complete refetch',
+  )
+  t.deepEqual(ids(ref.getSnapshot()!.data), [2, 3, 4])
+  t.true(figbird.getState().get('notes')!.entities.has('3'))
+  t.false(processed.some(event => event.type === 'removed' && event.itemId === '3'))
+  unsub()
+  unsubProcessed()
+})
+
+test('findAll terminates when the service ignores $skip', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'one', rank: 1 },
+        2: { id: 2, content: 'two', rank: 2 },
+        3: { id: 3, content: 'three', rank: 3 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    if (notes.counts.find >= 20) throw new Error('findAll kept paging')
+    return find({ ...params, query: { ...params?.query, $skip: 0 } })
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  await t.throwsAsync(adapter.findAll('notes'), { message: /inconsistent pages/ })
 })
 
 test('a provable window merge survives an older reconcile response', async t => {
