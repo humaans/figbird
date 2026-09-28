@@ -34,7 +34,7 @@ function IssueDetail({ id }: { id: number }) {
 - **Optimistic mutations, by default** — writes show immediately and roll back on failure everywhere at once
 - **Query preparation** — routers and hover handlers warm the exact queries screens will read
 - **Full TypeScript** — one schema, inference across builders, relations, and mutations
-- **Framework-agnostic core** — works outside React for SSR, testing, or background sync
+- **Framework-agnostic core** — works outside React for testing or background sync
 
 ## Installation
 
@@ -2047,7 +2047,7 @@ one schema from being applied to another runtime.
 
 Required for runtime-backed hooks from `createHooks`, such as `useQuery`, `useMutations`, and
 `useMutating`. It supplies the instance to a tree and is the injection point for application
-roots, per-request SSR instances, stories, and tests. `useAction` can also run without a provider;
+roots, stories, and tests. `useAction` can also run without a provider;
 when one exists, it uses that instance for observability events.
 
 ```tsx
