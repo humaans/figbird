@@ -90,6 +90,11 @@ export type AdapterConnectionEvent =
   | { type: 'error'; phase: 'connect' | 'reconnect'; error: Error }
   | { type: 'reconnect-failed'; error?: Error }
 
+/** Where the candidate row of a staleness check came from. */
+export interface StaleCheckContext {
+  source: 'fetch'
+}
+
 /** Service context supplied when the adapter evaluates a query locally. */
 export interface MatcherContext {
   serviceName: string
@@ -178,7 +183,12 @@ export interface Adapter<
    */
   getId(item: unknown): string | number | undefined
 
-  isItemStale(currItem: unknown, nextItem: unknown): boolean
+  /**
+   * Whether `nextItem` is older than `currItem`. `{ source: 'fetch' }` marks a row
+   * a query fetch just returned — the server's current answer rather than a
+   * delivery that may be out of order.
+   */
+  isItemStale(currItem: unknown, nextItem: unknown, context?: StaleCheckContext): boolean
 
   // Matcher is typed with TQuery but works with unknown items
   matcher(

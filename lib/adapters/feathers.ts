@@ -11,6 +11,7 @@ import type {
   PageSource,
   QueryResponse,
   RealtimeEventContext,
+  StaleCheckContext,
 } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type { Schema, ServiceDefinitionByPath, ServicePaths } from '../core/schema.js'
@@ -966,13 +967,18 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       : this.#updatedAtField(item)
   }
 
-  isItemStale(currItem: unknown, nextItem: unknown): boolean {
-    // Distinct row versions order the writes; timestamps decide rows written
-    // without the version hooks, and ties (a multi-row write shares a version).
-    const currVersion = this.#sync?.versionOf(currItem)
-    const nextVersion = this.#sync?.versionOf(nextItem)
-    if (currVersion !== undefined && nextVersion !== undefined && currVersion !== nextVersion) {
-      return nextVersion < currVersion
+  isItemStale(currItem: unknown, nextItem: unknown, context?: StaleCheckContext): boolean {
+    // Distinct row versions order deliveries — events, replays, mutation results.
+    // A fetched row is the server's current answer and never loses on version:
+    // versions stamped before the write aren't commit-ordered, so the stored row
+    // can carry a lower version than an event already applied. Timestamps decide
+    // fetched rows, rows without versions, and ties (a multi-row write shares one).
+    if (context?.source !== 'fetch') {
+      const currVersion = this.#sync?.versionOf(currItem)
+      const nextVersion = this.#sync?.versionOf(nextItem)
+      if (currVersion !== undefined && nextVersion !== undefined && currVersion !== nextVersion) {
+        return nextVersion < currVersion
+      }
     }
 
     const currMs = toEpochMs(this.#getUpdatedAt(currItem))

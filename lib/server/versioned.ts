@@ -19,6 +19,16 @@ export interface VersionedOptions {
   field?: string
   sequencer: Sequencer
   log: ChangeLog
+  /**
+   * Who assigns `field`. `hook` (the default) stamps it before the write, which
+   * is not commit-ordered: of two concurrent writes to one row, the one stamped
+   * first can commit last and leave the row with the lower version. `database`
+   * leaves it to the database inside the write, under the row lock — a trigger or
+   * `SET _v = nextval(...)` — so versions follow commit order; the hooks then only
+   * log the version the returned row carries, and `sequencer` must draw from the
+   * same sequence, since it still versions removals.
+   */
+  assign?: 'hook' | 'database'
 }
 
 const METHOD_CHANGES: Record<string, ChangeType> = {
@@ -47,8 +57,8 @@ const isRow = (value: unknown): value is Row =>
  * to the removed result, so the `removed` event carries a newer version than any
  * earlier event for the row. Custom methods and reads are left alone.
  */
-export function versioned({ field = '_v', sequencer, log }: VersionedOptions): {
-  before: Record<'create' | 'update' | 'patch', VersionedHook[]>
+export function versioned({ field = '_v', sequencer, log, assign = 'hook' }: VersionedOptions): {
+  before: Partial<Record<'create' | 'update' | 'patch', VersionedHook[]>>
   after: Record<'create' | 'update' | 'patch' | 'remove', VersionedHook[]>
 } {
   // The sequences stamped on each call's data, for results that don't echo the
@@ -101,7 +111,8 @@ export function versioned({ field = '_v', sequencer, log }: VersionedOptions): {
   }
 
   return {
-    before: { create: [stampData], update: [stampData], patch: [stampData] },
+    before:
+      assign === 'hook' ? { create: [stampData], update: [stampData], patch: [stampData] } : {},
     after: { create: [record], update: [record], patch: [record], remove: [record] },
   }
 }

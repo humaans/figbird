@@ -9,6 +9,7 @@ import {
   type Adapter,
   type PageResponse,
   type QueryResponse,
+  type StaleCheckContext,
 } from '../adapters/adapter.js'
 import { isEphemeralQuery } from './queryIdentity.js'
 import { type FigbirdEventEmitter, type FetchReason, type TraceCause } from './events.js'
@@ -88,6 +89,9 @@ type FetchAttemptOutcome =
   | { kind: 'failed'; error: Error }
 
 const DEFAULT_RETRIES = 3
+
+/** Staleness context for rows a query fetch returned. */
+const FETCHED: StaleCheckContext = { source: 'fetch' }
 
 /** A successful result with no fetch in flight and no background failure. */
 function isSettled(state: { status: string; isFetching: boolean; error: Error | null }): boolean {
@@ -1485,7 +1489,7 @@ export class QueryStore<
         latestEventById,
         entities: service.entities,
         getId,
-        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next, FETCHED),
         canKeepCurrentItem: item =>
           !(
             query.desc.method === 'find' &&
@@ -1522,7 +1526,7 @@ export class QueryStore<
         serviceName: query.desc.serviceName,
         events: fetchedRows,
         getId,
-        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next, FETCHED),
         processedEvents: fetchedEvents,
       })
 

@@ -183,6 +183,9 @@ function connect(
         quiet = pending === 0 ? quiet + 1 : 0
       }
     },
+    deliver(path: string, event: string, row: unknown) {
+      listeners.get(path)?.emit(event, clone(row))
+    },
     disconnect() {
       connected = false
       socket.emit('disconnect', 'transport close')
@@ -332,42 +335,69 @@ test('listening to a service the sync service does not replay falls back to refe
   client.dispose()
 })
 
-test('a stale response loses to a newer row version without timestamps', async t => {
-  const refetchFromStaleCache = async (adapterOptions: FeathersAdapterOptions) => {
+test('an out-of-order event loses to a newer row version without timestamps', async t => {
+  const deliverLate = async (adapterOptions: FeathersAdapterOptions) => {
     const app = await createServer()
     const people = app.service('people')
     await people.create({ id: 1, name: 'Ada', team: 'a' })
-    // A server-side response cache that serves one outdated page.
-    let cached: unknown
-    let serveCached = false
-    people.hooks({
-      after: {
-        find: [
-          context => {
-            if (serveCached) context.result = cached as typeof context.result
-            else cached = context.result
-          },
-        ],
-      },
-    })
     const bridge = connect(app)
     const client = await mount(bridge, adapterOptions)
+    const first = await people.patch(1, { name: 'Ada King' })
     await people.patch(1, { name: 'Ada Lovelace' })
-    await bridge.idle()
-    serveCached = true
-    client.figbird.refetch('people')
-    await bridge.idle()
+    // The first event again, delivered late (another node's fan-out, say).
+    bridge.deliver('people', 'patched', first)
     const names = client.everyone()
     client.dispose()
     return names
   }
 
-  t.deepEqual(await refetchFromStaleCache({ sync: {} }), ['Ada Lovelace'])
-  t.deepEqual(
-    await refetchFromStaleCache({}),
-    ['Ada'],
-    'without versions the outdated response wins',
-  )
+  t.deepEqual(await deliverLate({ sync: {} }), ['Ada Lovelace'])
+  t.deepEqual(await deliverLate({}), ['Ada King'], 'without versions the late event wins')
+})
+
+test('a refetch recovers a row whose last commit carries the lower version', async t => {
+  const app = await createServer()
+  const people = app.service('people')
+  await people.create({ id: 1, name: 'Ada', team: 'a' })
+  // Runs after the version stamp: holds the first patch until the second commits.
+  let release!: () => void
+  const held = new Promise<void>(resolve => (release = resolve))
+  people.hooks({
+    before: {
+      patch: [
+        async context => void ((context.data as Partial<Person>).team === 'slow' && (await held)),
+      ],
+    },
+  })
+  const bridge = connect(app)
+  const client = await mount(bridge)
+
+  const slow = people.patch(1, { name: 'Slow', team: 'slow' })
+  await people.patch(1, { name: 'Fast' })
+  release()
+  await slow
+  t.deepEqual(client.everyone(), ['Fast'], 'the last commit carries the lower version')
+
+  client.figbird.refetch('people')
+  await bridge.idle()
+  t.deepEqual(client.everyone(), ['Slow'], 'the refetch shows what the database holds')
+  client.dispose()
+})
+
+test('in database mode the hooks only log the version the database assigned', async t => {
+  const log = memoryChangeLog()
+  const app = feathers()
+  app.use('rows', new MemoryService<{ id: number; _v?: number }>())
+  // Stands in for a database assigning the version inside the write.
+  app
+    .service('rows')
+    .hooks({ before: { create: [context => void (context.data = { ...context.data, _v: 42 })] } })
+  const hooks = versioned({ log, sequencer: hybridClock(), assign: 'database' })
+  t.deepEqual(hooks.before, {})
+  app.service('rows').hooks(hooks)
+
+  await app.service('rows').create({ id: 1 })
+  t.deepEqual(log.since(0), [{ seq: 42, service: 'rows', id: 1, type: 'created' }])
 })
 
 test('a live removal during an in-flight replay is not resurrected', async t => {
