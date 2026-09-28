@@ -411,6 +411,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set(['created', 'updated', 'patched
 
 interface SyncResponse {
   cursor: number
+  services: string[]
   changes: Array<{ service: string; type: keyof EventHandlers; item: unknown }>
 }
 
@@ -418,6 +419,7 @@ function isSyncResponse(value: unknown): value is SyncResponse {
   const response = value as SyncResponse | null
   return (
     typeof response?.cursor === 'number' &&
+    Array.isArray(response.services) &&
     Array.isArray(response.changes) &&
     response.changes.every(
       change =>
@@ -894,8 +896,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   /**
    * Replay the changes missed while disconnected into the store's realtime
    * handlers. Resolves false when the store must reconcile instead: no cursor
-   * yet, a truncated log, or any failure. Concurrent reconnect subscribers share
-   * one request.
+   * yet, a truncated log, a subscribed service the server doesn't replay, or any
+   * failure. Concurrent reconnect subscribers share one request.
    */
   #replayMissedEvents(): Promise<boolean> {
     this.#replay ??= this.#requestReplay().finally(() => {
@@ -920,6 +922,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       return false
     }
     if (!isSyncResponse(response)) return false
+    // A listened service the server doesn't version has no replayable history.
+    if (!services.every(service => response.services.includes(service))) return false
 
     for (const change of response.changes) {
       const id = this.getId(change.item)

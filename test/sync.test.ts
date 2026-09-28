@@ -28,7 +28,14 @@ interface Person {
   _v?: number
 }
 
-const schema = createSchema({ services: { people: service<{ item: Person }>() } })
+interface Team {
+  id: string
+  name: string
+}
+
+const schema = createSchema({
+  services: { people: service<{ item: Person }>(), teams: service<{ item: Team }>() },
+})
 
 const EVENTS = ['created', 'updated', 'patched', 'removed'] as const
 
@@ -59,6 +66,8 @@ async function createServer({
     })
   }
   app.service('people').hooks(versioned({ sequencer: hybridClock(), log }))
+  // Unversioned: its changes are never logged.
+  app.use('teams', new MemoryService<Team>())
   app.use(
     'figbird/sync',
     figbirdSync({
@@ -87,10 +96,12 @@ function connect(
   let connected = true
   let holdSync: Promise<void> | undefined
 
-  for (const event of EVENTS) {
-    app.service('people').on(event, (row: Person) => {
-      if (connected && canSee(row)) listeners.get('people')?.emit(event, clone(row))
-    })
+  for (const path of ['people', 'teams']) {
+    for (const event of EVENTS) {
+      app.service(path).on(event, (row: Person) => {
+        if (connected && canSee(row)) listeners.get(path)?.emit(event, clone(row))
+      })
+    }
   }
 
   const call = async (path: string, method: string, args: unknown[]): Promise<unknown> => {
@@ -232,6 +243,34 @@ test('a truncated change log falls back to refetching active queries', async t =
   t.true(bridge.calls['people.find']! > findsBefore, 'active queries refetch')
   t.deepEqual(client.everyone(), ['Ada Lovelace', 'Cy'])
   t.deepEqual(client.teamA(), ['Ada Lovelace', 'Cy'])
+  client.dispose()
+})
+
+test('listening to a service the sync service does not replay falls back to refetching', async t => {
+  const app = await createServer()
+  await app.service('people').create({ id: 1, name: 'Ada', team: 'a' })
+  const bridge = connect(app)
+  const client = await mount(bridge)
+  const teams = client.figbird.query(client.figbird.q.teams.all())
+  const release = teams.subscribe(() => {})
+  await teams.suspensePromise()
+  await app.service('people').create({ id: 2, name: 'Bob', team: 'a' })
+  await settle()
+  const findsBefore = bridge.calls['teams.find']!
+
+  bridge.disconnect()
+  await app.service('teams').create({ id: 'a', name: 'Alpha' })
+  bridge.reconnect()
+  await settle()
+
+  t.is(bridge.calls['figbird/sync.find'], 1)
+  t.deepEqual(bridge.syncResults[0]?.services, ['people'])
+  t.true(bridge.calls['teams.find']! > findsBefore, 'active queries refetch')
+  t.deepEqual(
+    teams.getSnapshot()?.data?.map(team => team.name),
+    ['Alpha'],
+  )
+  release()
   client.dispose()
 })
 

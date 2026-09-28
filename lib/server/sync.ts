@@ -14,6 +14,11 @@ export interface SyncChange {
 export interface SyncResult {
   /** Resume position: pass it back as `since` once these changes are applied. */
   cursor: number
+  /**
+   * The requested services this answer covers. A client listening to any other
+   * service has missed its events and must refetch.
+   */
+  services: string[]
   changes: SyncChange[]
 }
 
@@ -188,7 +193,7 @@ export function figbirdSync({
                 item: { [idField]: entry.id, [field]: entry.seq },
               }
         })
-      return { cursor, changes }
+      return { cursor, services: names, changes }
     },
 
     async get(id) {
