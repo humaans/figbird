@@ -1362,6 +1362,63 @@ it('useQuery: large relation id sets are fetched in bounded $in chunks', async t
   unmount()
 })
 
+it('useQuery: ids that leave a still-live chunk stop driving nested relations', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second', status: 'open', creatorId: 1 },
+        },
+      },
+      comments: { data: { 1: { id: 1, issueId: 1, authorId: 1, body: 'Hi' } } },
+      users: { data: {} },
+      reactions: { data: {} },
+    },
+    { queryAwareFind: true },
+  )
+
+  function Issues() {
+    const issues = useQuery(
+      figbird.q.issues.where({ status: 'open' }).related('comments', c => c.related('reactions')),
+    )
+    return <div className='issues' data-ids={issues.map(issue => issue.id).join(',')} />
+  }
+
+  const reactionChunks = () =>
+    figbird
+      .inspect()
+      .filter(row => row.serviceName === 'reactions' && row.subscriberCount > 0)
+      .map(row => (row.query as { commentId: { $in: number[] } }).commentId.$in)
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.deepEqual(reactionChunks(), [[1]])
+
+  // Comment 2 lands in the comments chunk for issues [1, 2], and its reactions are
+  // fetched in a chunk of their own.
+  await flush(async () => {
+    await feathers.service('comments').create({ id: 2, issueId: 2, authorId: 1, body: 'New' })
+  })
+  t.deepEqual(reactionChunks(), [[1], [2]])
+
+  // Issue 2 leaves the root; the comments chunk stays live for issue 1.
+  await flush(async () => {
+    await feathers.service('issues').patch(2, { status: 'closed' })
+  })
+  t.is($('.issues')!.getAttribute('data-ids'), '1')
+  t.deepEqual(reactionChunks(), [[1]])
+  unmount()
+})
+
 it('useRelationalQuery: query changes trigger refetch', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()

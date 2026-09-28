@@ -40,6 +40,7 @@ import {
 import {
   collectRelationalFilterDependencies,
   collectRelationalFilterPaths,
+  getFieldValue,
   hasRelationalFilter,
   materializeRelationalFilterItem,
   relationalFilterServerReasons,
@@ -1091,11 +1092,15 @@ export class RelationalQueryRef<
           this.#staleTime,
           this.#graph(plan.key, role),
         ),
+      row => getFieldValue(row, target.field),
     )
     return query
   }
 
-  /** Nested relations follow the union of every chunk, once each has produced rows. */
+  /**
+   * Nested relations follow the rows of every referenced id, once each chunk has
+   * produced rows.
+   */
   #syncNestedFanIn(
     query: ChunkedRelationQuery<TMeta>,
     plan: Exclude<RelationPlan, { kind: 'missing' }>,

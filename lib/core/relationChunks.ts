@@ -28,25 +28,31 @@ export interface ChunkedRelationSnapshot {
  * realtime creates, foreign-key patches) fetches only the new ids while existing
  * chunks stay live with their results and realtime maintenance. A chunk is released
  * once none of its ids are referenced; ids dropping out of a still-referenced chunk
- * simply linger until then.
+ * linger in its rows until then, but `readyRows()` leaves them out.
  */
 export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
   #chunks: Chunk<TMeta>[] = []
+  #live: ReadonlySet<SourceValue> = new Set()
   #open: (values: SourceValue[]) => QueryRef<unknown[], unknown, TMeta>
   #subscribe: (queryRef: QueryRef<unknown[], unknown, TMeta>) => () => void
+  #sourceValueOf: (row: unknown) => SourceValue | undefined
   #lastParts: unknown[][] = []
   #lastRows: unknown[] = []
 
   constructor(
     open: (values: SourceValue[]) => QueryRef<unknown[], unknown, TMeta>,
     subscribe: (queryRef: QueryRef<unknown[], unknown, TMeta>) => () => void,
+    /** The source id a fetched row was matched by. */
+    sourceValueOf: (row: unknown) => SourceValue | undefined,
   ) {
     this.#open = open
     this.#subscribe = subscribe
+    this.#sourceValueOf = sourceValueOf
   }
 
   sync(values: readonly SourceValue[]): void {
     const live = new Set(values)
+    this.#live = live
     const kept: Chunk<TMeta>[] = []
     for (const chunk of this.#chunks) {
       if (chunk.values.some(value => live.has(value))) kept.push(chunk)
@@ -87,10 +93,22 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
     return { status, rows: this.#rows(parts), error, isFetching }
   }
 
-  /** Rows across every chunk, or null while any chunk has yet to produce data. */
+  /**
+   * Rows of the currently referenced ids across every chunk, or null while any chunk
+   * has yet to produce data. Nested relations sync from these, so ids that left a
+   * still-referenced chunk stop driving them.
+   */
   readyRows(): unknown[] | null {
     const snapshot = this.snapshot()
-    return snapshot.status === 'ready' ? snapshot.rows : null
+    if (snapshot.status !== 'ready') return null
+    const live = this.#live
+    if (this.#chunks.every(chunk => chunk.values.every(value => live.has(value)))) {
+      return snapshot.rows
+    }
+    return snapshot.rows.filter(row => {
+      const value = this.#sourceValueOf(row)
+      return value !== undefined && live.has(value)
+    })
   }
 
   queryRefs(): QueryRef<unknown[], unknown, TMeta>[] {
