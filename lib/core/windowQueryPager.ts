@@ -71,13 +71,17 @@ function targetStarts(
 
 export class OffsetWindowPager implements WindowPager {
   #context: WindowPagerContext
+  // Pages tile the index space at the size the server actually serves, which a
+  // server cap (Feathers' paginate.max) can hold below the configured pageSize.
+  #pageSize: number
 
   constructor(context: WindowPagerContext) {
     this.#context = context
+    this.#pageSize = context.pageSize
   }
 
   targetStarts(range: PagerRange, preloadPages: number): number[] {
-    return targetStarts(range, preloadPages, this.#context.pageSize, this.#context.access.total())
+    return targetStarts(range, preloadPages, this.#pageSize, this.#context.access.total())
   }
 
   requiredStarts(range: PagerRange): number[] {
@@ -103,7 +107,7 @@ export class OffsetWindowPager implements WindowPager {
   }
 
   rootOverride(start: number): RelationalRootOverride {
-    const { ast, pageSize, serviceName } = this.#context
+    const { ast, serviceName } = this.#context
     return {
       descriptor: {
         serviceName,
@@ -111,7 +115,7 @@ export class OffsetWindowPager implements WindowPager {
         params: {
           query: {
             ...ast.query,
-            $limit: pageSize,
+            $limit: this.#pageSize,
             $skip: start,
           },
         },
@@ -127,9 +131,20 @@ export class OffsetWindowPager implements WindowPager {
 
   pageSucceeded(page: PagerPageSuccess): void {
     if (page.total !== undefined) this.#context.access.setTotal(page.total)
+    if (page.continuation.kind !== 'offset') return
+    const served = page.continuation.offset - page.start
+    if (served <= 0 || served >= this.#pageSize) return
+    // A capped page leaves a gap before the next planned start. Re-plan at the
+    // served size and drop pages that no longer sit on its boundaries.
+    this.#pageSize = served
+    for (const { start } of Array.from(this.#context.access.pages())) {
+      if (start % served !== 0) this.#context.access.drop(start)
+    }
   }
 
-  reset(): void {}
+  reset(): void {
+    this.#pageSize = this.#context.pageSize
+  }
 }
 
 export class CursorWindowPager implements WindowPager {

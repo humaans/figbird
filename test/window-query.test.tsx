@@ -131,6 +131,33 @@ test('window query: offset jumps directly, assembles relations, and evicts dista
   second.unsubscribe()
 })
 
+test('window query: offset pages tile a server-capped page size without gaps', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    items: { data: keyed(makeRows(30)) },
+    owners: { data: {} },
+  })
+  // Like Feathers' paginate.max: the server serves at most 4 rows per page.
+  const items = feathers.service('items')
+  const find = items.find.bind(items)
+  items.find = ((params: { query?: Record<string, unknown> } = {}) =>
+    find({ ...params, query: { ...params.query, $limit: 4 } })) as never
+  const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 10,
+    preloadPages: 0,
+    maxPages: 10,
+  })
+
+  const range = { start: 0, end: 20 }
+  const read = readSettledWindow(ref, range)
+  const state = await read.promise
+  t.is(state.status, 'success')
+  t.deepEqual(
+    Array.from({ length: 20 }, (_, index) => state.data.get(index)?.id),
+    Array.from({ length: 20 }, (_, index) => index + 1),
+  )
+  read.unsubscribe()
+})
+
 test('window query: retention never evicts pages required by active readers', async t => {
   const { figbird } = createTestApp(schema, {
     items: { data: keyed(makeRows(80)) },
