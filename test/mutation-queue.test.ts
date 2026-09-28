@@ -317,6 +317,30 @@ test('mutation queue: a throwing retry predicate preserves the terminal failure'
   await t.throwsAsync(() => pending, { message: 'offline' })
 })
 
+test('mutation queue: a retry count does not repeat a create unless a predicate opts in', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  let calls = 0
+  feathers.service('notes').create = ((data: Partial<Note>) => {
+    calls += 1
+    return calls === 1 ? Promise.reject(new Error('timeout')) : Promise.resolve(data)
+  }) as never
+
+  const counted = figbird.createMutationQueue({ retry: 2 })
+  const pending = counted.m.notes.create({ id: 10, content: 'maybe saved' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(calls, 1, 'the server may already have applied the first attempt')
+  t.is(counted.status, 'failed')
+  counted.discard()
+  await t.throwsAsync(() => pending, { message: 'timeout' })
+
+  calls = 0
+  const optedIn = figbird.createMutationQueue({
+    retry: (_error, attempt, operation) => operation.method === 'create' && attempt <= 1,
+  })
+  await optedIn.m.notes.create({ id: 11, content: 'idempotent' })
+  t.is(calls, 2)
+})
+
 test('mutation queue: policy is fixed when the queue is created', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const firstAttempt = deferred<MockItem>()

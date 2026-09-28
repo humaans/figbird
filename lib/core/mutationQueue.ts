@@ -33,7 +33,12 @@ export type MutationQueueRetryDelay =
 export interface MutationQueueConfig {
   /** Scheduling policy. Omit for an immediate serial queue. */
   schedule?: (operation: MutationQueueOperation) => MutationSchedule
-  /** Automatic retries after the first failed attempt. Defaults to false. */
+  /**
+   * Automatic retries after the first failed attempt. Defaults to false. A number
+   * retries only updates, patches, and removes: a create or custom method whose
+   * failed attempt reached the server would apply twice, so those retry only when
+   * a function returns true for them.
+   */
   retry?: MutationQueueRetry
   /** Delay before an automatic retry. Defaults to 0. */
   retryDelay?: MutationQueueRetryDelay
@@ -376,7 +381,7 @@ export class MutationQueue<S extends Schema> {
     operation: MutationQueueOperation,
   ): boolean {
     if (retry === false) return false
-    if (typeof retry === 'number') return attempt <= retry
+    if (typeof retry === 'number') return isIdempotent(operation) && attempt <= retry
     try {
       return retry(error, attempt, operation)
     } catch {
@@ -536,6 +541,13 @@ export class MutationQueue<S extends Schema> {
       pending.registration?.cancel(new MutationQueueDiscardedError())
     }
   }
+}
+
+/** Repeating these converges on the same server state; creates and custom methods may not. */
+function isIdempotent(operation: MutationQueueOperation): boolean {
+  return (
+    operation.method === 'update' || operation.method === 'patch' || operation.method === 'remove'
+  )
 }
 
 function structurallyEqual(

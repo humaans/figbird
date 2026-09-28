@@ -814,8 +814,20 @@ and its dependent writes are cancelled.
 Outside React, use `figbird.createMutationQueue(config)`. A mutation queue is ordered, not
 atomic or durable. An unfinished keyed queue can survive component navigation, but no
 queue survives a page reload. Register a parent create before a child create that
-references it. Enable retries for creates only when the server treats their
-client-generated ids idempotently.
+references it.
+
+A numeric `retry` repeats failed updates, patches, and removes only. A create or custom
+method whose attempt timed out may already have been applied, so repeating it could
+create a duplicate or run the method twice. Those operations pause the queue on their
+first failure unless a `retry` function returns `true` for them. Opt in only when the
+server treats the create's client-generated id, or the method, idempotently:
+
+```ts
+// The server upserts creates by id, so they are safe to repeat; reminders are not.
+const sync = defineMutationQueue({
+  retry: (_error, attempt, operation) => attempt <= 2 && operation.method !== 'sendReminder',
+})
+```
 
 ### Creates and ids: the id contract
 
@@ -1798,7 +1810,8 @@ const reconnectable = useMutationQueue(autosave, `issue:${issueId}`)
 
 `defineMutationQueue(config?)` creates an immutable policy value. Keep it at module scope.
 The optional `schedule` function controls debounce timing; `retry` and `retryDelay`
-control automatic retries.
+control automatic retries. A numeric `retry` applies to updates, patches, and removes;
+creates and custom methods retry only when a `retry` function returns `true` for them.
 
 `useMutationQueue()` returns a serial queue with an `m` write proxy. Pass a definition to
 use its policy. Pass a definition and key to reconnect to unfinished work after a remount.
