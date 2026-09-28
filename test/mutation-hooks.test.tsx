@@ -440,6 +440,8 @@ it('useMutating: reflects in-flight mutations by service and id, including custo
   const anyMutation = renderMutating(App, () => useMutating())
   const noteOne = renderMutating(App, () => useMutating({ service: 'notes', id: 1 }))
   const noteTwo = renderMutating(App, () => useMutating({ service: 'notes', id: 2 }))
+  // Route params arrive as strings; they match the numeric id the mutation carries.
+  const routeNoteOne = renderMutating(App, () => useMutating({ service: 'notes', id: '1' }))
   const byMethod = renderMutating(App, () => useMutating({ service: 'notes', method: 'patch' }))
 
   t.is(anyMutation.read(), 'false')
@@ -452,6 +454,7 @@ it('useMutating: reflects in-flight mutations by service and id, including custo
   t.is(anyMutation.read(), 'true')
   t.is(noteOne.read(), 'true')
   t.is(noteTwo.read(), 'false')
+  t.is(routeNoteOne.read(), 'true')
   t.is(byMethod.read(), 'true')
 
   await anyMutation.d.flush(async () => {
