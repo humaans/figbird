@@ -418,7 +418,8 @@ Figbird cannot locally guarantee correctness when:
 - A limited window needs rows outside the current window.
 - Aggregates depend on unseen rows.
 - Negation depends on knowing global absence.
-- Realtime events were missed and there is no replay/sequence protocol.
+- Realtime events were missed and there is no replay/sequence protocol (the experimental
+  [Sync Protocol](#sync-protocol-experimental) adds one).
 - Events contain partial objects that omit fields needed for filters, sorts, or relations.
 - Derived relations are not modeled as explicit services, relations, or server-emitted projection
   events.
@@ -1551,6 +1552,154 @@ subtle boundary bug produces silently-wrong membership, the failure mode this ar
 built to avoid. Throttled-but-dumb reconciliation ships first; pruning is added only if measured
 numbers show a specific query shape needs it.
 
+## Sync Protocol (experimental)
+
+The server knows things the client can only guess: which events a disconnected client missed,
+which of two copies of a row is newer, and how the backend orders values. The `figbird/server`
+companion and the `FeathersAdapter` `sync` option let the server say so. Everything is opt-in and
+experimental; a client or server without it behaves exactly as before, and the client falls back
+to today's behaviour whenever a capability is missing or fails.
+
+### Is this a protocol?
+
+Yes — a small one, with four parts and no handshake:
+
+1. **The version field.** Every write through the `versioned` hooks stores `_v`: the change
+   sequence of the row's last write, and a later write to a row must get a greater `_v`. Rows carry
+   it everywhere they already go — events, `find`/`get` responses, mutation results — so it
+   needs no envelope.
+2. **The cursor.** The client's cursor is the highest `_v` it has seen _on a realtime event_.
+   Fetched rows never advance it: a response's versions say nothing about events for rows the
+   response didn't contain.
+3. **The sync endpoint.** `find({ query: { since, services } })` returns
+   `{ cursor, services, changes: [{ service, type, id, item }] }`: the latest change per
+   `(service, id)` with `seq >= since - overlap`, in sequence order. `item` is the current row,
+   read through the app's own service with the caller's params; a removed row, or one the caller
+   can no longer read, comes back as `{ type: 'removed', item: { id, _v } }`. `services` names
+   the requested services the answer covers. A log that can't answer throws
+   `{ name: 'Gone', code: 410 }`. Replaying a change the client already has is harmless, which
+   is what lets the server be generous (the overlap, inclusive `since`).
+4. **The ordering declaration.** `get('ordering')` returns
+   `{ [service]: { preset: 'default' | 'postgres', numeric: [field] } }`, and
+   `loadServerOrdering` turns it into the instance's `compare` — the ordering correctness contract
+   in [Ordering And Completeness](#ordering-and-completeness), declared by the side that knows it.
+
+Capability negotiation is by presence. The client uses a replay only when it has a cursor, the
+request succeeds, the response is well-formed, and it covers every service the client listens to.
+Anything else — an old server with no sync service, `Gone`, a timeout, an unversioned service —
+reports a plain reconnect and the store runs its usual reconnect sweep. Rows without `_v` compare
+by timestamp as before, so mixed data degrades per row, not per app.
+
+**Why applying a replay after live events is safe.** The reconnected socket receives live events
+while the replay request is in flight, and the server reads rows after it reads the log, so a
+live event can be newer than a replayed row, or remove it. Versions make the order irrelevant:
+
+- The store already rejects a `patched`/`updated` row older than its cache; with versions that
+  check is exact instead of timestamp-approximate.
+- The adapter records the version of every row seen live while the replay is in flight and drops
+  replayed changes for those rows at the same or an older version. This covers what the store's
+  check doesn't: `created` events aren't staleness-checked, and a replayed row must not resurrect
+  a row removed meanwhile (removals get a fresh `_v`, so they win).
+- Events after the response are ordinary events.
+
+Two server-side properties close the remaining gaps. A sequence is taken before a write and logged
+after it commits, so a slow write can be logged — and emitted — after faster writes with higher
+sequences; the sync service therefore replays from `since - overlap` (30 seconds by default).
+Writes that take longer than the overlap can still be missed. And `since` is inclusive, because a
+multi-row patch shares one sequence and the client may have received only some of its events.
+
+One deployment requirement: the replay must be served after the reconnected socket has rejoined
+its channels, or events between the log read and the join are lost. With Feathers authentication
+this holds, because requests wait for re-authentication, which is when `login` joins channels.
+
+### Where the sequence number comes from
+
+- **In-process hybrid clock (shipped: `hybridClock`).** `max(Date.now() * 1000, previous + 1)`:
+  monotonic across restarts without coordination, unique within a process, 1000 writes/ms before
+  it runs ahead of the clock, and safe-integer until the year 2255. Separate nodes issue
+  comparable (time-ordered) but not unique values, and none knows what the others issued; two
+  nodes writing the same row are ordered only as well as their clocks agree — no worse than
+  `updatedAt`, but a database sequence orders them strictly. Pass `last` (e.g. `max(_v)` at boot)
+  if the clock may step backwards across a restart.
+- **In-memory log (shipped: `memoryChangeLog`).** Bounded, lost on restart, and — critically —
+  per node. It answers `truncated` after a restart or once it has dropped needed entries, but in
+  a multi-node deployment it answers _incompletely_: writes made on other nodes are simply absent.
+  It is correct for single-node deployments only.
+- **Postgres outbox.** Insert `{ seq, service, id, type }` in the write's own transaction; `since`
+  is `WHERE seq >= $1`, retention a periodic `DELETE`. Restart-safe and shared across nodes. `_v`
+  can come from a sequence (`nextval`) instead of the clock; either way allocation order is not
+  commit order, so the overlap still applies. A column default plus an update trigger that sets
+  `_v` also versions raw writes.
+- **Redis Streams.** `XADD ... MAXLEN ~ n` after commit, `XRANGE` to read. Stream ids are
+  `ms-counter`, so a hybrid-clock cursor maps to a stream id by its millisecond part
+  (`seq / 1000`); `truncated` is a cursor older than the stream's first entry. Shared and bounded,
+  but durable only as far as Redis persistence is configured.
+
+Only a shared log makes replay gap-free across nodes; versions stay comparable either way.
+
+### Global versus per-entity versions
+
+One number serves both roles because the version _is_ a position in one global order: comparing
+two copies of a row compares the positions of their last writes (staleness), and the highest
+position the client has seen is where it resumes (the cursor). Per-service counters would contend
+less, but the client would need a version vector as its cursor, and cross-service positions — the
+basis for later rungs such as "this response reflects position X" in
+[Cross-Service Snapshot Skew](#cross-service-snapshot-skew) — would be incomparable.
+
+A **sync status** would expose what the adapter already knows: `cursor`, `lastSyncedAt` (the last
+live event or successful replay), and a phase (`live | replaying | refetching`), so a UI can say
+"offline — last synced 3 minutes ago" or badge rows changed while away. Not built.
+
+### Efficiency
+
+- One integer column per versioned table, one sequencer call and one log append per written row.
+- The log holds ids only: small (tens of bytes per entry), no PII, cheap to retain. `size`
+  bounds the memory log; the Redis and Postgres logs bound by `MAXLEN` or a retention job.
+- Replay is collapsed: fifty patches to one row replay as one change.
+- Authorized reads are batched: one `find` with `$in` per service per 100 ids.
+- A reconnect costs one request whose size tracks the changes missed, instead of one refetch per
+  active query. The worst case — a long disconnect on a busy system — is `Gone` and today's sweep,
+  plus one cheap request.
+
+### Maintenance and deployment
+
+- **Opt-in per service.** Register `versioned` on a service and list it in
+  `figbirdSync({ services })`. A client listening to anything else refetches on reconnect.
+- **Mixed deployments.** Old clients ignore `_v`; new clients against old servers find no sync
+  service and fall back. `_v` must pass validation schemas and external resolvers, or events and
+  responses silently lose it (staleness then falls back to timestamps).
+- **Backfilling.** No backfill is needed for correctness — rows without `_v` compare by
+  timestamp, and replay only concerns writes after the cursor. To make existing rows comparable,
+  backfill in clock units: `_v = floor(extract(epoch from updated_at) * 1000000)`.
+- **Writes that bypass the hooks** (raw SQL, scripts, another system writing the table) emit no
+  Feathers event, so clients miss them exactly as today; they aren't logged, so replay misses them
+  too, and the row keeps its old `_v`. Because clock versions are microsecond timestamps, they are
+  detectable: a row whose `updated_at` is later than its `_v` was written without the hook. A
+  trigger can reject or restamp such writes.
+
+### Relation-tree endpoint (sketch, not built)
+
+A `figbird/tree` endpoint could load a whole relational query in one round trip: the client sends
+the query's relational AST — root service, filters, order, window, and each relation's resolved
+keys (`sourceField`, `destService`, `destField`), as JSON under a protocol version — and receives
+normalized rows per node plus each node's window metadata. Authorization stays per service: the
+server walks the AST and calls `app.service(node.service).find({ ...params, query })` for each
+node, so each service's hooks decide what the caller sees, exactly as separate requests would.
+
+It is riskier than it looks:
+
+- **Coupling.** The server must execute joins the client declared. Trusting client-supplied
+  relation definitions is arbitrary joins, so the server must validate them against its own copy
+  of the schema — which then lives in two places — and cap depth and fan-out.
+- **Same work.** It is still N service calls; it saves round trips, not load. It only pays when
+  client–server latency dominates, which should be measured first.
+- **Cache semantics.** The response must decompose into per-node cache entries identical to
+  independent fetches — windows, totals, completeness — or realtime maintenance breaks. Nodes the
+  client already holds are unknown to the server, so either it refetches them or the request
+  grows a cache manifest. After the load, maintenance is per node as today, so the endpoint is a
+  cold-load optimization only; it doesn't make the tree snapshot-consistent either, since the
+  per-service reads still happen at different times.
+
 ## Considered And Rejected
 
 Decisions worth recording so they are not relitigated without new information:
@@ -1802,6 +1951,11 @@ version header on responses — protocol additions an adapter can carry without 
 architecture. Together they close missed-event detection, the stale-response membership race, and
 read-your-writes, which is most of the practical distance between a request orchestrator and a
 sync engine for a fraction of the machine. Nothing else in this document depends on this section.
+
+The experimental [Sync Protocol](#sync-protocol-experimental) takes rung 1 as _replay_ rather than
+gap detection: one global sequence, stored on each row as its version, doubles as the event
+cursor, and a reconnect replays the missed changes instead of refetching. Row versions also make
+per-row staleness exact. Rung 2 (a version on read responses, guarding membership) is not built.
 
 ### Count Queries
 

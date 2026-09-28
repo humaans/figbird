@@ -1313,6 +1313,59 @@ never gated.
 
 One practical consequence: an **unwindowed** relation like `.related('comments')` is local-exact, so a teammate's new comment merges straight from the socket event with no refetch. If you don't need a window, don't add one.
 
+### Server companion (experimental)
+
+By default a reconnect refetches every active query, because the client can't know which
+events it missed. The experimental `figbird/server` companion lets the server tell it: every
+write is stamped with a version from one change sequence, and a sync service replays what a
+reconnecting client missed in a single request. It has no runtime dependency on Feathers.
+
+```ts
+// server
+import { figbirdSync, hybridClock, memoryChangeLog, versioned } from 'figbird/server'
+
+const log = memoryChangeLog({ size: 10_000 })
+const sequencer = hybridClock()
+
+// after the service's own hooks, so the stamp survives validation
+app.service('people').hooks(versioned({ sequencer, log }))
+app.service('teams').hooks(versioned({ sequencer, log }))
+
+app.use(
+  'figbird/sync',
+  figbirdSync({
+    log,
+    services: ['people', 'teams'],
+    ordering: { people: { preset: 'postgres', numeric: ['salary'] } },
+  }),
+)
+```
+
+```ts
+// client
+import { Figbird, FeathersAdapter, loadServerOrdering } from 'figbird'
+
+const figbird = new Figbird({
+  schema,
+  adapter: new FeathersAdapter(feathersClient, { sync: { path: 'figbird/sync' } }),
+  compare: await loadServerOrdering(feathersClient),
+})
+```
+
+- Rows gain a `_v` field (`versionField`). Staleness compares versions instead of timestamps,
+  so an outdated response loses to a newer row even without `updatedAt`. Allow `_v` through your
+  schemas.
+- On reconnect the adapter asks for the changes since the highest `_v` it saw on an event and
+  applies them like realtime events; active queries don't refetch.
+- Replayed rows are read through your services with the caller's params, so users only receive
+  rows they may read; a changed row they can't read replays as removed.
+- The client falls back to refetching whenever the replay can't be served: no event seen yet,
+  the log no longer holds the gap (`Gone`), an error, or a listened service that isn't versioned.
+- `memoryChangeLog` is per process: use it on a single node only. Multi-node deployments need a
+  shared log (a Postgres outbox or Redis stream implementing `ChangeLog`).
+
+See the "Sync Protocol (experimental)" section of `DESIGN.md` for the contract and trade-offs.
+
 ### Freshness tolerance: staleTime
 
 Successful data stays fresh for five minutes by default. A mount within that window reuses
@@ -2096,7 +2149,8 @@ const figbird = new Figbird({
 ## FeathersAdapter
 
 Connects Figbird to a Feathers.js backend: data fetching, realtime subscriptions, reconnect
-handling (all active queries refetch on the socket's `reconnect`), and translation between
+handling (all active queries refetch on the socket's `reconnect`, unless `sync` replays the
+missed events), and translation between
 Figbird's query format and Feathers conventions.
 
 ```ts
@@ -2113,6 +2167,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
   - `isInvalidationEvent` — identifies application-specific realtime notifications that carry an entity ID but no complete entity value; see [Invalidation-only events](#invalidation-only-events)
   - `transactions` — optional atomic transaction transport; use `feathersTransactions()` for an application-provided `api/transactions` service, or set `serviceName` for an existing endpoint
+  - `sync` — experimental: `{ path?, versionField? }` (defaults `'figbird/sync'`, `'_v'`) for the `figbird/server` companion; compares row versions for staleness and replays missed events on reconnect instead of refetching. See [Server companion](#server-companion-experimental)
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
 
