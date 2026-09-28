@@ -193,7 +193,8 @@ export class QueryBuilder<
 
   /**
    * Add a sort clause
-   * Multiple calls accumulate sort fields
+   * Multiple calls accumulate sort fields, in call order of precedence. Re-sorting a
+   * field that is already present changes its direction but keeps its precedence.
    */
   orderBy(
     this: QueryBuilder<S, TService, TItem, TRelated, TCardinality, 'find'>,

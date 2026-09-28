@@ -503,4 +503,9 @@ test('figbird.query keeps $sort precedence in query identity', t => {
 
   t.not(byTagThenContent, byContentThenTag)
   t.is(byTagThenContent, figbird.query(figbird.q.notes.orderBy('tag').orderBy('content')))
+  t.is(
+    figbird.query(figbird.q.notes.where({ tag: 'a', content: 'b' }).orderBy('tag')),
+    figbird.query(figbird.q.notes.where({ content: 'b', tag: 'a' }).orderBy('tag')),
+    'filter key order still does not affect identity',
+  )
 })

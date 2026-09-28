@@ -42,7 +42,7 @@ function serialize(value: unknown, path: Set<object>, orderedKeys = false): stri
   // inside query filters into ISO strings).
   const toJSON = (obj as { toJSON?: () => unknown }).toJSON
   if (typeof toJSON === 'function') {
-    return serialize(toJSON.call(obj), path)
+    return serialize(toJSON.call(obj), path, orderedKeys)
   }
 
   if (path.has(obj)) return '"__circular"'
