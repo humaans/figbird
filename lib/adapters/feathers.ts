@@ -703,6 +703,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
         progressed = true
       }
 
+      // More rows than the page asked for: the service doesn't paginate, so this
+      // first page already is the whole set.
+      if ($skip === 0 && data.length > meta.limit) return { result, consistent }
+
       const done =
         data.length === 0 ||
         data.length < meta.limit ||

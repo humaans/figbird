@@ -481,6 +481,30 @@ test('findAll terminates when the service ignores $skip', async t => {
   await t.throwsAsync(adapter.findAll('notes'), { message: /inconsistent pages/ })
 })
 
+test('findAll accepts a service that ignores paging and returns every row', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'one', rank: 1 },
+        2: { id: 2, content: 'two', rank: 2 },
+        3: { id: 3, content: 'three', rank: 3 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  // paginate: false and no $limit/$skip support: a bare array of everything.
+  notes.find = (async () => (await find({ query: {} })).data) as never
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  const result = await adapter.findAll('notes')
+  t.deepEqual(
+    result.data.map(note => (note as { id: number }).id),
+    [1, 2, 3],
+  )
+  t.is(notes.counts.find, 1)
+})
+
 test('a provable window merge survives an older reconcile response', async t => {
   const { figbird, notes } = createApp({
     1: { id: 1, content: 'one', rank: 1 },
