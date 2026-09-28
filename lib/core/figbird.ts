@@ -265,7 +265,7 @@ export class Figbird<
    * @param compare The backend's value ordering, used wherever figbird sorts rows
    *   itself: `(a, b, { serviceName, field }) => number`, ascending. Defaults to
    *   `compareValues` (nulls first, codepoint strings); `postgresCompare` puts
-   *   nulls last ascending and collates strings. The same correctness contract as
+   *   nulls last ascending and collates strings like ICU `en`. The same correctness contract as
    *   `defaultSort`: it must mirror how the server orders values.
    */
   constructor({

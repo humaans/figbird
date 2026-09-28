@@ -1222,6 +1222,12 @@ const figbird = new Figbird({
 })
 ```
 
+`postgresCompare` collates strings like ICU `en`, so use it only when the database
+collation does too (for example `en-x-icu`). A glibc `en_US` collation ignores
+punctuation and spaces at the first level, so `'a-c'` sorts after `'ab'` there but
+before it in ICU; a `COLLATE "C"` database orders by codepoint, which the default
+comparator already mirrors.
+
 A comparator receives `(a, b, { serviceName, field })` and returns a negative,
 zero, or positive number for ascending order (`$sort: -1` negates it). The context
 covers columns your server returns in a different shape than it sorts them — for

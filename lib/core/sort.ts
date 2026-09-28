@@ -38,12 +38,18 @@ export function compareValues(a: unknown, b: unknown): number {
   return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0
 }
 
-const collator = new Intl.Collator('en')
+// Built on first use: constructing a collator loads ICU locale data, which an app
+// on the default comparator never needs.
+let collator: Intl.Collator | undefined
 
 /**
  * A Postgres-like value comparator: nulls sort greatest (NULLS LAST ascending,
- * NULLS FIRST descending — Postgres's defaults) and strings compare by `en` locale
- * collation, approximating a typical `en_US` database collation.
+ * NULLS FIRST descending — Postgres's defaults) and strings compare by ICU `en`
+ * collation. Use it only when the database collation matches ICU `en` (for
+ * example `en-x-icu`): glibc `en_US` collations ignore punctuation and spaces at
+ * the first level, so `'a-c'` sorts after `'ab'` there but before it here, and a
+ * `COLLATE "C"` database orders by codepoint, which the default `compareValues`
+ * mirrors.
  */
 export function postgresCompare(a: unknown, b: unknown): number {
   a = comparable(a)
@@ -51,7 +57,10 @@ export function postgresCompare(a: unknown, b: unknown): number {
   if (a === b) return 0
   if (a === undefined || a === null) return b === undefined || b === null ? 0 : 1
   if (b === undefined || b === null) return -1
-  if (typeof a === 'string' && typeof b === 'string') return collator.compare(a, b)
+  if (typeof a === 'string' && typeof b === 'string') {
+    collator ??= new Intl.Collator('en')
+    return collator.compare(a, b)
+  }
   return compareValues(a, b)
 }
 
