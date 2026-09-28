@@ -247,9 +247,13 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       return null
     }
 
-    // A removal observed while a write is in flight happened after that write
-    // succeeded, so its acknowledgement must not bring the row back.
-    state.removedDuring = type === 'removed' && state.running ? state.entries[0] : undefined
+    // A removal that takes the row away while a write is in flight happened after
+    // that write succeeded, so its acknowledgement must not bring the row back. A
+    // removal of an already-absent row (the echo of our own earlier remove, ahead of
+    // a re-create) says nothing about the running write. Any other accepted event
+    // clears the mark: the row is back.
+    state.removedDuring =
+      type === 'removed' && state.running && state.base !== ABSENT ? state.entries[0] : undefined
     this.#setBase(state, type, item)
     return {
       projection: this.#reproject(state),

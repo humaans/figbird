@@ -120,6 +120,32 @@ test('mutation lanes: realtime that overtakes an acknowledgement keeps the newer
   )
 })
 
+test('mutation lanes: the echo of our own remove does not swallow a re-create', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  const createGate = deferred<MockItem>()
+  notes.remove = (() => Promise.resolve({ id: 1, content: 'hello' })) as never
+  notes.create = (() => createGate.promise) as never
+  const removing = figbird.m.notes.remove(1)
+  const recreating = figbird.m.notes.create({ id: 1, content: 'again' })
+  await removing
+  // Feathers acknowledges before it publishes: the remove's echo lands mid-create.
+  notes.emit('removed', { id: 1, content: 'hello' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  createGate.resolve({ id: 1, content: 'again' })
+  await recreating
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'again')
+})
+
 test('mutation lanes: batch create acknowledgements advance lanes opened by later patches', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
