@@ -152,9 +152,10 @@ export class WindowQueryRef<
   #version = 0
   #data: ReadonlyMap<number, T> = EMPTY_DATA
   #total: number | undefined
-  // A cursor chain reset retired later pages; pages the rebuild creates must not
-  // trust the query cache, which still holds rows fetched along the old chain.
-  #rebuilding = false
+  // Set while a cursor chain rebuild replaces retired pages: their rows by index,
+  // shown until the rebuild settles. Pages the rebuild creates must not trust the
+  // query cache, which still holds rows fetched along the old chain.
+  #retired: Map<number, T> | null = null
   #snapshotCache = new Map<string, { version: number; state: WindowQueryState<T> }>()
 
   constructor(
@@ -185,7 +186,11 @@ export class WindowQueryRef<
         ensure: (start: number) => this.#ensurePage(start),
         drop: (start: number) => this.#dropPage(start),
         retire: (start: number) => {
-          this.#rebuilding = true
+          const retired = (this.#retired ??= new Map())
+          const state = this.#pages.get(start)?.ref.getSnapshot()
+          if (state?.status === 'success') {
+            state.data.forEach((item, index) => retired.set(start + index, item))
+          }
           this.#dropPage(start)
         },
         touch: (start: number) => this.#touchPage(start),
@@ -250,7 +255,7 @@ export class WindowQueryRef<
       const page = this.#pages.get(start)
       return page ? [page] : []
     })
-    const missing = !this.#pager.rangeReady(range)
+    const missing = !this.#pager.rangeReady(range) && !this.#retiredRowsCover(range)
     let isFetching = false
     let coldError: Error | null = null
     let backgroundError: Error | null = null
@@ -353,9 +358,10 @@ export class WindowQueryRef<
   #syncPages(): void {
     const desired = this.#desiredStarts()
     this.#pager.sync(desired)
-    if (this.#rebuilding && !this.#anyPageFetching()) this.#rebuilding = false
+    const rebuilt = this.#retired !== null && !this.#anyPageFetching()
+    if (rebuilt) this.#retired = null
     this.#syncPageFreshness()
-    if (this.#evictPages(this.#pager.protectedStarts(desired))) {
+    if (this.#evictPages(this.#pager.protectedStarts(desired)) || rebuilt) {
       this.#rebuildData()
       this.#version += 1
       this.#snapshotCache.clear()
@@ -395,7 +401,7 @@ export class WindowQueryRef<
     page.unsubscribe = ref.subscribe(() => this.#pageChanged(start), {
       staleTime,
     })
-    if (this.#rebuilding && ref.getSnapshot().status === 'success') {
+    if (this.#retired && ref.getSnapshot().status === 'success') {
       page.revalidating = true
       ref.refetch()
     }
@@ -428,6 +434,9 @@ export class WindowQueryRef<
 
   #rebuildData(): void {
     const data = new Map<number, T>()
+    for (const [index, item] of this.#retired ?? []) {
+      if (index < (this.#total ?? Infinity)) data.set(index, item)
+    }
     const pages = Array.from(this.#pages.values()).sort((a, b) => a.start - b.start)
     for (const page of pages) {
       const state = page.ref.getSnapshot()
@@ -475,6 +484,15 @@ export class WindowQueryRef<
       status: state.status,
       rowCount: state.status === 'success' ? state.data.length : 0,
     }
+  }
+
+  #retiredRowsCover(range: WindowRange): boolean {
+    if (!this.#retired) return false
+    const end = Math.min(range.end, this.#total ?? range.end)
+    for (let index = range.start; index < end; index++) {
+      if (!this.#data.has(index)) return false
+    }
+    return true
   }
 
   #anyPageFetching(): boolean {
@@ -554,7 +572,7 @@ export class WindowQueryRef<
     for (const page of this.#pages.values()) page.unsubscribe()
     this.#pages.clear()
     this.#pager.reset()
-    this.#rebuilding = false
+    this.#retired = null
     this.#data = EMPTY_DATA
     this.#total = undefined
     this.#snapshotCache.clear()

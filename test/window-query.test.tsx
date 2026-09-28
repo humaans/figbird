@@ -649,6 +649,42 @@ test('window query: cursor pages survive value patches to page zero', async t =>
   read.unsubscribe()
 })
 
+test('window query: a cursor chain rebuild keeps the old rows visible', async t => {
+  const rows = makeRows(8)
+  const app = createCursorWindowApp(rows)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 5,
+  })
+  const range = { start: 6, end: 7 }
+  const read = readSettledWindow(ref, range)
+  await read.promise
+
+  // A create at the tail changes the total, so later pages rebuild from page zero.
+  const statuses: string[] = []
+  const created = { id: 9, ownerId: 1, rank: 9, title: 'Tail' }
+  app.replaceRows([...rows, created])
+  const rebuilt = new Promise<void>(resolve => {
+    const unsubscribe = ref.subscribe(
+      state => {
+        statuses.push(state.status)
+        if (state.total === 9 && !state.isFetching) {
+          unsubscribe()
+          resolve()
+        }
+      },
+      { range },
+    )
+  })
+  app.emit('created', created)
+  await rebuilt
+  t.true(statuses.length > 1)
+  t.true(statuses.every(status => status === 'success'))
+  t.is(ref.getSnapshot(range).data.get(6)?.id, 7)
+  read.unsubscribe()
+})
+
 test('window query: a cursor page with more rows but none returned surfaces an error', async t => {
   const app = createCursorWindowApp(makeRows(8))
   app.serveEmptyPageAt(4)

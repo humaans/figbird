@@ -461,7 +461,9 @@ The hook detects the adapter's pagination capability:
 - Offset services jump straight to any requested index with `$skip` and `$limit`.
 - Cursor services walk forward from their nearest known cursor checkpoint. They do
   not pretend a cursor is a random-access offset; a future seek-capable adapter can
-  optimize that walk without changing the hook API.
+  optimize that walk without changing the hook API. Realtime events refetch the
+  first block; when its rows, end cursor, or `total` change, later blocks rebuild
+  along a fresh cursor chain while their previous rows stay visible.
 
 When the server reports `total`, give it to the virtualizer as its item count to get
 a full-size scrollbar and direct scrollbar jumps. Restoring a saved scroll offset is
