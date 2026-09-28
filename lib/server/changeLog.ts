@@ -6,6 +6,8 @@ export interface ChangeEntry {
   service: string
   id: string | number
   type: ChangeType
+  /** Who may learn of the change — a tenant, say — from `versioned`'s `scope`. */
+  scope?: string
 }
 
 /**

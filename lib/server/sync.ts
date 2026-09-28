@@ -31,6 +31,16 @@ export interface FigbirdSyncOptions {
   overlap?: number
   /** Ids per authorized `$in` read. Defaults to 100. */
   batchSize?: number
+  /**
+   * The scopes a caller may learn changes of — e.g. `params => params.user?.tenantId`.
+   * With it, only log entries whose `scope` (from `versioned`'s `scope`) is among
+   * them are replayed, and entries without a scope never are. Without it, every
+   * caller sees every allowed service's changes: removals and invalidations then
+   * reveal ids and write times across tenants, so set it for multi-tenant apps.
+   */
+  scope?: (
+    params: SyncParams,
+  ) => string | readonly string[] | undefined | Promise<string | readonly string[] | undefined>
 }
 
 class SyncServiceError extends Error {
@@ -89,6 +99,7 @@ export function figbirdSync({
   field = '_v',
   overlap = timeDefault(sequencer, 'overlap', 30_000),
   batchSize = 100,
+  scope,
 }: FigbirdSyncOptions): {
   setup(app: SyncApplication): Promise<void>
   find(params?: SyncParams): Promise<SyncResult>
@@ -120,6 +131,13 @@ export function figbirdSync({
     return rows
   }
 
+  const visibleTo = async (params: SyncParams): Promise<(entry: ChangeEntry) => boolean> => {
+    if (!scope) return () => true
+    const scopes = await scope(params)
+    const allowedScopes = new Set(typeof scopes === 'string' ? [scopes] : (scopes ?? []))
+    return entry => entry.scope !== undefined && allowedScopes.has(entry.scope)
+  }
+
   return {
     async setup(application) {
       app = application
@@ -142,13 +160,16 @@ export function figbirdSync({
       const entries = await log.since(Math.max(0, since - overlap))
       if (entries === 'truncated') throw new SyncTruncatedError(since)
 
+      const visible = await visibleTo(params)
       let cursor = since
       const latest = new Map<string, Map<string, ChangeEntry>>(names.map(name => [name, new Map()]))
       for (const entry of entries) {
-        cursor = Math.max(cursor, entry.seq)
         const byId = latest.get(entry.service)
-        const previous = byId?.get(String(entry.id))
-        if (byId && (!previous || entry.seq >= previous.seq)) byId.set(String(entry.id), entry)
+        if (!byId || !visible(entry)) continue
+        // Only entries the caller may see move its cursor: it reveals write times.
+        cursor = Math.max(cursor, entry.seq)
+        const previous = byId.get(String(entry.id))
+        if (!previous || entry.seq >= previous.seq) byId.set(String(entry.id), entry)
       }
 
       // The caller's own params, so its permissions decide which rows it reads.

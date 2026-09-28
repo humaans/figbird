@@ -18,7 +18,9 @@ import {
   memoryChangeLog,
   versioned,
   type ChangeLog,
+  type FigbirdSyncOptions,
   type SyncResult,
+  type VersionedOptions,
 } from '../lib/server/index'
 
 interface Person {
@@ -27,6 +29,7 @@ interface Person {
   team: string
   secret?: boolean
   archived?: boolean
+  tenant?: string
   _v?: number
 }
 
@@ -64,7 +67,14 @@ async function waitFor(condition: () => boolean): Promise<void> {
 async function createServer({
   log = memoryChangeLog(),
   hideSecret = false,
-}: { log?: ChangeLog; hideSecret?: boolean } = {}): Promise<Application> {
+  versioning,
+  sync,
+}: {
+  log?: ChangeLog
+  hideSecret?: boolean
+  versioning?: Partial<VersionedOptions>
+  sync?: Partial<FigbirdSyncOptions>
+} = {}): Promise<Application> {
   const app = feathers()
   app.use('people', new MemoryService<Person>({ paginate: { default: 10, max: 100 }, multi: true }))
   if (hideSecret) {
@@ -81,9 +91,9 @@ async function createServer({
     })
   }
   const sequencer = hybridClock()
-  app.service('people').hooks(versioned({ sequencer, log }))
+  app.service('people').hooks(versioned({ sequencer, log, ...versioning }))
   app.use('projects', new MemoryService<Project>())
-  app.service('projects').hooks(versioned({ sequencer, log }))
+  app.service('projects').hooks(versioned({ sequencer, log, ...versioning }))
   // Unversioned: its changes are never logged.
   app.use('teams', new MemoryService<Team>())
   app.use(
@@ -93,6 +103,7 @@ async function createServer({
       sequencer,
       services: ['people', 'projects'],
       ordering: { people: { preset: 'postgres', numeric: ['salary'] } },
+      ...sync,
     }),
   )
   await app.setup()
@@ -106,7 +117,10 @@ async function createServer({
  */
 function connect(
   app: Application,
-  { canSee = () => true }: { canSee?: (row: Person) => boolean } = {},
+  {
+    canSee = () => true,
+    user,
+  }: { canSee?: (row: Person) => boolean; user?: Record<string, unknown> } = {},
 ) {
   const socket = new EventEmitter()
   const listeners = new Map<string, EventEmitter>()
@@ -129,7 +143,7 @@ function connect(
     calls[key] = (calls[key] ?? 0) + 1
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     const target = app.service(path) as any
-    const params = { ...(clone(args.at(-1)) as object), provider: 'socketio' }
+    const params = { ...(clone(args.at(-1)) as object), provider: 'socketio', user }
     pending++
     try {
       if (!connected) throw Object.assign(new Error('Timeout'), { name: 'Timeout', code: 408 })
@@ -480,6 +494,28 @@ test('equal row versions fall through to timestamps', t => {
   const adapter = new FeathersAdapter(mockFeathers({}), { sync: {} })
   t.true(adapter.isItemStale({ id: 1, _v: 5, updatedAt: 2 }, { id: 1, _v: 5, updatedAt: 1 }))
   t.false(adapter.isItemStale({ id: 1, _v: 5, updatedAt: 1 }, { id: 1, _v: 6, updatedAt: 0 }))
+})
+
+test('sync only replays changes in the caller’s scope', async t => {
+  const app = await createServer({
+    versioning: { scope: row => row.tenant as string | undefined },
+    sync: { scope: params => (params.user as { tenant: string }).tenant },
+  })
+  const people = app.service('people')
+  const ada = await people.create({ id: 1, name: 'Ada', team: 'a', tenant: 'acme' })
+  await people.create({ id: 2, name: 'Eve', team: 'a', tenant: 'globex' })
+  await people.remove(2)
+  const bridge = connect(app, { user: { tenant: 'acme' } })
+
+  const result = (await bridge.client
+    .service('figbird/sync')
+    .find({ query: { since: ada._v, services: ['people'] } })) as unknown as SyncResult
+
+  t.deepEqual(
+    result.changes.map(change => change.id),
+    [1],
+  )
+  t.is(result.cursor, ada._v, 'other tenants’ writes do not move the cursor')
 })
 
 test('a row outside the default scope is reconciled, not removed', async t => {

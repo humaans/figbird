@@ -29,6 +29,12 @@ export interface VersionedOptions {
    * same sequence, since it still versions removals.
    */
   assign?: 'hook' | 'database'
+  /**
+   * The scope a change belongs to, recorded on its log entry — typically the
+   * row's tenant. The sync service only replays a caller the entries of its own
+   * scopes; see `figbirdSync`'s `scope`.
+   */
+  scope?: (row: Record<string, unknown>, context: VersionedHookContext) => string | undefined
 }
 
 const METHOD_CHANGES: Record<string, ChangeType> = {
@@ -57,7 +63,13 @@ const isRow = (value: unknown): value is Row =>
  * to the removed result, so the `removed` event carries a newer version than any
  * earlier event for the row. Custom methods and reads are left alone.
  */
-export function versioned({ field = '_v', sequencer, log, assign = 'hook' }: VersionedOptions): {
+export function versioned({
+  field = '_v',
+  sequencer,
+  log,
+  assign = 'hook',
+  scope,
+}: VersionedOptions): {
   before: Partial<Record<'create' | 'update' | 'patch', VersionedHook[]>>
   after: Record<'create' | 'update' | 'patch' | 'remove', VersionedHook[]>
 } {
@@ -106,7 +118,14 @@ export function versioned({ field = '_v', sequencer, log, assign = 'hook' }: Ver
       const seq = typeof version === 'number' ? version : (seqs[index] ?? seqs[0])
       const id = row[idField]
       if (seq === undefined || (typeof id !== 'string' && typeof id !== 'number')) continue
-      await log.append({ seq, service: context.path, id, type })
+      const entryScope = scope?.(row, context)
+      await log.append({
+        seq,
+        service: context.path,
+        id,
+        type,
+        ...(entryScope === undefined ? {} : { scope: entryScope }),
+      })
     }
   }
 
