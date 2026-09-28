@@ -57,13 +57,19 @@ export function versioned({ field = '_v', sequencer, log }: VersionedOptions): {
 
   const stampData: VersionedHook = async context => {
     const seqs: number[] = []
-    const stamp = (data: unknown): unknown => {
+    const stamp = async (data: unknown): Promise<unknown> => {
       if (!isRow(data)) return data
-      const seq = sequencer()
+      const seq = await sequencer.next()
       seqs.push(seq)
       return { ...data, [field]: seq }
     }
-    context.data = Array.isArray(context.data) ? context.data.map(stamp) : stamp(context.data)
+    if (Array.isArray(context.data)) {
+      const rows: unknown[] = []
+      for (const data of context.data) rows.push(await stamp(data))
+      context.data = rows
+    } else {
+      context.data = await stamp(context.data)
+    }
     stamped.set(context, seqs)
   }
 
@@ -71,7 +77,7 @@ export function versioned({ field = '_v', sequencer, log }: VersionedOptions): {
     const type = METHOD_CHANGES[context.method]
     if (!type) return
     if (type === 'removed') {
-      const seq = sequencer()
+      const seq = await sequencer.next()
       const restamp = (value: unknown) =>
         Array.isArray(value)
           ? value.map(row => (isRow(row) ? { ...row, [field]: seq } : row))

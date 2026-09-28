@@ -1,7 +1,7 @@
 import type { ServiceOrdering } from '../core/sort.js'
 import type { ChangeEntry, ChangeLog } from './changeLog.js'
 import type { SyncChange, SyncResult } from './protocol.js'
-import { SEQUENCE_UNITS_PER_MS } from './sequencer.js'
+import type { Sequencer } from './sequencer.js'
 import { serviceIdField } from './versioned.js'
 
 /** The slice of Feathers `Params` the sync service reads and forwards. */
@@ -12,6 +12,8 @@ export interface SyncParams {
 
 export interface FigbirdSyncOptions {
   log: ChangeLog
+  /** The sequencer passed to `versioned`. */
+  sequencer: Sequencer
   /** Service paths a client may sync. Anything else is ignored. */
   services: readonly string[]
   /** Per-service ordering declarations served from `get('ordering')`. */
@@ -24,7 +26,7 @@ export interface FigbirdSyncOptions {
    * be logged — and emitted — after faster writes with higher sequences. Any
    * write that takes less than the overlap is replayed; re-sending changes the
    * client already has is harmless, since versions reject stale rows. Defaults
-   * to 30 seconds of `hybridClock` sequence.
+   * to 30 seconds for a sequencer with `unitsPerMs`, and is required otherwise.
    */
   overlap?: number
   /** Ids per authorized `$in` read. Defaults to 100. */
@@ -79,10 +81,11 @@ interface SyncApplication {
  */
 export function figbirdSync({
   log,
+  sequencer,
   services,
   ordering = {},
   field = '_v',
-  overlap = 30_000 * SEQUENCE_UNITS_PER_MS,
+  overlap = timeDefault(sequencer, 'overlap', 30_000),
   batchSize = 100,
 }: FigbirdSyncOptions): {
   setup(app: SyncApplication): Promise<void>
@@ -183,6 +186,16 @@ export function figbirdSync({
       throw new SyncServiceError('NotFound', 404, 'not-found', `figbird sync: no resource "${id}"`)
     },
   }
+}
+
+/** A default expressed in wall-clock time, for sequencers that track it. */
+function timeDefault(sequencer: Sequencer, option: string, ms: number): number {
+  if (sequencer.unitsPerMs === undefined) {
+    throw new Error(
+      `figbirdSync(): pass \`${option}\` in sequence units — the sequencer has no \`unitsPerMs\``,
+    )
+  }
+  return ms * sequencer.unitsPerMs
 }
 
 function parseServices(value: unknown): string[] | undefined {

@@ -1,8 +1,16 @@
 /** Hands out the change sequence: strictly increasing safe integers. */
-export type Sequencer = () => number
+export interface Sequencer {
+  next(): number | Promise<number>
+  /**
+   * Sequence units per wall-clock millisecond, for sequences that track time.
+   * The sync service derives its time-based defaults from it; a sequencer
+   * without it (a database sequence, say) must be given them explicitly.
+   */
+  readonly unitsPerMs?: number
+}
 
 /** Sequence units per wall-clock millisecond in `hybridClock` values. */
-export const SEQUENCE_UNITS_PER_MS = 1000
+const SEQUENCE_UNITS_PER_MS = 1000
 
 export interface HybridClockOptions {
   /** Wall clock in epoch milliseconds. Defaults to `Date.now`. */
@@ -33,11 +41,14 @@ export interface HybridClockOptions {
  */
 export function hybridClock({ now = Date.now, last = 0 }: HybridClockOptions = {}): Sequencer {
   let previous = last
-  return () => {
-    previous = Math.max(Math.floor(now()) * SEQUENCE_UNITS_PER_MS, previous + 1)
-    if (!Number.isSafeInteger(previous)) {
-      throw new RangeError(`hybridClock(): sequence ${previous} is not a safe integer`)
-    }
-    return previous
+  return {
+    unitsPerMs: SEQUENCE_UNITS_PER_MS,
+    next() {
+      previous = Math.max(Math.floor(now()) * SEQUENCE_UNITS_PER_MS, previous + 1)
+      if (!Number.isSafeInteger(previous)) {
+        throw new RangeError(`hybridClock(): sequence ${previous} is not a safe integer`)
+      }
+      return previous
+    },
   }
 }

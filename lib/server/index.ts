@@ -5,7 +5,7 @@
  * No runtime dependency on Feathers: the hooks and the sync service are typed
  * structurally against the parts of Feathers they use.
  */
-export { hybridClock, SEQUENCE_UNITS_PER_MS } from './sequencer.js'
+export { hybridClock } from './sequencer.js'
 export type { HybridClockOptions, Sequencer } from './sequencer.js'
 export { memoryChangeLog } from './changeLog.js'
 export type { ChangeEntry, ChangeLog, MemoryChangeLogOptions } from './changeLog.js'

@@ -89,6 +89,7 @@ async function createServer({
     'figbird/sync',
     figbirdSync({
       log,
+      sequencer,
       services: ['people', 'projects'],
       ordering: { people: { preset: 'postgres', numeric: ['salary'] } },
     }),
@@ -431,6 +432,13 @@ test('sync reads rows through the caller’s own permissions', async t => {
   t.deepEqual(client.everyone(), ['Ada Lovelace', 'Cy'], 'a row that became hidden leaves')
   t.false(client.figbird.getState().get('people')!.entities.has('4'))
   client.dispose()
+})
+
+test('time-based sync defaults need a sequencer that tracks time', t => {
+  const log = memoryChangeLog()
+  const sequencer = { next: () => 1 }
+  t.throws(() => figbirdSync({ log, sequencer, services: [] }), { message: /`overlap`/ })
+  t.notThrows(() => figbirdSync({ log, sequencer, services: [], overlap: 100 }))
 })
 
 test('equal row versions fall through to timestamps', t => {
