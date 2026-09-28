@@ -411,8 +411,9 @@ test('a create landing between findAll pages does not duplicate rows', async t =
   }
   const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
 
+  // Row 5 sorts before the pages already read; its created event delivers it.
   const result = await adapter.findAll('notes')
-  t.deepEqual(ids(result.data), [5, 10, 11, 12, 13])
+  t.deepEqual(ids(result.data), [10, 11, 12, 13])
 })
 
 test('a remove landing between findAll pages does not delete the skipped row', async t => {
@@ -529,7 +530,38 @@ test('findAll terminates when the service ignores $skip', async t => {
   }
   const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
 
-  await t.throwsAsync(adapter.findAll('notes'), { message: /inconsistent pages/ })
+  // The repeated page ends the walk; the store looks up rows it never reached.
+  const result = await adapter.findAll('notes')
+  t.deepEqual(ids(result.data), [1, 2])
+  t.is(notes.counts.find, 2)
+})
+
+test('findAll reads a busy service that creates rows during every walk', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'one', rank: 1 },
+        2: { id: 2, content: 'two', rank: 2 },
+        3: { id: 3, content: 'three', rank: 3 },
+        4: { id: 4, content: 'four', rank: 4 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  // Every page lands alongside a create, so the total never holds still.
+  notes.find = async params => {
+    const page = await find(params)
+    const id = 100 + notes.counts.find
+    notes.data = { ...notes.data, [id]: { id, content: 'new', rank: id } }
+    return page
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  const result = await adapter.findAll('notes')
+  const read = ids(result.data)
+  t.deepEqual(read.slice(0, 4), [1, 2, 3, 4])
+  t.is(new Set(read).size, read.length, 'no row is read twice')
 })
 
 test('findAll accepts a service that ignores paging and returns every row', async t => {
@@ -546,14 +578,13 @@ test('findAll accepts a service that ignores paging and returns every row', asyn
   const find = notes.find.bind(notes)
   // paginate: false and no $limit/$skip support: a bare array of everything.
   notes.find = (async () => (await find({ query: {} })).data) as never
-  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
 
-  const result = await adapter.findAll('notes')
-  t.deepEqual(
-    result.data.map(note => (note as { id: number }).id),
-    [1, 2, 3],
-  )
-  t.is(notes.counts.find, 1)
+  // With a page size the first page overfills it; without one, a bare array's page
+  // size is its own length, so only the repeat on the next page ends the walk.
+  for (const options of [{ defaultPageSizeWhenFetchingAll: 2 }, {}]) {
+    const result = await new FeathersAdapter(feathers, options).findAll('notes')
+    t.deepEqual(ids(result.data), [1, 2, 3])
+  }
 })
 
 test('a provable window merge survives an older reconcile response', async t => {
