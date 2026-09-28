@@ -39,7 +39,7 @@ function collectCursorQueryInputPaths(query: unknown): Set<string> | null {
         if (!root || !isPlainRecord(value) || Object.keys(value).length === 0) return false
         hasExplicitSort = true
         for (const field of Object.keys(value)) paths.add(field)
-      } else if (key === '$or') {
+      } else if (key === '$or' || key === '$and') {
         if (!Array.isArray(value)) return false
         for (const branch of value) {
           if (!isPlainRecord(branch) || !visitClause(branch, false)) return false
