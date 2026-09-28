@@ -90,19 +90,25 @@ function relationPathOf(schema: Schema, serviceName: string, key: string): strin
   return relationPath
 }
 
+/** A dotted key of the query's predicate tree, with every operand it's compared to. */
+interface RelationalFilterLeaf {
+  path: string[]
+  operands: unknown[]
+}
+
 /**
  * The dotted keys of the query's predicate tree — the root object and `$and`/`$or`
- * branches — keyed by filter key, with their relation paths. Relation paths that
- * also occur anywhere else (e.g. inside a custom operator's operand) are opaque:
- * nothing is known about how they combine, so `substituteLeaves` can't bound them.
+ * branches — keyed by filter key. Relation paths that also occur anywhere else
+ * (e.g. inside a custom operator's operand) are opaque: nothing is known about how
+ * they combine, so `substituteLeaves` can't bound them.
  */
 function collectRelationalFilterLeaves(
   schema: Schema,
   serviceName: string,
   query: unknown,
-  leaves = new Map<string, string>(),
+  leaves = new Map<string, RelationalFilterLeaf>(),
   opaque = new Set<string>(),
-): { leaves: Map<string, string>; opaque: Set<string> } {
+): { leaves: Map<string, RelationalFilterLeaf>; opaque: Set<string> } {
   if (!isRecord(query)) return { leaves, opaque }
   for (const [key, child] of Object.entries(query)) {
     if (LOGICAL_OPERATORS.has(key) && Array.isArray(child)) {
@@ -112,7 +118,11 @@ function collectRelationalFilterLeaves(
       continue
     }
     const relationPath = relationPathOf(schema, serviceName, key)
-    if (relationPath.length > 0) leaves.set(key, relationPath.join('.'))
+    if (relationPath.length > 0) {
+      const leaf = leaves.get(key) ?? { path: relationPath, operands: [] }
+      leaf.operands.push(child)
+      leaves.set(key, leaf)
+    }
     for (const nested of collectRelationalFilterPaths(schema, serviceName, child)) {
       opaque.add(nested.path.join('.'))
     }
@@ -146,10 +156,12 @@ function substituteLeaves(query: unknown, keys: ReadonlySet<string>, value: bool
 /**
  * The local matcher for a query with relational filters. Each item is materialized
  * with its related rows from cache; a leaf whose relation path can't be resolved
- * is undecided. The item is still decided when the query gives the same answer with
- * every undecided leaf true and with every one false — `{ status: 'closed',
- * 'creator.name': 'Bob' }` rejects an open issue whatever its creator — and is
- * `'unknown'` otherwise.
+ * is undecided. So is a leaf through a null FK whose predicate also matches a
+ * missing relation (`$ne`, `$nin`, null equality): locally that is true, while a
+ * server join usually excludes the row, so only the server can say. The item is
+ * still decided when the query gives the same answer with every undecided leaf
+ * true and with every one false — `{ status: 'closed', 'creator.name': 'Bob' }`
+ * rejects an open issue whatever its creator — and is `'unknown'` otherwise.
  */
 export function createRelationalFilterMatcher<TMeta extends Record<string, unknown>>(
   schema: Schema,
@@ -162,6 +174,13 @@ export function createRelationalFilterMatcher<TMeta extends Record<string, unkno
   const paths = collectRelationalFilterPaths(schema, serviceName, query)
   if (paths.length === 0) return match
   const { leaves, opaque } = collectRelationalFilterLeaves(schema, serviceName, query)
+  const matchesMissingRelation = new Set<string>()
+  for (const [key, { path, operands }] of leaves) {
+    const missing = { [path[0]!]: null }
+    if (operands.some(operand => compile({ [key]: operand })(missing))) {
+      matchesMissingRelation.add(key)
+    }
+  }
   // Few distinct undecided sets occur, so their bound matchers are compiled once.
   const bounds = new Map<string, { upper: (item: unknown) => boolean; lower: typeof match }>()
 
@@ -173,10 +192,18 @@ export function createRelationalFilterMatcher<TMeta extends Record<string, unkno
       item,
       paths,
     )
-    if (materialized.unresolved.size === 0) return match(materialized.item)
     const undecided: string[] = []
-    for (const [key, path] of leaves) {
-      if (materialized.unresolved.has(path)) undecided.push(key)
+    for (const [key, { path }] of leaves) {
+      const relation = path.join('.')
+      if (
+        materialized.unresolved.has(relation) ||
+        (materialized.missing.has(relation) && matchesMissingRelation.has(key))
+      ) {
+        undecided.push(key)
+      }
+    }
+    if (materialized.unresolved.size === 0 && undecided.length === 0) {
+      return match(materialized.item)
     }
     for (const path of materialized.unresolved) {
       if (opaque.has(path)) return 'unknown'
@@ -310,8 +337,8 @@ export function shouldRefetchRelationalFilterQuery(
 }
 
 /**
- * The item with its related rows from cache, and the relation paths (dotted) that
- * local state can't resolve for it.
+ * The item with its related rows from cache, and its relation paths (dotted) that
+ * local state can't resolve, or that end at a null FK.
  */
 export function materializeRelationalFilterItem<TMeta extends Record<string, unknown>>(
   schema: Schema,
@@ -319,16 +346,25 @@ export function materializeRelationalFilterItem<TMeta extends Record<string, unk
   serviceName: string,
   item: unknown,
   paths: RelationalFilterPath[],
-): { item: unknown; unresolved: Set<string> } {
+): { item: unknown; unresolved: Set<string>; missing: Set<string> } {
   let materialized = cloneRecord(item)
   const unresolved = new Set<string>()
+  const missing = new Set<string>()
   for (const path of paths) {
     const result = materializeRelationPath(schema, state, serviceName, materialized, path.path)
-    if (result.complete) materialized = result.item
-    else unresolved.add(path.path.join('.'))
+    if (result.kind === 'unresolved') {
+      unresolved.add(path.path.join('.'))
+      continue
+    }
+    if (result.kind === 'missing') missing.add(path.path.join('.'))
+    materialized = result.item
   }
-  return { item: materialized, unresolved }
+  return { item: materialized, unresolved, missing }
 }
+
+type MaterializedPath =
+  | { kind: 'resolved' | 'missing'; item: Record<string, unknown> }
+  | { kind: 'unresolved' }
 
 function materializeRelationPath<TMeta extends Record<string, unknown>>(
   schema: Schema,
@@ -336,34 +372,24 @@ function materializeRelationPath<TMeta extends Record<string, unknown>>(
   serviceName: string,
   item: Record<string, unknown>,
   path: string[],
-): { item: Record<string, unknown>; complete: boolean } {
-  if (path.length === 0) return { item, complete: true }
+): MaterializedPath {
+  if (path.length === 0) return { kind: 'resolved', item }
 
   const [relName, ...rest] = path
   const relDef = relName ? schema.relationships?.[serviceName]?.[relName] : undefined
-  if (!relName || !relDef) return { item, complete: false }
+  if (!relName || !relDef) return { kind: 'unresolved' }
 
   const related = resolveRelatedItem(schema, state, relDef, item)
-  if (related === undefined) return { item, complete: false }
+  if (related === undefined) return { kind: 'unresolved' }
   // A null FK is a known absence: the path's predicates see a null relation.
-  if (related === null) return { item: { ...item, [relName]: null }, complete: true }
+  if (related === null) return { kind: 'missing', item: { ...item, [relName]: null } }
 
   const nextRelated =
     rest.length > 0
       ? materializeRelationPath(schema, state, relDef.destService, cloneRecord(related), rest)
-      : { item: related, complete: true }
-
-  if (!nextRelated.complete) {
-    return { item, complete: false }
-  }
-
-  return {
-    item: {
-      ...item,
-      [relName]: nextRelated.item,
-    },
-    complete: true,
-  }
+      : { kind: 'resolved' as const, item: related as Record<string, unknown> }
+  if (nextRelated.kind === 'unresolved') return nextRelated
+  return { kind: nextRelated.kind, item: { ...item, [relName]: nextRelated.item } }
 }
 
 /**

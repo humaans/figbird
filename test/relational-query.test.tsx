@@ -2377,6 +2377,27 @@ it('realtime: a null FK is a known absence, so the other $or branch keeps the ro
   unmount()
 })
 
+it('realtime: a null FK leaves predicates that match a missing relation to the server', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    { issues: { data: {} }, users: { data: {} } },
+    { queryAwareFind: true },
+  )
+  // The server's join decides whether an unassigned issue satisfies $ne.
+  const notAlice = figbird.query(figbird.q.issues.where({ 'creator.name': { $ne: 'Alice' } }))
+  const unsub = notAlice.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').create({ id: 1, title: 'New', status: 'open', creatorId: null })
+  await flushTasks()
+
+  t.deepEqual(notAlice.getSnapshot().data, [], 'the server excludes the unassigned issue')
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the root reconciles')
+
+  unsub()
+})
+
 it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
   interface FilterDocument {
     id: number

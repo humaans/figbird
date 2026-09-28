@@ -326,7 +326,9 @@ Local decisions are three-valued: match, no match, or unknown. Only paths throug
 `one` relations are locally evaluable — they resolve to exactly one row, or to none when the
 FK is null. A null FK is a known absence: the path's predicates are false, and other `$or`
 branches still decide (`$or: [{ priority: 'urgent' }, { 'assignee.role': 'owner' }]` keeps an
-unassigned urgent issue). A related row that isn't cached, or an FK missing from the event, is
+unassigned urgent issue). The exception is a predicate that also matches a missing value (`$ne`,
+`$nin`, null equality): locally it would hold, while a server join usually excludes the row, so
+it is unknown and the server decides. A related row that isn't cached, or an FK missing from the event, is
 unknown: the store keeps the current result and reconciles the root with the server instead
 of dropping the row or ignoring the create. An unknown predicate leaves the item unknown only
 when it could change the answer — the matcher evaluates the query with every undecided predicate
