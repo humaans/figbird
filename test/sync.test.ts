@@ -8,6 +8,7 @@ import {
   type FeathersClient,
   type FeathersService,
 } from '../lib/adapters/feathers'
+import type { AdapterConnectionEvent } from '../lib/adapters/adapter'
 import { loadServerOrdering } from '../lib/adapters/feathersSync'
 import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
@@ -435,6 +436,38 @@ test('a disconnect during an in-flight replay falls back to refetching', async t
 
   t.deepEqual(client.everyone(), ['Ada Lovelace', 'Bob'])
   client.dispose()
+})
+
+test('a replay that fails to apply reports a plain reconnect', async t => {
+  const app = await createServer()
+  const bridge = connect(app)
+  const adapter = new FeathersAdapter(bridge.client, { sync: {} })
+  const events: AdapterConnectionEvent[] = []
+  adapter.subscribeToConnectionEvents(event => events.push(event))
+  let failing = false
+  const handler = () => {
+    if (failing) throw new Error('handler failed')
+  }
+  adapter.subscribe('people', {
+    created: handler,
+    updated: handler,
+    patched: handler,
+    removed: handler,
+  })
+  await app.service('people').create({ id: 1, name: 'Ada', team: 'a' })
+
+  failing = true
+  bridge.disconnect()
+  bridge.reconnect()
+  await bridge.idle()
+
+  t.deepEqual(
+    events.map(event => [event.type, event.type === 'reconnected' && event.replayed === true]),
+    [
+      ['disconnected', false],
+      ['reconnected', false],
+    ],
+  )
 })
 
 test('a live removal during an in-flight replay is not resurrected', async t => {

@@ -146,6 +146,8 @@ export class FeathersSync {
     if (this.#replaying) return this.#broadcast(event)
     this.#replaying = true
     void this.#replayMissedEvents()
+      // A replay that fails to apply leaves the cache partly replayed: reconcile.
+      .catch(() => false)
       .finally(() => {
         this.#replaying = false
         this.#liveDuringReplay = undefined
