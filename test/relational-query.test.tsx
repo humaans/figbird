@@ -1362,6 +1362,61 @@ it('useQuery: large relation id sets are fetched in bounded $in chunks', async t
   unmount()
 })
 
+it('useQuery: relation ids arriving one at a time merge into a bounded set of chunks', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const ids = Array.from({ length: 20 }, (_, index) => index + 1)
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'Issue 1', status: 'open', creatorId: 1 } } },
+      users: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, name: `User ${id}`, email: `${id}@example.com` }]),
+        ),
+      },
+    },
+    { queryAwareFind: true },
+  )
+
+  const unresolved: number[] = []
+  function Issues() {
+    const issues = useQuery(figbird.q.issues.related('creator'))
+    // Only the newest issue may wait for its creator: merging never blanks loaded ones.
+    unresolved.push(issues.slice(0, -1).filter(issue => !issue.creator).length)
+    return (
+      <div
+        className='issues'
+        data-resolved={issues.filter(issue => issue.creator?.id === issue.creatorId).length}
+      />
+    )
+  }
+
+  const userChunks = () =>
+    figbird.inspect().filter(row => row.serviceName === 'users' && row.subscriberCount > 0)
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  for (const id of ids.slice(1)) {
+    await flush(async () => {
+      await feathers
+        .service('issues')
+        .create({ id, title: `Issue ${id}`, status: 'open', creatorId: id })
+    })
+  }
+
+  t.is($('.issues')!.getAttribute('data-resolved'), '20')
+  t.true(userChunks().length <= 5, `${userChunks().length} creator chunks`)
+  t.true(unresolved.every(count => count === 0))
+  unmount()
+})
+
 it('useQuery: ids that leave a still-live chunk stop driving nested relations', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createTestApp(

@@ -1084,15 +1084,16 @@ export class RelationalQueryRef<
   ): ChunkedRelationQuery<TMeta> {
     const query: ChunkedRelationQuery<TMeta> = new ChunkedRelationQuery(
       values => this.#query(target.descriptor({ $in: values }), target.config),
-      queryRef =>
+      (queryRef, onSuccess) =>
         subscribeAndSeed(
           queryRef,
-          () => (onReady ? onReady() : this.#syncNestedFanIn(query, plan)),
+          onSuccess,
           () => this.#notifyListeners(),
           this.#staleTime,
           this.#graph(plan.key, role),
         ),
       row => getFieldValue(row, target.field),
+      () => (onReady ? onReady() : this.#syncNestedFanIn(query, plan)),
     )
     return query
   }
