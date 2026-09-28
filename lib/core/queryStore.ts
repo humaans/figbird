@@ -740,11 +740,8 @@ export class QueryStore<
         ...(options.graph ? { graph: [options.graph] } : {}),
       }
       // A pending reconcile can coincide with an in-flight fetch (reconnect jitter,
-      // hidden tab). Record it as that fetch's follow-up rather than starting a
-      // second, concurrent fetch whose older response could win.
-      const execution = this.#executions.get(queryId)
-      if (execution?.inFlight && q.state.isFetching) execution.followup = context
-      else this.#queue(queryId, context)
+      // hidden tab); #dispatch makes it that fetch's follow-up.
+      this.#dispatch(queryId, context)
     }
   }
 
@@ -762,11 +759,21 @@ export class QueryStore<
       ...(options.graph ? { graph: [options.graph] } : {}),
     }
 
-    if (!q.state.isFetching) {
-      this.#queue(queryId, fetchContext)
+    this.#dispatch(queryId, fetchContext)
+  }
+
+  /**
+   * Start a fetch, or — while one is in flight — record the request as its single
+   * follow-up, so a query never has two concurrent fetches whose older response
+   * could win. In flight means dispatched and not yet committed: a new query reads
+   * `isFetching` before its first dispatch, and a settled dispatch has committed.
+   */
+  #dispatch(queryId: string, context: FetchContext): void {
+    const execution = this.#executions.get(queryId)
+    if (execution?.inFlight && this.#getQuery(queryId)?.state.isFetching) {
+      execution.followup = context
     } else {
-      const execution = this.#executions.get(queryId)
-      if (execution) execution.followup = fetchContext
+      this.#queue(queryId, context)
     }
   }
 

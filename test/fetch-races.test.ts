@@ -319,6 +319,8 @@ test('a subscriber joining a pending in-flight query does not start a second fet
   notes.setDelay(40)
   ref.refetch()
   await waitFor(() => notes.counts.find === 2, 'the delayed refetch to start')
+  // The server changes after the in-flight fetch read it; only the follow-up sees it.
+  notes.data = { 1: { id: 1, content: 'changed', rank: 1 } }
   socket.emit('reconnect')
 
   const unsubSecond = ref.subscribe(() => {})
@@ -327,6 +329,7 @@ test('a subscriber joining a pending in-flight query does not start a second fet
   await waitFor(() => notes.counts.find === 3, 'the follow-up fetch')
   await waitFor(() => !ref.getSnapshot()?.isFetching, 'the follow-up to settle')
   t.is(notes.counts.find, 3)
+  t.deepEqual(ref.getSnapshot()?.data, [{ id: 1, content: 'changed', rank: 1 }])
   unsub()
   unsubSecond()
   figbird.dispose()
