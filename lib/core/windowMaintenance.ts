@@ -49,15 +49,22 @@ function itemHasKey(
   return id !== undefined && entityKey(id) === key
 }
 
-// `$sort` doesn't affect which rows are fetched, so a sorted-but-unfiltered
-// allPages query still proves the complete row set.
-export function isUnfilteredFindQuery(params: unknown): boolean {
-  const q = queryOfParams(params)
-  return !q || Object.keys(q).every(key => key === '$sort')
+/**
+ * An unfiltered allPages find (`.all()`), whose response is the service's complete
+ * row set. `$sort` doesn't affect which rows are fetched, so a sorted one still is.
+ */
+export function isCompleteSetQuery<TMeta>(query: Query<unknown, TMeta, unknown>): boolean {
+  const q = queryOfParams(query.desc.params)
+  return (
+    query.desc.method === 'find' &&
+    'allPages' in query.config &&
+    query.config.allPages === true &&
+    (!q || Object.keys(q).every(key => key === '$sort'))
+  )
 }
 
 /** First index whose row sorts strictly after the item — ties insert after their equals. */
-function findInsertIndex(
+export function findInsertIndex(
   rows: unknown[],
   item: unknown,
   cmp: (a: unknown, b: unknown) => number,

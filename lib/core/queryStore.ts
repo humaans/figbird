@@ -29,8 +29,9 @@ import {
   applyVisibleEventToQuery,
   createServiceState,
   diffCompleteSet,
+  findInsertIndex,
   groupEventsByService,
-  isUnfilteredFindQuery,
+  isCompleteSetQuery,
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
   updateQueriesFromEvents,
@@ -1155,10 +1156,54 @@ export class QueryStore<
         })
       }
       const findConfig = config as FindQueryConfig<unknown, unknown>
-      return findConfig.allPages
-        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
-        : this.#adapter.find(desc.serviceName, desc.params as TParams)
+      if (!findConfig.allPages) return this.#adapter.find(desc.serviceName, desc.params as TParams)
+      const all = this.#adapter.findAll(desc.serviceName, desc.params as TParams)
+      return isCompleteSetQuery(query)
+        ? all.then(result => this.#addUnlistedRows(queryId, result))
+        : all
     }
+  }
+
+  /**
+   * A complete-set response is read page by page, and a remove landing between offset
+   * pages makes the walk step over a row, which the complete-set diff would then
+   * delete service-wide. So before the response commits, the root's rows it lacks are
+   * looked up by id: the ones still there join it — in sort order when the root has
+   * one, appended otherwise — and only the rest read as removed. Events meanwhile land
+   * in this fetch's journal like any other, and an adapter without `findByIds` keeps
+   * reading every unlisted row as removed.
+   */
+  async #addUnlistedRows(
+    queryId: string,
+    result: QueryResponse<unknown[], TMeta>,
+  ): Promise<QueryResponse<unknown[], TMeta>> {
+    const query = this.#getQuery(queryId)
+    const service = query && this.#state.get(query.desc.serviceName)
+    if (!this.#adapter.findByIds || !query || !service) return result
+
+    const listed = new Set<EntityKey>()
+    for (const item of result.data) {
+      const id = this.#adapter.getId(item)
+      if (id !== undefined) listed.add(entityKey(id))
+    }
+    const unlisted = new Map<EntityKey, ItemId>()
+    for (const key of query.rows.ids) {
+      const entity = listed.has(key) ? undefined : service.entities.get(key)
+      const id = entity === undefined ? undefined : this.#adapter.getId(entity)
+      if (id !== undefined) unlisted.set(key, id)
+    }
+    if (unlisted.size === 0) return result
+
+    const found = await this.#adapter.findByIds(query.desc.serviceName, [...unlisted.values()])
+    const data = [...result.data]
+    const { compare } = query.maintenance
+    for (const item of found) {
+      const id = this.#adapter.getId(item)
+      // A server that ignores the id filter answers with rows nobody asked about.
+      if (id === undefined || !unlisted.delete(entityKey(id))) continue
+      data.splice(compare ? findInsertIndex(data, item, compare) : data.length, 0, item)
+    }
+    return { ...result, data }
   }
 
   /**
@@ -1400,11 +1445,7 @@ export class QueryStore<
       }
       for (const event of activeOverlayEvents) journaledItemIds.add(event.itemId)
 
-      const findConfig = query.config as FindQueryConfig<unknown, unknown>
-      const isCompleteSet =
-        query.desc.method === 'find' &&
-        Boolean(findConfig.allPages) &&
-        isUnfilteredFindQuery(query.desc.params)
+      const isCompleteSet = isCompleteSetQuery(query)
       const previousRootEntities: Map<EntityKey, unknown> | null = isCompleteSet ? new Map() : null
       if (previousRootEntities) {
         for (const itemId of query.rows.ids) {

@@ -460,6 +460,57 @@ test('a remove landing between findAll pages does not delete the skipped row', a
   unsubProcessed()
 })
 
+test('a remove and an append landing between findAll pages do not delete the skipped row', async t => {
+  const { figbird, notes } = createApp(
+    {
+      1: { id: 1, content: 'one', rank: 1 },
+      2: { id: 2, content: 'two', rank: 2 },
+      3: { id: 3, content: 'three', rank: 3 },
+      4: { id: 4, content: 'four', rank: 4 },
+    },
+    { pageSizeWhenFetchingAll: 2 },
+  )
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { $sort: { rank: 1 } } } },
+    { allPages: true },
+  )
+  const processed: ProcessedCacheEvent[] = []
+  const unsubProcessed = figbird.queryStore.subscribeToProcessedEvents(event => {
+    processed.push(event)
+  })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial complete fetch')
+
+  // Removing row 1 and appending row 5 after the refetch's first page keeps the
+  // total and the row count equal with no row repeated, yet the next `$skip`
+  // steps over row 3.
+  const find = notes.find.bind(notes)
+  const firstRefetchPage = notes.counts.find + 1
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === firstRefetchPage) {
+      const removed = notes.data[1]!
+      const created = { id: 5, content: 'five', rank: 5 }
+      notes.data = { ...notes.data, 5: created }
+      delete notes.data[1]
+      notes.emit('removed', removed)
+      notes.emit('created', created)
+    }
+    return page
+  }
+  ref.refetch()
+
+  await waitFor(
+    () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
+    'the complete refetch',
+  )
+  t.deepEqual(ids(ref.getSnapshot()!.data), [2, 3, 4, 5])
+  t.true(figbird.getState().get('notes')!.entities.has('3'))
+  t.false(processed.some(event => event.type === 'removed' && event.itemId === '3'))
+  unsub()
+  unsubProcessed()
+})
+
 test('findAll terminates when the service ignores $skip', async t => {
   const feathers = mockFeathers({
     notes: {

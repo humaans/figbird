@@ -1610,6 +1610,10 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
 4. Optionally implement `subscribeToReconnect` so active queries refetch after connectivity gaps
 5. Optionally implement `isRetryableError` to return `false` for errors that another query
    attempt cannot fix; adapters without it treat all query errors as retryable
+6. Optionally implement `findByIds(serviceName, ids)` to return the rows with those ids that
+   still exist. An `.all()` refetch asks it about the rows its response lacks, since a page
+   walk can step over a row when another is removed between pages; without it, every row
+   the response lacks is removed
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 
@@ -2092,7 +2096,7 @@ const adapter = new FeathersAdapter(feathers, options)
 
 - `feathers` — feathers client
 - `options`
-  - `idField` — string or function, defaults to `item => item.id || item._id`
+  - `idField` — string or function, defaults to `item => item.id || item._id`. A string (or the default, which queries `id`) also lets an `.all()` refetch look rows up with `{ [idField]: { $in: ids } }` before reading a row missing from its pages as removed; a function can't be queried by, so such rows are removed right away
   - `updatedAtField` — string or function, defaults to `item => item.updatedAt || item.updated_at`; used to avoid overwriting newer cached data with older data when requests race
   - `defaultPageSize` — default `query.$limit` when fetching, unset by default so the server decides
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`
