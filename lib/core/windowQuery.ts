@@ -204,8 +204,9 @@ export class WindowQueryRef<
         },
       },
     }
-    this.#pager = host.adapter.pageSource?.(serviceName)
-      ? new CursorWindowPager(context)
+    const pageSource = host.adapter.pageSource?.(serviceName)
+    this.#pager = pageSource
+      ? new CursorWindowPager(context, pageSource.cursorStability)
       : new OffsetWindowPager(context)
   }
 
@@ -420,6 +421,7 @@ export class WindowQueryRef<
       this.#pager.pageSucceeded({
         start,
         rowCount: state.data.length,
+        ids: state.data.map(item => this.#host.adapter.getId(item)),
         continuation: metadata.continuation,
         total: metadata.total,
       })

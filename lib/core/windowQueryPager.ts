@@ -18,6 +18,7 @@ export interface PagerPage {
 export interface PagerPageSuccess {
   start: number
   rowCount: number
+  ids: ReadonlyArray<string | number | undefined>
   continuation: PageContinuation
   total: number | undefined
 }
@@ -174,11 +175,16 @@ export class OffsetWindowPager implements WindowPager {
 export class CursorWindowPager implements WindowPager {
   #context: WindowPagerContext
   #cursorAt = new Map<number, PageCursor | undefined>([[0, undefined]])
+  #cursorStability: 'ordering' | undefined
   #terminalIndex: number | undefined
-  #rootChain: Pick<PagerPageSuccess, 'rowCount' | 'continuation' | 'total'> | undefined
+  #rootChain:
+    | (Pick<PagerPageSuccess, 'rowCount' | 'continuation' | 'total'> &
+        Partial<Pick<PagerPageSuccess, 'ids'>>)
+    | undefined
 
-  constructor(context: WindowPagerContext) {
+  constructor(context: WindowPagerContext, cursorStability: 'ordering' | undefined) {
     this.#context = context
+    this.#cursorStability = cursorStability
   }
 
   targetStarts(range: PagerRange, preloadPages: number): number[] {
@@ -274,9 +280,17 @@ export class CursorWindowPager implements WindowPager {
 
   pageSucceeded(page: PagerPageSuccess): void {
     if (page.start === 0) {
-      // Later pages hang off page zero's continuation. A value-only change to its
-      // rows keeps the chain; a new end cursor, row count, or total invalidates it.
-      const chain = { rowCount: page.rowCount, continuation: page.continuation, total: page.total }
+      // Later pages hang off page zero's end cursor, and their absolute starts off
+      // its row count and the total; a value-only change to its rows keeps them.
+      // Only an `ordering` cursor promises to stay valid while those hold. Any other
+      // cursor is opaque — a position-encoded one repeats when a row moves out of
+      // page zero — so its row ids must match too.
+      const chain = {
+        rowCount: page.rowCount,
+        continuation: page.continuation,
+        total: page.total,
+        ...(this.#cursorStability === 'ordering' ? {} : { ids: page.ids }),
+      }
       if (this.#rootChain !== undefined && !sameValue(this.#rootChain, chain)) {
         this.#resetDescendants()
       }

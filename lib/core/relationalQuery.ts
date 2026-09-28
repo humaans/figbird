@@ -74,6 +74,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
       context?: MatcherContext,
     ): (item: unknown) => boolean
     pageSource?(serviceName: string): PageSource<TParams, TMeta> | undefined
+    getId(item: unknown): string | number | undefined
   }
   clock: Clock
   queryStore: {

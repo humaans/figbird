@@ -685,6 +685,41 @@ test('window query: a cursor chain rebuild keeps the old rows visible', async t 
   read.unsubscribe()
 })
 
+test('window query: an opaque cursor chain rebuilds when page zero membership changes', async t => {
+  const rows = makeRows(8)
+  const app = createCursorWindowApp(rows)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 5,
+  })
+  const range = { start: 0, end: 8 }
+  const read = readSettledWindow(ref, range)
+  await read.promise
+  const ids = () =>
+    Array.from({ length: 8 }, (_, index) => ref.getSnapshot(range).data.get(index)?.id)
+
+  // Row 1 moves to the end: page zero keeps its row count, `cursor:2` and the
+  // total, but its rows changed, so the position-encoded cursors behind it moved.
+  const moved = { ...rows[0]!, rank: 100 }
+  app.replaceRows([...rows.slice(1), moved])
+  const rebuilt = new Promise<void>(resolve => {
+    const unsubscribe = ref.subscribe(
+      state => {
+        if (state.data.get(0)?.id === 2 && !state.isFetching) {
+          unsubscribe()
+          resolve()
+        }
+      },
+      { range },
+    )
+  })
+  app.emit('patched', moved)
+  await rebuilt
+  t.deepEqual(ids(), [2, 3, 4, 5, 6, 7, 8, 1])
+  read.unsubscribe()
+})
+
 test('window query: a cursor page with more rows but none returned surfaces an error', async t => {
   const app = createCursorWindowApp(makeRows(8))
   app.serveEmptyPageAt(4)
