@@ -361,11 +361,6 @@ export type CombinedConfig<TItem = unknown, TQuery = unknown> =
 export type MatchResult = boolean | 'unknown'
 
 /**
- * Item matcher function type
- */
-export type ItemMatcher<T> = (item: T) => boolean
-
-/**
  * Helper type to infer data type from schema and query descriptor
  */
 export type InferQueryData<S extends Schema, D extends QueryDescriptor> = S extends AnySchema

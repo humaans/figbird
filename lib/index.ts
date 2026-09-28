@@ -125,6 +125,7 @@ export type {
   FeathersTransactionsOptions,
 } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
+export type { MatchResult } from './core/queryTypes.js'
 
 // Adapter interface and types
 export type {

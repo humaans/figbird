@@ -90,6 +90,9 @@ function relationPathOf(schema: Schema, serviceName: string, key: string): strin
   return relationPath
 }
 
+/** The logical operators of the local predicate language. */
+const LOGICAL_OPERATORS = new Set(['$and', '$or'])
+
 /** A dotted key of the query's predicate tree, with every operand it's compared to. */
 interface RelationalFilterLeaf {
   path: string[]
@@ -130,8 +133,6 @@ function collectRelationalFilterLeaves(
   return { leaves, opaque }
 }
 
-const LOGICAL_OPERATORS = new Set(['$and', '$or'])
-
 /**
  * Replace the given leaves with a constant predicate: always true drops the
  * conjunct, always false matches no value. The local predicate language is
@@ -166,6 +167,7 @@ function substituteLeaves(query: unknown, keys: ReadonlySet<string>, value: bool
 export function createRelationalFilterMatcher<TMeta extends Record<string, unknown>>(
   schema: Schema,
   getState: () => Map<string, ServiceState<TMeta>>,
+  getId: (item: unknown) => string | number | undefined,
   serviceName: string,
   query: unknown,
   compile: (query: unknown) => (item: unknown) => boolean,
@@ -186,8 +188,7 @@ export function createRelationalFilterMatcher<TMeta extends Record<string, unkno
 
   return item => {
     const materialized = materializeRelationalFilterItem(
-      schema,
-      getState(),
+      { schema, state: getState(), getId },
       serviceName,
       item,
       paths,
@@ -336,13 +337,19 @@ export function shouldRefetchRelationalFilterQuery(
   return itemChangedFields(event.previousItem, event.item, dep.fields)
 }
 
+/** What relation hops are followed through: the schema and the entity cache. */
+interface CacheContext<TMeta extends Record<string, unknown>> {
+  schema: Schema
+  state: Map<string, ServiceState<TMeta>>
+  getId: (item: unknown) => string | number | undefined
+}
+
 /**
  * The item with its related rows from cache, and its relation paths (dotted) that
  * local state can't resolve, or that end at a null FK.
  */
-export function materializeRelationalFilterItem<TMeta extends Record<string, unknown>>(
-  schema: Schema,
-  state: Map<string, ServiceState<TMeta>>,
+function materializeRelationalFilterItem<TMeta extends Record<string, unknown>>(
+  context: CacheContext<TMeta>,
   serviceName: string,
   item: unknown,
   paths: RelationalFilterPath[],
@@ -351,7 +358,7 @@ export function materializeRelationalFilterItem<TMeta extends Record<string, unk
   const unresolved = new Set<string>()
   const missing = new Set<string>()
   for (const path of paths) {
-    const result = materializeRelationPath(schema, state, serviceName, materialized, path.path)
+    const result = materializeRelationPath(context, serviceName, materialized, path.path)
     if (result.kind === 'unresolved') {
       unresolved.add(path.path.join('.'))
       continue
@@ -367,8 +374,7 @@ type MaterializedPath =
   | { kind: 'unresolved' }
 
 function materializeRelationPath<TMeta extends Record<string, unknown>>(
-  schema: Schema,
-  state: Map<string, ServiceState<TMeta>>,
+  context: CacheContext<TMeta>,
   serviceName: string,
   item: Record<string, unknown>,
   path: string[],
@@ -376,17 +382,17 @@ function materializeRelationPath<TMeta extends Record<string, unknown>>(
   if (path.length === 0) return { kind: 'resolved', item }
 
   const [relName, ...rest] = path
-  const relDef = relName ? schema.relationships?.[serviceName]?.[relName] : undefined
+  const relDef = relName ? context.schema.relationships?.[serviceName]?.[relName] : undefined
   if (!relName || !relDef) return { kind: 'unresolved' }
 
-  const related = resolveRelatedItem(schema, state, relDef, item)
+  const related = resolveRelatedItem(context, relDef, item)
   if (related === undefined) return { kind: 'unresolved' }
   // A null FK is a known absence: the path's predicates see a null relation.
   if (related === null) return { kind: 'missing', item: { ...item, [relName]: null } }
 
   const nextRelated =
     rest.length > 0
-      ? materializeRelationPath(schema, state, relDef.destService, cloneRecord(related), rest)
+      ? materializeRelationPath(context, relDef.destService, cloneRecord(related), rest)
       : { kind: 'resolved' as const, item: related as Record<string, unknown> }
   if (nextRelated.kind === 'unresolved') return nextRelated
   return { kind: nextRelated.kind, item: { ...item, [relName]: nextRelated.item } }
@@ -398,15 +404,14 @@ function materializeRelationPath<TMeta extends Record<string, unknown>>(
  * follow, an FK missing from the item, or a related row that isn't cached.
  */
 function resolveRelatedItem<TMeta extends Record<string, unknown>>(
-  schema: Schema,
-  state: Map<string, ServiceState<TMeta>>,
+  { schema, state, getId }: CacheContext<TMeta>,
   relDef: RelationshipDef,
   item: Record<string, unknown>,
 ): unknown {
   if (!isLocalRelation(relDef)) return undefined
-  if (item[relDef.sourceField] === null) return null
-  const sourceValue = getFieldValue(item, relDef.sourceField)
-  if (sourceValue === undefined) return undefined
+  const sourceValue = item[relDef.sourceField]
+  if (sourceValue === null) return null
+  if (typeof sourceValue !== 'string' && typeof sourceValue !== 'number') return undefined
 
   const destState = state.get(resolveServicePath(schema, relDef.destService))
   if (!destState) return undefined
@@ -417,13 +422,12 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   // below would make merge decisions O(items × entities). The candidate is verified
   // against destField before returning, since the map key and destField are not
   // guaranteed to be the same field.
-  const direct =
-    typeof sourceValue === 'string' || typeof sourceValue === 'number'
-      ? destState.entities.get(entityKey(sourceValue))
-      : undefined
+  const direct = destState.entities.get(entityKey(sourceValue))
   if (direct !== undefined && getFieldValue(direct, relDef.destField) === sourceValue) {
     return direct
   }
+  // When destField is the id field, the map key is the only place the row can be.
+  if (getId({ [relDef.destField]: sourceValue }) === sourceValue) return undefined
 
   for (const candidate of destState.entities.values()) {
     if (getFieldValue(candidate, relDef.destField) === sourceValue) {
