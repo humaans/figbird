@@ -63,7 +63,11 @@ export class FeathersSync {
   #cursor: number | undefined
   /** The store's handlers per subscribed service, which replays feed. */
   #listeners = new Map<string, Set<EventHandlers>>()
-  #replay: Promise<boolean> | undefined
+  #connectionSubscribers = new Set<(event: AdapterConnectionEvent) => void>()
+  #releaseTransport: (() => void) | undefined
+  /** Counts transport transitions, so a replay can tell it spans another outage. */
+  #connection = 0
+  #replaying = false
   /** Versions of rows seen live while a replay is in flight, by service and id. */
   #liveDuringReplay: Map<string, number> | undefined
 
@@ -115,16 +119,42 @@ export class FeathersSync {
     }
   }
 
-  /** Report a reconnect only once missed changes are replayed, flagged `replayed` on success. */
-  connectionHandler(
+  /**
+   * Multiplex the transport's connection events to the store's subscribers
+   * through one transport listener, so each reconnect runs one replay. A
+   * reconnect is reported once its replay settles, flagged `replayed` on success.
+   */
+  subscribeToConnectionEvents(
     handler: (event: AdapterConnectionEvent) => void,
-  ): (event: AdapterConnectionEvent) => void {
-    return event => {
-      if (event.type !== 'reconnected') return handler(event)
-      void this.#replayMissedEvents().then(replayed =>
-        handler(replayed ? { ...event, replayed } : event),
-      )
+    subscribeToTransport: (handler: (event: AdapterConnectionEvent) => void) => () => void,
+  ): () => void {
+    this.#connectionSubscribers.add(handler)
+    this.#releaseTransport ??= subscribeToTransport(event => this.#connectionEvent(event))
+    return () => {
+      this.#connectionSubscribers.delete(handler)
+      if (this.#connectionSubscribers.size > 0) return
+      this.#releaseTransport?.()
+      this.#releaseTransport = undefined
     }
+  }
+
+  #connectionEvent(event: AdapterConnectionEvent): void {
+    if (event.type === 'disconnected' || event.type === 'reconnected') this.#connection++
+    if (event.type !== 'reconnected') return this.#broadcast(event)
+    // A reconnect during a replay falls back: the replay it interrupted can't
+    // vouch for this outage.
+    if (this.#replaying) return this.#broadcast(event)
+    this.#replaying = true
+    void this.#replayMissedEvents()
+      .finally(() => {
+        this.#replaying = false
+        this.#liveDuringReplay = undefined
+      })
+      .then(replayed => this.#broadcast(replayed ? { ...event, replayed } : event))
+  }
+
+  #broadcast(event: AdapterConnectionEvent): void {
+    for (const handler of this.#connectionSubscribers) handler(event)
   }
 
   #observe(serviceName: string, row: unknown): void {
@@ -144,19 +174,12 @@ export class FeathersSync {
   /**
    * Replay the changes missed while disconnected into the store's realtime
    * handlers. Resolves false when the store must reconcile instead: no cursor
-   * yet, a truncated log, a subscribed service the server doesn't replay, or any
-   * failure. Concurrent reconnect subscribers share one request.
+   * yet, a truncated log, a subscribed service the server doesn't replay, a
+   * disconnect before the answer arrived, or any failure.
    */
-  #replayMissedEvents(): Promise<boolean> {
-    this.#replay ??= this.#requestReplay().finally(() => {
-      this.#replay = undefined
-      this.#liveDuringReplay = undefined
-    })
-    return this.#replay
-  }
-
-  async #requestReplay(): Promise<boolean> {
+  async #replayMissedEvents(): Promise<boolean> {
     const since = this.#cursor
+    const connection = this.#connection
     if (since === undefined) return false
     const services = [...this.#listeners.keys()]
     if (services.length === 0) return true
@@ -168,7 +191,7 @@ export class FeathersSync {
     } catch {
       return false
     }
-    if (!isSyncResult(response)) return false
+    if (connection !== this.#connection || !isSyncResult(response)) return false
     // A listened service the server doesn't version has no replayable history.
     if (!services.every(service => response.services.includes(service))) return false
 

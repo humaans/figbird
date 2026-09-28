@@ -803,7 +803,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   subscribeToConnectionEvents(handler: (event: AdapterConnectionEvent) => void): () => void {
-    return this.#subscribeToTransportEvents(this.#sync?.connectionHandler(handler) ?? handler)
+    if (!this.#sync) return this.#subscribeToTransportEvents(handler)
+    return this.#sync.subscribeToConnectionEvents(handler, transportHandler =>
+      this.#subscribeToTransportEvents(transportHandler),
+    )
   }
 
   #subscribeToTransportEvents(handler: (event: AdapterConnectionEvent) => void): () => void {

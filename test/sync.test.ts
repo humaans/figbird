@@ -415,6 +415,28 @@ test('in database mode the hooks only log the version the database assigned', as
   t.deepEqual(log.since(0), [{ seq: 42, service: 'rows', id: 1, type: 'created' }])
 })
 
+test('a disconnect during an in-flight replay falls back to refetching', async t => {
+  const app = await createServer()
+  const people = app.service('people')
+  await people.create({ id: 1, name: 'Ada', team: 'a' })
+  const bridge = connect(app)
+  const client = await mount(bridge)
+  await people.create({ id: 2, name: 'Bob', team: 'b' })
+
+  bridge.disconnect()
+  let release!: () => void
+  bridge.reconnect({ hold: new Promise(resolve => (release = resolve)) })
+  await waitFor(() => bridge.syncResults.length === 1)
+  bridge.disconnect()
+  await people.patch(1, { name: 'Ada Lovelace' })
+  bridge.reconnect()
+  release()
+  await bridge.idle()
+
+  t.deepEqual(client.everyone(), ['Ada Lovelace', 'Bob'])
+  client.dispose()
+})
+
 test('a live removal during an in-flight replay is not resurrected', async t => {
   const app = await createServer()
   const people = app.service('people')
