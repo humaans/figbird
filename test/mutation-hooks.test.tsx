@@ -2,7 +2,7 @@ import { useLayoutEffect } from 'react'
 import React, { useState } from 'react'
 import type { QueryState } from '../lib'
 import { createHooks, defineMutationQueue, useAction } from '../lib'
-import { dom, it } from './dom.js'
+import { dom, it, it19 } from './dom.js'
 import { createTestApp } from './helpers'
 import {
   collectEvents,
@@ -216,7 +216,7 @@ it('useAction (kit): named actions report action:start/end/error through the bou
 
 // ----- form action interop -----
 
-it('useAction: run works as a React 19 <form action>', async t => {
+it19('useAction: run works as a React 19 <form action>', async t => {
   const d = dom()
   // React builds `new FormData(form)` via the global constructor; Node's
   // built-in (undici) FormData can't read a jsdom form — use jsdom's.

@@ -1,11 +1,17 @@
 import ava from 'ava'
 import { JSDOM } from 'jsdom'
-import { act, type ReactElement } from 'react'
+import { act, version, type ReactElement } from 'react'
 import { createRoot, type Root, type RootOptions } from 'react-dom/client'
 import { waitForEmissions } from './helpers.js'
 
 // React's act queue and global.window are shared within a worker. Files remain parallel.
 export const it = ava.serial
+
+/** The suite also runs against React 18 in CI; React 19-only APIs gate on this. */
+export const REACT_19 = Number(version.split('.')[0]) >= 19
+
+/** A DOM test for a React 19-only feature, skipped on React 18. */
+export const it19: typeof it = REACT_19 ? it : (it.skip as typeof it)
 
 interface DomHelpers {
   root: Root

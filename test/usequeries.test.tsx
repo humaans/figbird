@@ -8,7 +8,7 @@ import {
   useQueries,
   useQueryResults,
 } from '../lib'
-import { dom, it } from './dom.js'
+import { REACT_19, dom, it } from './dom.js'
 import { createTestApp } from './helpers'
 import { deferred } from './mutation-test-helpers'
 
@@ -191,7 +191,8 @@ it('useQueries: a cold error on any query throws to the ErrorBoundary', async t 
   )
 
   await flush(() => sleep(10))
-  t.deepEqual(caughtErrors, [new Error('users are broken')])
+  // onCaughtError is a React 19 root option; the boundary assertions cover React 18.
+  if (REACT_19) t.deepEqual(caughtErrors, [new Error('users are broken')])
   t.is($('.error')!.innerHTML, 'users are broken')
   t.falsy($('.dashboard'))
 
