@@ -663,6 +663,33 @@ test('QueryBuilder: where() merges queries', t => {
   const ast = query.toAST()
 
   t.deepEqual(ast.query, { status: 'open', creatorId: 1 })
+  t.deepEqual(
+    q.issues
+      .where({ createdAt: { $gte: '2025-01-01' } })
+      .where({ createdAt: { $lt: '2026-01-01' } })
+      .toAST().query,
+    { createdAt: { $gte: '2025-01-01', $lt: '2026-01-01' } },
+    'different operators on one field merge',
+  )
+  t.deepEqual(q.issues.where({ status: 'open' }).where({ status: 'open' }).toAST().query, {
+    status: 'open',
+  })
+})
+
+test('QueryBuilder: where() keeps both conditions on a field constrained twice', t => {
+  const { q } = createApp().figbird
+
+  t.deepEqual(
+    q.issues
+      .where({ status: { $in: ['open', 'triage'] } })
+      .where({ status: { $in: ['triage', 'closed'] } })
+      .toAST().query,
+    { $and: [{ status: { $in: ['open', 'triage'] } }, { status: { $in: ['triage', 'closed'] } }] },
+    'a second $in narrows instead of replacing the first',
+  )
+  t.deepEqual(q.issues.where({ creatorId: 1 }).where({ creatorId: 2 }).toAST().query, {
+    $and: [{ creatorId: 1 }, { creatorId: 2 }],
+  })
 })
 
 test('QueryBuilder: where() keeps both sets of $or alternatives', async t => {
@@ -700,10 +727,13 @@ test('QueryBuilder: Date values merge as ISO strings', t => {
       .where({ createdAt: since, $or: [{ dueAt: { $in: [since] } }] })
       .toAST().query,
     {
-      createdAt: '2025-01-01T00:00:00.000Z',
+      $and: [
+        { createdAt: { $gte: '2025-01-01T00:00:00.000Z' } },
+        { createdAt: '2025-01-01T00:00:00.000Z' },
+      ],
       $or: [{ dueAt: { $in: ['2025-01-01T00:00:00.000Z'] } }],
     },
-    'a later Date value replaces the earlier filter instead of merging as an empty object',
+    'a later Date value is kept as an ISO string instead of merging as an empty object',
   )
 })
 

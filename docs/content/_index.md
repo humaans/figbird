@@ -1713,7 +1713,7 @@ The full builder surface:
 
 | Method                                   | Meaning                                                                                                           |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `.where(filters)`                        | Merge filter conditions (deep-merged across calls); typed against the item, admits dotted paths and `$` operators |
+| `.where(filters)`                        | Add filter conditions (calls AND together); typed against the item, admits dotted paths and `$` operators         |
 | `.orderBy(field, dir?)`                  | Add a sort clause; calls accumulate                                                                               |
 | `.limit(n)` / `.skip(n)`                 | Window the result (`$limit` / `$skip`)                                                                            |
 | `.get(id)`                               | Resource fetch by pk (`GET /:service/:id`); `.where()` after it rides along as `params.query`                     |

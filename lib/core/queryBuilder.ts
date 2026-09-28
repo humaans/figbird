@@ -5,6 +5,7 @@
 
 import { hashObject } from './hash.js'
 import { assertJunctionUnwindowed } from './relationPlan.js'
+import { isPlainRecord, sameValue } from './valueEquality.js'
 import { datesToIso } from './wireDates.js'
 import type {
   Schema,
@@ -87,37 +88,43 @@ export type QueryAST = QueryOperation & {
 }
 
 /**
- * Deep merge two objects (for combining .where() calls). Successive calls AND
- * together, so two sets of `$or` alternatives are both kept, under `$and`.
+ * Merge two .where() clauses. Successive calls AND together: new fields, and new
+ * operators on a field, merge in place. Clauses that would overwrite one another —
+ * two `$or` groups, or two values or operators for the same field — are both kept
+ * under `$and`. Other top-level controls (`$sort`, `$select`, ...) are not filters,
+ * so a later call replaces them.
  */
-function deepMerge(target: FeathersQuery, source: FeathersQuery): FeathersQuery {
+function mergeWhere(target: FeathersQuery, source: FeathersQuery): FeathersQuery {
   const result: FeathersQuery = { ...target }
+  const and = (...clauses: unknown[]) => {
+    result.$and = [...(Array.isArray(result.$and) ? result.$and : []), ...clauses]
+  }
 
-  for (const key of Object.keys(source)) {
-    const sourceVal = source[key]
+  for (const [key, sourceVal] of Object.entries(source)) {
     const targetVal = result[key]
-
-    if ((key === '$or' || key === '$and') && Array.isArray(targetVal) && Array.isArray(sourceVal)) {
-      const and = Array.isArray(result.$and) ? result.$and : []
-      if (key === '$and') {
-        result.$and = [...and, ...sourceVal]
-      } else {
-        delete result.$or
-        result.$and = [...and, { $or: targetVal }, { $or: sourceVal }]
-      }
-    } else if (
-      typeof sourceVal === 'object' &&
-      sourceVal !== null &&
-      !Array.isArray(sourceVal) &&
-      typeof targetVal === 'object' &&
-      targetVal !== null &&
-      !Array.isArray(targetVal)
-    ) {
-      // Deep merge nested objects
-      result[key] = deepMerge(targetVal as FeathersQuery, sourceVal as FeathersQuery)
-    } else {
-      // Overwrite with source value
+    if (!Object.hasOwn(result, key) || sameValue(targetVal, sourceVal)) {
       result[key] = sourceVal
+    } else if (key === '$and' && Array.isArray(targetVal) && Array.isArray(sourceVal)) {
+      and(...sourceVal)
+    } else if (key === '$or' && Array.isArray(targetVal) && Array.isArray(sourceVal)) {
+      delete result.$or
+      and({ $or: targetVal }, { $or: sourceVal })
+    } else if (key.startsWith('$')) {
+      result[key] =
+        isPlainRecord(targetVal) && isPlainRecord(sourceVal)
+          ? { ...targetVal, ...sourceVal }
+          : sourceVal
+    } else if (
+      isPlainRecord(targetVal) &&
+      isPlainRecord(sourceVal) &&
+      Object.keys(sourceVal).every(
+        op => !Object.hasOwn(targetVal, op) || sameValue(targetVal[op], sourceVal[op]),
+      )
+    ) {
+      result[key] = { ...targetVal, ...sourceVal }
+    } else {
+      delete result[key]
+      and({ [key]: targetVal }, { [key]: sourceVal })
     }
   }
 
@@ -194,7 +201,8 @@ export class QueryBuilder<
 
   /**
    * Merge a Feathers query object into the current query.
-   * Multiple calls are deep-merged together.
+   * Multiple calls AND together; a field constrained twice keeps both conditions
+   * under `$and`.
    *
    * On a `find` builder these are the filter; on a `.get(id)` builder they ride
    * along as `params.query` to the get endpoint (rare conditions, `$select`, ...).
@@ -207,7 +215,7 @@ export class QueryBuilder<
       ...this.#state,
       // A Date operand would never match the ISO strings rows carry, and would
       // merge as an empty object.
-      query: deepMerge(this.#state.query, datesToIso(query) as FeathersQuery),
+      query: mergeWhere(this.#state.query, datesToIso(query) as FeathersQuery),
     }) as QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>
   }
 
