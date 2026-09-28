@@ -119,6 +119,8 @@ interface QueryExecution<TMeta> {
   cancelRetry?: () => void
   stats?: QueryFetchStats
   followup?: FetchContext
+  /** Token of the dispatch currently running (fetch or retry backoff), if any. */
+  inFlight?: symbol
 }
 
 interface FetchContext {
@@ -732,11 +734,17 @@ export class QueryStore<
         !isFresh) ||
       (q.state.error !== null && !q.state.isFetching)
     ) {
-      this.#queue(queryId, {
+      const context: FetchContext = {
         reason: 'subscription',
         ...this.#causeContext('subscription'),
         ...(options.graph ? { graph: [options.graph] } : {}),
-      })
+      }
+      // A pending reconcile can coincide with an in-flight fetch (reconnect jitter,
+      // hidden tab). Record it as that fetch's follow-up rather than starting a
+      // second, concurrent fetch whose older response could win.
+      const execution = this.#executions.get(queryId)
+      if (execution?.inFlight && q.state.isFetching) execution.followup = context
+      else this.#queue(queryId, context)
     }
   }
 
@@ -860,6 +868,8 @@ export class QueryStore<
       this.#telemetry.finishGraph(queryId, graph)
       return
     }
+    const dispatch = Symbol('dispatch')
+    execution.inFlight = dispatch
 
     try {
       let retryAttempt = 0
@@ -909,6 +919,8 @@ export class QueryStore<
         }
       }
     } finally {
+      // A follow-up started from this dispatch's settlement owns the token now.
+      if (execution.inFlight === dispatch) delete execution.inFlight
       this.#telemetry.finishGraph(queryId, graph)
     }
   }
