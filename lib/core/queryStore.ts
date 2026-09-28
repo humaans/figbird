@@ -1194,7 +1194,15 @@ export class QueryStore<
     }
     if (unlisted.size === 0) return result
 
-    const found = await this.#adapter.findByIds(query.desc.serviceName, [...unlisted.values()])
+    let found: unknown[]
+    try {
+      found = await this.#adapter.findByIds(query.desc.serviceName, [...unlisted.values()])
+    } catch {
+      // The lookup only narrows removals: if the service rejects it (e.g. a strict
+      // query schema without the id field), the unlisted rows read as removed, as
+      // they did before it existed, rather than failing the refetch.
+      return result
+    }
     const data = [...result.data]
     const { compare } = query.maintenance
     for (const item of found) {

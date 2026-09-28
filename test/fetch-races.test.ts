@@ -512,6 +512,35 @@ test('a remove and an append landing between findAll pages do not delete the ski
   unsubProcessed()
 })
 
+test('a rejected lookup of unlisted rows does not fail the complete refetch', async t => {
+  const { figbird, notes } = createApp({
+    1: { id: 1, content: 'one', rank: 1 },
+    2: { id: 2, content: 'two', rank: 2 },
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { allPages: true })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial complete fetch')
+
+  // Row 2 was removed out of band; a strict query schema rejects the id lookup.
+  delete notes.data[2]
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    if ((params?.query as Record<string, unknown> | undefined)?.id) {
+      throw new Error('query schema rejects id')
+    }
+    return find(params)
+  }
+  ref.refetch()
+
+  await waitFor(
+    () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
+    'the complete refetch',
+  )
+  t.is(ref.getSnapshot()?.error ?? null, null)
+  t.deepEqual(ids(ref.getSnapshot()!.data), [1], 'the unlisted row reads as removed')
+  unsub()
+})
+
 test('findAll terminates when the service ignores $skip', async t => {
   const feathers = mockFeathers({
     notes: {
