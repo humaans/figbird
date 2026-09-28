@@ -27,7 +27,7 @@
  */
 
 import type { FeathersClient } from './adapters/feathers.js'
-import { buildComparator } from './core/sort.js'
+import { buildComparator, compareValues, type ValueComparator } from './core/sort.js'
 
 export interface TestItem {
   id?: string | number
@@ -74,6 +74,8 @@ interface ServiceOptions {
    * semantics.
    */
   queryAware?: boolean
+  /** Value ordering for `$sort` — pass the same `compare` as the Figbird instance. */
+  compare?: ValueComparator
   /**
    * How mutation-triggered realtime emits are deferred (they must not fire
    * synchronously inside the mutation promise, like a real socket wouldn't).
@@ -161,6 +163,10 @@ export class MockService {
       rows = sortRows(
         rows.filter(item => matchesQuery(item, query)),
         query.$sort as Record<string, unknown> | undefined,
+        {
+          serviceName: this.name,
+          ...(this.options.compare ? { compare: this.options.compare } : {}),
+        },
       )
     }
 
@@ -261,6 +267,8 @@ export interface MockFeathersOptions {
   queryAwareFind?: boolean
   /** Make every service omit `total` from find envelopes. */
   skipTotal?: boolean
+  /** Value ordering for `$sort` (see ServiceOptions). */
+  compare?: ValueComparator
   /** Deferred-emission scheduler threaded to every service (see ServiceOptions). */
   schedule?: (task: () => void) => void
 }
@@ -274,13 +282,14 @@ export interface MockFeathers extends FeathersClient {
  */
 export function mockFeathers(
   services: MockFeathersServices,
-  { queryAwareFind = false, skipTotal = false, schedule }: MockFeathersOptions = {},
+  { queryAwareFind = false, skipTotal = false, compare, schedule }: MockFeathersOptions = {},
 ): MockFeathers {
   const processedServices: Record<string, MockService> = {}
   for (const [name, details] of Object.entries(services)) {
     processedServices[name] = service(name, details, {
       skipTotal,
       queryAware: queryAwareFind,
+      ...(compare ? { compare } : {}),
       ...(schedule ? { schedule } : {}),
     })
   }
@@ -311,14 +320,19 @@ export function matchesQuery(
 }
 
 /**
- * Sort rows by a `$sort` map using figbird's canonical comparator (lib/core/sort) —
- * the mock "server" must order rows exactly like figbird's own local window
- * maintenance, or realtime merges would appear to reorder server results.
+ * Sort rows by a `$sort` map using figbird's row comparator (lib/core/sort) — the
+ * mock "server" must order rows exactly like figbird's own local window
+ * maintenance, or realtime merges would appear to reorder server results. Pass the
+ * Figbird instance's `compare` when it configures one.
  */
 export function sortRows<T extends Record<string, unknown>>(
   rows: T[],
   sort: Record<string, unknown> | undefined,
+  {
+    compare = compareValues,
+    serviceName = '',
+  }: { compare?: ValueComparator; serviceName?: string } = {},
 ): T[] {
   if (!sort) return rows
-  return [...rows].sort(buildComparator(sort as Record<string, number>))
+  return [...rows].sort(buildComparator(sort as Record<string, number>, { compare, serviceName }))
 }

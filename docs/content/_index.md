@@ -1156,6 +1156,39 @@ query. With no `$sort` and no `defaultSort`, membership still merges where it's
 exact (visible patches keep their position, underfilled first pages append) and
 everything positional refetches.
 
+The same contract covers how individual values compare. By default figbird sorts
+nulls first and compares strings by codepoint, which is not how every database
+orders them: Postgres puts nulls last ascending (first descending) and collates
+strings by locale, so `'B'` sorts between `'b'` and `'c'`. Pass the backend's value
+ordering as `compare`, and figbird uses it everywhere it sorts rows itself — window
+merges, local finds against materialized services, and the `figbird/testing` mock
+server when given the same option:
+
+```ts
+import { Figbird, postgresCompare } from 'figbird'
+
+const figbird = new Figbird({
+  adapter,
+  schema,
+  compare: postgresCompare,
+})
+```
+
+A comparator receives `(a, b, { serviceName, field })` and returns a negative,
+zero, or positive number for ascending order (`$sort: -1` negates it). The context
+covers columns your server returns in a different shape than it sorts them — for
+example `numeric` columns, which the `pg` driver returns as strings:
+
+```ts
+compare: (a, b, context) =>
+  context.field === 'amount' && a != null && b != null
+    ? Number(a) - Number(b)
+    : postgresCompare(a, b),
+```
+
+A mismatch has the same cost as a wrong `defaultSort`: on a full window a realtime
+row can be inserted or evicted in the wrong place until the next fetch.
+
 ### Teaching the client custom operators
 
 The inverse escape hatch: when your API has a custom operator the client _could_

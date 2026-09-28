@@ -78,6 +78,7 @@ import type {
   ServicePaths,
 } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import type { ValueComparator } from './sort.js'
 import { isWithinStaleTime, validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
 import { createTransactionContext, type TransactionContext } from './transactions.js'
 
@@ -261,6 +262,11 @@ export class Figbird<
    *   correctness contract like custom operators: it must mirror the order the
    *   server actually applies — divergence shows up as misplaced rows until the
    *   next fetch.
+   * @param compare The backend's value ordering, used wherever figbird sorts rows
+   *   itself: `(a, b, { serviceName, field }) => number`, ascending. Defaults to
+   *   `compareValues` (nulls first, codepoint strings); `postgresCompare` puts
+   *   nulls last ascending and collates strings. The same correctness contract as
+   *   `defaultSort`: it must mirror how the server orders values.
    */
   constructor({
     adapter,
@@ -274,6 +280,7 @@ export class Figbird<
     reconnectJitter,
     visibility,
     defaultSort,
+    compare,
     clock = systemClock,
   }: {
     adapter: A
@@ -288,6 +295,7 @@ export class Figbird<
     reconnectJitter?: ReconnectJitter
     visibility?: VisibilitySource
     defaultSort?: Record<string, 1 | -1>
+    compare?: ValueComparator
     /** @internal Deterministic policy time for tests. */
     clock?: Clock
   }) {
@@ -308,6 +316,7 @@ export class Figbird<
       ...(reconnectJitter !== undefined ? { reconnectJitter } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
       ...(defaultSort !== undefined ? { defaultSort } : {}),
+      ...(compare !== undefined ? { compare } : {}),
     })
     this.#unregisterDevtools = registerDevtoolsInstance(this)
   }

@@ -351,6 +351,14 @@ window after a removal, anything that shifts the page start of a skipped window,
 reconciles by refetch. Sort position is judged by `$sort`, falling back to the configured
 `defaultSort` (the backend's implicit order — a correctness contract like custom operators).
 
+Values within a sort field compare through the instance's `compare` option (default: nulls
+first, numbers numerically, dates by time, other values by codepoint). It is the same kind of
+correctness contract: window merges use the comparator as proof of position, so a comparator
+that disagrees with the backend (nulls last, locale collation, numeric columns returned as
+strings) inserts or evicts the wrong rows — wrong membership, not just order — until the next
+fetch. Every place figbird sorts rows itself builds its row comparator from this one value
+comparator.
+
 Server-derived ordering, such as search rank or permission-aware priority, should be treated as
 server-authoritative.
 

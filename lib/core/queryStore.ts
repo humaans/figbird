@@ -61,6 +61,7 @@ import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
 import { normalizeError } from './errors.js'
 import { isWithinStaleTime } from './staleTime.js'
 import { sameValue } from './valueEquality.js'
+import { compareValues, type ValueComparator } from './sort.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -207,6 +208,7 @@ export class QueryStore<
   #hiddenAt: number | null
 
   #defaultSort: Record<string, number> | undefined
+  #compare: ValueComparator
   #retry: number | false
   #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
@@ -235,6 +237,7 @@ export class QueryStore<
     reconnectJitter = [0, 3000],
     visibility,
     defaultSort,
+    compare = compareValues,
     clock = systemClock,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
@@ -265,6 +268,12 @@ export class QueryStore<
      * until the next fetch.
      */
     defaultSort?: Record<string, number>
+    /**
+     * The backend's value ordering for sorting rows locally (nulls, collation,
+     * value types). Defaults to `compareValues`. Like `defaultSort`, it must
+     * mirror the server's actual order.
+     */
+    compare?: ValueComparator
     /** @internal Deterministic policy time for tests. */
     clock?: Clock
   }) {
@@ -279,6 +288,7 @@ export class QueryStore<
     )
     this.#adapter = adapter
     this.#defaultSort = defaultSort
+    this.#compare = compare
     this.#eventBatchInterval = eventBatchInterval
     this.#telemetry = new QueryTelemetry()
     this.#mutationExecutor = new MutationExecutor({
@@ -573,6 +583,7 @@ export class QueryStore<
         desc,
         config: config as QueryConfig<unknown, unknown>,
         defaultSort: this.#defaultSort,
+        compare: this.#compare,
         localOperators: locallySupportedOperators(this.#adapter, desc.serviceName),
         matcher: filters =>
           this.#resolveMatcher(desc.serviceName, config as QueryConfig<unknown, unknown>, filters),

@@ -2,6 +2,7 @@ import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
+import { postgresCompare, type ValueComparator } from '../lib/core/sort'
 import { mockFeathers } from './helpers'
 
 /**
@@ -16,7 +17,7 @@ import { mockFeathers } from './helpers'
 type Note = {
   id: number
   text: string
-  rank: number
+  rank: number | null
   tag: string
   updatedAt: number
 }
@@ -34,8 +35,14 @@ const seed = (): Record<number, Note> => ({
   4: { id: 4, text: 'd', rank: 4, tag: 'x', updatedAt: 1 },
 })
 
-function createApp({ defaultSort }: { defaultSort?: Record<string, 1 | -1> } = {}) {
-  const feathers = mockFeathers({ notes: { data: seed() } }, { queryAwareFind: true })
+function createApp({
+  defaultSort,
+  compare,
+}: { defaultSort?: Record<string, 1 | -1>; compare?: ValueComparator } = {}) {
+  const feathers = mockFeathers(
+    { notes: { data: seed() } },
+    { queryAwareFind: true, ...(compare ? { compare } : {}) },
+  )
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({
     schema,
@@ -43,6 +50,7 @@ function createApp({ defaultSort }: { defaultSort?: Record<string, 1 | -1> } = {
     eventBatchInterval: 0,
     reconcileCooldown: 0,
     ...(defaultSort ? { defaultSort } : {}),
+    ...(compare ? { compare } : {}),
   })
   const notes = feathers.service('notes')
   return { figbird, notes }
@@ -384,6 +392,22 @@ test('defaultSort places creates into windows without $sort', async t => {
   t.deepEqual(full.texts(), ['a', 'b', 'n'])
   underfilled.unsub()
   full.unsub()
+})
+
+test('a configured compare places creates like the backend orders them', async t => {
+  // Postgres sorts nulls last ascending; the default comparator sorts them first,
+  // which would insert the row at the top of the full window and evict 'c'.
+  const { figbird, notes } = createApp({ compare: postgresCompare })
+  const { texts, total, unsub } = await watch(figbird, { $sort: { rank: 1 }, $limit: 3 })
+  const finds = notes.counts.find
+
+  serverCreate(notes, { id: 5, text: 'n', rank: null, tag: 'x', updatedAt: 1 })
+  await settle()
+
+  t.is(notes.counts.find, finds)
+  t.deepEqual(texts(), ['a', 'b', 'c'])
+  t.is(total(), 5)
+  unsub()
 })
 
 test('without order knowledge, underfilled first pages append and full windows refetch', async t => {

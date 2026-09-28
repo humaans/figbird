@@ -57,6 +57,8 @@ export {
 } from './core/figbird.js'
 export type { MutationQueue } from './core/mutationQueue.js'
 export { ItemRemovedError, isItemRemovedError } from './core/errors.js'
+export { compareValues, postgresCompare } from './core/sort.js'
+export type { CompareContext, ValueComparator } from './core/sort.js'
 
 // schema
 export { createSchema, service } from './core/schema.js'
