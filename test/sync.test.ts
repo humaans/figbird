@@ -34,8 +34,17 @@ interface Team {
   name: string
 }
 
+interface Project {
+  id: number
+  name: string
+}
+
 const schema = createSchema({
-  services: { people: service<{ item: Person }>(), teams: service<{ item: Team }>() },
+  services: {
+    people: service<{ item: Person }>(),
+    projects: service<{ item: Project }>(),
+    teams: service<{ item: Team }>(),
+  },
 })
 
 const EVENTS = ['created', 'updated', 'patched', 'removed'] as const
@@ -70,14 +79,17 @@ async function createServer({
       },
     })
   }
-  app.service('people').hooks(versioned({ sequencer: hybridClock(), log }))
+  const sequencer = hybridClock()
+  app.service('people').hooks(versioned({ sequencer, log }))
+  app.use('projects', new MemoryService<Project>())
+  app.service('projects').hooks(versioned({ sequencer, log }))
   // Unversioned: its changes are never logged.
   app.use('teams', new MemoryService<Team>())
   app.use(
     'figbird/sync',
     figbirdSync({
       log,
-      services: ['people'],
+      services: ['people', 'projects'],
       ordering: { people: { preset: 'postgres', numeric: ['salary'] } },
     }),
   )
@@ -102,7 +114,7 @@ function connect(
   let pending = 0
   let holdSync: Promise<void> | undefined
 
-  for (const path of ['people', 'teams']) {
+  for (const path of ['people', 'projects', 'teams']) {
     for (const event of EVENTS) {
       app.service(path).on(event, (row: Person) => {
         if (connected && canSee(row)) listeners.get(path)?.emit(event, clone(row))
@@ -118,6 +130,7 @@ function connect(
     const params = { ...(clone(args.at(-1)) as object), provider: 'socketio' }
     pending++
     try {
+      if (!connected) throw Object.assign(new Error('Timeout'), { name: 'Timeout', code: 408 })
       const result = clone(await target[method](...clone(args.slice(0, -1)), params))
       if (path === 'figbird/sync' && method === 'find') {
         syncResults.push(result as SyncResult)
@@ -190,6 +203,7 @@ async function mount(
     adapter: new FeathersAdapter(bridge.client, adapterOptions),
     eventBatchInterval: 0,
     reconnectJitter: 0,
+    retry: false,
   })
   const everyone = figbird.query(figbird.q.people.all())
   const teamA = figbird.query(figbird.q.people.where({ team: 'a' }))
@@ -235,6 +249,32 @@ test('a reconnect replays missed writes in one sync request instead of refetchin
   t.deepEqual(client.teamA(), ['Ada Lovelace', 'Dee'])
   t.is(bridge.calls['figbird/sync.find'], 1)
   t.is(bridge.calls['people.find'], findsBefore, 'active queries are not refetched')
+  client.dispose()
+})
+
+test('a replayed reconnect still reconciles a query that failed during the outage', async t => {
+  const app = await createServer()
+  const people = app.service('people')
+  await people.create({ id: 1, name: 'Ada', team: 'a' })
+  const bridge = connect(app)
+  const client = await mount(bridge)
+  await people.create({ id: 2, name: 'Bob', team: 'b' })
+  await bridge.idle()
+
+  bridge.disconnect()
+  const projects = client.figbird.query(client.figbird.q.projects.all())
+  const release = projects.subscribe(() => {})
+  await bridge.idle()
+  t.is(projects.getSnapshot()?.status, 'error')
+  const peopleFinds = bridge.calls['people.find']
+
+  bridge.reconnect()
+  await bridge.idle()
+
+  t.deepEqual(bridge.syncResults[0]?.services, ['people', 'projects'], 'the reconnect replayed')
+  t.is(projects.getSnapshot()?.status, 'success')
+  t.is(bridge.calls['people.find'], peopleFinds, 'settled queries do not refetch')
+  release()
   client.dispose()
 })
 

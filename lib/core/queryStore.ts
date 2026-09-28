@@ -89,6 +89,11 @@ type FetchAttemptOutcome =
 
 const DEFAULT_RETRIES = 3
 
+/** A successful result with no fetch in flight and no background failure. */
+function isSettled(state: { status: string; isFetching: boolean; error: Error | null }): boolean {
+  return state.status === 'success' && !state.isFetching && state.error === null
+}
+
 function isIdOnlyRealtimePayload(item: unknown, itemId: ItemId | undefined): boolean {
   return (
     itemId !== undefined &&
@@ -390,7 +395,12 @@ export class QueryStore<
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
               ...(event.replayed ? { replayed: true } : {}),
             })
-            if (!event.replayed) this.#scheduleReconnectSweep(traceId)
+            // A replay kept settled results current. Results that weren't settled —
+            // never fetched, failed, or mid-fetch across the outage — still reconcile.
+            this.#scheduleReconnectSweep(
+              traceId,
+              event.replayed ? query => !isSettled(query.state) : undefined,
+            )
             break
           case 'error':
             this.#telemetry.emit({
@@ -2476,8 +2486,11 @@ export class QueryStore<
     }
   }
 
-  #scheduleReconnectSweep(traceId: number | undefined): void {
-    this.#markReconciliationPending()
+  #scheduleReconnectSweep(
+    traceId: number | undefined,
+    shouldMark?: (query: Query<unknown, TMeta, unknown>) => boolean,
+  ): void {
+    this.#markReconciliationPending(shouldMark)
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
