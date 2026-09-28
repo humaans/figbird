@@ -714,6 +714,42 @@ test('id contract: a write that references a pending create waits for it and fai
   t.false(latest?.data?.some(note => note.id === 21))
 })
 
+test('id contract: a write holds for its referenced create before observers see it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let edit: Promise<unknown> | undefined
+  ref.subscribe(state => {
+    const notes = (state as QueryState<Note[], Record<string, unknown>>).data
+    // An observer that writes to the new row the moment it appears drains its lane.
+    if (!edit && notes?.some(note => note.id === 11)) edit = m.notes.patch(11, { content: 'edit' })
+  })
+  await new Promise(r => setTimeout(r, 10))
+
+  const created: number[] = []
+  const parentGate = deferred<MockItem>()
+  const notes = feathers.service('notes')
+  const create = notes.create.bind(notes)
+  notes.create = ((data: MockItem) => {
+    created.push(data.id)
+    return data.id === 10 ? parentGate.promise : create(data)
+  }) as never
+
+  const parent = m.notes.create({ id: 10, content: 'parent' })
+  const child = m.notes.create({ id: 11, content: 'child', parentId: 10 })
+  t.truthy(edit)
+  t.deepEqual(created, [10], 'the child still waits for the record it references')
+  parentGate.resolve({ id: 10, content: 'parent' })
+  await Promise.all([parent, child, edit])
+  t.deepEqual(created, [10, 11])
+})
+
 test('id contract: a reverse one relation does not hold a write behind a create', async t => {
   const related = createSchema({
     services: {

@@ -499,8 +499,9 @@ export class MutationExecutor {
     )
 
     if (tracked.cause) entry.cause = tracked.cause
-    this.#cache.project(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
+    // Hold first: projecting notifies observers, whose writes to this lane drain it.
     this.#awaitReferencedCreates(lane, entry)
+    this.#cache.project(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
     entry.attempt.whenReady(() => {
       this.#expediteMutationPredecessors(lane, entry)
       this.#drainMutationLane(lane)
