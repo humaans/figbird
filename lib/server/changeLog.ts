@@ -1,4 +1,4 @@
-export type ChangeType = 'created' | 'updated' | 'patched' | 'removed'
+import type { ChangeType } from './protocol.js'
 
 /** One committed write. Ids only: the log never holds row payloads. */
 export interface ChangeEntry {

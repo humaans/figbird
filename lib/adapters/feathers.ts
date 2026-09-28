@@ -14,7 +14,7 @@ import type {
 } from './adapter.js'
 import { matcher, type PrepareQueryOptions, type Query } from './matcher.js'
 import type { Schema, ServiceDefinitionByPath, ServicePaths } from '../core/schema.js'
-import { orderingComparator, type ServiceOrdering, type ValueComparator } from '../core/sort.js'
+import { FeathersSync, type FeathersSyncOptions } from './feathersSync.js'
 
 // Helper types for field extraction
 type IdExtractor = (item: unknown) => string | number | undefined
@@ -396,56 +396,6 @@ function isFeathersTransactionResult(value: unknown): value is FeathersTransacti
   )
 }
 
-/**
- * Opt into the experimental figbird sync protocol served by `figbird/server`.
- * See DESIGN.md "Sync Protocol (experimental)".
- */
-export interface FeathersSyncOptions {
-  /** Path the `figbirdSync` service is mounted at. Defaults to `figbird/sync`. */
-  path?: string
-  /** Row version field stamped by the `versioned` hooks. Defaults to `_v`. */
-  versionField?: string
-}
-
-const EVENT_TYPES: ReadonlySet<string> = new Set(['created', 'updated', 'patched', 'removed'])
-
-interface SyncResponse {
-  cursor: number
-  services: string[]
-  changes: Array<{ service: string; type: keyof EventHandlers; item: unknown }>
-}
-
-function isSyncResponse(value: unknown): value is SyncResponse {
-  const response = value as SyncResponse | null
-  return (
-    typeof response?.cursor === 'number' &&
-    Array.isArray(response.services) &&
-    Array.isArray(response.changes) &&
-    response.changes.every(
-      change =>
-        typeof change?.service === 'string' &&
-        EVENT_TYPES.has(change.type) &&
-        change.item !== null &&
-        typeof change.item === 'object',
-    )
-  )
-}
-
-/**
- * Read the server's ordering declarations from a `figbirdSync` service and build
- * the matching value comparator, for `new Figbird({ compare })`.
- */
-export async function loadServerOrdering(
-  feathers: FeathersClient,
-  path = 'figbird/sync',
-): Promise<ValueComparator> {
-  const ordering = await feathers.service(path).get('ordering')
-  if (!ordering || typeof ordering !== 'object') {
-    throw new Error(`Sync service "${path}" returned invalid ordering declarations`)
-  }
-  return orderingComparator(ordering as Record<string, ServiceOrdering>)
-}
-
 export interface FeathersAdapterOptions {
   idField?: IdFieldType
   updatedAtField?: UpdatedAtFieldType
@@ -513,14 +463,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #defaultPagination: FeathersPagination | undefined
   #pagination: Record<string, FeathersPagination>
   #isInvalidationEvent: ((event: RealtimeEventContext) => boolean) | undefined
-  #sync: Required<FeathersSyncOptions> | undefined
-  /** Highest row version seen on a realtime event: where a replay resumes. */
-  #cursor: number | undefined
-  /** The store's handlers per subscribed service, which replays feed. */
-  #listeners = new Map<string, Set<EventHandlers>>()
-  #replay: Promise<boolean> | undefined
-  /** Versions of rows seen live while a replay is in flight, by service and id. */
-  #liveDuringReplay: Map<string, number> | undefined
+  #sync: FeathersSync | undefined
   transaction?: Adapter['transaction']
   findByIds?: Adapter['findByIds']
 
@@ -581,9 +524,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#defaultPagination = defaultPagination
     this.#pagination = pagination
     this.#isInvalidationEvent = isInvalidationEvent
-    if (sync) {
-      this.#sync = { path: sync.path ?? 'figbird/sync', versionField: sync.versionField ?? '_v' }
-    }
+    if (sync) this.#sync = new FeathersSync(feathers, item => this.getId(item), sync)
     if (transactions) {
       this.transaction = operations => transactions(this.feathers, operations)
     }
@@ -837,111 +778,21 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
 
   subscribe(serviceName: string, handlers: EventHandlers): () => void {
     const service = this.#service(serviceName)
-    const live = this.#sync ? this.#observeLive(serviceName, handlers) : handlers
+    const tracked = this.#sync?.track(serviceName, handlers)
+    const live = tracked?.live ?? handlers
 
     service.on('created', live.created)
     service.on('updated', live.updated)
     service.on('patched', live.patched)
     service.on('removed', live.removed)
-    let listeners = this.#listeners.get(serviceName)
-    if (!listeners) this.#listeners.set(serviceName, (listeners = new Set()))
-    listeners.add(handlers)
 
     return () => {
       service.off('created', live.created)
       service.off('updated', live.updated)
       service.off('patched', live.patched)
       service.off('removed', live.removed)
-      listeners.delete(handlers)
-      if (listeners.size === 0) this.#listeners.delete(serviceName)
+      tracked?.release()
     }
-  }
-
-  /** Track the cursor, and live rows a replay in flight must not overwrite. */
-  #observeLive(serviceName: string, handlers: EventHandlers): EventHandlers {
-    const observe =
-      (type: keyof EventHandlers) =>
-      (item: unknown): void => {
-        for (const row of Array.isArray(item) ? item : [item]) {
-          const version = this.#versionOf(row)
-          if (version === undefined) continue
-          if (this.#cursor === undefined || version > this.#cursor) this.#cursor = version
-          const id = this.getId(row)
-          if (this.#liveDuringReplay && id !== undefined) {
-            const key = replayKey(serviceName, id)
-            this.#liveDuringReplay.set(
-              key,
-              Math.max(version, this.#liveDuringReplay.get(key) ?? -Infinity),
-            )
-          }
-        }
-        handlers[type](item)
-      }
-    return {
-      created: observe('created'),
-      updated: observe('updated'),
-      patched: observe('patched'),
-      removed: observe('removed'),
-    }
-  }
-
-  #versionOf(item: unknown): number | undefined {
-    if (!this.#sync || !item || typeof item !== 'object') return undefined
-    const value = (item as Record<string, unknown>)[this.#sync.versionField]
-    // bigint columns commonly serialize as strings
-    const version = typeof value === 'string' && value !== '' ? Number(value) : value
-    return typeof version === 'number' && Number.isSafeInteger(version) ? version : undefined
-  }
-
-  /**
-   * Replay the changes missed while disconnected into the store's realtime
-   * handlers. Resolves false when the store must reconcile instead: no cursor
-   * yet, a truncated log, a subscribed service the server doesn't replay, or any
-   * failure. Concurrent reconnect subscribers share one request.
-   */
-  #replayMissedEvents(): Promise<boolean> {
-    this.#replay ??= this.#requestReplay().finally(() => {
-      this.#replay = undefined
-      this.#liveDuringReplay = undefined
-    })
-    return this.#replay
-  }
-
-  async #requestReplay(): Promise<boolean> {
-    const sync = this.#sync
-    const since = this.#cursor
-    if (!sync || since === undefined) return false
-    const services = [...this.#listeners.keys()]
-    if (services.length === 0) return true
-    const liveDuringReplay = new Map<string, number>()
-    this.#liveDuringReplay = liveDuringReplay
-    let response: unknown
-    try {
-      response = await this.#service(sync.path).find({ query: { since, services } })
-    } catch {
-      return false
-    }
-    if (!isSyncResponse(response)) return false
-    // A listened service the server doesn't version has no replayable history.
-    if (!services.every(service => response.services.includes(service))) return false
-
-    for (const change of response.changes) {
-      const id = this.getId(change.item)
-      // A row event that arrived while the request was in flight is at least as
-      // new as the replayed row, and a replayed row must not resurrect a row
-      // removed meanwhile.
-      const live =
-        id === undefined ? undefined : liveDuringReplay.get(replayKey(change.service, id))
-      const version = this.#versionOf(change.item)
-      if (live !== undefined && (version === undefined || version <= live)) continue
-      for (const handlers of this.#listeners.get(change.service) ?? []) {
-        handlers[change.type](change.item)
-      }
-    }
-    if (this.#cursor === undefined || response.cursor > this.#cursor) {
-      this.#cursor = response.cursor
-    }
-    return true
   }
 
   subscribeToReconnect(handler: () => void): () => void {
@@ -951,16 +802,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   subscribeToConnectionEvents(handler: (event: AdapterConnectionEvent) => void): () => void {
-    return this.#subscribeToTransportEvents(
-      this.#sync
-        ? event => {
-            if (event.type !== 'reconnected') return handler(event)
-            void this.#replayMissedEvents().then(replayed =>
-              handler(replayed ? { ...event, replayed } : event),
-            )
-          }
-        : handler,
-    )
+    return this.#subscribeToTransportEvents(this.#sync?.connectionHandler(handler) ?? handler)
   }
 
   #subscribeToTransportEvents(handler: (event: AdapterConnectionEvent) => void): () => void {
@@ -1127,8 +969,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   isItemStale(currItem: unknown, nextItem: unknown): boolean {
     // Row versions order writes exactly; timestamps are the fallback for rows
     // written without the version hooks.
-    const currVersion = this.#versionOf(currItem)
-    const nextVersion = this.#versionOf(nextItem)
+    const currVersion = this.#sync?.versionOf(currItem)
+    const nextVersion = this.#sync?.versionOf(nextItem)
     if (currVersion !== undefined && nextVersion !== undefined) return nextVersion < currVersion
 
     const currMs = toEpochMs(this.#getUpdatedAt(currItem))
@@ -1208,10 +1050,6 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   findMeta(window: { total: number; limit: number; skip: number }): FeathersFindMeta {
     return window
   }
-}
-
-function replayKey(serviceName: string, id: string | number): string {
-  return `${serviceName}\u0000${String(id)}`
 }
 
 function connectionError(value: unknown): Error {

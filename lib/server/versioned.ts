@@ -1,4 +1,5 @@
-import type { ChangeLog, ChangeType } from './changeLog.js'
+import type { ChangeLog } from './changeLog.js'
+import type { ChangeType } from './protocol.js'
 import type { Sequencer } from './sequencer.js'
 
 /** The slice of a Feathers `HookContext` the version hooks read and write. */
@@ -20,7 +21,7 @@ export interface VersionedOptions {
   log: ChangeLog
 }
 
-const CHANGE_TYPES: Record<string, ChangeType> = {
+const METHOD_CHANGES: Record<string, ChangeType> = {
   create: 'created',
   update: 'updated',
   patch: 'patched',
@@ -67,7 +68,7 @@ export function versioned({ field = '_v', sequencer, log }: VersionedOptions): {
   }
 
   const record: VersionedHook = async context => {
-    const type = CHANGE_TYPES[context.method]
+    const type = METHOD_CHANGES[context.method]
     if (!type) return
     if (type === 'removed') {
       const seq = sequencer()

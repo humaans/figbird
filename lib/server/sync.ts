@@ -1,26 +1,8 @@
 import type { ServiceOrdering } from '../core/sort.js'
-import type { ChangeEntry, ChangeLog, ChangeType } from './changeLog.js'
+import type { ChangeEntry, ChangeLog } from './changeLog.js'
+import type { SyncChange, SyncResult } from './protocol.js'
 import { SEQUENCE_UNITS_PER_MS } from './sequencer.js'
 import { serviceIdField } from './versioned.js'
-
-export interface SyncChange {
-  service: string
-  type: ChangeType
-  id: string | number
-  /** The current row, or `{ [idField]: id, [field]: seq }` for a removal. */
-  item: Record<string, unknown>
-}
-
-export interface SyncResult {
-  /** Resume position: pass it back as `since` once these changes are applied. */
-  cursor: number
-  /**
-   * The requested services this answer covers. A client listening to any other
-   * service has missed its events and must refetch.
-   */
-  services: string[]
-  changes: SyncChange[]
-}
 
 /** The slice of Feathers `Params` the sync service reads and forwards. */
 export interface SyncParams {

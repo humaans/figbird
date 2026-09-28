@@ -7,8 +7,8 @@ import {
   type FeathersAdapterOptions,
   type FeathersClient,
   type FeathersService,
-  loadServerOrdering,
 } from '../lib/adapters/feathers'
+import { loadServerOrdering } from '../lib/adapters/feathersSync'
 import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
 import {
@@ -41,9 +41,13 @@ const EVENTS = ['created', 'updated', 'patched', 'removed'] as const
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
-/** Let in-process requests, events and store batches run to completion. */
-async function settle(): Promise<void> {
-  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve))
+const nextTurn = () => new Promise(resolve => setImmediate(resolve))
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let turn = 0; !condition(); turn++) {
+    if (turn > 1000) throw new Error('waitFor: condition never held')
+    await nextTurn()
+  }
 }
 
 async function createServer({
@@ -94,6 +98,7 @@ function connect(
   const calls: Record<string, number> = {}
   const syncResults: SyncResult[] = []
   let connected = true
+  let pending = 0
   let holdSync: Promise<void> | undefined
 
   for (const path of ['people', 'teams']) {
@@ -110,6 +115,7 @@ function connect(
     // oxlint-disable-next-line @typescript-eslint/no-explicit-any
     const target = app.service(path) as any
     const params = { ...(clone(args.at(-1)) as object), provider: 'socketio' }
+    pending++
     try {
       const result = clone(await target[method](...clone(args.slice(0, -1)), params))
       if (path === 'figbird/sync' && method === 'find') {
@@ -120,6 +126,8 @@ function connect(
     } catch (error) {
       const { name, code, message } = error as { name: string; code?: number; message: string }
       throw Object.assign(new Error(message), { name, code })
+    } finally {
+      pending--
     }
   }
 
@@ -152,6 +160,14 @@ function connect(
     client,
     calls,
     syncResults,
+    /** Wait until no request is in flight across two consecutive turns. */
+    async idle() {
+      for (let quiet = 0, turn = 0; quiet < 2; turn++) {
+        if (turn > 1000) throw new Error('idle: requests never settled')
+        await nextTurn()
+        quiet = pending === 0 ? quiet + 1 : 0
+      }
+    },
     disconnect() {
       connected = false
       socket.emit('disconnect', 'transport close')
@@ -202,7 +218,7 @@ test('a reconnect replays missed writes in one sync request instead of refetchin
   const client = await mount(bridge)
   // A realtime event gives the client its cursor.
   await people.create({ id: 3, name: 'Cy', team: 'b' })
-  await settle()
+  await bridge.idle()
   const findsBefore = bridge.calls['people.find']
 
   bridge.disconnect()
@@ -212,7 +228,7 @@ test('a reconnect replays missed writes in one sync request instead of refetchin
   t.deepEqual(client.everyone(), ['Ada', 'Bob', 'Cy'], 'events are missed while disconnected')
 
   bridge.reconnect()
-  await settle()
+  await bridge.idle()
 
   t.deepEqual(client.everyone(), ['Ada Lovelace', 'Cy', 'Dee'])
   t.deepEqual(client.teamA(), ['Ada Lovelace', 'Dee'])
@@ -228,7 +244,7 @@ test('a truncated change log falls back to refetching active queries', async t =
   const bridge = connect(app)
   const client = await mount(bridge)
   await people.create({ id: 2, name: 'Bob', team: 'a' })
-  await settle()
+  await bridge.idle()
   const findsBefore = bridge.calls['people.find']!
 
   bridge.disconnect()
@@ -236,7 +252,7 @@ test('a truncated change log falls back to refetching active queries', async t =
   await people.patch(1, { name: 'Ada Lovelace' })
   await people.remove(2)
   bridge.reconnect()
-  await settle()
+  await bridge.idle()
 
   t.is(bridge.calls['figbird/sync.find'], 1)
   t.deepEqual(bridge.syncResults, [], 'the sync service answered Gone')
@@ -255,13 +271,13 @@ test('listening to a service the sync service does not replay falls back to refe
   const release = teams.subscribe(() => {})
   await teams.suspensePromise()
   await app.service('people').create({ id: 2, name: 'Bob', team: 'a' })
-  await settle()
+  await bridge.idle()
   const findsBefore = bridge.calls['teams.find']!
 
   bridge.disconnect()
   await app.service('teams').create({ id: 'a', name: 'Alpha' })
   bridge.reconnect()
-  await settle()
+  await bridge.idle()
 
   t.is(bridge.calls['figbird/sync.find'], 1)
   t.deepEqual(bridge.syncResults[0]?.services, ['people'])
@@ -295,10 +311,10 @@ test('a stale response loses to a newer row version without timestamps', async t
     const bridge = connect(app)
     const client = await mount(bridge, adapterOptions)
     await people.patch(1, { name: 'Ada Lovelace' })
-    await settle()
+    await bridge.idle()
     serveCached = true
     client.figbird.refetch('people')
-    await settle()
+    await bridge.idle()
     const names = client.everyone()
     client.dispose()
     return names
@@ -319,20 +335,19 @@ test('a live removal during an in-flight replay is not resurrected', async t => 
   const bridge = connect(app)
   const client = await mount(bridge)
   await people.create({ id: 2, name: 'Bob', team: 'b' })
-  await settle()
+  await bridge.idle()
 
   bridge.disconnect()
   await people.patch(1, { name: 'Ada Lovelace' })
   let release!: () => void
   bridge.reconnect({ hold: new Promise(resolve => (release = resolve)) })
-  await settle()
+  await waitFor(() => bridge.syncResults.length === 1)
   const replayed = bridge.syncResults[0]?.changes.find(change => change.id === 1)
   t.is(replayed?.item.name, 'Ada Lovelace', 'the replay read the row before its removal')
 
   await people.remove(1)
-  await settle()
   release()
-  await settle()
+  await bridge.idle()
 
   t.deepEqual(client.everyone(), ['Bob'])
   client.dispose()
@@ -348,14 +363,14 @@ test('sync reads rows through the caller’s own permissions', async t => {
   const bridge = connect(app, { canSee: person => !person.secret })
   const client = await mount(bridge)
   await people.create({ id: 3, name: 'Cy', team: 'b' })
-  await settle()
+  await bridge.idle()
 
   bridge.disconnect()
   await people.create({ id: 4, name: 'Hidden', team: 'a', secret: true })
   await people.patch(2, { secret: true })
   await people.patch(1, { name: 'Ada Lovelace' })
   bridge.reconnect()
-  await settle()
+  await bridge.idle()
 
   const changes = bridge.syncResults[0]!.changes
   t.false(
