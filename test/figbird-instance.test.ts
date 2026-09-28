@@ -494,3 +494,13 @@ test('figbird.refetch coalesces an in-flight query into one follow-up fetch', as
   t.deepEqual(ref.getSnapshot()?.data, [{ id: 1, content: 'latest' }])
   unsub()
 })
+
+test('figbird.query keeps $sort precedence in query identity', t => {
+  const figbird = new Figbird({ schema, adapter: new FeathersAdapter(mockFeathers({})) })
+
+  const byTagThenContent = figbird.query(figbird.q.notes.orderBy('tag').orderBy('content'))
+  const byContentThenTag = figbird.query(figbird.q.notes.orderBy('content').orderBy('tag'))
+
+  t.not(byTagThenContent, byContentThenTag)
+  t.is(byTagThenContent, figbird.query(figbird.q.notes.orderBy('tag').orderBy('content')))
+})
