@@ -2159,8 +2159,8 @@ export class QueryStore<
     for (const listener of this.#processedEventListeners) {
       try {
         listener(event)
-      } catch {
-        // Internal invalidation listeners should not break the event loop.
+      } catch (error) {
+        this.#reportListenerError('processed-event', error)
       }
     }
   }
@@ -2214,8 +2214,8 @@ export class QueryStore<
     for (const listener of this.#invalidationListeners) {
       try {
         listener(event)
-      } catch {
-        // Internal invalidation listeners should not break the event loop.
+      } catch (error) {
+        this.#reportListenerError('invalidation', error)
       }
     }
   }
@@ -2224,8 +2224,8 @@ export class QueryStore<
     for (const listener of this.#projectionSettlementListeners) {
       try {
         listener(event)
-      } catch {
-        // Internal invalidation listeners should not break mutation settlement.
+      } catch (error) {
+        this.#reportListenerError('projection-settlement', error)
       }
     }
   }
@@ -2725,7 +2725,10 @@ export class QueryStore<
     }
   }
 
-  #reportListenerError(kind: 'query' | 'global', error: unknown): void {
+  #reportListenerError(
+    kind: 'query' | 'global' | 'processed-event' | 'invalidation' | 'projection-settlement',
+    error: unknown,
+  ): void {
     try {
       console.error(`figbird: ${kind} listener threw`, error)
     } catch {

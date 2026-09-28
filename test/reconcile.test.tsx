@@ -447,3 +447,27 @@ it('a throwing subscriber cannot block other listeners or reconcile follow-ups',
   unsubSafe()
   unsubWindow()
 })
+
+it('a throwing processed-event listener reports its error', async t => {
+  const { figbird, feathers } = createApp()
+  const failure = new Error('invalidation failed')
+  const reported: unknown[][] = []
+  const originalConsoleError = console.error
+  console.error = (...args: unknown[]) => reported.push(args)
+  t.teardown(() => {
+    console.error = originalConsoleError
+  })
+
+  const unsub = figbird.queryDesc({ serviceName: 'notes', method: 'find' }).subscribe(() => {})
+  const unsubProcessed = figbird.queryStore.subscribeToProcessedEvents(event => {
+    if (event.itemId === '3') throw failure
+  })
+  await sleep(20)
+
+  serverCreate(feathers.service('notes'), { id: 3, content: 'new' })
+  await sleep(20)
+
+  t.deepEqual(reported, [['figbird: processed-event listener threw', failure]])
+  unsubProcessed()
+  unsub()
+})
