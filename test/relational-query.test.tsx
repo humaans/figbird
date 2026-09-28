@@ -759,6 +759,20 @@ test('matcher: an optimistic row with a Date field joins a live Date filter imme
   })
   await new Promise(resolve => setTimeout(resolve, 0))
   t.deepEqual(ids(), [2, 4], 'the pending row matches before the server echoes it')
+
+  // A form library may reuse and mutate one values object across writes.
+  feathers.service('employments').patch = (() => new Promise(() => {})) as never
+  const form = { title: 'First', effectiveAt: new Date('2025-06-01T00:00:00.000Z') }
+  void figbird.m.employments.patch(2, form as never)
+  form.title = 'Second'
+  form.effectiveAt = new Date('2025-07-01T00:00:00.000Z')
+  void figbird.m.employments.patch(2, form as never)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.like(
+    ref.getSnapshot().data!.find(row => row.id === 2),
+    { title: 'Second', effectiveAt: '2025-07-01T00:00:00.000Z' },
+    'the second write projects its own values',
+  )
   unsubscribe()
 })
 
