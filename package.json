@@ -16,6 +16,11 @@
       "types": "./dist/esm/testing.d.ts",
       "require": "./dist/cjs/testing.js",
       "import": "./dist/esm/testing.js"
+    },
+    "./server": {
+      "types": "./dist/esm/server/index.d.ts",
+      "require": "./dist/cjs/server/index.js",
+      "import": "./dist/esm/server/index.js"
     }
   },
   "files": [

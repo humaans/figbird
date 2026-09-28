@@ -35,6 +35,11 @@ try {
     'devtools panel files are not published',
   )
   assert.ok(files.includes('dist/esm/core/devtoolsBridge.d.ts'), 'the core devtools bridge ships')
+  // The server companion must stay free of runtime imports: no Feathers, no React.
+  for (const path of files.filter(path => /^dist\/(esm|cjs)\/server\/.*\.js$/.test(path))) {
+    const code = await readFile(join(root, path), 'utf8')
+    assert.doesNotMatch(code, /(from |require\()["'](?!\.)/, `${path} has no package imports`)
+  }
   const installed = join(consumer, 'node_modules/figbird')
   await mkdir(installed, { recursive: true })
   run('tar', ['-xzf', join(consumer, packed.filename), '-C', installed, '--strip-components=1'])
@@ -42,6 +47,7 @@ try {
   assert.deepEqual(Object.keys(manifest.exports).sort(), [
     '.',
     './package.json',
+    './server',
     './testing',
     './tsconfig.json',
   ])
@@ -59,6 +65,10 @@ try {
             assert.equal(typeof library[name], 'function', name);
           }
           assert.equal(typeof (await load('figbird/testing')).mockFeathers, 'function');
+          const server = await load('figbird/server');
+          for (const name of ['versioned', 'figbirdSync', 'memoryChangeLog', 'hybridClock']) {
+            assert.equal(typeof server[name], 'function', 'figbird/server ' + name);
+          }
           for (const path of ['core/queryStore', 'react/useQuery', 'adapters/feathers', 'devtools/Devtools', 'dist/esm/index.js']) {
             await assert.rejects(load('figbird/' + path), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
           }

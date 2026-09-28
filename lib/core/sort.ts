@@ -64,6 +64,46 @@ export function postgresCompare(a: unknown, b: unknown): number {
   return compareValues(a, b)
 }
 
+/**
+ * How one service's backend orders values, as declared by the server (see
+ * `loadServerOrdering`): `preset` picks the base comparator — `default` for
+ * `compareValues`, `postgres` for `postgresCompare` — and `numeric` lists fields
+ * the backend sorts as numbers but serializes as strings (Postgres `numeric` and
+ * `bigint` columns).
+ */
+export interface ServiceOrdering {
+  preset?: 'default' | 'postgres'
+  numeric?: readonly string[]
+}
+
+const asNumber = (value: unknown): unknown =>
+  typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))
+    ? Number(value)
+    : value
+
+/**
+ * Build a value comparator from per-service ordering declarations. Services
+ * without a declaration compare with `compareValues`.
+ */
+export function orderingComparator(ordering: Record<string, ServiceOrdering>): ValueComparator {
+  const services = new Map(
+    Object.entries(ordering).map(([serviceName, { preset, numeric = [] }]) => [
+      serviceName,
+      {
+        compare: preset === 'postgres' ? postgresCompare : compareValues,
+        numeric: new Set(numeric),
+      },
+    ]),
+  )
+  return (a, b, { serviceName, field }) => {
+    const service = services.get(serviceName)
+    if (!service) return compareValues(a, b)
+    return service.numeric.has(field)
+      ? service.compare(asNumber(a), asNumber(b))
+      : service.compare(a, b)
+  }
+}
+
 /** Build a row comparator from a `$sort` map (`{ field: 1 | -1, ... }`). */
 export function buildComparator(
   sort: Record<string, number>,
