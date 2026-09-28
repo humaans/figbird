@@ -7,6 +7,7 @@
  */
 
 import type { RelationPlan } from './relationPlan.js'
+import type { RelationshipDef } from './schema.js'
 import { getFieldValue } from './relationalFilters.js'
 
 export type AssembledRelationData =
@@ -53,10 +54,28 @@ export function sourceValueKey(value: string | number): string {
   return JSON.stringify(value)
 }
 
+/**
+ * The destination filter a parent's own windowed query runs with, keyed stably. An
+ * `embed` parent windows over its id list; other relations over their source value.
+ */
+export function perParentSource(
+  item: unknown,
+  relDef: RelationshipDef,
+): { key: string; filter: string | number | { $in: (string | number)[] } } | undefined {
+  if (relDef.cardinality === 'embedded') {
+    const list = getFieldValueAsList(item, relDef.sourceField)
+    return list?.length ? { key: JSON.stringify(list), filter: { $in: list } } : undefined
+  }
+  const value = getFieldValue(item, relDef.sourceField)
+  return value === undefined ? undefined : { key: sourceValueKey(value), filter: value }
+}
+
 interface RelationIndex {
   byKey?: Map<string | number, unknown>
   listByKey?: Map<string | number, unknown[]>
   junctionsByParent?: Map<string | number, unknown[]>
+  /** Result position of each destination row, when the relation has an explicit sort. */
+  positions?: Map<unknown, number>
 }
 
 /**
@@ -128,11 +147,26 @@ function buildIndexes(
       }
       index = { listByKey }
     }
+    // Junction and embed edges carry their own order; an explicit sort overrides it
+    // with the destination query's result order.
+    if (plan.sorted && (relDef.via || relDef.cardinality === 'embedded')) {
+      index.positions = new Map(rel.items.map((entity, position) => [entity, position]))
+    }
     indexes.set(relName, index)
     cache.set(key, { items: rel.items, junctionItems, index })
   }
 
   return indexes
+}
+
+function inResultOrder(items: unknown[], positions: Map<unknown, number> | undefined): unknown[] {
+  if (!positions || items.length < 2) return items
+  return [...items].sort((a, b) => positions.get(a)! - positions.get(b)!)
+}
+
+function inListOrder(ids: (string | number)[], rows: unknown[], destField: string): unknown[] {
+  const byKey = firstMatchIndex(rows, destField)
+  return ids.flatMap(id => (byKey.has(id) ? [byKey.get(id)] : []))
 }
 
 // First match wins — mirrors a linear scan's short-circuit semantics.
@@ -194,9 +228,22 @@ function assembleRelations(
       let matchedItems: unknown[]
 
       if (rel?.kind === 'perParent') {
-        const sourceValue = getFieldValue(item, relDef.sourceField)
+        const source = perParentSource(item, relDef)
+        const rows = source ? (rel.byParent.get(source.key) ?? []) : []
+        // Each parent's window arrives in server order; an unsorted embed window
+        // keeps the parent's id-list order instead.
         matchedItems =
-          sourceValue === undefined ? [] : (rel.byParent.get(sourceValueKey(sourceValue)) ?? [])
+          source && typeof source.filter === 'object' && !plan.sorted
+            ? inListOrder(source.filter.$in, rows, relDef.destField)
+            : rows
+        if (relDef.cardinality === 'one') {
+          let found: unknown = matchedItems[0] ?? null
+          if (hasNested && found) {
+            found = assembleRelations([found], children, key, context)[0] ?? null
+          }
+          result[relName] = found
+          continue
+        }
       } else if (relDef.cardinality === 'embedded') {
         const sourceList = getFieldValueAsList(item, relDef.sourceField)
         matchedItems = []
@@ -208,6 +255,7 @@ function assembleRelations(
             if (found) matchedItems.push(found)
           }
         }
+        matchedItems = inResultOrder(matchedItems, index?.positions)
       } else if (relDef.via) {
         // Two-hop: walk this parent's junction rows, then collect dest items keyed
         // by the junction's outgoing FK.
@@ -223,6 +271,7 @@ function assembleRelations(
             if (found) matchedItems.push(found)
           }
         }
+        matchedItems = inResultOrder(matchedItems, index?.positions)
         // A chained `one` resolves to the first (declared-selective) match, or null.
         if (relDef.cardinality === 'one') {
           let found: unknown = matchedItems[0] ?? null

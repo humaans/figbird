@@ -478,6 +478,14 @@ export class QueryBuilder<
       throw new Error('related(): refinements must return a find query')
     }
     relatedAST.cardinality = relDef.cardinality === 'one' ? 'one' : 'many'
+    const window = { ...relatedAST.query, ...relDef.query }
+    if (relDef.via && ('$limit' in window || '$skip' in window)) {
+      throw new Error(
+        `related(): "${name}" goes through the junction service "${relDef.via.destService}", ` +
+          'so .limit()/.skip() cannot apply per parent — no single find on either service ' +
+          'expresses that window. Relate the junction service directly and window it instead.',
+      )
+    }
 
     return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,

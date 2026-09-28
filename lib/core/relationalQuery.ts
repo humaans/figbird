@@ -32,8 +32,8 @@ import {
 import {
   createRelationAssembler,
   getFieldValueAsList,
+  perParentSource,
   sourceSet,
-  sourceValueKey,
   uniqueSourceValues,
   type AssembledRelationData,
 } from './relationalAssembly.js'
@@ -140,7 +140,6 @@ type RelationSub<TMeta extends Record<string, unknown>> =
         {
           queryRef: QueryRef<unknown[], unknown, TMeta>
           unsub: () => void
-          sourceValue: string | number
         }
       >
     }
@@ -1054,7 +1053,7 @@ export class RelationalQueryRef<
           this.#syncJunctionRelation(parentData, plan)
           break
         case 'perParent':
-          this.#syncWindowedManyRelation(parentData, plan)
+          this.#syncPerParentRelation(parentData, plan)
           break
         case 'fanIn': {
           let sub = this.#relationSubs.get(plan.key)
@@ -1124,15 +1123,17 @@ export class RelationalQueryRef<
     this.#syncNestedFanIn(query, plan)
   }
 
-  #syncWindowedManyRelation(
+  #syncPerParentRelation(
     parentData: unknown[],
     plan: Exclude<RelationPlan, { kind: 'missing' }>,
   ): void {
     const { definition: relDef, key } = plan
-    const { values: uniqueValues, key: newSourceKey } = uniqueSourceValues(
-      parentData,
-      relDef.sourceField,
-    )
+    const filters = new Map<string, string | number | { $in: (string | number)[] }>()
+    for (const item of parentData) {
+      const source = perParentSource(item, relDef)
+      if (source) filters.set(source.key, source.filter)
+    }
+    const newSourceKey = JSON.stringify([...filters.keys()].sort())
 
     const existing = this.#relationSubs.get(key)
     if (existing?.kind === 'perParent' && existing.sourceKey === newSourceKey) {
@@ -1142,20 +1143,20 @@ export class RelationalQueryRef<
 
     if (existing && existing.kind !== 'perParent') this.#disposeRelationSub(existing)
 
-    if (uniqueValues.length === 0) {
+    if (filters.size === 0) {
       if (existing?.kind === 'perParent') this.#disposeRelationSub(existing)
       this.#relationSubs.set(key, { kind: 'empty' })
       return
     }
 
     if (
-      uniqueValues.length > WINDOWED_RELATION_FANOUT_WARN_THRESHOLD &&
+      filters.size > WINDOWED_RELATION_FANOUT_WARN_THRESHOLD &&
       !this.#fanOutWarnedKeys.has(key)
     ) {
       this.#fanOutWarnedKeys.add(key)
       console.warn(
         `figbird: windowed relation "${key}" on service "${this.#ast.service}" is fanning out ` +
-          `${uniqueValues.length} per-parent queries (one per parent, because per-parent ` +
+          `${filters.size} per-parent queries (one per parent, because per-parent ` +
           '$limit/$skip windows cannot be expressed as a single find). For list screens, ' +
           'consider a server-materialized id-list field declared with the `embed` relation ' +
           'kind instead — it collapses this to one batched IN(...) fetch.',
@@ -1170,17 +1171,13 @@ export class RelationalQueryRef<
     entry.children = new Map()
     this.#relationSubs.set(key, entry)
 
-    for (const sourceValue of uniqueValues) {
-      const childKey = sourceValueKey(sourceValue)
+    for (const [childKey, filter] of filters) {
       const retained = previousChildren.get(childKey)
       if (retained) {
         entry.children.set(childKey, retained)
         continue
       }
-      const queryRef = this.#query(
-        plan.destination.descriptor(sourceValue),
-        plan.destination.config,
-      )
+      const queryRef = this.#query(plan.destination.descriptor(filter), plan.destination.config)
       const unsub = queryRef.subscribe(
         state => {
           if (state.status === 'success') {
@@ -1191,7 +1188,7 @@ export class RelationalQueryRef<
         { staleTime: this.#staleTime, graph: this.#graph(key) },
       )
 
-      entry.children.set(childKey, { queryRef, unsub, sourceValue })
+      entry.children.set(childKey, { queryRef, unsub })
     }
 
     for (const [childKey, child] of previousChildren) {

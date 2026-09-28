@@ -24,6 +24,8 @@ interface PlannedRelation {
   name: string
   key: string
   definition: RelationshipDef
+  /** The refinement or definition sets `$sort`, so each parent's items follow it. */
+  sorted: boolean
   children: RelationPlan[]
   destination: RelationQueryPlan
 }
@@ -71,12 +73,10 @@ export function compileRelations(
     const definition = schema.relationships?.[ast.service]?.[name]
     if (!definition) return { kind: 'missing', key, name, service: ast.service }
     const query = { ...child.query, ...definition.query }
+    // A window applies to each parent, so it can't ride on one shared `$in` fetch.
+    // The builder rejects windows on junction relations, which have no per-parent find.
     const windowed = '$limit' in query || '$skip' in query
-    const strategy = definition.via
-      ? 'junction'
-      : windowed && definition.cardinality === 'many'
-        ? 'perParent'
-        : 'fanIn'
+    const strategy = definition.via ? 'junction' : windowed ? 'perParent' : 'fanIn'
     const allPages = !windowed
     const hasSort = '$sort' in query
     const sort =
@@ -89,6 +89,7 @@ export function compileRelations(
       name,
       key,
       definition,
+      sorted: hasSort,
       children: compileRelations(child, schema, realtime, key),
       destination: queryPlan(
         schema,

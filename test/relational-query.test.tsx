@@ -4448,6 +4448,58 @@ it('junction: realtime — patching a destination user updates the assembled vie
   unmount()
 })
 
+it('junction and embed: windows apply per parent and orderBy orders junction destinations', async t => {
+  const junctionApp = createJunctionApp()
+  t.throws(() => junctionApp.figbird.q.roles2.related('members', u => u.limit(1)), {
+    message: /junction service "roleMembers".*cannot apply per parent/,
+  })
+
+  const embedApp = createEmbedApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function Members() {
+    const roles = useQuery(
+      junctionApp.figbird.q.roles2.related('members', u => u.orderBy('name', 'desc')),
+    )
+    return (
+      <div
+        className='members'
+        data-names={roles.map(role => role.members.map(u => u.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  function Previews() {
+    const roles = useQuery(embedApp.figbird.q.roles.related('membersPreview', p => p.limit(2)))
+    return (
+      <div
+        className='previews'
+        data-names={roles.map(role => role.membersPreview.map(p => p.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  render(
+    <>
+      <junctionApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Members />
+        </React.Suspense>
+      </junctionApp.App>
+      <embedApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Previews />
+        </React.Suspense>
+      </embedApp.App>
+    </>,
+  )
+  await flush()
+
+  t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Cara,Bob|')
+  t.is($('.previews')!.getAttribute('data-names'), 'Cara,Alice|Bob|')
+  unmount()
+})
+
 it('junction: empty parent set (no find match) resolves with no junction fetch needed', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, $ } = dom()
