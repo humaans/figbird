@@ -71,9 +71,12 @@ the contract.
 
 These are explicitly out of scope. They are not bad ideas — they are different products:
 
-- **SSR / RSC / streaming HTML.** Figbird targets live, socket-connected SPAs. The reveal model
-  assumes a long-lived process that owns the realtime event stream. Server-rendered first paint
-  is a different machine; we do not try to be both.
+- **SSR / RSC as a designed-for target.** Figbird targets live, socket-connected SPAs. The reveal
+  model assumes a long-lived process that owns the realtime event stream. Server rendering works
+  as a consequence rather than a design goal: with a streaming renderer
+  (`renderToPipeableStream`) and a per-request instance, cold reads suspend on the server and
+  render real data (`renderToString` cannot wait on Suspense and renders fallbacks). There is no
+  cache hand-off, so the client refetches during hydration; RSC is not supported.
 - **Offline-first / local writes against a replica.** Mutations are remote-first with optimistic
   cache writes layered on top. There is no local persistence layer, no rebase against an
   authoritative log, no operational-transform conflict resolution.
@@ -1072,8 +1075,8 @@ checklist" in the docs that maps each failure mode to its tool.
 
 **Schema-bound hooks, provider-bound runtime.** `createHooks(schema)` is pure: it creates typed
 hooks and the `q` builder without constructing a client. Every generated hook reads the nearest
-`FigbirdProvider`, making the runtime explicit and replaceable for application roots, stories,
-and tests. `useMutations()` returns that same instance's `m` proxy. Code outside
+`FigbirdProvider`, making the runtime explicit and replaceable for application roots, SSR
+requests, stories, and tests. `useMutations()` returns that same instance's `m` proxy. Code outside
 React already has an explicit runtime boundary and uses `figbird.m`, `figbird.prepare`, and other
 instance methods directly. There is no hidden default-instance getter and no second initialization
 path to keep consistent.
