@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import type { MutationActivity } from '../core/figbird.js'
+import { entityKey } from '../core/queryTypes.js'
 import { resolveServicePath, type Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
 
@@ -51,7 +52,10 @@ export function useMutatingImpl(figbird: MutatingHost, filter: UseMutatingFilter
   // so `{ service: 'people' }` matches mutations on `'api/people'`.
   const service =
     filter.service !== undefined ? resolveServicePath(figbird.schema, filter.service) : undefined
-  const { id, method } = filter
+  // Compare ids the way lanes and the cache key them, so a route-string `'1'`
+  // matches a mutation tracked with numeric id `1`.
+  const id = filter.id === undefined ? undefined : entityKey(filter.id)
+  const { method } = filter
   const { mutating } = figbird
 
   const subscribe = useCallback((onChange: () => void) => mutating.subscribe(onChange), [mutating])
@@ -64,7 +68,7 @@ export function useMutatingImpl(figbird: MutatingHost, filter: UseMutatingFilter
       .some(
         m =>
           (service === undefined || m.serviceName === service) &&
-          (id === undefined || m.id === id) &&
+          (id === undefined || (m.id !== undefined && entityKey(m.id) === id)) &&
           (method === undefined || m.method === method),
       )
   }, [mutating, service, id, method])

@@ -545,14 +545,23 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     params?: FeathersParams<TQuery>,
   ): Promise<QueryResponse<unknown[], FeathersFindMeta>> {
     const res = await this.#service(serviceName).find(params as FeathersParams)
-    return this.#normalizeFind(res)
+    const requested = (params?.query as Record<string, unknown> | undefined)?.$limit
+    return this.#normalizeFind(res, typeof requested === 'number' ? requested : undefined)
   }
 
-  #normalizeFind(res: FeathersFindResult): QueryResponse<unknown[], FeathersFindMeta> {
+  /**
+   * A response without a reported limit (a plain array, or a page missing the
+   * field) gets the requested `$limit`, falling back to the row count: a short page
+   * must still read as the last one, since the limit is taken as the served size.
+   */
+  #normalizeFind(
+    res: FeathersFindResult,
+    requestedLimit?: number,
+  ): QueryResponse<unknown[], FeathersFindMeta> {
     if (Array.isArray(res)) {
-      return { data: res, meta: { total: -1, limit: res.length, skip: 0 } }
+      return { data: res, meta: { total: -1, limit: requestedLimit ?? res.length, skip: 0 } }
     } else {
-      const { data, total = -1, limit = data.length, skip = 0, ...rest } = res
+      const { data, total = -1, limit = requestedLimit ?? data.length, skip = 0, ...rest } = res
       return { data, meta: { total, limit, skip, ...rest } }
     }
   }

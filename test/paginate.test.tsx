@@ -237,6 +237,107 @@ it('useQueryResult + paginate: loadMore appends the next page and flips hasMore 
   unmount()
 })
 
+it('useQueryResult + paginate: a server page-size cap still pages past the capped page', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, issuesService } = createPaginateApp({ totalIssues: 5 })
+  // Like Feathers' paginate.max: the server serves at most 2 rows per page and
+  // reports that effective limit, whatever $limit the client asked for.
+  const find = issuesService.find.bind(issuesService)
+  issuesService.find = ((params: { query?: Record<string, unknown> } = {}) =>
+    find({ ...params, query: { ...params.query, $limit: 2 } })) as never
+
+  let loadMoreFn: (() => void) | null = null
+  function IssueList() {
+    const { data, hasMore, loadMore } = useQueryResult(
+      figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
+    )
+    useLayoutEffect(() => {
+      loadMoreFn = loadMore
+    })
+    return (
+      <div
+        className='issues'
+        data-titles={data.map(i => i.title).join(',')}
+        data-has-more={String(hasMore)}
+      />
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>...</div>}>
+        <IssueList />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.is($('.issues')!.getAttribute('data-titles'), 'Issue 1,Issue 2')
+  t.is($('.issues')!.getAttribute('data-has-more'), 'true')
+
+  await flush(() => {
+    loadMoreFn!()
+  })
+  t.is($('.issues')!.getAttribute('data-titles'), 'Issue 1,Issue 2,Issue 3,Issue 4')
+  t.is($('.issues')!.getAttribute('data-has-more'), 'true')
+
+  // Capped pages are full at the cap: a row sorting past them belongs to a later
+  // page, not appended to every loaded one.
+  await flush(async () => {
+    await issuesService.create({ id: 99, title: 'Late', status: 'open', rank: 100 })
+  })
+  t.is($('.issues')!.getAttribute('data-titles'), 'Issue 1,Issue 2,Issue 3,Issue 4')
+
+  await flush(() => {
+    loadMoreFn!()
+  })
+  await flush(() => {
+    loadMoreFn!()
+  })
+  t.is($('.issues')!.getAttribute('data-titles'), 'Issue 1,Issue 2,Issue 3,Issue 4,Issue 5,Late')
+  t.is($('.issues')!.getAttribute('data-has-more'), 'false')
+  unmount()
+})
+
+it('useQueryResult + paginate: a service returning plain arrays ends on its short last page', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, issuesService } = createPaginateApp({ totalIssues: 4 })
+  // A non-paginated Feathers service (paginate: false) honors $limit/$skip but
+  // answers with a bare array — no reported limit to read the page size from.
+  const find = issuesService.find.bind(issuesService)
+  issuesService.find = (async (params: unknown) => (await find(params as never)).data) as never
+
+  let loadMoreFn: (() => void) | null = null
+  function IssueList() {
+    const { data, hasMore, loadMore } = useQueryResult(
+      figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
+    )
+    useLayoutEffect(() => {
+      loadMoreFn = loadMore
+    })
+    return (
+      <div className='issues' data-count={String(data.length)} data-has-more={String(hasMore)} />
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>...</div>}>
+        <IssueList />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.is($('.issues')!.getAttribute('data-has-more'), 'true')
+
+  await flush(() => {
+    loadMoreFn!()
+  })
+  t.is($('.issues')!.getAttribute('data-count'), '4')
+  t.is($('.issues')!.getAttribute('data-has-more'), 'false', 'the one-row page is the last')
+  t.is(issuesService.counts.find, 2, 'no extra request for an empty page')
+  unmount()
+})
+
 it('useQueryResult + paginate: includeTotal exposes total from the first page meta', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird } = createPaginateApp({ totalIssues: 12 })

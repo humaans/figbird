@@ -30,6 +30,8 @@ interface MutationLaneState<TEntry extends MutationLaneEntry> extends MutationLa
   lastPresent: unknown | null
   entries: TEntry[]
   running: boolean
+  /** The running entry during which realtime reported the row removed. */
+  removedDuring: TEntry | undefined
   deferredQueryIds: Set<string>
   deferredProjection: ProcessedProjectionEvent | null
 }
@@ -62,9 +64,14 @@ export interface ReleasedLaneEffects {
 export class MutationLanes<TEntry extends MutationLaneEntry> {
   readonly #lanes = new Map<string, MutationLaneState<TEntry>>()
   readonly #getId: (item: unknown) => ItemId | undefined
+  readonly #isItemStale: (current: unknown, next: unknown) => boolean
 
-  constructor(getId: (item: unknown) => ItemId | undefined) {
+  constructor(
+    getId: (item: unknown) => ItemId | undefined,
+    isItemStale: (current: unknown, next: unknown) => boolean,
+  ) {
     this.#getId = getId
+    this.#isItemStale = isItemStale
   }
 
   get(serviceName: string, id: ItemId): MutationLane | undefined {
@@ -96,6 +103,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       running: false,
       deferredQueryIds: new Set(),
       deferredProjection: null,
+      removedDuring: undefined,
     }
     this.#lanes.set(key, lane)
     return lane
@@ -134,6 +142,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     const index = state.entries.indexOf(entry)
     if (index === -1) return null
     state.entries.splice(index, 1)
+    if (state.removedDuring === entry) state.removedDuring = undefined
     return this.#reproject(state)
   }
 
@@ -192,7 +201,16 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     }
     let authoritativeEvent: ProcessedServerEvent | null = null
 
-    if (outcome.ok) {
+    const removedDuring = state.removedDuring === entry
+    if (removedDuring) state.removedDuring = undefined
+    // Realtime can overtake the response: a newer patch or a later removal of the
+    // row is already the base, and the older acknowledgement must not replace it.
+    const superseded =
+      outcome.ok &&
+      entry.desc.method !== 'remove' &&
+      (removedDuring || this.#isStale(state, outcome.item))
+
+    if (outcome.ok && !superseded) {
       const type = MUTATION_EVENT_TYPE[entry.desc.method]
       const previousItem = state.base === ABSENT ? null : state.base
       const eventItem =
@@ -219,30 +237,25 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     }
   }
 
-  acceptAuthoritative(lane: MutationLane, type: EventType, item: unknown): AuthoritativeTransition
   acceptAuthoritative(
     lane: MutationLane,
     type: EventType,
     item: unknown,
-    isItemStale: (current: unknown, next: unknown) => boolean,
-  ): AuthoritativeTransition | null
-  acceptAuthoritative(
-    lane: MutationLane,
-    type: EventType,
-    item: unknown,
-    isItemStale?: (current: unknown, next: unknown) => boolean,
   ): AuthoritativeTransition | null {
     const state = this.#require(lane)
     const previousItem = state.base === ABSENT ? null : state.base
-    if (
-      isItemStale &&
-      (type === 'updated' || type === 'patched') &&
-      previousItem &&
-      isItemStale(previousItem, item)
-    ) {
+    if ((type === 'updated' || type === 'patched') && this.#isStale(state, item)) {
       return null
     }
 
+    // A removal that takes the row away while a write is in flight happened after
+    // that write succeeded, so its acknowledgement is older than everything from
+    // here on — including a re-create — and must not replace it. The mark holds
+    // until that write settles. A removal of an already-absent row (the echo of our
+    // own earlier remove, ahead of a re-create) says nothing about the running write.
+    if (type === 'removed' && state.running && state.base !== ABSENT) {
+      state.removedDuring = state.entries[0]
+    }
     this.#setBase(state, type, item)
     return {
       projection: this.#reproject(state),
@@ -328,6 +341,10 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       }
     }
     return events
+  }
+
+  #isStale(state: MutationLaneState<TEntry>, item: unknown): boolean {
+    return state.base !== ABSENT && state.base !== null && this.#isItemStale(state.base, item)
   }
 
   #setBase(state: MutationLaneState<TEntry>, type: EventType, item: unknown): void {

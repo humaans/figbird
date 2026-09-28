@@ -112,7 +112,10 @@ export class MutationExecutor {
     this.#adapter = adapter
     this.#cache = cache
     this.#telemetry = telemetry
-    this.#mutationLanes = new MutationLanes(item => this.#peekId(item))
+    this.#mutationLanes = new MutationLanes(
+      item => this.#peekId(item),
+      (current, next) => this.#adapter.isItemStale(current, next),
+    )
   }
 
   get activity(): MutationActivity {
@@ -146,9 +149,7 @@ export class MutationExecutor {
     if (!lane) return { handled: false }
     return {
       handled: true,
-      transition: this.#mutationLanes.acceptAuthoritative(lane, type, item, (current, next) =>
-        this.#adapter.isItemStale(current, next),
-      ),
+      transition: this.#mutationLanes.acceptAuthoritative(lane, type, item),
     }
   }
 
@@ -190,14 +191,7 @@ export class MutationExecutor {
           `figbird: transaction ${desc.method} on "${desc.serviceName}" requires a stable entity id`,
         )
       }
-      if (desc.method === 'create') {
-        const optimisticId = this.#peekId(resolveCreateOptimisticItem(desc))
-        if (optimisticId === undefined || entityKey(optimisticId) !== entityKey(id)) {
-          throw new Error(
-            `figbird: transaction create on "${desc.serviceName}" must preserve its payload id in the optimistic item`,
-          )
-        }
-      }
+      if (desc.method === 'create') this.#assertCreateIdentity(desc)
       const key = JSON.stringify([desc.serviceName, entityKey(id)])
       if (keys.has(key)) {
         throw new Error(
@@ -297,13 +291,51 @@ export class MutationExecutor {
     return registration.promise
   }
 
+  /**
+   * The id contract for creates the cache shows before the server answers: every
+   * optimistic item has an id, and the payload sends that same id — an explicit
+   * `optimisticItem` is cache-only, so a payload without it lets the server assign
+   * another and the optimistic row is never replaced.
+   */
+  #assertCreateIdentity(desc: CreateMutationDescriptor): void {
+    const { serviceName } = desc
+    const optimisticItem = resolveCreateOptimisticItem(desc)
+    const items: unknown[] = Array.isArray(optimisticItem) ? optimisticItem : [optimisticItem]
+    const payloads: unknown[] = Array.isArray(desc.data) ? desc.data : [desc.data]
+    if (
+      Array.isArray(optimisticItem) !== Array.isArray(desc.data) ||
+      items.length !== payloads.length
+    ) {
+      throw new Error(
+        `figbird: optimistic creates on "${serviceName}" need one optimistic item per created record`,
+      )
+    }
+    if (items.some(item => this.#peekId(item) === undefined)) {
+      throw new Error(
+        `figbird: optimistic creates on "${serviceName}" need a client-generated id the ` +
+          'server will accept (e.g. crypto.randomUUID()) — provide one in the data, or use ' +
+          'a confirmed create to wait for the server-assigned id.',
+      )
+    }
+    const mismatched = items.some((item, index) => {
+      const payloadId = this.#peekId(payloads[index])
+      return payloadId === undefined || entityKey(payloadId) !== entityKey(this.#peekId(item)!)
+    })
+    if (mismatched) {
+      throw new Error(
+        `figbird: optimistic creates on "${serviceName}" must send the optimistic item's id ` +
+          'in the payload, so the server creates the record the cache already shows.',
+      )
+    }
+  }
+
   /** Register a mutation with an optional transport scheduler. @internal */
   registerMutation(
     desc: MutationDescriptor,
     control?: ScheduledMutationControl,
   ): RegisteredMutation {
     this.#assertActive()
-    const { serviceName, method, optimistic } = desc
+    const { method, optimistic } = desc
     const optimisticItem = method === 'create' ? resolveCreateOptimisticItem(desc) : undefined
     // For creates, track by the client-generated id — this is what lets
     // `useMutating({ id })` cover the create→navigate→act-before-ack window.
@@ -316,16 +348,7 @@ export class MutationExecutor {
     // an optimistic item without a real id has none. Confirmed creates
     // (non-optimistic) are the mode for server-assigned ids: await the create,
     // the server's item carries its identity.
-    if (isOptimistic && method === 'create') {
-      const items: unknown[] = Array.isArray(optimisticItem) ? optimisticItem : [optimisticItem]
-      if (items.some(item => this.#peekId(item) === undefined)) {
-        throw new Error(
-          `figbird: optimistic creates on "${serviceName}" need a client-generated id the ` +
-            'server will accept (e.g. crypto.randomUUID()) — provide one in the data, or use ' +
-            'a confirmed create to wait for the server-assigned id.',
-        )
-      }
-    }
+    if (isOptimistic && method === 'create') this.#assertCreateIdentity(desc)
 
     const args = this.#buildMutationArgs(desc)
 

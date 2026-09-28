@@ -1,4 +1,5 @@
 import { TestClock, flushTasks } from './clock.js'
+import EventEmitter from 'events'
 import test from 'ava'
 import {
   FeathersAdapter,
@@ -293,6 +294,45 @@ test('a created event that lands during a find survives the stale response', asy
   )
   t.deepEqual(ids(ref.getSnapshot()!.data), [1, 2])
   unsub()
+})
+
+test('a subscriber joining a pending in-flight query does not start a second fetch', async t => {
+  const feathers = mockFeathers(
+    { notes: { data: { 1: { id: 1, content: 'one', rank: 1 } } } },
+    { queryAwareFind: true },
+  )
+  const socket = new EventEmitter()
+  Object.assign(feathers, { io: socket })
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+    // Keep the reconnect sweep out of the way: the reconnect only marks queries pending.
+    reconnectJitter: [60_000, 60_000],
+  })
+  const notes = feathers.service('notes')
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial find')
+
+  notes.setDelay(40)
+  ref.refetch()
+  await waitFor(() => notes.counts.find === 2, 'the delayed refetch to start')
+  // The server changes after the in-flight fetch read it; only the follow-up sees it.
+  notes.data = { 1: { id: 1, content: 'changed', rank: 1 } }
+  socket.emit('reconnect')
+
+  const unsubSecond = ref.subscribe(() => {})
+  t.is(notes.counts.find, 2, 'the pending reconcile waits for the in-flight fetch')
+
+  await waitFor(() => notes.counts.find === 3, 'the follow-up fetch')
+  await waitFor(() => !ref.getSnapshot()?.isFetching, 'the follow-up to settle')
+  t.is(notes.counts.find, 3)
+  t.deepEqual(ref.getSnapshot()?.data, [{ id: 1, content: 'changed', rank: 1 }])
+  unsub()
+  unsubSecond()
+  figbird.dispose()
 })
 
 test('a removed event that lands during a find is not resurrected', async t => {

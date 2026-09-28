@@ -77,6 +77,99 @@ test('mutation lanes: a batched projection still settles and refetches after its
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'other client')
 })
 
+test('mutation lanes: realtime that overtakes an acknowledgement keeps the newer state', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    ...services(),
+    notes: {
+      data: {
+        1: { id: 1, content: 'hello', updatedAt: 1 },
+        2: { id: 2, content: 'world', updatedAt: 1 },
+      },
+    },
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  const olderAck = deferred<MockItem>()
+  notes.patch = (() => olderAck.promise) as never
+  const patching = figbird.m.notes.patch(1, { content: 'mine' })
+  notes.emit('patched', { id: 1, content: 'other client', updatedAt: 3 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  olderAck.resolve({ id: 1, content: 'mine', updatedAt: 2 })
+  await patching
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'other client')
+
+  const removedAfterPatch = deferred<MockItem>()
+  notes.patch = (() => removedAfterPatch.promise) as never
+  const patchingRemoved = figbird.m.notes.patch(2, { content: 'mine' })
+  notes.emit('removed', { id: 2, content: 'world', updatedAt: 1 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  removedAfterPatch.resolve({ id: 2, content: 'mine', updatedAt: 2 })
+  await patchingRemoved
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    latest?.data?.map(note => note.id),
+    [1],
+    'the acknowledgement does not resurrect a row removed after the patch',
+  )
+})
+
+test('mutation lanes: the echo of our own remove does not swallow a re-create', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  const createGate = deferred<MockItem>()
+  notes.remove = (() => Promise.resolve({ id: 1, content: 'hello' })) as never
+  notes.create = (() => createGate.promise) as never
+  const removing = figbird.m.notes.remove(1)
+  const recreating = figbird.m.notes.create({ id: 1, content: 'again' })
+  await removing
+  // Feathers acknowledges before it publishes: the remove's echo lands mid-create.
+  notes.emit('removed', { id: 1, content: 'hello' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  createGate.resolve({ id: 1, content: 'again' })
+  await recreating
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'again')
+})
+
+test('mutation lanes: a re-create after a mid-flight removal outranks the older acknowledgement', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  // No updatedAt anywhere, so staleness can't decide; event order must.
+  const ack = deferred<MockItem>()
+  notes.patch = (() => ack.promise) as never
+  const patching = figbird.m.notes.patch(2, { content: 'mine' })
+  notes.emit('removed', { id: 2, content: 'world' })
+  notes.emit('created', { id: 2, content: 'recreated elsewhere' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  ack.resolve({ id: 2, content: 'mine' })
+  await patching
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(latest?.data?.find(note => note.id === 2)?.content, 'recreated elsewhere')
+})
+
 test('mutation lanes: batch create acknowledgements advance lanes opened by later patches', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
@@ -180,8 +273,14 @@ test('mutations: null-id bulk removes apply every returned row', async t => {
   t.deepEqual(latest?.data, [])
 })
 
-test('mutation lanes: explicit optimistic create ids serialize dependent patches', async t => {
+test('mutation lanes: explicit optimistic create items serialize dependent patches', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
   const createGate = deferred<MockItem>()
   const patchGate = deferred<MockItem>()
   const calls: string[] = []
@@ -195,11 +294,16 @@ test('mutation lanes: explicit optimistic create ids serialize dependent patches
   }) as never
 
   const created = figbird.m.notes.create(
-    { content: 'wire create' },
-    { optimisticItem: { id: 10, content: 'optimistic create' } },
+    { id: 10, content: 'wire create' },
+    { optimisticItem: { id: 10, content: 'optimistic create', parentId: 1 } },
   )
   const patched = figbird.m.notes.patch(10, { content: 'dependent patch' })
   t.deepEqual(calls, ['create'])
+  t.like(
+    latest?.data?.find(note => note.id === 10),
+    { content: 'dependent patch', parentId: 1 },
+    'the patch projects over the explicit optimistic item, not the wire payload',
+  )
 
   createGate.resolve({ id: 10, content: 'server create' })
   await created

@@ -1,3 +1,4 @@
+import { servedLimit } from '../adapters/queryPage.js'
 import { sameValue } from './valueEquality.js'
 import { commitQuery } from './queryResults.js'
 /**
@@ -654,7 +655,12 @@ function mergeEventIntoWindow<TMeta>({
   const state = query.state
   if (state.status !== 'success' || !Array.isArray(state.data)) return { action: 'noop' }
 
-  const { limit, skip, compare: cmp } = query.maintenance
+  const { skip, compare: cmp } = query.maintenance
+  // A page the server capped below the requested $limit is full at the cap.
+  const limit =
+    query.maintenance.limit === undefined
+      ? undefined
+      : servedLimit(state.meta, query.maintenance.limit)
   const rows = query.rows.data
   const full = limit !== undefined && rows.length >= limit
   const matches = type !== 'removed' && query.maintenance.matches(item)
