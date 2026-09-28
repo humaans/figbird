@@ -52,7 +52,11 @@ export type WhereClause<TItem> = {
   [K in keyof TItem & string]?: FilterValue<TItem[K]> | FieldOperators<FilterValue<TItem[K]>>
 } & Record<string, unknown>
 
-/** Plain string fields also take a `Date`, which `.where()` sends as its ISO string. */
+/**
+ * Plain string fields also take a `Date`, which `.where()` sends as its ISO timestamp.
+ * That suits timestamp fields; filter date-only fields (`'2025-01-01'`) with
+ * date-only strings, since a timestamp never equals a date and sorts after it.
+ */
 type FilterValue<V> = string extends V ? V | Date : V
 
 /**
@@ -81,12 +85,13 @@ export type QueryAST = QueryOperation & {
 }
 
 /**
- * Replace Date values with their ISO strings — the form they take on the wire and
- * in cached rows. Keeping a Date in the query would make it compare against ISO
- * string rows (which never match) and merge as an empty object.
+ * Replace Date values with their JSON form — the ISO string they take on the wire
+ * and in cached rows (null for an invalid Date, as JSON.stringify does). Keeping a
+ * Date in the query would make it compare against ISO string rows (which never
+ * match) and merge as an empty object.
  */
 function datesToIso(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString()
+  if (value instanceof Date) return value.toJSON()
   if (Array.isArray(value)) return value.map(datesToIso)
   if (
     typeof value === 'object' &&

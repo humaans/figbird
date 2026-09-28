@@ -664,32 +664,44 @@ test('QueryBuilder: where() merges queries', t => {
   t.deepEqual(ast.query, { status: 'open', creatorId: 1 })
 })
 
-test('QueryBuilder: Date filters stay live against ISO string rows', async t => {
+test('QueryBuilder: Date values merge as ISO strings', t => {
+  const { figbird } = createApp()
+  const since = new Date('2025-01-01T00:00:00.000Z')
+
+  t.deepEqual(
+    figbird.q.issues
+      .where({ createdAt: { $gte: since } })
+      .where({ createdAt: since, $or: [{ dueAt: { $in: [since] } }] })
+      .toAST().query,
+    {
+      createdAt: '2025-01-01T00:00:00.000Z',
+      $or: [{ dueAt: { $in: ['2025-01-01T00:00:00.000Z'] } }],
+    },
+    'a later Date value replaces the earlier filter instead of merging as an empty object',
+  )
+})
+
+test('matcher: Date operands match ISO string rows through realtime patches', async t => {
   // The mock server ignores filters here, standing in for a server that matched
   // these rows; the point is what the local matcher does with realtime patches.
+  // A descriptor query reaches the matcher with raw Dates, bypassing .where().
   const { figbird, feathers } = createTestApp(exactQuerySchema, {
     employments: {
       data: {
-        2: { id: 2, personId: 1, effectiveAt: '2025-04-23', title: 'Current role' },
-        3: { id: 3, personId: 2, effectiveAt: '2025-04-23', title: 'Inactive role' },
+        2: { id: 2, personId: 1, effectiveAt: '2025-04-23T09:00:00.000Z', title: 'Current' },
+        3: { id: 3, personId: 2, effectiveAt: '2025-04-24T09:00:00.000Z', title: 'Next' },
       },
     },
   })
   const since = new Date('2025-01-01T00:00:00.000Z')
-
-  t.deepEqual(
-    figbird.q.employments
-      .where({ effectiveAt: { $gte: since } })
-      .where({ effectiveAt: since })
-      .toAST().query,
-    { effectiveAt: '2025-01-01T00:00:00.000Z' },
-    'a later Date value replaces the earlier filter instead of merging as an empty object',
-  )
-
-  const ref = figbird.query(figbird.q.employments.where({ effectiveAt: { $gte: since } }))
+  const ref = figbird.queryDesc({
+    serviceName: 'employments',
+    method: 'find',
+    params: { query: { $or: [{ effectiveAt: { $gte: since } }] } },
+  })
   const unsubscribe = ref.subscribe(() => {})
-  await ref.suspensePromise()
-  const ids = () => (ref.getSnapshot().data as Array<{ id: number }>).map(row => row.id)
+  const ids = () => (ref.getSnapshot()?.data as Array<{ id: number }> | null)?.map(row => row.id)
+  await new Promise(resolve => setTimeout(resolve, 10))
   t.deepEqual(ids(), [2, 3])
 
   await feathers.service('employments').patch(2, { title: 'Renamed' })

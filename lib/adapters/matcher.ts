@@ -18,10 +18,10 @@ export interface PrepareQueryOptions {
 
 function cleanQuery(query: QueryValue, operators: string[], filters: string[]): QueryValue {
   // Rows arrive over the wire with dates as ISO strings, so compare against that
-  // form — a Date operand never matches a string (and would otherwise be rebuilt
-  // below as an empty object).
+  // form (toJSON, as the wire does: an invalid Date becomes null) — a Date operand
+  // never matches a string, and would otherwise be rebuilt below as an empty object.
   if ((query as unknown) instanceof Date) {
-    return (query as unknown as Date).toISOString()
+    return (query as unknown as Date).toJSON()
   } else if (Array.isArray(query)) {
     return query.map(value => cleanQuery(value, operators, filters)) as QueryValue
   } else if (isObject(query)) {
