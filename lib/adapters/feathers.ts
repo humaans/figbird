@@ -967,11 +967,13 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   isItemStale(currItem: unknown, nextItem: unknown): boolean {
-    // Row versions order writes exactly; timestamps are the fallback for rows
-    // written without the version hooks.
+    // Distinct row versions order the writes; timestamps decide rows written
+    // without the version hooks, and ties (a multi-row write shares a version).
     const currVersion = this.#sync?.versionOf(currItem)
     const nextVersion = this.#sync?.versionOf(nextItem)
-    if (currVersion !== undefined && nextVersion !== undefined) return nextVersion < currVersion
+    if (currVersion !== undefined && nextVersion !== undefined && currVersion !== nextVersion) {
+      return nextVersion < currVersion
+    }
 
     const currMs = toEpochMs(this.#getUpdatedAt(currItem))
     const nextMs = toEpochMs(this.#getUpdatedAt(nextItem))

@@ -11,6 +11,7 @@ import {
 import { loadServerOrdering } from '../lib/adapters/feathersSync'
 import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
+import { mockFeathers } from '../lib/testing'
 import {
   figbirdSync,
   hybridClock,
@@ -390,6 +391,12 @@ test('sync reads rows through the caller’s own permissions', async t => {
   t.deepEqual(client.everyone(), ['Ada Lovelace', 'Cy'], 'a row that became hidden leaves')
   t.false(client.figbird.getState().get('people')!.entities.has('4'))
   client.dispose()
+})
+
+test('equal row versions fall through to timestamps', t => {
+  const adapter = new FeathersAdapter(mockFeathers({}), { sync: {} })
+  t.true(adapter.isItemStale({ id: 1, _v: 5, updatedAt: 2 }, { id: 1, _v: 5, updatedAt: 1 }))
+  t.false(adapter.isItemStale({ id: 1, _v: 5, updatedAt: 1 }, { id: 1, _v: 6, updatedAt: 0 }))
 })
 
 test('loadServerOrdering builds a comparator from the server declarations', async t => {
