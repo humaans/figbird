@@ -1072,8 +1072,8 @@ checklist" in the docs that maps each failure mode to its tool.
 
 **Schema-bound hooks, provider-bound runtime.** `createHooks(schema)` is pure: it creates typed
 hooks and the `q` builder without constructing a client. Every generated hook reads the nearest
-`FigbirdProvider`, making the runtime explicit and replaceable for application roots, SSR
-requests, stories, and tests. `useMutations()` returns that same instance's `m` proxy. Code outside
+`FigbirdProvider`, making the runtime explicit and replaceable for application roots, stories,
+and tests. `useMutations()` returns that same instance's `m` proxy. Code outside
 React already has an explicit runtime boundary and uses `figbird.m`, `figbird.prepare`, and other
 instance methods directly. There is no hidden default-instance getter and no second initialization
 path to keep consistent.

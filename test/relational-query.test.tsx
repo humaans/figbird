@@ -1251,7 +1251,7 @@ it('useRelationalQuery: query changes trigger refetch', async t => {
   // Track fetch calls to verify refetch happens
   let fetchCount = 0
   const originalFind = feathers.service('issues').find.bind(feathers.service('issues'))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   feathers.service('issues').find = async (params: any) => {
     fetchCount++
     return originalFind(params)
@@ -1315,7 +1315,7 @@ it('useRelationalQuery: skip option prevents fetch', async t => {
 
   let fetchCount = 0
   const originalFind = feathers.service('issues').find.bind(feathers.service('issues'))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   feathers.service('issues').find = async (params: any) => {
     fetchCount++
     return originalFind(params)
@@ -1347,7 +1347,7 @@ it('useRelationalQuery: refetch function works', async t => {
 
   let fetchCount = 0
   const originalFind = feathers.service('issues').find.bind(feathers.service('issues'))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   feathers.service('issues').find = async (params: any) => {
     fetchCount++
     return originalFind(params)
@@ -1470,7 +1470,7 @@ it('useRelationalQuery: two components share cached data', async t => {
   // Track fetch calls - should only fetch once for shared queries
   let fetchCount = 0
   const originalFind = feathers.service('issues').find.bind(feathers.service('issues'))
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   feathers.service('issues').find = async (params: any) => {
     fetchCount++
     return originalFind(params)
@@ -2311,7 +2311,7 @@ it('suspense: first-mount error throws to ErrorBoundary', async t => {
   // Make the root fetch reject — this should trigger throw to the ErrorBoundary on
   // first mount, not render the fallback nor the component. `.get()` fetches via
   // the resource verb, so break `get`.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   feathers.service('issues').get = async () => {
     throw new Error('boom')
   }
@@ -2383,7 +2383,7 @@ it('suspense: refetch failure keeps previous data, exposes error, clears on reco
   // data (no fallback, no ErrorBoundary) and surface the failure via `error`.
   // `.get()` fetches via the resource verb, so break `get`.
   const originalGet = feathers.service('issues').get
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   feathers.service('issues').get = async () => {
     throw new Error('network down')
   }
@@ -2521,7 +2521,7 @@ it('empty top-level relation does not hang loading', async t => {
   // path on the comments relation. Before the fix, the relation query would never be
   // created (because there's nothing to fetch), yet the snapshot's loading check
   // compared relationQueryRefs.size to ast.related size and hung loading forever.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   feathers.service('issues').find = async () => ({ total: 0, limit: 100, skip: 0, data: [] }) as any
 
   function IssueList() {

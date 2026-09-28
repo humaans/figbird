@@ -110,7 +110,7 @@ export interface FigbirdHooks<S extends Schema, A extends Adapter = Adapter> {
  *
  * The schema is pure configuration, so binding it here has no runtime side
  * effects. Hooks resolve their Figbird instance from `FigbirdProvider`, which
- * lets applications, tests, stories, and SSR requests inject the right runtime.
+ * lets applications, tests, and stories inject the right runtime.
  * Imperative work outside React uses the instance directly (`figbird.m`,
  * `figbird.prepare`, and so on).
  *
