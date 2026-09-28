@@ -735,6 +735,33 @@ test('matcher: Date operands match ISO string rows through realtime patches', as
   unsubscribe()
 })
 
+test('matcher: an optimistic row with a Date field joins a live Date filter immediately', async t => {
+  const { figbird, feathers } = createTestApp(exactQuerySchema, {
+    employments: {
+      data: {
+        2: { id: 2, personId: 1, effectiveAt: '2025-04-23T09:00:00.000Z', title: 'Current' },
+      },
+    },
+  })
+  const since = new Date('2025-01-01T00:00:00.000Z')
+  const ref = figbird.query(figbird.q.employments.where({ effectiveAt: { $gte: since } }))
+  const unsubscribe = ref.subscribe(() => {})
+  await ref.suspensePromise()
+  const ids = () => ref.getSnapshot().data!.map(row => row.id)
+  t.deepEqual(ids(), [2])
+
+  feathers.service('employments').create = (() => new Promise(() => {})) as never
+  void figbird.m.employments.create({
+    id: 4,
+    personId: 1,
+    effectiveAt: new Date('2025-05-01T09:00:00.000Z') as unknown as string,
+    title: 'Next',
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.deepEqual(ids(), [2, 4], 'the pending row matches before the server echoes it')
+  unsubscribe()
+})
+
 test('QueryBuilder: related() adds relation to AST', t => {
   const { figbird } = createApp()
   const { q } = figbird

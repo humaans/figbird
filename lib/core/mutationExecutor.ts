@@ -19,6 +19,7 @@ import {
 } from './mutationQueue.js'
 import type { QueryTelemetry } from './queryTelemetry.js'
 import type { ForeignKey } from './schema.js'
+import { datesToIso } from './wireDates.js'
 import {
   entityKey,
   type ItemId,
@@ -378,7 +379,8 @@ export class MutationExecutor {
     optimistic: boolean,
     control?: ScheduledMutationControl,
   ): RegisteredMutation {
-    const optimisticItem = resolveCreateOptimisticItem(desc)
+    // Dates in wire form, like the lane projections of keyed creates.
+    const optimisticItem = datesToIso(resolveCreateOptimisticItem(desc))
     return this.#registerUnkeyedMutation({
       tracking: {
         serviceName: desc.serviceName,

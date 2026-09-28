@@ -4,6 +4,7 @@
  */
 
 import { hashObject } from './hash.js'
+import { datesToIso } from './wireDates.js'
 import type {
   Schema,
   ServiceNames,
@@ -82,25 +83,6 @@ export type QueryAST = QueryOperation & {
   server?: boolean
   /** Point-in-time result: fetched once, untouched by realtime; refetch() only. */
   snapshot?: boolean
-}
-
-/**
- * Replace Date values with their JSON form — the ISO string they take on the wire
- * and in cached rows (null for an invalid Date, as JSON.stringify does). Keeping a
- * Date in the query would make it compare against ISO string rows (which never
- * match) and merge as an empty object.
- */
-function datesToIso(value: unknown): unknown {
-  if (value instanceof Date) return value.toJSON()
-  if (Array.isArray(value)) return value.map(datesToIso)
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    Object.getPrototypeOf(value) === Object.prototype
-  ) {
-    return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, datesToIso(v)]))
-  }
-  return value
 }
 
 /**
@@ -222,6 +204,8 @@ export class QueryBuilder<
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, K> {
     return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
+      // A Date operand would never match the ISO strings rows carry, and would
+      // merge as an empty object.
       query: deepMerge(this.#state.query, datesToIso(query) as FeathersQuery),
     }) as QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>
   }

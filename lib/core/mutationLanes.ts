@@ -7,6 +7,7 @@ import {
   type ProcessedServerEvent,
   type TraceCause,
 } from './queryTypes.js'
+import { datesToIso } from './wireDates.js'
 
 export const ABSENT = Symbol('figbird.absent')
 export type ProjectedEntity = unknown | typeof ABSENT
@@ -368,12 +369,13 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     return { lane: state, previous, next }
   }
 
+  /** Projections hold Dates in wire form, so they match like the rows the server sends. */
   #applyIntent(current: ProjectedEntity, desc: MutationDescriptor): ProjectedEntity {
     const explicit =
       desc.optimistic !== undefined && desc.optimistic !== true && desc.optimistic !== false
-        ? desc.optimistic
+        ? datesToIso(desc.optimistic)
         : null
-    if (desc.method === 'create') return explicit ?? desc.data
+    if (desc.method === 'create') return explicit ?? datesToIso(desc.data)
     if (desc.method === 'remove') return ABSENT
     if (explicit !== null) return explicit
 
@@ -381,7 +383,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       current !== ABSENT && current && typeof current === 'object'
         ? (current as Record<string, unknown>)
         : null
-    const data = (desc.optimisticPatch ?? desc.data) as Record<string, unknown>
+    const data = datesToIso(desc.optimisticPatch ?? desc.data) as Record<string, unknown>
     if (!currentRecord && this.#getId(data) === undefined) return current
     return { ...(currentRecord ?? {}), ...data }
   }

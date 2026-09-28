@@ -624,6 +624,10 @@ updates immediately and everywhere, and a server error rolls the change back eve
 at once, emitting `mutate:rollback` for observability. Most product surfaces want this
 mode: task lists, inline edits, comments.
 
+The optimistic row stores `Date` values as ISO strings, the form the server's row will
+carry, so it matches date filters the same way before and after the server responds.
+The request payload keeps the `Date` values you passed.
+
 Some surfaces are different. When the user must know the change saved before walking
 away (settings, policies, anything contractual), opt out with the `confirmed` variant.
 It shows the change only once it's real; the cache updates after the server acks:
