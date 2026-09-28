@@ -44,6 +44,7 @@ import {
   type FindQueryConfig,
   type GetQueryConfig,
   type ItemId,
+  type MatchResult,
   type MutationDescriptor,
   type ProcessedProjectionEvent,
   type ProcessedCacheEvent,
@@ -1177,7 +1178,7 @@ export class QueryStore<
     const q = queryOfParams(desc.params)
     if (q && Object.keys(q).length > 0) {
       // classification === 'get' guarantees the conditions are locally evaluable.
-      if (!query.maintenance.matchesLocal(entity)) return null
+      if (query.maintenance.matchesLocal(entity) !== true) return null
     }
 
     return { data: entity } as QueryResponse<unknown, TMeta | undefined>
@@ -1220,7 +1221,11 @@ export class QueryStore<
     // discovered by sibling queries, which must not widen derived local finds.
     for (const id of root.rows.ids) {
       const entity = service.entities.get(id)
-      if (entity !== undefined && matchesLocal(entity)) rows.push(entity)
+      if (entity === undefined) continue
+      const match = matchesLocal(entity)
+      // A row local state can't decide makes the local answer unprovable.
+      if (match === 'unknown') return null
+      if (match) rows.push(entity)
     }
     rows.sort(compare)
     const total = rows.length
@@ -1395,7 +1400,8 @@ export class QueryStore<
             query.desc.method === 'find' &&
             query.config.realtime === 'merge' &&
             !isServerMaintained(query.maintenance.classification) &&
-            !query.maintenance.matches(item)
+            // An undecidable item keeps the server's word for it.
+            query.maintenance.matches(item) === false
           ),
       })
       const nextItemIds = new Set(rebasedResponse.itemIds)
@@ -1897,7 +1903,15 @@ export class QueryStore<
       })
       for (const queryId of selectedQueries) {
         const query = service.queries.get(queryId)
-        if (!query || this.#reapplyMaterializedFind(service, query) !== 'changed') continue
+        if (!query) continue
+        const result = this.#reapplyMaterializedFind(service, query)
+        if (result === 'unavailable') {
+          // A row local state can't decide made the local answer unprovable.
+          reconcileQueryIds.add(queryId)
+          queryEffects?.set(queryId, 'reconcile')
+          continue
+        }
+        if (result !== 'changed') continue
         touch(queryId)
         queryEffects?.set(queryId, 'merged')
       }
@@ -2594,9 +2608,9 @@ export class QueryStore<
     serviceName: string,
     config: QueryConfig<unknown, unknown>,
     filters: Record<string, unknown> | undefined,
-  ): (item: unknown) => boolean {
+  ): (item: unknown) => MatchResult {
     return config.matcher
-      ? (config.matcher(filters as never) as (item: unknown) => boolean)
+      ? (config.matcher(filters as never) as (item: unknown) => MatchResult)
       : (this.#adapter.matcher(filters as TQuery | undefined, undefined, {
           serviceName,
         }) as (item: unknown) => boolean)

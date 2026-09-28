@@ -322,15 +322,21 @@ must be treated as server-window for the same reason any windowed dependency for
 parent server-window: the visible related set isn't the complete set, so a missing match
 might exist outside the window.
 
+Local decisions are three-valued: match, no match, or unknown. Only paths through single-hop
+`one` relations are locally evaluable — they resolve to exactly one row, or to none when the
+FK is null. A null FK is a known absence: the path's predicates are false, and other `$or`
+branches still decide (`$or: [{ priority: 'urgent' }, { 'assignee.role': 'owner' }]` keeps an
+unassigned urgent issue). A related row that isn't cached, or an FK missing from the event, is
+unknown: the store keeps the current result and reconciles the root with the server instead
+of dropping the row or ignoring the create.
+
+Paths through `many`, junction, `embed`, or two-hop `one` relations ask whether _some_ related
+row matches, which needs the complete related set. They classify the root
+server-authoritative (reason `relational-filter` in `explain()`): its own events reconcile it,
+and relevant changes on the related and junction services refetch it.
+
 Open questions:
 
-- The matcher must handle the case where a new parent event arrives but its related entity
-  hasn't been fetched yet. Conservative answer: hold the parent in a pending state until the
-  relation leaf is fetched, then evaluate. This extends today's "fetch missing relation leaf"
-  path with a "membership undecided until leaf arrives" state.
-- `$or` predicates that span parent and relation fields (e.g. "issue.priority === 'urgent' OR
-  issue.assignee.role === 'owner'"). The server can express this; the client matcher needs
-  the same expressivity. v1 can restrict to AND-of-predicates and grow later.
 - Cross-relation filters that span sibling relations (`'assignee.teamId': X AND
 'reviewer.role': 'admin'`). Should work by extension of the same matcher rules; document
   explicitly when implemented.

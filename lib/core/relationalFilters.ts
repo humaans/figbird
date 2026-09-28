@@ -1,4 +1,5 @@
 import type { QueryAST } from './queryBuilder.js'
+import type { ClassificationReason } from './queryClassification.js'
 import type { RelationshipDef, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
 import { entityKey, type ProcessedCacheEvent, type ServiceState } from './queryTypes.js'
@@ -8,6 +9,8 @@ import { entityKey, type ProcessedCacheEvent, type ServiceState } from './queryT
  * `q.issues.where({ 'assignee.teamId': 5 })`. The helpers here:
  *
  * - discover which dotted paths in a query traverse schema relations
+ * - decide which of those the client can evaluate locally (paths through single-hop
+ *   `one` relations); any other path makes the root server-maintained
  * - compute which services/fields the query therefore depends on
  * - materialize a parent item with its related entities (from cache) so the
  *   matcher can evaluate the dotted predicate locally
@@ -83,6 +86,42 @@ function collectRelationalFilterPathsInto(
   }
 }
 
+/**
+ * Whether the client can follow a relation hop from its entity cache: a single-hop
+ * `one` resolves to exactly one row (or none, for a null FK). A `many`, junction,
+ * `embed`, or two-hop `one` filter asks whether *some* related row matches, which
+ * needs the complete related set — only the server has it.
+ */
+function isLocalRelation(relDef: RelationshipDef): boolean {
+  return relDef.cardinality === 'one' && !relDef.via
+}
+
+/**
+ * Relational filter paths the client can't evaluate locally, as classification
+ * reasons. Any reason makes the root server-maintained for membership: its own
+ * realtime events reconcile it with the server, and the relational dependencies
+ * below refetch it when a related service changes.
+ */
+export function relationalFilterServerReasons(
+  schema: Schema,
+  ast: QueryAST,
+): ClassificationReason[] {
+  const reasons: ClassificationReason[] = []
+  for (const { path, field } of collectRelationalFilterPaths(schema, ast.service, ast.query)) {
+    let currentService = ast.service
+    for (const relName of path) {
+      const relDef = schema.relationships?.[currentService]?.[relName]
+      if (!relDef) break
+      if (!isLocalRelation(relDef)) {
+        reasons.push({ code: 'relational-filter', detail: [...path, field].join('.') })
+        break
+      }
+      currentService = relDef.destService
+    }
+  }
+  return reasons
+}
+
 function dedupeRelationalPaths(paths: RelationalFilterPath[]): RelationalFilterPath[] {
   const seen = new Set<string>()
   const deduped: RelationalFilterPath[] = []
@@ -120,9 +159,15 @@ export function collectRelationalFilterDependencies(
     for (let i = 0; i < filterPath.path.length; i++) {
       const relName = filterPath.path[i]!
       const relDef = schema.relationships?.[currentService]?.[relName]
-      if (!relDef || relDef.cardinality !== 'one' || relDef.via) break
+      if (!relDef) break
 
-      add(currentService, [relDef.sourceField])
+      if (relDef.via) {
+        // Two hops: parent → intermediate (junction) → destination.
+        add(currentService, [relDef.via.sourceField])
+        add(relDef.via.destService, [relDef.via.destField, relDef.sourceField])
+      } else {
+        add(currentService, [relDef.sourceField])
+      }
 
       const isLeaf = i === filterPath.path.length - 1
       add(relDef.destService, isLeaf ? [relDef.destField, filterPath.field] : [relDef.destField])
@@ -134,31 +179,20 @@ export function collectRelationalFilterDependencies(
   return Array.from(byService, ([serviceName, fields]) => ({ serviceName, fields }))
 }
 
-export function shouldRefetchRelationalFilterQuery<TMeta extends Record<string, unknown>>(
+export function shouldRefetchRelationalFilterQuery(
   schema: Schema,
-  state: Map<string, ServiceState<TMeta>>,
   ast: QueryAST,
-  // Both derived from the static AST — precomputed once at subscription time by the
+  // Derived from the static AST — precomputed once at subscription time by the
   // caller rather than re-derived on every processed event.
-  paths: RelationalFilterPath[],
   dependencies: RelationalFilterDependency[],
   event: ProcessedCacheEvent,
 ): boolean {
   const dep = dependencies.find(item => item.serviceName === event.serviceName)
   if (!dep) return false
 
-  if (event.serviceName === resolveServicePath(schema, ast.service)) {
-    if (event.type === 'removed') return false
-    if (paths.length === 0) return false
-    const materialized = materializeRelationalFilterItem(
-      schema,
-      state,
-      ast.service,
-      event.item,
-      paths,
-    )
-    return !materialized.complete
-  }
+  // The store decides root rows itself: the relational matcher answers 'unknown'
+  // for a row it can't evaluate, which reconciles the root there.
+  if (event.serviceName === resolveServicePath(schema, ast.service)) return false
 
   if (event.type === 'created' || event.type === 'removed') return true
 
@@ -197,7 +231,9 @@ function materializeRelationPath<TMeta extends Record<string, unknown>>(
   if (!relName || !relDef) return { item, complete: false }
 
   const related = resolveRelatedItem(schema, state, relDef, item)
-  if (!related) return { item, complete: false }
+  if (related === undefined) return { item, complete: false }
+  // A null FK is a known absence: the path's predicates see a null relation.
+  if (related === null) return { item: { ...item, [relName]: null }, complete: true }
 
   const nextRelated =
     rest.length > 0
@@ -217,18 +253,24 @@ function materializeRelationPath<TMeta extends Record<string, unknown>>(
   }
 }
 
+/**
+ * The row a relation hop points at: `null` when the FK is null (known: there is no
+ * related row), `undefined` when local state can't tell — a hop the client can't
+ * follow, an FK missing from the item, or a related row that isn't cached.
+ */
 function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   schema: Schema,
   state: Map<string, ServiceState<TMeta>>,
   relDef: RelationshipDef,
-  item: unknown,
-): unknown | null {
-  if (relDef.cardinality !== 'one' || relDef.via) return null
+  item: Record<string, unknown>,
+): unknown {
+  if (!isLocalRelation(relDef)) return undefined
+  if (item[relDef.sourceField] === null) return null
   const sourceValue = getFieldValue(item, relDef.sourceField)
-  if (sourceValue === undefined) return null
+  if (sourceValue === undefined) return undefined
 
   const destState = state.get(resolveServicePath(schema, relDef.destService))
-  if (!destState) return null
+  if (!destState) return undefined
 
   // Fast path: the entity cache is keyed by adapter id, and destField is nearly always
   // that id field — a direct map hit avoids scanning the whole service. This runs
@@ -250,7 +292,7 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
     }
   }
 
-  return null
+  return undefined
 }
 
 function cloneRecord(value: unknown): Record<string, unknown> {

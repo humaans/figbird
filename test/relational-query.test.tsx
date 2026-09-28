@@ -1940,6 +1940,87 @@ it('realtime: relation-path filters match root events through cached relations',
   unmount()
 })
 
+it('realtime: a filter through a many relation keeps server rows and reconciles root events', async t => {
+  const { App, figbird, feathers } = createApp()
+  const { render, unmount, flush, $all } = dom()
+
+  function Issues() {
+    const issues = useStatusQuery(figbird.q.issues.where({ 'comments.authorId': 1 }))
+    if (issues.status !== 'success') return <div>Loading</div>
+    return (
+      <ul>
+        {issues.data.map(issue => (
+          <li key={issue.id} className='issue'>
+            {issue.title}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  render(
+    <App>
+      <Issues />
+    </App>,
+  )
+  await flush()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'First issue, renamed' })
+  await flush()
+
+  t.deepEqual(
+    $all('.issue').map(node => node.innerHTML),
+    ['First issue, renamed', 'Second issue', 'Third issue'],
+  )
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the root reconciles with the server')
+
+  unmount()
+})
+
+it('realtime: a null FK is a known absence, so the other $or branch keeps the row', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, {
+    issues: { data: { 1: { id: 1, title: 'Unassigned', status: 'open', creatorId: null } } },
+    users: { data: {} },
+  })
+  const { render, unmount, flush, $all } = dom()
+
+  function Issues() {
+    const issues = useStatusQuery(
+      figbird.q.issues.where({ $or: [{ status: 'open' }, { 'creator.name': 'Alice' }] }),
+    )
+    if (issues.status !== 'success') return <div>Loading</div>
+    return (
+      <ul>
+        {issues.data.map(issue => (
+          <li key={issue.id} className='issue'>
+            {issue.title}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  render(
+    <App>
+      <Issues />
+    </App>,
+  )
+  await flush()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Still unassigned' })
+  await flush()
+
+  t.deepEqual(
+    $all('.issue').map(node => node.innerHTML),
+    ['Still unassigned'],
+  )
+  t.is(feathers.service('issues').counts.find, findCount, 'decided locally, no refetch')
+
+  unmount()
+})
+
 it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
   interface FilterDocument {
     id: number

@@ -3,9 +3,11 @@ import {
   explainQueryNode,
   planRootPagination,
   rootAllPages,
+  rootServerReasons,
   type ExplainNode,
   type QueryNodeClass,
 } from './queryClassification.js'
+import { relationalFilterServerReasons } from './relationalFilters.js'
 import { resolveServicePath, type RelationshipDef, type Schema } from './schema.js'
 import type { FindDescriptor, FindQueryConfig } from './queryTypes.js'
 
@@ -126,13 +128,18 @@ export function explainQuery(
   hasNativePagination: (serviceName: string) => boolean,
 ): ExplainNode[] {
   const snapshot = Boolean(ast.snapshot)
+  const rootReasons = rootServerReasons(
+    Boolean(ast.server),
+    relationalFilterServerReasons(schema, ast),
+  )
   const pagination =
     ast.kind === 'paginate'
-      ? planRootPagination(hasNativePagination(ast.service), Boolean(ast.server))
+      ? planRootPagination(hasNativePagination(ast.service), rootReasons)
       : null
+  const serverReasons = pagination?.serverReasons ?? rootReasons
   const root = explainQueryNode(ast.query, {
-    server: pagination?.server ?? ast.server,
-    ...(pagination ? { serverReasons: pagination.serverReasons } : {}),
+    server: serverReasons.length > 0,
+    serverReasons,
     allPages: rootAllPages(ast.kind),
     localOperators: localOperatorsFor(ast.service),
     snapshot,

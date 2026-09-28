@@ -5,10 +5,11 @@ import { hashObject } from './hash.js'
 import type { MatcherContext, PageSource } from '../adapters/adapter.js'
 import { cursorQueryCanKeepPrefix, cursorQueryInputsUnchanged } from './cursorMaintenance.js'
 import type { QueryAST } from './queryBuilder.js'
-import { planRootPagination, rootAllPages } from './queryClassification.js'
+import { planRootPagination, rootAllPages, rootServerReasons } from './queryClassification.js'
 import type { QueryRef } from './queryRef.js'
 import type { QueryLifecycleConfig } from './queryIdentity.js'
 import type {
+  MatchResult,
   ProcessedProjectionEvent,
   ProcessedCacheEvent,
   QueryConfig,
@@ -40,6 +41,7 @@ import {
   collectRelationalFilterPaths,
   hasRelationalFilter,
   materializeRelationalFilterItem,
+  relationalFilterServerReasons,
   shouldRefetchRelationalFilterQuery,
 } from './relationalFilters.js'
 import type { AnySchema, Schema } from './schema.js'
@@ -947,16 +949,22 @@ export class RelationalQueryRef<
     const matcherConfig = hasRelationalFilter(this.#schema, this.#ast)
       ? { matcher: this.#createRelationalMatcher(this.#ast) }
       : {}
+    // `.server()`, or relational filters the client can't evaluate locally.
+    const rootReasons = rootServerReasons(
+      Boolean(this.#ast.server),
+      relationalFilterServerReasons(this.#schema, this.#ast),
+    )
+    const server = rootReasons.length > 0
 
     if (this.#ast.kind === 'paginate') {
       const { pageSize, includeTotal } = this.#ast
       const pageSource = this.#host.adapter.pageSource?.(serviceName)
-      const paginationPlan = planRootPagination(pageSource !== undefined, Boolean(this.#ast.server))
+      const paginationPlan = planRootPagination(pageSource !== undefined, rootReasons)
       const sequential = paginationPlan.kind === 'sequential'
       const cursorRealtime =
         sequential &&
         pageSource?.cursorStability === 'ordering' &&
-        !this.#ast.server &&
+        !server &&
         !this.#ast.snapshot &&
         cursorQueryCanKeepPrefix(this.#ast.query)
           ? {
@@ -969,7 +977,7 @@ export class RelationalQueryRef<
                   if (event.serviceName === serviceName) fn()
                 }),
               canKeepPrefix: (event: ProcessedCacheEvent) =>
-                !this.#ast.server &&
+                !server &&
                 (event.type === 'patched' || event.type === 'updated') &&
                 event.previousItem !== null &&
                 cursorQueryInputsUnchanged(this.#ast.query, event.previousItem, event.item),
@@ -984,7 +992,7 @@ export class RelationalQueryRef<
           ? 'manual'
           : sequential && !cursorRealtime
             ? 'reconcile'
-            : this.#ast.server
+            : server
               ? 'reconcile'
               : 'merge-or-reconcile',
         staleTime: this.#staleTime,
@@ -1059,7 +1067,7 @@ export class RelationalQueryRef<
         // unfiltered, success marks the service fully materialized.
         ...(rootAllPages(this.#ast.kind) ? { allPages: true } : {}),
         ...(this.#ast.kind !== 'get' ? matcherConfig : {}),
-        ...(this.#ast.server ? { server: true } : {}),
+        ...(server ? { server: true } : {}),
         ...this.#rootOverride?.config,
       }),
       onRows,
@@ -1382,14 +1390,7 @@ export class RelationalQueryRef<
     )
 
     const affectsFilter = (event: ProcessedCacheEvent) =>
-      shouldRefetchRelationalFilterQuery(
-        this.#schema,
-        this.#host.getState(),
-        this.#ast,
-        paths,
-        dependencies,
-        event,
-      )
+      shouldRefetchRelationalFilterQuery(this.#schema, this.#ast, dependencies, event)
 
     const unsubscribeEvents = this.#host.queryStore.subscribeToProcessedEvents(event => {
       if (!affectsFilter(event)) return
@@ -1431,7 +1432,7 @@ export class RelationalQueryRef<
     })
   }
 
-  #createRelationalMatcher(ast: QueryAST): (query: unknown) => (item: unknown) => boolean {
+  #createRelationalMatcher(ast: QueryAST): (query: unknown) => (item: unknown) => MatchResult {
     return query => {
       const match = this.#host.adapter.matcher(query as TQuery | undefined, undefined, {
         serviceName: resolveServicePath(this.#schema, ast.service),
@@ -1446,7 +1447,7 @@ export class RelationalQueryRef<
           item,
           paths,
         )
-        return materialized.complete ? match(materialized.item) : false
+        return materialized.complete ? match(materialized.item) : 'unknown'
       }
     }
   }

@@ -353,6 +353,8 @@ function applyMergeEventToQuery<TMeta>(
   }
 
   const matches = type !== 'removed' && query.maintenance.matches(item)
+  // Local state can't decide the item: leave the result as it is and ask the server.
+  if (matches === 'unknown') return 'reconcile'
   const hasItem = service.itemQueryIndex.get(itemId)?.has(queryId) ?? false
   if (hasItem) {
     return applyVisibleEventEffect(context, queryId, event, matches ? 'replace' : 'remove')
@@ -502,19 +504,26 @@ export function reapplyQueryFromEntities<TMeta>({
   if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
   if (!Array.isArray(query.state.data)) return 'ignored'
 
-  const candidates = new Map<EntityKey, { id: EntityKey; item: unknown }>()
-  for (const [storedId, item] of service.entities) {
-    const incomingId = getId(item)
-    if (incomingId === undefined || !query.maintenance.matches(item)) continue
-    candidates.set(storedId, { id: storedId, item })
-  }
-
   const previousRows = query.rows.data
   const previousKeys = new Set<EntityKey>()
   for (const item of previousRows) {
     const itemId = getId(item)
     if (itemId === undefined) continue
     previousKeys.add(entityKey(itemId))
+  }
+
+  // Rows local state can't decide keep their current membership, and the query
+  // reconciles with the server once the rebuild is committed.
+  let undecided = false
+  const candidates = new Map<EntityKey, { id: EntityKey; item: unknown }>()
+  for (const [storedId, item] of service.entities) {
+    const incomingId = getId(item)
+    if (incomingId === undefined) continue
+    const match = query.maintenance.matches(item)
+    if (match === 'unknown') undecided = true
+    if (match === true || (match === 'unknown' && previousKeys.has(storedId))) {
+      candidates.set(storedId, { id: storedId, item })
+    }
   }
 
   const retainedKeys = new Set<EntityKey>()
@@ -540,7 +549,9 @@ export function reapplyQueryFromEntities<TMeta>({
   const dataChanged =
     previousRows.length !== nextRows.length ||
     previousRows.some((item, index) => item !== nextRows[index])
-  if (!dataChanged && added.length === 0 && removed.length === 0) return 'ignored'
+  if (!dataChanged && added.length === 0 && removed.length === 0) {
+    return undecided ? 'reconcile' : 'ignored'
+  }
 
   let meta = query.state.meta
   for (let index = 0; index < added.length; index += 1) meta = itemAdded(meta)
@@ -550,7 +561,7 @@ export function reapplyQueryFromEntities<TMeta>({
     state: { ...query.state, data: nextRows, meta },
   })
   touch(queryId)
-  return 'applied'
+  return undecided ? 'reconcile' : 'applied'
 }
 
 /** Replay in-flight events over one fetched query without changing disabled snapshots. */
@@ -677,6 +688,8 @@ function mergeEventIntoWindow<TMeta>({
     previousItem != null
       ? query.maintenance.matches(previousItem)
       : type === 'removed' && query.maintenance.matches(item)
+  // Membership local state can't decide is unprovable by definition.
+  if (matches === 'unknown' || wasMember === 'unknown') return { action: 'refetch' }
 
   if (!hasItem) {
     if (!matches) {

@@ -302,7 +302,7 @@ You can also filter parents by a field on a related entity, with a dotted path:
 q.issues.where({ 'creator.teamId': 5 })
 ```
 
-The server resolves the join; on the client, Figbird's matcher evaluates the path against the entity cache so realtime events keep the result fresh.
+The server resolves the join; on the client, Figbird's matcher evaluates the path against the entity cache so realtime events keep the result fresh. When it can't decide a row (the related row isn't cached), it refetches the root instead of guessing. Paths through `many`, junction, or `embed` relations are left to the server: the root is server-authoritative, and realtime changes on the involved services refetch it.
 
 ## Suspense
 
@@ -2232,7 +2232,8 @@ automatically, via `swr` + classification-driven realtime):
 - `retry` — failed fetches to retry before exposing the error; `false` disables retries
 - `retryDelay` — fixed delay in milliseconds between retries
 - `allPages` — fetch all pages (`parallel` + `parallelLimit` control concurrency)
-- `matcher` — custom `(query) => (item) => boolean` for realtime merging
+- `matcher` — custom `(query) => (item) => boolean | 'unknown'` for realtime merging;
+  `'unknown'` keeps the result as is and refetches it
 - `matcherKey` — opt into sharing equivalent custom-matcher queries across hooks;
   without it, matcher queries remain hook-scoped
 
