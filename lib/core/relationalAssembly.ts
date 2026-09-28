@@ -44,10 +44,22 @@ export function uniqueSourceValues(
  * carry an array of `string | number` at `field`; non-array or missing values become
  * `undefined` so callers can treat them as "no edges from this parent".
  */
-export function getFieldValueAsList(item: unknown, field: string): (string | number)[] | undefined {
+function getFieldValueAsList(item: unknown, field: string): (string | number)[] | undefined {
   const value = (item as Record<string, unknown>)[field]
   if (!Array.isArray(value)) return undefined
   return value.filter((v): v is string | number => typeof v === 'string' || typeof v === 'number')
+}
+
+/**
+ * The ids an `embed` relation reads from a parent's list: all of them, or the prefix
+ * an unfiltered list window needs.
+ */
+export function embeddedIds(
+  item: unknown,
+  plan: Pick<Exclude<RelationPlan, { kind: 'missing' }>, 'definition' | 'listWindow'>,
+): (string | number)[] | undefined {
+  const list = getFieldValueAsList(item, plan.definition.sourceField)
+  return list && plan.listWindow ? list.slice(0, plan.listWindow.fetchEnd) : list
 }
 
 /** Stable key for a parent source value (used by per-parent windowed relations). */
@@ -184,11 +196,6 @@ function collectOrders(
   return orders
 }
 
-function inListOrder(ids: (string | number)[], rows: unknown[], destField: string): unknown[] {
-  const byKey = firstMatchIndex(rows, destField)
-  return ids.flatMap(id => (byKey.has(id) ? [byKey.get(id)] : []))
-}
-
 // First match wins — mirrors a linear scan's short-circuit semantics.
 function firstMatchIndex(items: unknown[], destField: string): Map<string | number, unknown> {
   const byKey = new Map<string | number, unknown>()
@@ -251,12 +258,8 @@ function assembleRelations(
       if (rel?.kind === 'perParent') {
         const source = perParentSource(item, relDef)
         const rows = source ? (rel.byParent.get(source.key) ?? []) : []
-        // Each parent's window arrives in server order; an unsorted embed window
-        // keeps the parent's id-list order instead.
-        matchedItems =
-          source && typeof source.filter === 'object' && !plan.sort
-            ? inListOrder(source.filter.$in, rows, relDef.destField)
-            : rows
+        // Each parent's window arrives in server order.
+        matchedItems = rows
         if (relDef.cardinality === 'one') {
           let found: unknown = matchedItems[0] ?? null
           if (hasNested && found) {
@@ -266,7 +269,7 @@ function assembleRelations(
           continue
         }
       } else if (relDef.cardinality === 'embedded') {
-        const sourceList = getFieldValueAsList(item, relDef.sourceField)
+        const sourceList = embeddedIds(item, plan)
         matchedItems = []
         if (sourceList) {
           // Walk the parent's id list (preserves the server-chosen order) and look up
@@ -277,6 +280,9 @@ function assembleRelations(
           }
         }
         matchedItems = inOrder(matchedItems, context.orders.get(key))
+        if (plan.listWindow) {
+          matchedItems = matchedItems.slice(plan.listWindow.start, plan.listWindow.end)
+        }
       } else if (relDef.via) {
         // Two-hop: walk this parent's junction rows, then collect dest items keyed
         // by the junction's outgoing FK.

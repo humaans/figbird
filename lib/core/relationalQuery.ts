@@ -31,7 +31,7 @@ import {
 } from './queryRoots.js'
 import {
   createRelationAssembler,
-  getFieldValueAsList,
+  embeddedIds,
   perParentSource,
   sourceSet,
   uniqueSourceValues,
@@ -1123,7 +1123,7 @@ export class RelationalQueryRef<
     if (relDef.cardinality === 'embedded') {
       const all: (string | number)[] = []
       for (const item of parentData) {
-        const list = getFieldValueAsList(item, relDef.sourceField)
+        const list = embeddedIds(item, plan)
         if (list) for (const v of list) all.push(v)
       }
       query.sync(sourceSet(all).values)

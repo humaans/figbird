@@ -4740,6 +4740,44 @@ it('junction and embed: orderBy holds when new destination ids arrive in a later
   unmount()
 })
 
+it('embed: an unsorted window slices each id list in one batched fetch', async t => {
+  const { App, figbird, feathers } = createEmbedApp()
+  const { render, unmount, flush, $ } = dom()
+  const people = feathers.service('people')
+  const find = people.find.bind(people)
+  const requested: unknown[] = []
+  people.find = (params => {
+    requested.push(params?.query?.id)
+    return find(params)
+  }) as typeof find
+
+  function Previews() {
+    const first = useQuery(figbird.q.roles.related('membersPreview', p => p.limit(1)))
+    const filtered = useQuery(
+      figbird.q.roles.related('membersPreview', p => p.where({ name: 'Dan' }).limit(1)),
+    )
+    const names = (roles: typeof first) =>
+      roles.map(role => role.membersPreview.map(p => p.name).join(',')).join('|')
+    return <div className='previews' data-first={names(first)} data-filtered={names(filtered)} />
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Previews />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  // Role 1 lists [3, 1, 4] and role 2 lists [2]; the window is the head of each list,
+  // after the filter when there is one.
+  t.is($('.previews')!.getAttribute('data-first'), 'Cara|Bob|')
+  t.is($('.previews')!.getAttribute('data-filtered'), 'Dan||')
+  t.deepEqual(requested, [{ $in: [2, 3] }, { $in: [1, 2, 3, 4] }])
+  unmount()
+})
+
 it('junction: empty parent set (no find match) resolves with no junction fetch needed', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, $ } = dom()

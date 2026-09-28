@@ -29,6 +29,12 @@ interface PlannedRelation {
   definition: RelationshipDef
   /** The refinement's or definition's `$sort`, which each parent's items follow. */
   sort: Record<string, number> | null
+  /**
+   * An unsorted `embed` window, applied to each parent's list in assembly. Parents
+   * read their ids up to `fetchEnd`, and the matched items are sliced to
+   * `[start, end)`; a filtered window reads the whole list, as any id may not match.
+   */
+  listWindow: { start: number; end: number | undefined; fetchEnd: number | undefined } | null
   children: RelationPlan[]
   destination: RelationQueryPlan
 }
@@ -66,6 +72,27 @@ function queryPlan(
   }
 }
 
+function embedWindow(query: Record<string, unknown>): NonNullable<PlannedRelation['listWindow']> {
+  const start = (query.$skip as number | undefined) ?? 0
+  const limit = query.$limit as number | undefined
+  const end = limit === undefined ? undefined : start + limit
+  const filtered = Object.keys(query).some(
+    key => key !== '$limit' && key !== '$skip' && key !== '$select',
+  )
+  return { start, end, fetchEnd: filtered ? undefined : end }
+}
+
+/** A list window is applied in assembly, so its destination fetch carries none. */
+function unwindowed(
+  query: Record<string, unknown>,
+  listWindow: PlannedRelation['listWindow'],
+): Record<string, unknown> {
+  if (!listWindow) return query
+  return Object.fromEntries(
+    Object.entries(query).filter(([key]) => key !== '$limit' && key !== '$skip'),
+  )
+}
+
 /** Resolve immutable schema/AST decisions once; only source values vary at runtime. */
 export function compileRelations(
   ast: QueryAST,
@@ -78,12 +105,17 @@ export function compileRelations(
     const definition = schema.relationships?.[ast.service]?.[name]
     if (!definition) return { kind: 'missing', key, name, service: ast.service }
     const query = { ...child.query, ...definition.query }
-    // A window applies to each parent, so it can't ride on one shared `$in` fetch.
-    // The builder rejects windows on junction relations, which have no per-parent find.
-    const windowed = '$limit' in query || '$skip' in query
-    const strategy = definition.via ? 'junction' : windowed ? 'perParent' : 'fanIn'
-    const allPages = !windowed
     const explicitSort = (query.$sort as Record<string, number> | undefined) ?? null
+    const windowed = '$limit' in query || '$skip' in query
+    // An unsorted embed window follows each parent's list order, so it is a slice of
+    // the list: one shared `$in` fetch, windowed per parent in assembly.
+    const listWindow =
+      windowed && definition.cardinality === 'embedded' && !explicitSort ? embedWindow(query) : null
+    // Other windows apply to each parent, so they can't ride on one shared `$in` fetch.
+    // The builder rejects windows on junction relations, which have no per-parent find.
+    const perParent = windowed && !listWindow
+    const strategy = definition.via ? 'junction' : perParent ? 'perParent' : 'fanIn'
+    const allPages = !perParent
     const sort =
       strategy !== 'perParent' &&
       !explicitSort &&
@@ -95,13 +127,14 @@ export function compileRelations(
       key,
       definition,
       sort: explicitSort,
+      listWindow,
       children: compileRelations(child, schema, realtime, key),
       destination: queryPlan(
         schema,
         definition.destService,
         definition.destField,
-        { ...child.query, ...sort },
-        definition.query ?? {},
+        { ...unwindowed(child.query, listWindow), ...sort },
+        unwindowed(definition.query ?? {}, listWindow),
         {
           realtime,
           fetchPolicy: 'swr',
