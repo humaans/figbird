@@ -1010,10 +1010,17 @@ export class QueryStore<
 
     try {
       const local = this.#tryLocalGet(query) ?? this.#selectMaterializedFind(query)
-      const result = await (local ?? this.#fetch(queryId))
+      const answered = await (local ?? this.#fetch(queryId))
       const endedAt = this.#clock.now()
       const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
+      // A local answer is read again at commit: a materialized root that committed
+      // during the await (this query still loading, so not maintained by it) would
+      // otherwise be overwritten by the older answer.
+      const result =
+        local && current
+          ? (this.#tryLocalGet(current) ?? this.#selectMaterializedFind(current) ?? answered)
+          : answered
       if (current && this.#executions.get(queryId) === execution) {
         const journal = this.#fetchEventJournal.read(journalCursor)
         if (journal.overflowed) {
