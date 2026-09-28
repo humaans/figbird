@@ -15,6 +15,7 @@ interface Chunk<TMeta extends Record<string, unknown>> {
 }
 
 export interface ChunkedRelationSnapshot {
+  /** `loading` until every chunk has settled; `error` if any settled chunk failed. */
   status: 'ready' | 'loading' | 'error'
   /** Rows of every resolved chunk, in chunk order. Identity is stable while they are. */
   rows: unknown[]
@@ -79,10 +80,12 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
     for (const { queryRef } of this.#chunks) {
       const state = queryRef.getSnapshot()
       if (!state || state.status === 'loading') {
-        if (status === 'ready') status = 'loading'
+        status = 'loading'
         isFetching = true
       } else if (state.status === 'error') {
-        status = 'error'
+        // A chunk still loading outranks a failed one: the hop settles once every
+        // chunk has, and the error rides along until then.
+        if (status === 'ready') status = 'error'
         error ??= state.error
       } else {
         error ??= state.error
@@ -94,13 +97,14 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
   }
 
   /**
-   * Rows of the currently referenced ids across every chunk, or null while any chunk
-   * has yet to produce data. Nested relations sync from these, so ids that left a
-   * still-referenced chunk stop driving them.
+   * Rows of the currently referenced ids across every resolved chunk, or null while
+   * any chunk has yet to settle. Nested relations sync from these, so ids that left
+   * a still-referenced chunk stop driving them, and a failed chunk (whose error the
+   * snapshot reports) doesn't hold back its healthy siblings.
    */
   readyRows(): unknown[] | null {
     const snapshot = this.snapshot()
-    if (snapshot.status !== 'ready') return null
+    if (snapshot.status === 'loading') return null
     const live = this.#live
     if (this.#chunks.every(chunk => chunk.values.every(value => live.has(value)))) {
       return snapshot.rows

@@ -1419,6 +1419,63 @@ it('useQuery: ids that leave a still-live chunk stop driving nested relations', 
   unmount()
 })
 
+it('useQuery: an errored chunk does not stop nested relations of healthy chunks', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'First', status: 'open', creatorId: 1 } } },
+      comments: { data: { 1: { id: 1, issueId: 1, authorId: 1, body: 'Hi' } } },
+      users: { data: {} },
+      reactions: { data: {} },
+    },
+    { queryAwareFind: true },
+  )
+  const comments = feathers.service('comments')
+  const find = comments.find.bind(comments)
+  comments.find = (params => {
+    const issueId = params?.query?.issueId as { $in: number[] }
+    return issueId.$in.includes(2) ? Promise.reject(new Error('chunk failed')) : find(params)
+  }) as typeof find
+
+  function Issues() {
+    const { data, error } = useQueryResult(
+      figbird.q.issues.related('comments', c => c.related('reactions')),
+    )
+    return <div className='issues' data-error={error?.message ?? ''} data-count={data.length} />
+  }
+
+  const reactionChunks = () =>
+    figbird
+      .inspect()
+      .filter(row => row.serviceName === 'reactions' && row.subscriberCount > 0)
+      .map(row => (row.query as { commentId: { $in: number[] } }).commentId.$in)
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.deepEqual(reactionChunks(), [[1]])
+
+  // Issue 2's comments chunk fails; issue 1's chunk keeps syncing its nested relations.
+  await flush(async () => {
+    await feathers
+      .service('issues')
+      .create({ id: 2, title: 'Second', status: 'open', creatorId: 1 })
+  })
+  await flush(async () => {
+    await comments.create({ id: 3, issueId: 1, authorId: 1, body: 'New' })
+  })
+  t.is($('.issues')!.getAttribute('data-count'), '2')
+  t.is($('.issues')!.getAttribute('data-error'), 'chunk failed')
+  t.deepEqual(reactionChunks(), [[1], [3]])
+  unmount()
+})
+
 it('useRelationalQuery: query changes trigger refetch', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()
