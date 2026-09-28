@@ -40,9 +40,9 @@ import {
 import {
   collectRelationalFilterDependencies,
   collectRelationalFilterPaths,
+  createRelationalFilterMatcher,
   getFieldValue,
   hasRelationalFilter,
-  materializeRelationalFilterItem,
   relationalFilterServerReasons,
   shouldRefetchRelationalFilterQuery,
 } from './relationalFilters.js'
@@ -1355,23 +1355,16 @@ export class RelationalQueryRef<
   }
 
   #createRelationalMatcher(ast: QueryAST): (query: unknown) => (item: unknown) => MatchResult {
-    return query => {
-      const match = this.#host.adapter.matcher(query as TQuery | undefined, undefined, {
-        serviceName: resolveServicePath(this.#schema, ast.service),
-      })
-      const paths = collectRelationalFilterPaths(this.#schema, ast.service, query)
-      return item => {
-        if (paths.length === 0) return match(item)
-        const materialized = materializeRelationalFilterItem(
-          this.#schema,
-          this.#host.getState(),
-          ast.service,
-          item,
-          paths,
-        )
-        return materialized.complete ? match(materialized.item) : 'unknown'
-      }
-    }
+    const serviceName = resolveServicePath(this.#schema, ast.service)
+    return query =>
+      createRelationalFilterMatcher(
+        this.#schema,
+        () => this.#host.getState(),
+        ast.service,
+        query,
+        filters =>
+          this.#host.adapter.matcher(filters as TQuery | undefined, undefined, { serviceName }),
+      )
   }
 
   #notifyListeners(): void {

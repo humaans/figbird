@@ -2301,6 +2301,39 @@ it('realtime: related-service bursts reconcile a relation-filtered root through 
   unsub()
 })
 
+it('realtime: root-only predicates decide rows whose related row is not cached', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'Open', status: 'open', creatorId: 1 } } },
+      users: { data: { 1: { id: 1, name: 'Alice', email: 'alice@example.com' } } },
+    },
+    { queryAwareFind: true },
+  )
+  // No query fetches users, so creator rows are never cached.
+  const closedByBob = figbird.query(
+    figbird.q.issues.where({ status: 'closed', 'creator.name': 'Bob' }),
+  )
+  const openOrBob = figbird.query(
+    figbird.q.issues.where({ $or: [{ status: 'open' }, { 'creator.name': 'Bob' }] }),
+  )
+  const unsubs = [closedByBob.subscribe(() => {}), openOrBob.subscribe(() => {})]
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').create({ id: 2, title: 'New', status: 'open', creatorId: 1 })
+  await flushTasks()
+
+  t.deepEqual(
+    (openOrBob.getSnapshot().data as Issue[]).map(issue => issue.id),
+    [1, 2],
+    'the open branch admits the create locally',
+  )
+  t.is(feathers.service('issues').counts.find, findCount, 'neither query needs the server')
+
+  for (const unsub of unsubs) unsub()
+})
+
 it('realtime: a null FK is a known absence, so the other $or branch keeps the row', async t => {
   const { App, figbird, feathers } = createTestApp(schema, {
     issues: { data: { 1: { id: 1, title: 'Unassigned', status: 'open', creatorId: null } } },

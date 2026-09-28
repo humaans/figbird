@@ -328,7 +328,10 @@ FK is null. A null FK is a known absence: the path's predicates are false, and o
 branches still decide (`$or: [{ priority: 'urgent' }, { 'assignee.role': 'owner' }]` keeps an
 unassigned urgent issue). A related row that isn't cached, or an FK missing from the event, is
 unknown: the store keeps the current result and reconciles the root with the server instead
-of dropping the row or ignoring the create.
+of dropping the row or ignoring the create. An unknown predicate leaves the item unknown only
+when it could change the answer — the matcher evaluates the query with every undecided predicate
+true and with every one false, and the item is decided when both agree (`{ state: 'closed',
+'assignee.role': 'owner' }` rejects an open issue whatever its assignee).
 
 Paths through `many`, junction, `embed`, or two-hop `one` relations ask whether _some_ related
 row matches, which needs the complete related set. They classify the root
