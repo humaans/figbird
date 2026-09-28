@@ -1296,6 +1296,58 @@ it('useQuery: sorted many relations batch all pages and retain nested live data'
   unmount()
 })
 
+it('useQuery: large relation id sets are fetched in bounded $in chunks', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const ids = Array.from({ length: 250 }, (_, index) => index + 1)
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, title: `Issue ${id}`, status: 'open', creatorId: id }]),
+        ),
+      },
+      users: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, name: `User ${id}`, email: `${id}@example.com` }]),
+        ),
+      },
+    },
+    { queryAwareFind: true },
+  )
+  const users = feathers.service('users')
+  const find = users.find.bind(users)
+  const inSizes: number[] = []
+  users.find = (params => {
+    const id = params?.query?.id as { $in: unknown[] }
+    inSizes.push(id.$in.length)
+    return find(params)
+  }) as typeof find
+
+  function Issues() {
+    const issues = useQuery(figbird.q.issues.limit(250).related('creator'))
+    return (
+      <div
+        className='issues'
+        data-resolved={issues.filter(issue => issue.creator?.id === issue.creatorId).length}
+      />
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  t.is($('.issues')!.getAttribute('data-resolved'), '250')
+  t.deepEqual(inSizes, [100, 100, 50])
+  unmount()
+})
+
 it('useRelationalQuery: query changes trigger refetch', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createApp()

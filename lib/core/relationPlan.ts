@@ -13,7 +13,7 @@ import type { FindDescriptor, FindQueryConfig } from './queryTypes.js'
 
 type RelationValue = string | number
 
-interface RelationQueryPlan {
+export interface RelationQueryPlan {
   service: string
   query: Record<string, unknown>
   descriptor(value: RelationValue | { $in: RelationValue[] }): FindDescriptor
