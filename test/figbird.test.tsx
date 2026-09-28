@@ -1622,8 +1622,9 @@ it('useFind - fetchPolicy network-only', async t => {
     renderNote(true)
   })
 
-  // a 2nd find happened in the background
-  t.is(feathers.service('notes').counts.find, 3) // re-mounting in <StrictMode /> double subscribes
+  // a 2nd find happened in the background — exactly one, even though remounting in
+  // <StrictMode /> subscribes, unsubscribes, and resubscribes the hook-scoped query
+  t.is(feathers.service('notes').counts.find, 2)
 
   // we see no notes since we're still fetching
   // cache was not used
@@ -1872,6 +1873,9 @@ it('useFind - state sequencing for fetchPolicy swr', async t => {
 
     const { data, status, isFetching } = notes
     useEffect(() => {
+      // StrictMode replays mount effects on React 18; record each state once.
+      const last = seq.at(-1)
+      if (last?.data === data && last.status === status && last.isFetching === isFetching) return
       seq.push({ data, status, isFetching })
     }, [data, status, isFetching])
 
@@ -1940,6 +1944,9 @@ it('useFind - state sequencing for fetchPolicy network-only', async t => {
 
     const { data, status, isFetching } = notes
     useEffect(() => {
+      // StrictMode replays mount effects on React 18; record each state once.
+      const last = seq.at(-1)
+      if (last?.data === data && last.status === status && last.isFetching === isFetching) return
       seq.push({ data, status, isFetching })
     }, [data, status, isFetching])
 
@@ -2344,6 +2351,7 @@ it('legacy useMutation preserves concurrent transport behavior', async t => {
   const { render, flush, unmount, $all } = dom()
   const { App, useFind, useMutation, feathers } = app()
   let hasFiredMutations = false
+  let mutations: Promise<unknown>[] = []
 
   // Add delays to simulate network latency
   const originalPatch = feathers.service('notes').patch.bind(feathers.service('notes'))
@@ -2368,8 +2376,10 @@ it('legacy useMutation preserves concurrent transport behavior', async t => {
         const id = notes.data[0]!.id
 
         // Fire both mutations
-        patch1(id, { content: 'update1', version: 1 })
-        patch2(id, { content: 'update2', version: 2 })
+        mutations = [
+          patch1(id, { content: 'update1', version: 1 }),
+          patch2(id, { content: 'update2', version: 2 }),
+        ]
       }
       // oxlint-disable-next-line react-hooks/exhaustive-deps -- test: fire once when data arrives
     }, [notes.data, patch1, patch2])
@@ -2384,8 +2394,12 @@ it('legacy useMutation preserves concurrent transport behavior', async t => {
   )
 
   // Wait for both mutations to complete
+  // The first flush loads the notes and runs the effect that fires the patches
+  // (React 18's act() defers effects until its scope exits); the second waits for them.
+  await flush()
+  t.is(mutations.length, 2, 'the effect fired both patches')
   await flush(async () => {
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await Promise.all(mutations)
   })
 
   // Deprecated useMutation does not enter record lanes. The later transport
@@ -2564,12 +2578,16 @@ it('useFind with custom query operators does not crash when realtime is not merg
 it('mutations work correctly when no queries are active', async t => {
   const { render, flush, unmount } = dom()
   let createResult: Note, patchResult: Note, removeResult: Note
+  let mutationsStarted = false
   let mutationsCompleted = false
 
   function MutateOnly() {
     const { create, patch, remove } = useMutation('notes')
 
     useEffect(() => {
+      // StrictMode replays mount effects on React 18; mutate once.
+      if (mutationsStarted) return
+      mutationsStarted = true
       // Perform mutations without any queries being active
       ;(async () => {
         createResult = await create({ id: 100, content: 'new note' })
@@ -2612,11 +2630,15 @@ it('mutations work correctly when no queries are active', async t => {
 it('mutate methods return the mutated item', async t => {
   const { render, flush, unmount } = dom()
   let createResult: Note, patchResult: Note, updateResult: Note, removeResult: Note
+  let mutationsStarted = false
 
   function Notes() {
     const { create, patch, update, remove } = useMutation('notes')
 
     useEffect(() => {
+      // StrictMode replays mount effects on React 18; mutate once.
+      if (mutationsStarted) return
+      mutationsStarted = true
       ;(async () => {
         // Test create returns the created item
         createResult = await create({ id: 101, content: 'test create' })

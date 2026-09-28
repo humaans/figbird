@@ -18,7 +18,7 @@ import {
   type QueryBuilder,
   type StandardSchemaV1,
 } from '../lib'
-import { dom, it } from './dom.js'
+import { REACT_19, dom, it } from './dom.js'
 import { createTestApp, mockFeathers } from './helpers'
 
 // Tagged-union variant of useQuery — the shape the deleted useRelationalQuery had.
@@ -2336,7 +2336,8 @@ it('suspense: first-mount error throws to ErrorBoundary', async t => {
     await flush()
   })
 
-  t.deepEqual(caughtErrors, [new Error('boom')])
+  // onCaughtError is a React 19 root option; the boundary assertions cover React 18.
+  if (REACT_19) t.deepEqual(caughtErrors, [new Error('boom')])
   t.truthy($('.boundary'))
   t.is($('.boundary')!.innerHTML, 'boom')
   t.falsy($('.issue-detail'))
@@ -4628,7 +4629,8 @@ it('suspense: remounting after a cold error refetches and recovers', async t => 
     </App>,
   )
   await flush()
-  t.deepEqual(caughtErrors, [new Error('cold failure')])
+  // onCaughtError is a React 19 root option; the boundary assertions cover React 18.
+  if (REACT_19) t.deepEqual(caughtErrors, [new Error('cold failure')])
   t.is($('.boundary')?.innerHTML, 'cold failure')
 
   // The server recovers; the user hits "retry" (boundary remounts its subtree).

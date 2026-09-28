@@ -620,10 +620,18 @@ export class QueryStore<
     const shouldVacuum = isEphemeralQuery(q.config)
     return () => {
       removeListener()
-      if (this.#listenerCount(queryId) === 0) {
-        if (shouldVacuum) this.#vacuum({ queryId })
-        else this.#retention.retain(queryId)
+      if (this.#listenerCount(queryId) > 0) return
+      if (!shouldVacuum) {
+        this.#retention.retain(queryId)
+        return
       }
+      // React can unsubscribe and resubscribe within one commit (React 18's
+      // useSyncExternalStore, StrictMode effects). Vacuum after the current task so
+      // that resubscribe keeps the result instead of refetching it. Window pages
+      // (also gcOnUnsubscribe) get the same grace; swr revalidates what they keep.
+      queueMicrotask(() => {
+        if (!this.#disposed && this.#listenerCount(queryId) === 0) this.#vacuum({ queryId })
+      })
     }
   }
 
