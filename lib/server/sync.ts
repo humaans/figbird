@@ -29,6 +29,18 @@ export interface FigbirdSyncOptions {
    * to 30 seconds for a sequencer with `unitsPerMs`, and is required otherwise.
    */
   overlap?: number
+  /**
+   * The oldest cursor served, in sequence units behind the sequencer's current
+   * value: an older `since` answers `Gone`, so no request can read the whole log.
+   * Defaults to one hour for a sequencer with `unitsPerMs`, and is required
+   * otherwise.
+   */
+  maxAge?: number
+  /**
+   * The most changed rows one replay returns; more answer `Gone`, since a
+   * refetch is then the cheaper way back. Defaults to 1000.
+   */
+  maxChanges?: number
   /** Ids per authorized `$in` read. Defaults to 100. */
   batchSize?: number
   /**
@@ -56,9 +68,10 @@ class SyncServiceError extends Error {
 }
 
 /**
- * The log no longer holds every change since the requested cursor. Shaped like
- * a Feathers `Gone` error, so clients see `{ name: 'Gone', code: 410 }` and fall
- * back to refetching.
+ * The changes since the requested cursor can't be replayed: the log no longer
+ * holds them all, the cursor is older than `maxAge`, or they exceed
+ * `maxChanges`. Shaped like a Feathers `Gone` error, so clients see
+ * `{ name: 'Gone', code: 410 }` and fall back to refetching.
  */
 export class SyncTruncatedError extends SyncServiceError {
   constructor(since: number) {
@@ -98,6 +111,8 @@ export function figbirdSync({
   ordering = {},
   field = '_v',
   overlap = timeDefault(sequencer, 'overlap', 30_000),
+  maxAge = timeDefault(sequencer, 'maxAge', 60 * 60_000),
+  maxChanges = 1000,
   batchSize = 100,
   scope,
 }: FigbirdSyncOptions): {
@@ -157,6 +172,7 @@ export function figbirdSync({
       const requested = parseServices(params.query?.services)
       const names = requested ? requested.filter(name => allowed.has(name)) : [...allowed]
 
+      if (since < (await sequencer.next()) - maxAge) throw new SyncTruncatedError(since)
       const entries = await log.since(Math.max(0, since - overlap))
       if (entries === 'truncated') throw new SyncTruncatedError(since)
 
@@ -171,6 +187,9 @@ export function figbirdSync({
         const previous = byId.get(String(entry.id))
         if (!previous || entry.seq >= previous.seq) byId.set(String(entry.id), entry)
       }
+      let changed = 0
+      for (const byId of latest.values()) changed += byId.size
+      if (changed > maxChanges) throw new SyncTruncatedError(since)
 
       // The caller's own params, so its permissions decide which rows it reads.
       const forwarded: SyncParams = { ...params }

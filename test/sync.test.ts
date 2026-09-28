@@ -487,7 +487,10 @@ test('time-based sync defaults need a sequencer that tracks time', t => {
   const log = memoryChangeLog()
   const sequencer = { next: () => 1 }
   t.throws(() => figbirdSync({ log, sequencer, services: [] }), { message: /`overlap`/ })
-  t.notThrows(() => figbirdSync({ log, sequencer, services: [], overlap: 100 }))
+  t.throws(() => figbirdSync({ log, sequencer, services: [], overlap: 1 }), {
+    message: /`maxAge`/,
+  })
+  t.notThrows(() => figbirdSync({ log, sequencer, services: [], overlap: 1, maxAge: 100 }))
 })
 
 test('equal row versions fall through to timestamps', t => {
@@ -516,6 +519,21 @@ test('sync only replays changes in the caller’s scope', async t => {
     [1],
   )
   t.is(result.cursor, ada._v, 'other tenants’ writes do not move the cursor')
+})
+
+test('a replay is bounded by age and size', async t => {
+  const app = await createServer({ sync: { maxChanges: 2 } })
+  const people = app.service('people')
+  const ada = await people.create({ id: 1, name: 'Ada', team: 'a' })
+  const sync = connect(app).client.service('figbird/sync')
+
+  await t.throwsAsync(sync.find({ query: { since: 0 } }), { name: 'Gone' })
+  t.is(((await sync.find({ query: { since: ada._v } })) as unknown as SyncResult).changes.length, 1)
+  await people.create([
+    { id: 2, name: 'Bob', team: 'a' },
+    { id: 3, name: 'Cy', team: 'a' },
+  ])
+  await t.throwsAsync(sync.find({ query: { since: ada._v } }), { name: 'Gone' })
 })
 
 test('a row outside the default scope is reconciled, not removed', async t => {
