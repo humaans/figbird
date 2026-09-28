@@ -2397,6 +2397,7 @@ it('legacy useMutation preserves concurrent transport behavior', async t => {
   // The first flush loads the notes and runs the effect that fires the patches
   // (React 18's act() defers effects until its scope exits); the second waits for them.
   await flush()
+  t.is(mutations.length, 2, 'the effect fired both patches')
   await flush(async () => {
     await Promise.all(mutations)
   })

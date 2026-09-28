@@ -627,7 +627,8 @@ export class QueryStore<
       }
       // React can unsubscribe and resubscribe within one commit (React 18's
       // useSyncExternalStore, StrictMode effects). Vacuum after the current task so
-      // that resubscribe keeps the result instead of refetching it.
+      // that resubscribe keeps the result instead of refetching it. Window pages
+      // (also gcOnUnsubscribe) get the same grace; swr revalidates what they keep.
       queueMicrotask(() => {
         if (!this.#disposed && this.#listenerCount(queryId) === 0) this.#vacuum({ queryId })
       })
