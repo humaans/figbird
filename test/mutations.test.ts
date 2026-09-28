@@ -693,6 +693,15 @@ test('id contract: a write that references a pending create waits for it and fai
   gates.get(11)!.resolve({ id: 11, content: 'child', parentId: 10 })
   await child
 
+  // A foreign key from a route param is a string; it references the numeric id.
+  const numericParent = m.notes.create({ id: 30, content: 'parent' })
+  const stringRef = m.notes.create({ id: 31, content: 'child', parentId: '30' as never })
+  t.false(gates.has(31), 'a string foreign key waits for the numeric create')
+  gates.get(30)!.resolve({ id: 30, content: 'parent' })
+  await numericParent
+  gates.get(31)!.resolve({ id: 31, content: 'child' })
+  await stringRef
+
   const doomed = m.notes.create({ id: 20, content: 'doomed parent' })
   const orphan = m.notes.create({ id: 21, content: 'orphan', parentId: 20 })
   t.true(latest?.data?.some(note => note.id === 21))

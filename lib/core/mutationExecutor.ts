@@ -549,7 +549,9 @@ export class MutationExecutor {
       if (create?.desc.method !== 'create') continue
       // The lane is keyed by the adapter id; the relation may target another field.
       const createdId = (create.desc.data as Record<string, unknown>)[destField]
-      if (createdId !== id) continue
+      // Compare the way lanes key ids, so a route-string '10' references id 10.
+      if (typeof createdId !== 'string' && typeof createdId !== 'number') continue
+      if (entityKey(createdId) !== entityKey(id)) continue
       entry.attempt.waitFor(create.attempt.promise)
       create.attempt.promise.catch(() =>
         this.#abortQueuedMutation(

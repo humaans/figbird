@@ -66,6 +66,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
   readonly #lanes = new Map<string, MutationLaneState<TEntry>>()
   readonly #getId: (item: unknown) => ItemId | undefined
   readonly #isItemStale: (current: unknown, next: unknown) => boolean
+  readonly #wireForms = new WeakMap<object, unknown>()
 
   constructor(
     getId: (item: unknown) => ItemId | undefined,
@@ -373,9 +374,9 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
   #applyIntent(current: ProjectedEntity, desc: MutationDescriptor): ProjectedEntity {
     const explicit =
       desc.optimistic !== undefined && desc.optimistic !== true && desc.optimistic !== false
-        ? datesToIso(desc.optimistic)
+        ? this.#wireForm(desc.optimistic)
         : null
-    if (desc.method === 'create') return explicit ?? datesToIso(desc.data)
+    if (desc.method === 'create') return explicit ?? this.#wireForm(desc.data)
     if (desc.method === 'remove') return ABSENT
     if (explicit !== null) return explicit
 
@@ -383,9 +384,24 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
       current !== ABSENT && current && typeof current === 'object'
         ? (current as Record<string, unknown>)
         : null
-    const data = datesToIso(desc.optimisticPatch ?? desc.data) as Record<string, unknown>
+    const data = this.#wireForm(desc.optimisticPatch ?? desc.data) as Record<string, unknown>
     if (!currentRecord && this.#getId(data) === undefined) return current
     return { ...(currentRecord ?? {}), ...data }
+  }
+
+  /**
+   * Optimistic data in the form server rows carry (Dates as ISO strings). A write's
+   * data is re-projected on every lane transition; converting it once keeps the
+   * projected item's identity stable across those passes.
+   */
+  #wireForm(value: unknown): unknown {
+    if (typeof value !== 'object' || value === null) return datesToIso(value)
+    let converted = this.#wireForms.get(value)
+    if (converted === undefined) {
+      converted = datesToIso(value)
+      this.#wireForms.set(value, converted)
+    }
+    return converted
   }
 
   #require(lane: MutationLane): MutationLaneState<TEntry> {
