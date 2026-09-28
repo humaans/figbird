@@ -158,6 +158,35 @@ test('window query: offset pages tile a server-capped page size without gaps', a
   read.unsubscribe()
 })
 
+test('window query: a server page cap keeps the retained row budget', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    items: { data: keyed(makeRows(40)) },
+    owners: { data: {} },
+  })
+  const items = feathers.service('items')
+  const find = items.find.bind(items)
+  items.find = ((params: { query?: Record<string, unknown> } = {}) =>
+    find({ ...params, query: { ...params.query, $limit: 5 } })) as never
+  const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 10,
+    preloadPages: 0,
+    maxPages: 1,
+  })
+
+  const top = readSettledWindow(ref, { start: 0, end: 5 })
+  await top.promise
+  top.unsubscribe()
+  const deep = readSettledWindow(ref, { start: 30, end: 35 })
+  await deep.promise
+  await new Promise<void>(resolve => queueMicrotask(() => resolve()))
+
+  // One configured page is ten rows, so two capped five-row pages stay retained.
+  const data = ref.getSnapshot({ start: 30, end: 35 }).data
+  t.is(data.get(0)?.id, 1)
+  t.is(data.get(30)?.id, 31)
+  deep.unsubscribe()
+})
+
 test('window query: retention never evicts pages required by active readers', async t => {
   const { figbird } = createTestApp(schema, {
     items: { data: keyed(makeRows(80)) },

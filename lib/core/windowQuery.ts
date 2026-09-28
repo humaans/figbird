@@ -467,7 +467,8 @@ export class WindowQueryRef<
 
   #evictPages(protectedStarts: ReadonlySet<number>): boolean {
     let evicted = false
-    while (this.#pages.size > this.#config.maxPages) {
+    const retained = this.#pager.retainedPages(this.#config.maxPages)
+    while (this.#pages.size > retained) {
       const candidates = Array.from(this.#pages.values())
         .filter(page => !protectedStarts.has(page.start))
         .sort((a, b) => a.lastUsed - b.lastUsed)

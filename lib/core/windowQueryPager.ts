@@ -41,6 +41,8 @@ export interface WindowPager {
   rangeReady(range: PagerRange): boolean
   sync(targets: ReadonlySet<number>): void
   protectedStarts(targets: ReadonlySet<number>): ReadonlySet<number>
+  /** The retention budget, in this pager's pages, for `maxPages` configured-size pages. */
+  retainedPages(maxPages: number): number
   rootOverride(start: number): RelationalRootOverride
   pageSucceeded(page: PagerPageSuccess): void
   reset(): void
@@ -83,7 +85,12 @@ export class OffsetWindowPager implements WindowPager {
   }
 
   targetStarts(range: PagerRange, preloadPages: number): number[] {
-    return targetStarts(range, preloadPages, this.#pageSize, this.#context.access.total())
+    return targetStarts(
+      range,
+      preloadPages * this.#pagesPerConfiguredPage(),
+      this.#pageSize,
+      this.#context.access.total(),
+    )
   }
 
   requiredStarts(range: PagerRange): number[] {
@@ -106,6 +113,10 @@ export class OffsetWindowPager implements WindowPager {
 
   protectedStarts(targets: ReadonlySet<number>): ReadonlySet<number> {
     return targets
+  }
+
+  retainedPages(maxPages: number): number {
+    return maxPages * this.#pagesPerConfiguredPage()
   }
 
   rootOverride(start: number): RelationalRootOverride {
@@ -146,6 +157,12 @@ export class OffsetWindowPager implements WindowPager {
 
   reset(): void {
     this.#pageSize = this.#context.pageSize
+  }
+
+  // `preloadPages` and `maxPages` count configured-size pages, so a server cap
+  // keeps the preloaded and retained row counts rather than shrinking them.
+  #pagesPerConfiguredPage(): number {
+    return Math.ceil(this.#context.pageSize / this.#pageSize)
   }
 }
 
@@ -221,6 +238,10 @@ export class CursorWindowPager implements WindowPager {
       if (this.#context.access.page(nearest)) starts.add(nearest)
     }
     return starts
+  }
+
+  retainedPages(maxPages: number): number {
+    return maxPages
   }
 
   rootOverride(start: number): RelationalRootOverride {
