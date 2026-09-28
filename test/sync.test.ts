@@ -26,6 +26,7 @@ interface Person {
   name: string
   team: string
   secret?: boolean
+  archived?: boolean
   _v?: number
 }
 
@@ -454,12 +455,16 @@ test('sync reads rows through the caller’s own permissions', async t => {
       .filter(change => change.id === 2 || change.id === 4)
       .map(({ id, type }) => ({ id, type })),
     [
-      { id: 4, type: 'removed' },
-      { id: 2, type: 'removed' },
+      { id: 4, type: 'invalidated' },
+      { id: 2, type: 'invalidated' },
     ],
-    'rows the caller cannot read read as removed',
+    'rows the caller cannot read are invalidated, id only',
   )
-  t.deepEqual(client.everyone(), ['Ada Lovelace', 'Cy'], 'a row that became hidden leaves')
+  t.deepEqual(
+    client.everyone(),
+    ['Ada Lovelace', 'Cy'],
+    'a row that became hidden leaves on reconcile',
+  )
   t.false(client.figbird.getState().get('people')!.entities.has('4'))
   client.dispose()
 })
@@ -475,6 +480,48 @@ test('equal row versions fall through to timestamps', t => {
   const adapter = new FeathersAdapter(mockFeathers({}), { sync: {} })
   t.true(adapter.isItemStale({ id: 1, _v: 5, updatedAt: 2 }, { id: 1, _v: 5, updatedAt: 1 }))
   t.false(adapter.isItemStale({ id: 1, _v: 5, updatedAt: 1 }, { id: 1, _v: 6, updatedAt: 0 }))
+})
+
+test('a row outside the default scope is reconciled, not removed', async t => {
+  const app = await createServer()
+  const people = app.service('people')
+  // A default scope: archived people are only listed when asked for by team.
+  people.hooks({
+    before: {
+      find: [
+        context => {
+          const query = context.params.query ?? {}
+          if (context.params.provider && query.team === undefined) {
+            context.params.query = { ...query, archived: { $ne: true } }
+          }
+        },
+      ],
+    },
+  })
+  await people.create({ id: 1, name: 'Ada', team: 'a', archived: true })
+  const bridge = connect(app)
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(bridge.client, { sync: {} }),
+    eventBatchInterval: 0,
+    reconnectJitter: 0,
+  })
+  const teamA = figbird.query(figbird.q.people.where({ team: 'a' }))
+  const release = teamA.subscribe(() => {})
+  await teamA.suspensePromise()
+  await people.create({ id: 2, name: 'Bob', team: 'b' })
+
+  bridge.disconnect()
+  bridge.reconnect()
+  await bridge.idle()
+
+  t.is(bridge.syncResults[0]?.changes.find(change => change.id === 1)?.type, 'invalidated')
+  t.deepEqual(
+    teamA.getSnapshot()?.data?.map(person => person.name),
+    ['Ada'],
+  )
+  release()
+  figbird.dispose()
 })
 
 test('loadServerOrdering builds a comparator from the server declarations', async t => {

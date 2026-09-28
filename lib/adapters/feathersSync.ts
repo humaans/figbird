@@ -1,7 +1,7 @@
 import type { AdapterConnectionEvent, EventHandlers } from './adapter.js'
 import type { FeathersClient } from './feathers.js'
 import { orderingComparator, type ServiceOrdering, type ValueComparator } from '../core/sort.js'
-import { CHANGE_TYPES, type SyncResult } from '../server/protocol.js'
+import { SYNC_CHANGE_TYPES, type SyncResult } from '../server/protocol.js'
 
 /**
  * Opt into the experimental figbird sync protocol served by `figbird/server`.
@@ -16,7 +16,7 @@ export interface FeathersSyncOptions {
 
 const DEFAULT_PATH = 'figbird/sync'
 
-const CHANGE_TYPE_SET: ReadonlySet<string> = new Set(CHANGE_TYPES)
+const CHANGE_TYPE_SET: ReadonlySet<string> = new Set(SYNC_CHANGE_TYPES)
 
 function isSyncResult(value: unknown): value is SyncResult {
   const response = value as SyncResult | null
@@ -181,8 +181,11 @@ export class FeathersSync {
         id === undefined ? undefined : liveDuringReplay.get(replayKey(change.service, id))
       const version = this.versionOf(change.item)
       if (live !== undefined && (version === undefined || version <= live)) continue
+      // An id-only payload reaches the store as an invalidation: it reconciles the
+      // queries that might hold the row instead of trusting a missing read.
+      const type = change.type === 'invalidated' ? 'patched' : change.type
       for (const handlers of this.#listeners.get(change.service) ?? []) {
-        handlers[change.type](change.item)
+        handlers[type](change.item)
       }
     }
     if (this.#cursor === undefined || response.cursor > this.#cursor) {

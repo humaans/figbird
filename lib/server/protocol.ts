@@ -7,11 +7,23 @@ export const CHANGE_TYPES = ['created', 'updated', 'patched', 'removed'] as cons
 
 export type ChangeType = (typeof CHANGE_TYPES)[number]
 
+/**
+ * A change as replayed: a logged change type, or `invalidated` for a changed row
+ * the read-back didn't return — the caller may not read it, or it falls outside
+ * the service's default scope. The client reconciles instead of deleting.
+ */
+export const SYNC_CHANGE_TYPES = [...CHANGE_TYPES, 'invalidated'] as const
+
+export type SyncChangeType = (typeof SYNC_CHANGE_TYPES)[number]
+
 export interface SyncChange {
   service: string
-  type: ChangeType
+  type: SyncChangeType
   id: string | number
-  /** The current row, or `{ [idField]: id, [field]: seq }` for a removal. */
+  /**
+   * The current row; `{ [idField]: id, [field]: seq }` for a removal;
+   * `{ [idField]: id }` for an invalidation.
+   */
   item: Record<string, unknown>
 }
 

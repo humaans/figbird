@@ -74,10 +74,12 @@ interface SyncApplication {
  * `find({ query: { since, services? } })` answers the latest change per row
  * since the cursor. Current rows are read back through the app's own services
  * with the caller's params, so a caller only receives rows it could read anyway;
- * a changed row it cannot read — including one it could read before the change —
- * is reported as removed, which is what a refetch would show it. Removals carry
- * only the id: they reveal that an id existed, and clients act only on ids they
- * already hold. `get('ordering')` serves the ordering declarations.
+ * only logged removals are reported as removed. A changed row the read-back
+ * doesn't return — unreadable, or outside the service's default scope, which an
+ * `$in` read can't reproduce — is reported as `invalidated`, id only, and the
+ * client reconciles the queries that might hold it. Removals and invalidations
+ * reveal that an id changed; clients act only on ids they hold. `get('ordering')`
+ * serves the ordering declarations.
  */
 export function figbirdSync({
   log,
@@ -168,15 +170,14 @@ export function figbirdSync({
         .sort((a, b) => a.seq - b.seq)
         .map((entry): SyncChange => {
           const { idField, rows } = services.get(entry.service)!
-          const row = entry.type === 'removed' ? undefined : rows.get(String(entry.id))
+          const change = { service: entry.service, id: entry.id }
+          if (entry.type === 'removed') {
+            return { ...change, type: 'removed', item: { [idField]: entry.id, [field]: entry.seq } }
+          }
+          const row = rows.get(String(entry.id))
           return row
-            ? { service: entry.service, type: entry.type, id: entry.id, item: row }
-            : {
-                service: entry.service,
-                type: 'removed',
-                id: entry.id,
-                item: { [idField]: entry.id, [field]: entry.seq },
-              }
+            ? { ...change, type: entry.type, item: row }
+            : { ...change, type: 'invalidated', item: { [idField]: entry.id } }
         })
       return { cursor, services: names, changes }
     },
