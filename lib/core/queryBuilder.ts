@@ -104,7 +104,8 @@ function datesToIso(value: unknown): unknown {
 }
 
 /**
- * Deep merge two objects (for combining .where() calls)
+ * Deep merge two objects (for combining .where() calls). Successive calls AND
+ * together, so two sets of `$or` alternatives are both kept, under `$and`.
  */
 function deepMerge(target: FeathersQuery, source: FeathersQuery): FeathersQuery {
   const result: FeathersQuery = { ...target }
@@ -113,7 +114,15 @@ function deepMerge(target: FeathersQuery, source: FeathersQuery): FeathersQuery 
     const sourceVal = source[key]
     const targetVal = result[key]
 
-    if (
+    if ((key === '$or' || key === '$and') && Array.isArray(targetVal) && Array.isArray(sourceVal)) {
+      const and = Array.isArray(result.$and) ? result.$and : []
+      if (key === '$and') {
+        result.$and = [...and, ...sourceVal]
+      } else {
+        delete result.$or
+        result.$and = [...and, { $or: targetVal }, { $or: sourceVal }]
+      }
+    } else if (
       typeof sourceVal === 'object' &&
       sourceVal !== null &&
       !Array.isArray(sourceVal) &&

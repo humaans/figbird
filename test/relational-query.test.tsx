@@ -664,6 +664,31 @@ test('QueryBuilder: where() merges queries', t => {
   t.deepEqual(ast.query, { status: 'open', creatorId: 1 })
 })
 
+test('QueryBuilder: where() keeps both sets of $or alternatives', async t => {
+  const { figbird, feathers } = createApp()
+  const query = figbird.q.issues
+    .where({ $or: [{ status: 'open' }, { status: 'triage' }] })
+    .where({ $or: [{ creatorId: 1 }, { creatorId: 2 }] })
+
+  t.deepEqual(query.toAST().query, {
+    $and: [
+      { $or: [{ status: 'open' }, { status: 'triage' }] },
+      { $or: [{ creatorId: 1 }, { creatorId: 2 }] },
+    ],
+  })
+
+  // Still maintained locally: a realtime create matching only one group stays out.
+  const ref = figbird.query(query)
+  const unsubscribe = ref.subscribe(() => {})
+  await ref.suspensePromise()
+  const before = (ref.getSnapshot().data as Array<{ id: number }>).length
+  await feathers.service('issues').create({ id: 99, title: 'x', status: 'open', creatorId: 3 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is((ref.getSnapshot().data as Array<{ id: number }>).length, before)
+  t.is(figbird.explain(query).nodes[0]!.class, 'local-exact')
+  unsubscribe()
+})
+
 test('QueryBuilder: Date values merge as ISO strings', t => {
   const { figbird } = createApp()
   const since = new Date('2025-01-01T00:00:00.000Z')

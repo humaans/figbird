@@ -30,6 +30,7 @@ export const LOCAL_QUERY_OPERATORS = new Set([
   '$gte',
   '$ne',
   '$or',
+  '$and',
 ])
 export const SERVER_WINDOW_QUERY_FILTERS = new Set(['$limit', '$skip', '$sort'])
 /** Filters that change returned row shape, so their results are not canonical entities. */
