@@ -278,6 +278,23 @@ it('useQueryResult + paginate: a server page-size cap still pages past the cappe
     loadMoreFn!()
   })
   t.is($('.issues')!.getAttribute('data-titles'), 'Issue 1,Issue 2,Issue 3,Issue 4')
+  t.is($('.issues')!.getAttribute('data-has-more'), 'true')
+
+  // Capped pages are full at the cap: a row sorting past them belongs to a later
+  // page, not appended to every loaded one.
+  await flush(async () => {
+    await issuesService.create({ id: 99, title: 'Late', status: 'open', rank: 100 })
+  })
+  t.is($('.issues')!.getAttribute('data-titles'), 'Issue 1,Issue 2,Issue 3,Issue 4')
+
+  await flush(() => {
+    loadMoreFn!()
+  })
+  await flush(() => {
+    loadMoreFn!()
+  })
+  t.is($('.issues')!.getAttribute('data-titles'), 'Issue 1,Issue 2,Issue 3,Issue 4,Issue 5,Late')
+  t.is($('.issues')!.getAttribute('data-has-more'), 'false')
   unmount()
 })
 

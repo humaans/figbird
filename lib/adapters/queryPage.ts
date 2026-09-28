@@ -14,6 +14,17 @@ export interface QueryPage {
 
 export const EMPTY_PAGE: QueryPage = { rows: [], total: undefined, continuation: { kind: 'done' } }
 
+/**
+ * The page size the server actually served. Feathers caps a requested `$limit` at
+ * `paginate.max` and reports the effective limit, so a full capped page is not the
+ * last one; the requested limit stands in when the server reports none.
+ */
+export function servedLimit(meta: unknown, requested: unknown): number | undefined {
+  const reported = meta && typeof meta === 'object' && 'limit' in meta ? meta.limit : undefined
+  if (typeof reported === 'number') return reported
+  return typeof requested === 'number' ? requested : undefined
+}
+
 /** Normalize current rows as well as fetched rows, so realtime totals stay current. */
 export function queryPage({
   rows,
@@ -40,10 +51,7 @@ export function queryPage({
         : { kind: 'done' },
     }
   }
-  // The server's reported limit is the page size it actually served: Feathers
-  // caps a requested $limit at paginate.max, and a full capped page has more after it.
-  const reportedLimit = 'limit' in metadata ? metadata.limit : undefined
-  const limit = typeof reportedLimit === 'number' ? reportedLimit : query?.$limit
+  const limit = servedLimit(metadata, query?.$limit)
   const offset = typeof query?.$skip === 'number' ? query.$skip : 0
   return {
     rows,
