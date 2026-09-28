@@ -85,6 +85,8 @@ interface WindowPage<T, S extends Schema, TParams, TMeta extends Record<string, 
   lastUsed: number
   /** Set when the page loaded but broke the pagination protocol. */
   failure: Error | undefined
+  /** Served from a cache entry the rebuilt chain can't trust; refetching. */
+  revalidating: boolean
 }
 
 interface WindowQueryOptions {
@@ -150,6 +152,9 @@ export class WindowQueryRef<
   #version = 0
   #data: ReadonlyMap<number, T> = EMPTY_DATA
   #total: number | undefined
+  // A cursor chain reset retired later pages; pages the rebuild creates must not
+  // trust the query cache, which still holds rows fetched along the old chain.
+  #rebuilding = false
   #snapshotCache = new Map<string, { version: number; state: WindowQueryState<T> }>()
 
   constructor(
@@ -179,6 +184,10 @@ export class WindowQueryRef<
         pages: () => Array.from(this.#pages.keys(), start => this.#pagerPage(start)!),
         ensure: (start: number) => this.#ensurePage(start),
         drop: (start: number) => this.#dropPage(start),
+        retire: (start: number) => {
+          this.#rebuilding = true
+          this.#dropPage(start)
+        },
         touch: (start: number) => this.#touchPage(start),
         fail: (start: number, error: Error) => {
           const page = this.#pages.get(start)
@@ -344,6 +353,7 @@ export class WindowQueryRef<
   #syncPages(): void {
     const desired = this.#desiredStarts()
     this.#pager.sync(desired)
+    if (this.#rebuilding && !this.#anyPageFetching()) this.#rebuilding = false
     this.#syncPageFreshness()
     if (this.#evictPages(this.#pager.protectedStarts(desired))) {
       this.#rebuildData()
@@ -379,11 +389,16 @@ export class WindowQueryRef<
       staleTime,
       lastUsed: ++this.#clock,
       failure: undefined,
+      revalidating: false,
     }
     this.#pages.set(start, page)
     page.unsubscribe = ref.subscribe(() => this.#pageChanged(start), {
       staleTime,
     })
+    if (this.#rebuilding && ref.getSnapshot().status === 'success') {
+      page.revalidating = true
+      ref.refetch()
+    }
     this.#pageChanged(start)
   }
 
@@ -391,7 +406,9 @@ export class WindowQueryRef<
     const page = this.#pages.get(start)
     if (!page) return
     const state = page.ref.getSnapshot()
-    if (state.status === 'success') {
+    if (!state.isFetching) page.revalidating = false
+    // A revalidating page's cached rows would advance the chain along old cursors.
+    if (state.status === 'success' && !page.revalidating) {
       const metadata = page.ref.rootMetadata()
       page.failure = undefined
       this.#pager.pageSucceeded({
@@ -458,6 +475,13 @@ export class WindowQueryRef<
       status: state.status,
       rowCount: state.status === 'success' ? state.data.length : 0,
     }
+  }
+
+  #anyPageFetching(): boolean {
+    for (const page of this.#pages.values()) {
+      if (page.ref.getSnapshot().isFetching) return true
+    }
+    return false
   }
 
   #touchPage(start: number): void {
@@ -530,6 +554,7 @@ export class WindowQueryRef<
     for (const page of this.#pages.values()) page.unsubscribe()
     this.#pages.clear()
     this.#pager.reset()
+    this.#rebuilding = false
     this.#data = EMPTY_DATA
     this.#total = undefined
     this.#snapshotCache.clear()

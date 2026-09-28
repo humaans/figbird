@@ -27,6 +27,11 @@ export interface WindowPagerAccess {
   pages(): Iterable<PagerPage>
   ensure(start: number): void
   drop(start: number): void
+  /**
+   * Drop a page whose rows no longer sit on the cursor chain. Its replacement is
+   * revalidated rather than served from the query cache.
+   */
+  retire(start: number): void
   touch(start: number): void
   /** Surface a loaded page that broke the pagination protocol as that page's error. */
   fail(start: number, error: Error): void
@@ -361,7 +366,7 @@ export class CursorWindowPager implements WindowPager {
 
   #resetDescendants(): void {
     for (const page of Array.from(this.#context.access.pages())) {
-      if (page.start > 0) this.#context.access.drop(page.start)
+      if (page.start > 0) this.#context.access.retire(page.start)
     }
     this.#cursorAt = new Map([[0, undefined]])
     this.#terminalIndex = undefined

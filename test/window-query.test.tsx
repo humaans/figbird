@@ -633,15 +633,19 @@ test('window query: cursor pages survive value patches to page zero', async t =>
   )
   t.is(ref.getSnapshot(range).data.get(5)?.id, 6)
 
-  // A membership change still walks the chain again past page zero.
+  // A membership change walks the chain again past page zero, refetching pages
+  // whose cursors repeat instead of serving their cached, shifted rows.
   app.calls.length = 0
   const created = { id: 99, ownerId: 1, rank: 0, title: 'Inserted' }
   app.replaceRows([created, patched, ...rows.slice(1)])
   const afterCreate = settled(data => data.get(0)?.id === 99)
   app.emit('created', created)
   await afterCreate
-  t.is(app.calls[0]?.after, null)
-  t.true(app.calls.some(call => call.after !== null))
+  t.deepEqual(
+    app.calls.map(call => call.after),
+    [null, 'cursor:2', 'cursor:4'],
+  )
+  t.is(ref.getSnapshot(range).data.get(5)?.id, 5)
   read.unsubscribe()
 })
 
