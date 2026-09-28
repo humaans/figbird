@@ -81,6 +81,11 @@ export type AdapterConnectionEvent =
       attempt?: number
       transport?: string
       connectionId?: string
+      /**
+       * The adapter already replayed every event missed while disconnected, so the
+       * store has nothing to reconcile.
+       */
+      replayed?: boolean
     }
   | { type: 'error'; phase: 'connect' | 'reconnect'; error: Error }
   | { type: 'reconnect-failed'; error?: Error }

@@ -388,8 +388,9 @@ export class QueryStore<
               ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
+              ...(event.replayed ? { replayed: true } : {}),
             })
-            this.#scheduleReconnectSweep(traceId)
+            if (!event.replayed) this.#scheduleReconnectSweep(traceId)
             break
           case 'error':
             this.#telemetry.emit({

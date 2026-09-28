@@ -110,6 +110,7 @@ export {
   FeathersAdapter,
   feathersTransactions,
   FeathersTransactionError,
+  loadServerOrdering,
   offsetPagination,
 } from './adapters/feathers.js'
 export type {
@@ -121,6 +122,7 @@ export type {
   FeathersCursorPagination,
   FeathersOffsetPagination,
   FeathersPagination,
+  FeathersSyncOptions,
   FeathersTransaction,
   FeathersTransactionsOptions,
 } from './adapters/feathers.js'

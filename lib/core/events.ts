@@ -124,6 +124,8 @@ export type FigbirdEvent = (
       attempt?: number
       transport?: string
       connectionId?: string
+      /** Missed events were replayed, so no reconnect sweep follows. */
+      replayed?: boolean
     }
   | {
       kind: 'connection:error'
