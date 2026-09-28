@@ -333,7 +333,8 @@ of dropping the row or ignoring the create.
 Paths through `many`, junction, `embed`, or two-hop `one` relations ask whether _some_ related
 row matches, which needs the complete related set. They classify the root
 server-authoritative (reason `relational-filter` in `explain()`): its own events reconcile it,
-and relevant changes on the related and junction services refetch it.
+and relevant changes on the related and junction services reconcile it too — through the same
+cooldown and hidden-tab gate, since related services are often the busiest.
 
 Open questions:
 

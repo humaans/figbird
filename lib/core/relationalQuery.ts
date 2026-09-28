@@ -237,7 +237,7 @@ export class RelationalQueryRef<
   #nextPreparationGeneration = 0
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #processedEventUnsub: (() => void) | null = null
-  #relationalFilterRefetchQueued = false
+  #relationalFilterReconcileQueued = false
   // Strictest active subscriber freshness tolerance — applied to newly-created
   // internal subscriptions. Existing subscriptions are prodded through ensureFresh()
   // when each subscriber joins, so late strict readers are honored too.
@@ -1318,17 +1318,17 @@ export class RelationalQueryRef<
         }
         return
       }
-      this.#queueRelationalFilterRefetch()
+      this.#queueRelationalFilterReconcile()
     })
     const dependencyServices = new Set(dependencies.map(dependency => dependency.serviceName))
     const unsubscribeInvalidations = this.#host.queryStore.subscribeToRealtimeInvalidations(
       event => {
         if (!dependencyServices.has(event.serviceName)) return
-        this.#queueRelationalFilterRefetch()
+        this.#queueRelationalFilterReconcile()
       },
     )
     const unsubscribeSettlements = this.#host.queryStore.subscribeToProjectionSettlements(event => {
-      if (affectsFilter(event)) this.#queueRelationalFilterRefetch()
+      if (affectsFilter(event)) this.#queueRelationalFilterReconcile()
     })
     this.#processedEventUnsub = () => {
       unsubscribeEvents()
@@ -1338,13 +1338,19 @@ export class RelationalQueryRef<
     }
   }
 
-  #queueRelationalFilterRefetch(): void {
-    if (this.#relationalFilterRefetchQueued) return
-    this.#relationalFilterRefetchQueued = true
+  /**
+   * A related change can move root membership only, so the root reconciles through
+   * the store's gate — related services are often the busiest, and their bursts must
+   * coalesce under the cooldown and wait out a hidden tab. Relation leaves keep
+   * themselves fresh through their own realtime.
+   */
+  #queueRelationalFilterReconcile(): void {
+    if (this.#relationalFilterReconcileQueued) return
+    this.#relationalFilterReconcileQueued = true
     queueMicrotask(() => {
-      this.#relationalFilterRefetchQueued = false
+      this.#relationalFilterReconcileQueued = false
       if (this.#lifetime.owners.size === 0) return
-      this.refetch()
+      this.#root?.reconcile()
     })
   }
 
@@ -1461,7 +1467,7 @@ export class RelationalQueryRef<
     this.#pagedRoot = null
     this.#processedEventUnsub?.()
     this.#processedEventUnsub = null
-    this.#relationalFilterRefetchQueued = false
+    this.#relationalFilterReconcileQueued = false
     for (const sub of this.#relationSubs.values()) {
       this.#disposeRelationSub(sub)
     }

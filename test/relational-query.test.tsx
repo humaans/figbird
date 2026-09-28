@@ -2271,6 +2271,36 @@ it('realtime: a filter through a many relation keeps server rows and reconciles 
   unmount()
 })
 
+it('realtime: related-service bursts reconcile a relation-filtered root through the cooldown', async t => {
+  const clock = new TestClock()
+  const feathers = mockFeathers({
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 } } },
+    comments: { data: {} },
+  })
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    clock,
+    eventBatchInterval: 0,
+    reconcileCooldown: 60_000,
+  })
+  const ref = figbird.query(figbird.q.issues.where({ 'comments.authorId': 1 }))
+  const unsub = ref.subscribe(() => {})
+  await clock.advance(0)
+  const findCount = feathers.service('issues').counts.find
+
+  for (let id = 10; id < 15; id++) {
+    await feathers.service('comments').create({ id, issueId: 1, authorId: 2, body: 'Unrelated' })
+    await clock.advance(0)
+  }
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the leading edge reconciles once')
+
+  await clock.advance(60_000)
+  t.is(feathers.service('issues').counts.find, findCount + 2, 'one trailing reconcile')
+
+  unsub()
+})
+
 it('realtime: a null FK is a known absence, so the other $or branch keeps the row', async t => {
   const { App, figbird, feathers } = createTestApp(schema, {
     issues: { data: { 1: { id: 1, title: 'Unassigned', status: 'open', creatorId: null } } },

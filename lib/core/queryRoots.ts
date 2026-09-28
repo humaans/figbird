@@ -27,6 +27,8 @@ export interface RootSource {
   setStaleTime(staleTime: number): void
   ensureFresh(staleTime?: number, graph?: QueryGraphRef): void
   refetch(graph?: QueryGraphRef): void
+  /** Refetch the loaded rows through the store's reconcile gate (cooldown, hidden tab). */
+  reconcile(): void
   teardown(): void
   queryIds(): string[]
 }
@@ -69,7 +71,14 @@ const LOADING_ROOT: RootSnapshot = {
 
 type RootQueryRef<TMeta extends Record<string, unknown>> = Pick<
   QueryRef<unknown, unknown, TMeta>,
-  'getPage' | 'getRows' | 'getSnapshot' | 'subscribe' | 'ensureFresh' | 'refetch' | 'hash'
+  | 'getPage'
+  | 'getRows'
+  | 'getSnapshot'
+  | 'subscribe'
+  | 'ensureFresh'
+  | 'refetch'
+  | 'reconcile'
+  | 'hash'
 >
 
 /**
@@ -145,6 +154,10 @@ export class SingleQueryRoot<TMeta extends Record<string, unknown>> implements R
 
   refetch(graph?: QueryGraphRef): void {
     this.#queryRef.refetch({ graph })
+  }
+
+  reconcile(): void {
+    this.#queryRef.reconcile()
   }
 
   teardown(): void {
@@ -452,6 +465,16 @@ export class PagedQueryRoot<
     this.#loadMoreError = null
     this.#pageRefs[0]?.refetch({ graph })
     this.#onChange()
+  }
+
+  /**
+   * Keep the loaded pages: offset pages reconcile independently, and a sequential
+   * chain rebuilds its loaded prefix once page zero starts fetching.
+   */
+  reconcile(): void {
+    for (const pageRef of this.#sequential ? this.#pageRefs.slice(0, 1) : this.#pageRefs) {
+      pageRef.reconcile()
+    }
   }
 
   teardown(): void {

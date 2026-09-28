@@ -100,7 +100,7 @@ function isLocalRelation(relDef: RelationshipDef): boolean {
  * Relational filter paths the client can't evaluate locally, as classification
  * reasons. Any reason makes the root server-maintained for membership: its own
  * realtime events reconcile it with the server, and the relational dependencies
- * below refetch it when a related service changes.
+ * below reconcile it when a related service changes.
  */
 export function relationalFilterServerReasons(
   schema: Schema,
