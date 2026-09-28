@@ -587,6 +587,51 @@ test('findAll accepts a service that ignores paging and returns every row', asyn
   }
 })
 
+test('a local answer committing after a root refetch reads the refetched root', async t => {
+  // A find answered from the materialized service computes its rows, awaits, then
+  // commits. A root refetch committing in that gap skips the still-loading find, so
+  // the find must read the root again rather than commit the rows it computed. The
+  // gap is one microtask; starting the find 0..20 microtasks after the root's
+  // response is released lands one start in it, whatever the root's chain length.
+  for (let delay = 0; delay <= 20; delay++) {
+    const { figbird, notes } = createApp({ 1: { id: 1, content: 'one', rank: 1 } })
+    const root = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { allPages: true })
+    const unsubRoot = root.subscribe(() => {})
+    await waitFor(() => root.getSnapshot()?.status === 'success', 'the materializing fetch')
+
+    notes.data = { ...notes.data, 2: { id: 2, content: 'two', rank: 2 } }
+    const find = notes.find.bind(notes)
+    let release!: () => void
+    const released = new Promise<void>(resolve => (release = resolve))
+    notes.find = async params => {
+      const page = await find(params)
+      await released
+      return page
+    }
+    root.refetch()
+    await flushTasks()
+
+    release()
+    for (let i = 0; i < delay; i++) await null
+    const local = figbird.queryDesc({
+      serviceName: 'notes',
+      method: 'find',
+      params: { query: { $sort: { rank: 1 } } },
+    })
+    // Like a render-time read: the fetch starts before anyone subscribes, so no
+    // follow-up fetch repairs a stale commit.
+    local.ensureFresh()
+    await waitFor(() => !root.getSnapshot()?.isFetching, 'the root refetch')
+    await flushTasks()
+    const unsubLocal = local.subscribe(() => {})
+
+    t.deepEqual(ids(local.getSnapshot()!.data), [1, 2], `started ${delay} microtasks later`)
+    unsubLocal()
+    unsubRoot()
+    figbird.dispose()
+  }
+})
+
 test('a provable window merge survives an older reconcile response', async t => {
   const { figbird, notes } = createApp({
     1: { id: 1, content: 'one', rank: 1 },
