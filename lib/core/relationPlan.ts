@@ -93,6 +93,26 @@ function unwindowed(
   )
 }
 
+/**
+ * A junction relation has no single find on either service that expresses a
+ * per-parent window over destination rows, so a window on either hop is an error.
+ */
+export function assertJunctionUnwindowed(
+  name: string,
+  definition: RelationshipDef,
+  query: Record<string, unknown>,
+): void {
+  if (!definition.via) return
+  const hops = [{ ...query, ...definition.query }, definition.via.query ?? {}]
+  if (hops.some(hop => '$limit' in hop || '$skip' in hop)) {
+    throw new Error(
+      `related(): "${name}" goes through the junction service "${definition.via.destService}", ` +
+        'so .limit()/.skip() cannot apply per parent — no single find on either service ' +
+        'expresses that window. Relate the junction service directly and window it instead.',
+    )
+  }
+}
+
 /** Resolve immutable schema/AST decisions once; only source values vary at runtime. */
 export function compileRelations(
   ast: QueryAST,
@@ -104,6 +124,7 @@ export function compileRelations(
     const key = parentKey ? `${parentKey}.${name}` : name
     const definition = schema.relationships?.[ast.service]?.[name]
     if (!definition) return { kind: 'missing', key, name, service: ast.service }
+    assertJunctionUnwindowed(name, definition, child.query)
     const query = { ...child.query, ...definition.query }
     const explicitSort = (query.$sort as Record<string, number> | undefined) ?? null
     const windowed = '$limit' in query || '$skip' in query
@@ -112,7 +133,6 @@ export function compileRelations(
     const listWindow =
       windowed && definition.cardinality === 'embedded' && !explicitSort ? embedWindow(query) : null
     // Other windows apply to each parent, so they can't ride on one shared `$in` fetch.
-    // The builder rejects windows on junction relations, which have no per-parent find.
     const perParent = windowed && !listWindow
     const strategy = definition.via ? 'junction' : perParent ? 'perParent' : 'fanIn'
     const allPages = !perParent

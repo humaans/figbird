@@ -18,6 +18,7 @@ import {
   type QueryBuilder,
   type StandardSchemaV1,
 } from '../lib'
+import { compileRelations } from '../lib/core/relationPlan.js'
 import { REACT_19, dom, it } from './dom.js'
 import { createTestApp, mockFeathers } from './helpers'
 
@@ -4681,6 +4682,42 @@ it('junction and embed: windows apply per parent and orderBy orders junction des
   t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Cara,Bob|')
   t.is($('.previews')!.getAttribute('data-names'), 'Cara,Alice|Bob|')
   unmount()
+})
+
+test('junction: plan compilation rejects windows on either hop', t => {
+  const { figbird } = createJunctionApp()
+  const ast = figbird.q.roles2.related('members').toAST()
+  const windowed = {
+    ...ast,
+    related: { members: { ...ast.related.members!, query: { $limit: 1 } } },
+  }
+  t.throws(() => compileRelations(windowed, junctionSchema, 'merge'), {
+    message: /junction service "roleMembers".*cannot apply per parent/,
+  })
+
+  const viaWindowed = createSchema({
+    services: {
+      roles2: service<Role2Service>(),
+      roleMembers: service<RoleMemberService>(),
+      users2: service<User2Service>(),
+    },
+    relationships: {
+      roles2: ({ many }) => ({
+        members: many(
+          {
+            sourceField: 'id',
+            destService: 'roleMembers',
+            destField: 'roleId',
+            query: { $skip: 1 },
+          },
+          { sourceField: 'userId', destService: 'users2', destField: 'id' },
+        ),
+      }),
+    },
+  })
+  t.throws(() => compileRelations(ast, viaWindowed, 'merge'), {
+    message: /cannot apply per parent/,
+  })
 })
 
 it('junction and embed: orderBy holds when new destination ids arrive in a later chunk', async t => {
