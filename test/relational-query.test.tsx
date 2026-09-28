@@ -2377,6 +2377,46 @@ it('realtime: a null FK is a known absence, so the other $or branch keeps the ro
   unmount()
 })
 
+it('realtime: a visible row the matcher cannot decide still takes new values', async t => {
+  const feathers = mockFeathers({
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 } } },
+    users: { data: {} },
+  })
+  // A hidden tab defers the reconcile, so only the local merge can show the patch.
+  let hidden = true
+  let onVisibilityChange = () => {}
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    visibility: {
+      isHidden: () => hidden,
+      onChange: listener => {
+        onVisibilityChange = listener
+        return () => {}
+      },
+    },
+  })
+  const ref = figbird.query(figbird.q.issues.where({ 'creator.name': 'Alice' }))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+  t.deepEqual(
+    (ref.getSnapshot().data as Issue[]).map(issue => issue.title),
+    ['Renamed'],
+  )
+
+  hidden = false
+  onVisibilityChange()
+  await flushTasks()
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'membership still reconciles')
+
+  unsub()
+})
+
 it('realtime: a null FK leaves predicates that match a missing relation to the server', async t => {
   const { figbird, feathers } = createTestApp(
     schema,

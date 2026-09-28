@@ -360,9 +360,13 @@ function applyMergeEventToQuery<TMeta>(
   }
 
   const matches = type !== 'removed' && query.maintenance.matches(item)
-  // Local state can't decide the item: leave the result as it is and ask the server.
-  if (matches === 'unknown') return 'reconcile'
   const hasItem = service.itemQueryIndex.get(itemId)?.has(queryId) ?? false
+  if (matches === 'unknown') {
+    // Local state can't decide the item: keep membership as it is and ask the
+    // server, while a visible row still shows its new values.
+    if (hasItem) applyVisibleEventEffect(context, queryId, event, 'replace')
+    return 'reconcile'
+  }
   if (hasItem) {
     return applyVisibleEventEffect(context, queryId, event, matches ? 'replace' : 'remove')
       ? 'applied'
