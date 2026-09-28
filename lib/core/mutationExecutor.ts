@@ -85,6 +85,8 @@ interface QueuedMutation {
   attempt: GatedMutationAttempt
   cause?: MutationTraceCause
   transaction?: QueuedTransaction
+  /** Writes holding for this create, aborted in the same settlement when it fails. */
+  referencedBy?: Map<QueuedMutation, MutationLane>
 }
 
 interface QueuedTransaction {
@@ -534,7 +536,7 @@ export class MutationExecutor {
   /**
    * Lanes run in parallel, so a write whose data references a record that is still
    * being created could reach the server first. It waits for that create, and is
-   * rolled back with it when the create fails.
+   * rolled back with it when the create fails (see #abortReferencingWrites).
    */
   #awaitReferencedCreates(lane: MutationLane, entry: QueuedMutation): void {
     const { desc } = entry
@@ -550,26 +552,32 @@ export class MutationExecutor {
       const create = this.#mutationLanes.pendingCreate(parentLane)
       if (!create) continue
       entry.attempt.waitFor(create.attempt.promise)
-      create.attempt.promise.catch(() =>
-        this.#abortQueuedMutation(
-          lane,
-          entry,
-          new MutationSupersededError(
-            `figbird: cancelled "${lane.serviceName}"/${String(lane.id)} because the create of ` +
-              `the "${destService}"/${String(id)} it references failed`,
-          ),
-        ),
-      )
+      create.referencedBy ??= new Map()
+      create.referencedBy.set(entry, lane)
     }
   }
 
-  #abortQueuedMutation(lane: MutationLane, entry: QueuedMutation, error: Error): void {
-    if (!entry.attempt.pending) return
-    const lanes = new Set<MutationLane>()
-    const settlement = this.#mutationLanes.abort(lane, entry, error)
-    if (settlement) this.#applyLaneSettlement(lane, entry, { ok: false, error }, settlement, lanes)
-    entry.attempt.cancel(error)
-    this.#finishLaneSettlements(lanes)
+  /**
+   * Abort the writes holding for a create that will not happen, into the same
+   * `lanes` batch, so observers see the parent and its children leave together.
+   */
+  #abortReferencingWrites(
+    lane: MutationLane,
+    create: QueuedMutation,
+    lanes: Set<MutationLane>,
+  ): void {
+    for (const [entry, referencingLane] of create.referencedBy ?? []) {
+      if (!entry.attempt.pending) continue
+      const error = new MutationSupersededError(
+        `figbird: cancelled "${referencingLane.serviceName}"/${String(referencingLane.id)} because ` +
+          `the create of the "${lane.serviceName}"/${String(lane.id)} it references failed`,
+      )
+      const settlement = this.#mutationLanes.abort(referencingLane, entry, error)
+      if (settlement) {
+        this.#applyLaneSettlement(referencingLane, entry, { ok: false, error }, settlement, lanes)
+      }
+      entry.attempt.cancel(error)
+    }
   }
 
   #drainMutationLane(lane: MutationLane): void {
@@ -649,6 +657,7 @@ export class MutationExecutor {
         this.#applyLaneSettlement(lane, entry, outcome, settlement, lanes)
       }
       entry.attempt.cancel(error)
+      this.#abortReferencingWrites(lane, entry, lanes)
     }
   }
 
@@ -705,9 +714,11 @@ export class MutationExecutor {
     cause?: TraceCause,
   ): void {
     if (!entry.attempt.cancel(error)) return
+    const lanes = new Set([lane])
     const projection = this.#mutationLanes.cancel(lane, entry)
-    if (projection) this.#cache.project(projection, true, cause)
-    this.#drainMutationLane(lane)
+    if (projection) this.#cache.project(projection, false, cause)
+    this.#abortReferencingWrites(lane, entry, lanes)
+    this.#finishLaneSettlements(lanes)
   }
 
   #settleQueuedMutation(
@@ -737,6 +748,7 @@ export class MutationExecutor {
     this.#cache.settle(settlement, !this.#mutationLanes.peekNext(lane), cause)
 
     this.#cancelSettledDependants(lane, entry, outcome, settlement.cancelled, lanes)
+    if (!outcome.ok) this.#abortReferencingWrites(lane, entry, lanes)
   }
 
   #finishLaneSettlements(lanes: ReadonlySet<MutationLane>): void {
@@ -773,6 +785,7 @@ export class MutationExecutor {
           `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ${reason}`,
         ),
       )
+      this.#abortReferencingWrites(lane, queued, lanes)
     }
   }
 

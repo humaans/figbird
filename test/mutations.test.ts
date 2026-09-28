@@ -673,8 +673,10 @@ test('id contract: a write that references a pending create waits for it and fai
   const { m } = figbird
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  const renders: number[][] = []
   ref.subscribe(state => {
     latest = state as QueryState<Note[], Record<string, unknown>>
+    renders.push(latest.data?.map(note => note.id) ?? [])
   })
   await new Promise(r => setTimeout(r, 10))
 
@@ -712,6 +714,10 @@ test('id contract: a write that references a pending create waits for it and fai
   await waitForEmissions()
   t.false(gates.has(21))
   t.false(latest?.data?.some(note => note.id === 21))
+  t.false(
+    renders.some(ids => ids.includes(21) && !ids.includes(20)),
+    'the child rolls back with its parent, never shown alone',
+  )
 })
 
 test('id contract: a write holds for its referenced create before observers see it', async t => {
