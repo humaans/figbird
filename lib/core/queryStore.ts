@@ -2674,8 +2674,8 @@ export class QueryStore<
    * The per-batch counterpart of #pruneService: of the rows a realtime batch touched
    * that no query references, keep the most recently touched
    * MAX_RETAINED_UNREFERENCED_ENTITIES and drop the rest, visiting only the touched
-   * keys and the evicted ones. Eviction waits while a fetch against the service is in
-   * flight — its response rebases journaled rows over the cached entity. A
+   * keys and the evicted ones. Rows with events journaled for an in-flight fetch stay
+   * until it settles — its response rebases them over the cached entity. A
    * materialized service keeps everything.
    */
   #trimUnreferencedEntities(serviceName: string, touched: readonly EntityKey[] = []): void {
@@ -2694,10 +2694,12 @@ export class QueryStore<
     }
     if (!keys) return
     this.#unreferencedEntities.set(serviceName, keys)
-    if (this.#fetchEventJournal.isRecording(serviceName)) return
+    if (keys.size <= MAX_RETAINED_UNREFERENCED_ENTITIES) return
 
+    const journaled = this.#fetchEventJournal.journaledItemIds(serviceName)
     for (const key of keys) {
       if (keys.size <= MAX_RETAINED_UNREFERENCED_ENTITIES) break
+      if (journaled.has(key)) continue
       keys.delete(key)
       if (this.#isUnreferenced(service, serviceName, key)) service.entities.delete(key)
     }

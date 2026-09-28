@@ -74,9 +74,10 @@ export class FetchEventJournal {
     }
   }
 
-  /** Whether any fetch against the service is in flight and recording events. */
-  isRecording(serviceName: string): boolean {
-    return this.#services.has(serviceName)
+  /** Items with events journaled for the service's in-flight fetches to rebase over. */
+  journaledItemIds(serviceName: string): Set<EntityKey> {
+    const journal = this.#services.get(serviceName)
+    return new Set(journal?.events.toArray().map(event => event.itemId))
   }
 
   end(cursor: FetchJournalCursor): void {
