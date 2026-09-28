@@ -77,6 +77,49 @@ test('mutation lanes: a batched projection still settles and refetches after its
   t.is(latest?.data?.find(note => note.id === 1)?.content, 'other client')
 })
 
+test('mutation lanes: realtime that overtakes an acknowledgement keeps the newer state', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    ...services(),
+    notes: {
+      data: {
+        1: { id: 1, content: 'hello', updatedAt: 1 },
+        2: { id: 2, content: 'world', updatedAt: 1 },
+      },
+    },
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  const olderAck = deferred<MockItem>()
+  notes.patch = (() => olderAck.promise) as never
+  const patching = figbird.m.notes.patch(1, { content: 'mine' })
+  notes.emit('patched', { id: 1, content: 'other client', updatedAt: 3 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  olderAck.resolve({ id: 1, content: 'mine', updatedAt: 2 })
+  await patching
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'other client')
+
+  const removedAfterPatch = deferred<MockItem>()
+  notes.patch = (() => removedAfterPatch.promise) as never
+  const patchingRemoved = figbird.m.notes.patch(2, { content: 'mine' })
+  notes.emit('removed', { id: 2, content: 'world', updatedAt: 1 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  removedAfterPatch.resolve({ id: 2, content: 'mine', updatedAt: 2 })
+  await patchingRemoved
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(
+    latest?.data?.map(note => note.id),
+    [1],
+    'the acknowledgement does not resurrect a row removed after the patch',
+  )
+})
+
 test('mutation lanes: batch create acknowledgements advance lanes opened by later patches', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })

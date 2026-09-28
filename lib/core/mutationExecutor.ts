@@ -112,7 +112,10 @@ export class MutationExecutor {
     this.#adapter = adapter
     this.#cache = cache
     this.#telemetry = telemetry
-    this.#mutationLanes = new MutationLanes(item => this.#peekId(item))
+    this.#mutationLanes = new MutationLanes(
+      item => this.#peekId(item),
+      (current, next) => this.#adapter.isItemStale(current, next),
+    )
   }
 
   get activity(): MutationActivity {
@@ -146,9 +149,7 @@ export class MutationExecutor {
     if (!lane) return { handled: false }
     return {
       handled: true,
-      transition: this.#mutationLanes.acceptAuthoritative(lane, type, item, (current, next) =>
-        this.#adapter.isItemStale(current, next),
-      ),
+      transition: this.#mutationLanes.acceptAuthoritative(lane, type, item),
     }
   }
 
