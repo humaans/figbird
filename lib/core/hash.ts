@@ -8,8 +8,9 @@
  *
  * Matches `JSON.stringify` semantics (toJSON honored, undefined/function values
  * dropped from objects and nulled in arrays, NaN/Infinity → null, BigInt throws)
- * with two deliberate differences: object keys are sorted, and true cycles encode
- * as a `"__circular"` marker instead of throwing. The cycle guard tracks only the
+ * with two deliberate differences: object keys are sorted (except inside `$sort`,
+ * where key order is the sort precedence), and true cycles encode as a
+ * `"__circular"` marker instead of throwing. The cycle guard tracks only the
  * *current path* of ancestors — a shared (DAG) reference appearing twice as a
  * sibling serializes normally both times, so two structurally identical queries
  * hash identically regardless of object aliasing.
@@ -24,7 +25,7 @@ function stableSerialize(value: unknown): string {
   return out
 }
 
-function serialize(value: unknown, path: Set<object>): string | undefined {
+function serialize(value: unknown, path: Set<object>, orderedKeys = false): string | undefined {
   if (value === null) return 'null'
   const t = typeof value
   if (t === 'string' || t === 'number' || t === 'boolean') {
@@ -41,7 +42,7 @@ function serialize(value: unknown, path: Set<object>): string | undefined {
   // inside query filters into ISO strings).
   const toJSON = (obj as { toJSON?: () => unknown }).toJSON
   if (typeof toJSON === 'function') {
-    return serialize(toJSON.call(obj), path)
+    return serialize(toJSON.call(obj), path, orderedKeys)
   }
 
   if (path.has(obj)) return '"__circular"'
@@ -58,8 +59,9 @@ function serialize(value: unknown, path: Set<object>): string | undefined {
     const record = obj as Record<string, unknown>
     let out = '{'
     let first = true
-    for (const key of Object.keys(record).sort()) {
-      const child = serialize(record[key], path)
+    const keys = Object.keys(record)
+    for (const key of orderedKeys ? keys : keys.sort()) {
+      const child = serialize(record[key], path, key === '$sort')
       if (child === undefined) continue
       if (!first) out += ','
       first = false
@@ -87,7 +89,7 @@ const FNV_OFFSET_B = 0xcbf29ce4
  *
  * Features:
  * - Deterministic: Same input always produces same hash
- * - Stable: Object key order doesn't affect hash
+ * - Stable: Object key order doesn't affect hash (except `$sort` precedence)
  * - Fast: FNV-1a is efficient for frequent operations
  *
  * Inputs must be JSON-serializable (cycles are tolerated and encoded as a
