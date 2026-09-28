@@ -86,6 +86,11 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
     )
   }
 
+  /** The lane's last queued or in-flight create. */
+  pendingCreate(lane: MutationLane): TEntry | undefined {
+    return [...this.#require(lane).entries].reverse().find(entry => entry.desc.method === 'create')
+  }
+
   ensure(serviceName: string, id: ItemId, cached: unknown): MutationLane {
     const key = this.#key(serviceName, id)
     let lane = this.#lanes.get(key)

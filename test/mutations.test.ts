@@ -1,9 +1,11 @@
 import test from 'ava'
 import {
+  createSchema,
   feathersTransactions,
   FeathersTransactionError,
   type FigbirdEvent,
   type QueryState,
+  service,
 } from '../lib'
 import { createTestApp, waitForEmissions } from './helpers'
 import {
@@ -658,6 +660,49 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
   t.false(latest?.data?.some(note => note.id === 77))
   t.is(latest?.data?.length, 2)
   t.is(patchCalls, 0)
+})
+
+test('id contract: a write that references a pending create waits for it and fails with it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(r => setTimeout(r, 10))
+
+  const gates = new Map<number, ReturnType<typeof deferred<MockItem>>>()
+  feathers.service('notes').create = ((data: Note) => {
+    gates.set(data.id, deferred<MockItem>())
+    return gates.get(data.id)!.promise
+  }) as never
+
+  const parent = m.notes.create({ id: 10, content: 'parent' })
+  const child = m.notes.create({ id: 11, content: 'child', parentId: 10 })
+  t.deepEqual([...gates.keys()], [10], 'the child waits for the record it references')
+  gates.get(10)!.resolve({ id: 10, content: 'parent' })
+  await parent
+  t.deepEqual([...gates.keys()], [10, 11])
+  gates.get(11)!.resolve({ id: 11, content: 'child', parentId: 10 })
+  await child
+
+  const doomed = m.notes.create({ id: 20, content: 'doomed parent' })
+  const orphan = m.notes.create({ id: 21, content: 'orphan', parentId: 20 })
+  t.true(latest?.data?.some(note => note.id === 21))
+  const rejected = t.throwsAsync(doomed, { message: 'rejected' })
+  const cancelled = t.throwsAsync(orphan, { message: /references failed/ })
+  gates.get(20)!.reject(new Error('rejected'))
+  await Promise.all([rejected, cancelled])
+  await waitForEmissions()
+  t.false(gates.has(21))
+  t.false(latest?.data?.some(note => note.id === 21))
 })
 
 test('create-id tracking: optimistic creates with client ids are visible to useMutating by id', async t => {

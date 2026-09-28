@@ -77,7 +77,7 @@ import type {
   ServiceNames,
   ServicePaths,
 } from './schema.js'
-import { resolveServicePath } from './schema.js'
+import { foreignKeys, resolveServicePath } from './schema.js'
 import type { ValueComparator } from './sort.js'
 import { isWithinStaleTime, validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
 import { createTransactionContext, type TransactionContext } from './transactions.js'
@@ -310,6 +310,7 @@ export class Figbird<
       eventBatchInterval,
       staleTime,
       gcTime,
+      foreignKeys: foreignKeys(schema),
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
       ...(retry !== undefined ? { retry } : {}),
       ...(retryDelay !== undefined ? { retryDelay } : {}),

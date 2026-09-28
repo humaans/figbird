@@ -664,6 +664,12 @@ then Figbird reapplies the remaining changes. An old response cannot resurrect a
 version. If a patch fails, Figbird removes that change and reapplies the later ones. If a
 create fails, Figbird cancels the writes that depend on its id.
 
+A write whose data references a record through a schema `one` relation waits while that
+record's create is pending. `m.comments.create({ id, issueId })` reaches the server only
+after the `m.issues.create({ id: issueId })` before it succeeds, and it rolls back with
+the issue if that create fails. Figbird follows only the written record's own relation
+fields, not relations further along the path.
+
 Confirmed writes with the same service and id follow the same ordering, so they cannot
 overtake optimistic writes. Id-less confirmed creates, batch creates, and custom methods
 have no single record id and do not join this ordering. Use a mutation queue when one

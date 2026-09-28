@@ -596,6 +596,29 @@ export function resolveServicePath<S extends Schema>(schema: S | undefined, name
   return findServiceByName(schema, name)?.path ?? name
 }
 
+/** A field whose value names a record of another service, keyed by transport paths. */
+export interface ForeignKey {
+  sourceField: string
+  destService: string
+  destField: string
+}
+
+/** Each service path's direct `one` relations, the references a write can make. */
+export function foreignKeys(schema: Schema | undefined): Map<string, ForeignKey[]> {
+  const keys = new Map<string, ForeignKey[]>()
+  for (const [name, relations] of Object.entries(schema?.relationships ?? {})) {
+    const direct = Object.values(relations)
+      .filter(relation => relation.cardinality === 'one' && relation.via === undefined)
+      .map(({ sourceField, destService, destField }) => ({
+        sourceField,
+        destService: resolveServicePath(schema, destService),
+        destField,
+      }))
+    if (direct.length > 0) keys.set(resolveServicePath(schema, name), direct)
+  }
+  return keys
+}
+
 // Type guard to check if schema is defined
 export function hasSchema<S extends Schema>(schema: S | undefined): schema is S {
   return schema !== undefined

@@ -23,6 +23,7 @@ import {
   type FetchResponseMode,
 } from './fetchRebase.js'
 import { ABSENT, type ProjectionChange } from './mutationLanes.js'
+import type { ForeignKey } from './schema.js'
 import {
   applyEventsToService,
   applyVisibleEventToQuery,
@@ -239,6 +240,7 @@ export class QueryStore<
     visibility,
     defaultSort,
     compare = compareValues,
+    foreignKeys,
     clock = systemClock,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
@@ -275,6 +277,8 @@ export class QueryStore<
      * mirror the server's actual order.
      */
     compare?: ValueComparator
+    /** Direct `one` relations by service path; writes wait for the creates they reference. */
+    foreignKeys?: ReadonlyMap<string, readonly ForeignKey[]>
     /** @internal Deterministic policy time for tests. */
     clock?: Clock
   }) {
@@ -294,6 +298,7 @@ export class QueryStore<
     this.#telemetry = new QueryTelemetry()
     this.#mutationExecutor = new MutationExecutor({
       adapter,
+      ...(foreignKeys !== undefined ? { foreignKeys } : {}),
       cache: {
         getEntity: (serviceName, id) => this.#getEntity(serviceName, id),
         ingest: (serviceName, event, cause) => this.#processEvent(serviceName, event, cause),

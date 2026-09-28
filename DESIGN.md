@@ -674,9 +674,13 @@ intents immediately but reach the adapter one at a time. A lane keeps the last a
 as its base and folds the remaining create/update/patch/remove intents over that base after every
 acknowledgement or failure. This prevents an older response from replacing newer optimistic state
 and makes rollback compositional: remove only the failed intent, then replay what remains. A failed
-create cancels the queued writes that depended on the identity. Different records stay parallel;
-id-less confirmed creates, batch creates, and opaque custom methods have no record key and keep the
-direct path.
+create cancels the queued writes that depended on the identity. Different records stay parallel,
+except that a keyed write whose data names a record with a pending create (through one of the
+schema's direct `one` relations) waits for that create's acknowledgement and is aborted, rolling
+back its optimism, if the create fails; otherwise a child row could reach the server before its
+parent, or outlive a parent that never existed. Only the written record's own foreign keys are
+followed. Id-less confirmed creates, batch creates, and opaque custom methods have no record key
+and keep the direct path.
 
 The active intent overlay participates in fetch rebasing even when it predates the fetch cursor.
 Locally exact query nodes consume projected entity events immediately. Reconciliation that needs

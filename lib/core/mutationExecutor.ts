@@ -18,6 +18,7 @@ import {
   type ScheduledMutationControl,
 } from './mutationQueue.js'
 import type { QueryTelemetry } from './queryTelemetry.js'
+import type { ForeignKey } from './schema.js'
 import {
   entityKey,
   type ItemId,
@@ -97,6 +98,7 @@ export class MutationExecutor {
   #cache: MutationCache
   #telemetry: Pick<QueryTelemetry, 'emit' | 'mutationCause'>
   #mutationLanes: MutationLanes<QueuedMutation>
+  #foreignKeys: ReadonlyMap<string, readonly ForeignKey[]>
   #mutations = new MutationTracker()
   #disposed = false
 
@@ -104,14 +106,17 @@ export class MutationExecutor {
     adapter,
     cache,
     telemetry,
+    foreignKeys = new Map(),
   }: {
     adapter: MutationAdapter
     cache: MutationCache
     telemetry: Pick<QueryTelemetry, 'emit' | 'mutationCause'>
+    foreignKeys?: ReadonlyMap<string, readonly ForeignKey[]>
   }) {
     this.#adapter = adapter
     this.#cache = cache
     this.#telemetry = telemetry
+    this.#foreignKeys = foreignKeys
     this.#mutationLanes = new MutationLanes(
       item => this.#peekId(item),
       (current, next) => this.#adapter.isItemStale(current, next),
@@ -493,6 +498,7 @@ export class MutationExecutor {
 
     if (tracked.cause) entry.cause = tracked.cause
     this.#cache.project(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
+    this.#awaitReferencedCreates(lane, entry)
     entry.attempt.whenReady(() => {
       this.#expediteMutationPredecessors(lane, entry)
       this.#drainMutationLane(lane)
@@ -520,6 +526,49 @@ export class MutationExecutor {
       },
       cancel: error => this.#cancelQueuedMutation(lane, entry, error, tracked.cause),
     }
+  }
+
+  /**
+   * Lanes run in parallel, so a write whose data references a record that is still
+   * being created could reach the server first. It waits for that create, and is
+   * rolled back with it when the create fails.
+   */
+  #awaitReferencedCreates(lane: MutationLane, entry: QueuedMutation): void {
+    const { desc } = entry
+    if (desc.method === 'remove' || !desc.data || typeof desc.data !== 'object') return
+    const data = desc.data as Record<string, unknown>
+    const keys = this.#foreignKeys.get(lane.serviceName) ?? []
+    for (const { sourceField, destService, destField } of keys) {
+      const id = data[sourceField]
+      if (typeof id !== 'string' && typeof id !== 'number') continue
+      const parentLane = this.#mutationLanes.get(destService, id)
+      if (!parentLane || parentLane === lane) continue
+      const create = this.#mutationLanes.pendingCreate(parentLane)
+      if (create?.desc.method !== 'create') continue
+      // The lane is keyed by the adapter id; the relation may target another field.
+      const createdId = (create.desc.data as Record<string, unknown>)[destField]
+      if (createdId !== id) continue
+      entry.attempt.waitFor(create.attempt.promise)
+      create.attempt.promise.catch(() =>
+        this.#abortQueuedMutation(
+          lane,
+          entry,
+          new MutationSupersededError(
+            `figbird: cancelled "${lane.serviceName}"/${String(lane.id)} because the create of ` +
+              `the "${destService}"/${String(id)} it references failed`,
+          ),
+        ),
+      )
+    }
+  }
+
+  #abortQueuedMutation(lane: MutationLane, entry: QueuedMutation, error: Error): void {
+    if (!entry.attempt.pending) return
+    const lanes = new Set<MutationLane>()
+    const settlement = this.#mutationLanes.abort(lane, entry, error)
+    if (settlement) this.#applyLaneSettlement(lane, entry, { ok: false, error }, settlement, lanes)
+    entry.attempt.cancel(error)
+    this.#finishLaneSettlements(lanes)
   }
 
   #drainMutationLane(lane: MutationLane): void {
