@@ -540,18 +540,14 @@ export class MutationExecutor {
     if (desc.method === 'remove' || !desc.data || typeof desc.data !== 'object') return
     const data = desc.data as Record<string, unknown>
     const keys = this.#foreignKeys.get(lane.serviceName) ?? []
-    for (const { sourceField, destService, destField } of keys) {
+    for (const { sourceField, destService } of keys) {
       const id = data[sourceField]
       if (typeof id !== 'string' && typeof id !== 'number') continue
+      // Lanes key ids by entity key, so a route-string '10' finds the create of id 10.
       const parentLane = this.#mutationLanes.get(destService, id)
       if (!parentLane || parentLane === lane) continue
       const create = this.#mutationLanes.pendingCreate(parentLane)
-      if (create?.desc.method !== 'create') continue
-      // The lane is keyed by the adapter id; the relation may target another field.
-      const createdId = (create.desc.data as Record<string, unknown>)[destField]
-      // Compare the way lanes key ids, so a route-string '10' references id 10.
-      if (typeof createdId !== 'string' && typeof createdId !== 'number') continue
-      if (entityKey(createdId) !== entityKey(id)) continue
+      if (!create) continue
       entry.attempt.waitFor(create.attempt.promise)
       create.attempt.promise.catch(() =>
         this.#abortQueuedMutation(

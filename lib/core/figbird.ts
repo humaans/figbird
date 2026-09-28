@@ -310,7 +310,7 @@ export class Figbird<
       eventBatchInterval,
       staleTime,
       gcTime,
-      foreignKeys: foreignKeys(schema),
+      foreignKeys: foreignKeys(schema, item => adapter.getId(item)),
       ...(reconcileCooldown !== undefined ? { reconcileCooldown } : {}),
       ...(retry !== undefined ? { retry } : {}),
       ...(retryDelay !== undefined ? { retryDelay } : {}),

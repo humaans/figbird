@@ -714,6 +714,31 @@ test('id contract: a write that references a pending create waits for it and fai
   t.false(latest?.data?.some(note => note.id === 21))
 })
 
+test('id contract: a reverse one relation does not hold a write behind a create', async t => {
+  const related = createSchema({
+    services: {
+      notes: service<{ item: Note }>(),
+      people: service<{ item: { id: number; name: string } }>().at('api/people'),
+    },
+    relationships: {
+      // The note points at the person; the person's id says nothing about which note.
+      people: ({ one }) => ({
+        pinned: one({ sourceField: 'id', destService: 'notes', destField: 'parentId' }),
+      }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const note = deferred<MockItem>()
+  feathers.service('notes').create = (() => note.promise) as never
+
+  const failed = t.throwsAsync(m.notes.create({ id: 5, content: 'note', parentId: 5 }))
+  const person = m.people.create({ id: 5, name: 'Grace' })
+  note.reject(new Error('rejected'))
+  await failed
+  t.is((await person).name, 'Grace', 'the person does not fail with the note that has its id')
+})
+
 test('create-id tracking: optimistic creates with client ids are visible to useMutating by id', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const { m } = figbird
