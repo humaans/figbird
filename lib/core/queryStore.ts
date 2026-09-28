@@ -448,6 +448,11 @@ export class QueryStore<
   }
 
   // Public store API
+  /** The value comparator every local sort uses, including relational assembly's. */
+  get compare(): ValueComparator {
+    return this.#compare
+  }
+
   /** The instance's observability event emitter — the store is its single owner. */
   get events(): FigbirdEventEmitter {
     return this.#telemetry.events

@@ -9,6 +9,7 @@
 import type { RelationPlan } from './relationPlan.js'
 import type { RelationshipDef } from './schema.js'
 import { getFieldValue } from './relationalFilters.js'
+import { buildComparator, type ValueComparator } from './sort.js'
 
 export type AssembledRelationData =
   | { kind: 'none' }
@@ -74,8 +75,6 @@ interface RelationIndex {
   byKey?: Map<string | number, unknown>
   listByKey?: Map<string | number, unknown[]>
   junctionsByParent?: Map<string | number, unknown[]>
-  /** Result position of each destination row, when the relation has an explicit sort. */
-  positions?: Map<unknown, number>
 }
 
 /**
@@ -147,11 +146,6 @@ function buildIndexes(
       }
       index = { listByKey }
     }
-    // Junction and embed edges carry their own order; an explicit sort overrides it
-    // with the destination query's result order.
-    if (plan.sorted && (relDef.via || relDef.cardinality === 'embedded')) {
-      index.positions = new Map(rel.items.map((entity, position) => [entity, position]))
-    }
     indexes.set(relName, index)
     cache.set(key, { items: rel.items, junctionItems, index })
   }
@@ -159,9 +153,35 @@ function buildIndexes(
   return indexes
 }
 
-function inResultOrder(items: unknown[], positions: Map<unknown, number> | undefined): unknown[] {
-  if (!positions || items.length < 2) return items
-  return [...items].sort((a, b) => positions.get(a)! - positions.get(b)!)
+type RowComparator = (a: unknown, b: unknown) => number
+
+function inOrder(items: unknown[], order: RowComparator | undefined): unknown[] {
+  return order && items.length > 1 ? [...items].sort(order) : items
+}
+
+/**
+ * Junction and embed edges carry their own order; an explicit sort overrides it.
+ * Items are sorted per parent with the store's comparator rather than by result
+ * position, because a relation's rows span several independently sorted chunks.
+ */
+function collectOrders(
+  plans: RelationPlan[],
+  compare: ValueComparator,
+  orders = new Map<string, RowComparator>(),
+): Map<string, RowComparator> {
+  for (const plan of plans) {
+    if (plan.kind === 'missing') continue
+    const { definition, sort, destination } = plan
+    if (
+      sort &&
+      plan.kind !== 'perParent' &&
+      (definition.via || definition.cardinality === 'embedded')
+    ) {
+      orders.set(plan.key, buildComparator(sort, { compare, serviceName: destination.serviceName }))
+    }
+    collectOrders(plan.children, compare, orders)
+  }
+  return orders
 }
 
 function inListOrder(ids: (string | number)[], rows: unknown[], destField: string): unknown[] {
@@ -187,6 +207,7 @@ function firstMatchIndex(items: unknown[], destField: string): Map<string | numb
  */
 interface AssemblyContext {
   relationData: Map<string, AssembledRelationData>
+  orders: Map<string, RowComparator>
   indexCache: Map<string, CachedRelationIndex>
   indexesByPath: Map<string | null, Map<string, RelationIndex>>
   previousByPath: Map<string | null, WeakMap<object, Record<string, unknown>>>
@@ -233,7 +254,7 @@ function assembleRelations(
         // Each parent's window arrives in server order; an unsorted embed window
         // keeps the parent's id-list order instead.
         matchedItems =
-          source && typeof source.filter === 'object' && !plan.sorted
+          source && typeof source.filter === 'object' && !plan.sort
             ? inListOrder(source.filter.$in, rows, relDef.destField)
             : rows
         if (relDef.cardinality === 'one') {
@@ -255,7 +276,7 @@ function assembleRelations(
             if (found) matchedItems.push(found)
           }
         }
-        matchedItems = inResultOrder(matchedItems, index?.positions)
+        matchedItems = inOrder(matchedItems, context.orders.get(key))
       } else if (relDef.via) {
         // Two-hop: walk this parent's junction rows, then collect dest items keyed
         // by the junction's outgoing FK.
@@ -271,7 +292,7 @@ function assembleRelations(
             if (found) matchedItems.push(found)
           }
         }
-        matchedItems = inResultOrder(matchedItems, index?.positions)
+        matchedItems = inOrder(matchedItems, context.orders.get(key))
         // A chained `one` resolves to the first (declared-selective) match, or null.
         if (relDef.cardinality === 'one') {
           let found: unknown = matchedItems[0] ?? null
@@ -323,7 +344,8 @@ function reuseArray(previous: unknown, next: unknown[]): unknown[] {
 }
 
 /** Each query retains row identities and indexes for the latest relation arrays. */
-export function createRelationAssembler(plans: RelationPlan[]) {
+export function createRelationAssembler(plans: RelationPlan[], compare: ValueComparator) {
+  const orders = collectOrders(plans, compare)
   const previousByPath = new Map<string | null, WeakMap<object, Record<string, unknown>>>()
   const indexCache = new Map<string, CachedRelationIndex>()
   let previous: unknown[] = []
@@ -344,6 +366,7 @@ export function createRelationAssembler(plans: RelationPlan[]) {
       previous,
       assembleRelations(items, plans, null, {
         relationData,
+        orders,
         indexesByPath: new Map(),
         indexCache,
         previousByPath,

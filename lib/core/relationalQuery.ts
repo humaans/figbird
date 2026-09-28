@@ -47,6 +47,7 @@ import {
 } from './relationalFilters.js'
 import type { AnySchema, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
+import type { ValueComparator } from './sort.js'
 import { validateStaleTime } from './staleTime.js'
 
 export type { RelationalPaginationState } from './queryRoots.js'
@@ -81,6 +82,8 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
     subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
     ensureRealtimeSubscription(serviceName: string): () => void
     reapplyQuery(queryId: string, mutationLaneKeys: ReadonlySet<string>): void
+    /** The instance's value comparator, shared with every store-side sort. */
+    readonly compare: ValueComparator
   }
   getState(): Map<string, ServiceState<TMeta>>
   /** Returns a QueryRef; typed loosely here and re-typed once at the engine's seam. */
@@ -660,7 +663,10 @@ export class RelationalQueryRef<
   }
 
   #assemble(rootRows: unknown[], assembly: Map<string, AssembledRelationData>): T {
-    this.#assembleRelations ??= createRelationAssembler(this.#relationPlans)
+    this.#assembleRelations ??= createRelationAssembler(
+      this.#relationPlans,
+      this.#host.queryStore.compare,
+    )
     const assembled = this.#assembleRelations(rootRows, assembly)
     return this.#ast.kind !== 'paginate' && this.#ast.cardinality === 'one'
       ? ((assembled[0] ?? null) as T)

@@ -4514,6 +4514,63 @@ it('junction and embed: windows apply per parent and orderBy orders junction des
   unmount()
 })
 
+it('junction and embed: orderBy holds when new destination ids arrive in a later chunk', async t => {
+  const junctionApp = createJunctionApp()
+  const embedApp = createEmbedApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function Members() {
+    const roles = useQuery(
+      junctionApp.figbird.q.roles2.related('members', u => u.orderBy('name', 'desc')),
+    )
+    return (
+      <div
+        className='members'
+        data-names={roles.map(role => role.members.map(u => u.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  function Previews() {
+    const roles = useQuery(
+      embedApp.figbird.q.roles.related('membersPreview', p => p.orderBy('name', 'desc')),
+    )
+    return (
+      <div
+        className='previews'
+        data-names={roles.map(role => role.membersPreview.map(p => p.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  render(
+    <>
+      <junctionApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Members />
+        </React.Suspense>
+      </junctionApp.App>
+      <embedApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Previews />
+        </React.Suspense>
+      </embedApp.App>
+    </>,
+  )
+  await flush()
+  t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Cara,Bob|')
+  t.is($('.previews')!.getAttribute('data-names'), 'Dan,Cara,Alice|Bob|')
+
+  // Dan and Erin are new destination ids, so each is fetched in a chunk of its own.
+  await flush(async () => {
+    await junctionApp.feathers.service('roleMembers').create({ id: 5, roleId: 2, userId: 4 })
+    await embedApp.feathers.service('roles').patch(2, { membersPreview: [2, 5] })
+  })
+  t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Dan,Cara,Bob|')
+  t.is($('.previews')!.getAttribute('data-names'), 'Dan,Cara,Alice|Erin,Bob|')
+  unmount()
+})
+
 it('junction: empty parent set (no find match) resolves with no junction fetch needed', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, $ } = dom()

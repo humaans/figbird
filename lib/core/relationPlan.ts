@@ -15,6 +15,7 @@ type RelationValue = string | number
 
 export interface RelationQueryPlan {
   service: string
+  serviceName: string
   query: Record<string, unknown>
   descriptor(value: RelationValue | { $in: RelationValue[] }): FindDescriptor
   config: FindQueryConfig
@@ -24,8 +25,8 @@ interface PlannedRelation {
   name: string
   key: string
   definition: RelationshipDef
-  /** The refinement or definition sets `$sort`, so each parent's items follow it. */
-  sorted: boolean
+  /** The refinement's or definition's `$sort`, which each parent's items follow. */
+  sort: Record<string, number> | null
   children: RelationPlan[]
   destination: RelationQueryPlan
 }
@@ -51,6 +52,7 @@ function queryPlan(
   })
   return {
     service,
+    serviceName,
     query: bind({ $in: [] }),
     descriptor: value => ({
       serviceName,
@@ -78,10 +80,10 @@ export function compileRelations(
     const windowed = '$limit' in query || '$skip' in query
     const strategy = definition.via ? 'junction' : windowed ? 'perParent' : 'fanIn'
     const allPages = !windowed
-    const hasSort = '$sort' in query
+    const explicitSort = (query.$sort as Record<string, number> | undefined) ?? null
     const sort =
       strategy !== 'perParent' &&
-      !hasSort &&
+      !explicitSort &&
       (definition.cardinality === 'one' || definition.cardinality === 'embedded' || definition.via)
         ? { $sort: { [definition.destField]: 1 } }
         : {}
@@ -89,7 +91,7 @@ export function compileRelations(
       name,
       key,
       definition,
-      sorted: hasSort,
+      sort: explicitSort,
       children: compileRelations(child, schema, realtime, key),
       destination: queryPlan(
         schema,
