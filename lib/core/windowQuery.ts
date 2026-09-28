@@ -83,6 +83,8 @@ interface WindowPage<T, S extends Schema, TParams, TMeta extends Record<string, 
   unsubscribe: () => void
   staleTime: number
   lastUsed: number
+  /** Set when the page loaded but broke the pagination protocol. */
+  failure: Error | undefined
 }
 
 interface WindowQueryOptions {
@@ -178,6 +180,10 @@ export class WindowQueryRef<
         ensure: (start: number) => this.#ensurePage(start),
         drop: (start: number) => this.#dropPage(start),
         touch: (start: number) => this.#touchPage(start),
+        fail: (start: number, error: Error) => {
+          const page = this.#pages.get(start)
+          if (page) page.failure = error
+        },
         total: () => this.#total,
         setTotal: (total: number) => {
           this.#total = total
@@ -243,7 +249,10 @@ export class WindowQueryRef<
       const state = page.ref.getSnapshot()
       if (state.isFetching) isFetching = true
       if (state.status === 'error') coldError ??= state.error
-      if (state.status === 'success') backgroundError ??= state.error
+      if (state.status === 'success') {
+        coldError ??= page.failure ?? null
+        backgroundError ??= state.error
+      }
     }
     for (const start of this.#pager.fetchingStarts(range, this.#config.preloadPages)) {
       if (this.#pages.get(start)?.ref.getSnapshot().isFetching) isFetching = true
@@ -369,6 +378,7 @@ export class WindowQueryRef<
       unsubscribe: () => {},
       staleTime,
       lastUsed: ++this.#clock,
+      failure: undefined,
     }
     this.#pages.set(start, page)
     page.unsubscribe = ref.subscribe(() => this.#pageChanged(start), {
@@ -383,6 +393,7 @@ export class WindowQueryRef<
     const state = page.ref.getSnapshot()
     if (state.status === 'success') {
       const metadata = page.ref.rootMetadata()
+      page.failure = undefined
       this.#pager.pageSucceeded({
         start,
         rowCount: state.data.length,

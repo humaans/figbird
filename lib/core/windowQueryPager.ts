@@ -28,6 +28,8 @@ export interface WindowPagerAccess {
   ensure(start: number): void
   drop(start: number): void
   touch(start: number): void
+  /** Surface a loaded page that broke the pagination protocol as that page's error. */
+  fail(start: number, error: Error): void
   total(): number | undefined
   setTotal(total: number): void
 }
@@ -266,7 +268,11 @@ export class CursorWindowPager implements WindowPager {
       return
     }
     if (page.rowCount === 0) {
-      throw new Error('Native window page reported hasMore without returning rows')
+      this.#context.access.fail(
+        page.start,
+        new Error('Native window page reported hasMore without returning rows'),
+      )
+      return
     }
     if (page.continuation.kind === 'cursor') {
       this.#cursorAt.set(page.start + page.rowCount, page.continuation.cursor)

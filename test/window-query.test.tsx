@@ -429,6 +429,7 @@ interface CursorCall {
 function createCursorWindowApp(initialRows: Item[]) {
   let rows = initialRows
   let failure: Error | null = null
+  let emptyPageAt: number | null = null
   const calls: CursorCall[] = []
   const listeners = new Map<string, Set<(item: unknown) => void>>()
   const cursorService = {
@@ -439,6 +440,10 @@ function createCursorWindowApp(initialRows: Item[]) {
       calls.push({ after, limit: requestedLimit })
       if (failure) throw failure
       const start = after ? Number(after.slice('cursor:'.length)) : 0
+      if (start === emptyPageAt) {
+        // A broken server: more rows promised, none returned.
+        return { data: [], limit: requestedLimit, hasNextPage: true, endCursor: 'cursor:stuck' }
+      }
       // Deliberately return short, non-terminal pages to prove that absolute
       // checkpoints follow actual row counts rather than requested page size.
       const data = rows.slice(start, start + Math.min(2, requestedLimit))
@@ -483,6 +488,9 @@ function createCursorWindowApp(initialRows: Item[]) {
     },
     replaceRows(next: Item[]) {
       rows = next
+    },
+    serveEmptyPageAt(index: number) {
+      emptyPageAt = index
     },
     emit(event: string, item: Item) {
       for (const listener of listeners.get(event) ?? []) listener(item)
@@ -605,5 +613,21 @@ test('window query: cursor pages survive value patches to page zero', async t =>
   await afterCreate
   t.is(app.calls[0]?.after, null)
   t.true(app.calls.some(call => call.after !== null))
+  read.unsubscribe()
+})
+
+test('window query: a cursor page with more rows but none returned surfaces an error', async t => {
+  const app = createCursorWindowApp(makeRows(8))
+  app.serveEmptyPageAt(4)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 4,
+  })
+  const read = readSettledWindow(ref, { start: 5, end: 6 })
+  const state = await read.promise
+  t.is(state.status, 'error')
+  t.is(state.error?.message, 'Native window page reported hasMore without returning rows')
+  t.is(ref.getSnapshot({ start: 0, end: 4 }).status, 'success')
   read.unsubscribe()
 })
