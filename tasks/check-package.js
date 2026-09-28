@@ -27,6 +27,14 @@ try {
       root,
     ),
   )
+  // The devtools panel builds from the repo; only the core bridge ships.
+  const files = packed.files.map(file => file.path)
+  assert.deepEqual(
+    files.filter(path => path.includes('/devtools/')),
+    [],
+    'devtools panel files are not published',
+  )
+  assert.ok(files.includes('dist/esm/core/devtoolsBridge.d.ts'), 'the core devtools bridge ships')
   const installed = join(consumer, 'node_modules/figbird')
   await mkdir(installed, { recursive: true })
   run('tar', ['-xzf', join(consumer, packed.filename), '-C', installed, '--strip-components=1'])
