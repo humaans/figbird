@@ -298,6 +298,26 @@ test('a replayed reconnect still reconciles a query that failed during the outag
   client.dispose()
 })
 
+test('a client that saw no event starts from the server’s head', async t => {
+  const app = await createServer()
+  const people = app.service('people')
+  await people.create({ id: 1, name: 'Ada', team: 'a' })
+  const bridge = connect(app)
+  const client = await mount(bridge)
+  await bridge.idle()
+  const findsBefore = bridge.calls['people.find']
+
+  bridge.disconnect()
+  await people.patch(1, { name: 'Ada Lovelace' })
+  bridge.reconnect()
+  await bridge.idle()
+
+  t.is(bridge.syncResults.length, 1, 'the reconnect replayed')
+  t.is(bridge.calls['people.find'], findsBefore, 'active queries are not refetched')
+  t.deepEqual(client.everyone(), ['Ada Lovelace'])
+  client.dispose()
+})
+
 test('a truncated change log falls back to refetching active queries', async t => {
   const app = await createServer({ log: memoryChangeLog({ size: 2 }) })
   const people = app.service('people')

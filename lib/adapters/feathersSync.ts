@@ -68,6 +68,7 @@ export class FeathersSync {
   /** Counts transport transitions, so a replay can tell it spans another outage. */
   #connection = 0
   #replaying = false
+  #seeding = false
   /** Versions of rows seen live while a replay is in flight, by service and id. */
   #liveDuringReplay: Map<string, number> | undefined
 
@@ -98,6 +99,7 @@ export class FeathersSync {
     let listeners = this.#listeners.get(serviceName)
     if (!listeners) this.#listeners.set(serviceName, (listeners = new Set()))
     listeners.add(handlers)
+    if (this.#cursor === undefined) this.#seedCursor()
 
     const observe =
       (type: keyof EventHandlers) =>
@@ -152,7 +154,38 @@ export class FeathersSync {
         this.#replaying = false
         this.#liveDuringReplay = undefined
       })
-      .then(replayed => this.#broadcast(replayed ? { ...event, replayed } : event))
+      .then(replayed => {
+        this.#broadcast(replayed ? { ...event, replayed } : event)
+        // The reconnect sweep brings the cache up to date: resume from now on.
+        if (!replayed) this.#seedCursor()
+      })
+  }
+
+  /**
+   * Start the cursor at the server's head, so a client that hasn't seen an event
+   * yet can still replay its next outage. Valid while connected with a cache that
+   * is fetched or kept by live events — on first use and after a reconnect sweep
+   * — and discarded if the connection changed while the request was out.
+   */
+  #seedCursor(): void {
+    if (this.#seeding) return
+    this.#seeding = true
+    const connection = this.#connection
+    void Promise.resolve()
+      .then(() => this.#feathers.service(this.#path).get('head'))
+      .then(
+        head => {
+          const cursor = (head as { cursor?: unknown } | null)?.cursor
+          if (connection !== this.#connection) return
+          if (typeof cursor !== 'number' || !Number.isSafeInteger(cursor)) return
+          if (this.#cursor === undefined || cursor > this.#cursor) this.#cursor = cursor
+        },
+        // Without a head the next reconnect falls back to the sweep.
+        () => {},
+      )
+      .finally(() => {
+        this.#seeding = false
+      })
   }
 
   #broadcast(event: AdapterConnectionEvent): void {

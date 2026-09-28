@@ -102,7 +102,7 @@ interface SyncApplication {
  * `$in` read can't reproduce — is reported as `invalidated`, id only, and the
  * client reconciles the queries that might hold it. Removals and invalidations
  * reveal that an id changed; clients act only on ids they hold. `get('ordering')`
- * serves the ordering declarations.
+ * serves the ordering declarations, and `get('head')` a starting cursor.
  */
 export function figbirdSync({
   log,
@@ -118,7 +118,7 @@ export function figbirdSync({
 }: FigbirdSyncOptions): {
   setup(app: SyncApplication): Promise<void>
   find(params?: SyncParams): Promise<SyncResult>
-  get(id: string | number): Promise<Record<string, ServiceOrdering>>
+  get(id: string | number): Promise<Record<string, ServiceOrdering> | { cursor: number }>
 } {
   const allowed = new Set(services)
   let app: SyncApplication | undefined
@@ -224,6 +224,10 @@ export function figbirdSync({
 
     async get(id) {
       if (id === 'ordering') return ordering
+      // A position at least as new as every change committed so far — a cursor
+      // for a client that hasn't seen an event yet. It is the sequencer's
+      // current value, not a log position, so it reveals no caller's writes.
+      if (id === 'head') return { cursor: await sequencer.next() }
       throw new SyncServiceError('NotFound', 404, 'not-found', `figbird sync: no resource "${id}"`)
     },
   }
