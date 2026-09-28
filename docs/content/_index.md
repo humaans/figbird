@@ -2050,6 +2050,11 @@ Required for runtime-backed hooks from `createHooks`, such as `useQuery`, `useMu
 roots, per-request SSR instances, stories, and tests. `useAction` can also run without a provider;
 when one exists, it uses that instance for observability events.
 
+Server rendering needs a streaming renderer such as `renderToPipeableStream`, so cold reads can
+suspend and render real data; `renderToString` cannot wait on Suspense and renders fallbacks.
+Create an instance per request and dispose it after the render. The server's cache is not handed
+to the client, so the client refetches during hydration.
+
 ```tsx
 <FigbirdProvider figbird={testFigbird}>{ui}</FigbirdProvider>
 ```

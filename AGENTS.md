@@ -2,11 +2,11 @@ Figbird is a library that provides effortless realtime data management for React
 
 When updating the code, use the following after updates:
 * `npm run tsc` to type check
-* `npm run lint` to eslint
+* `npm run lint` to lint (oxlint)
 * `npm run ava` to run the tests
 * `npm run test` to run the full test suite including all of the above
 
-Since this is a library, we typically avoid using `any` at all. If the code produces the `Unexpected any` eslint error, fix those by using better types. In some rare cases it does make sense to use any if that makes the public API of the library or a test implementation simpler - add eslint ignore rule in those cases.
+Since this is a library, we typically avoid using `any` at all. If the code produces the `Unexpected any` lint error, fix those by using better types. In some rare cases it does make sense to use any if that makes the public API of the library or a test implementation simpler - add an `oxlint-disable-next-line` comment in those cases.
 
 Update tests if needed to make them work with the updated code.
-Don't add additional tests unless explicitly asked for that task - otherwise we'll accumulate to many noisy tests.
+Bug fixes come with one focused regression test that fails without the fix. Otherwise don't add tests unless explicitly asked for that task - otherwise we'll accumulate too many noisy tests.

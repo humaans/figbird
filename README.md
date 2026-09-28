@@ -68,7 +68,7 @@ function Root() {
 ```
 
 `createHooks(schema)` is pure and safe to evaluate at import time. The provider selects the
-runtime instance, so tests, stories, and SSR requests can inject their own client. Imperative
+runtime instance, so tests and stories can inject their own client. Imperative
 code outside React uses the instance directly: `figbird.m`, `figbird.prepare`, and
 `figbird.prefetch`. Construct each injected instance with the same schema object passed to
 `createHooks`; provider-bound APIs and schema-built queries throw when the schemas differ.

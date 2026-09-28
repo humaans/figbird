@@ -145,9 +145,10 @@ export type {
 export { createHooks } from './react/createHooks.js'
 export type { FigbirdHooks } from './react/createHooks.js'
 export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
-// The write-side story: useMutations returns the provider instance's stateless write
-// proxy; useAction carries per-action pending/error; useMutating answers entity/service-
-// level "is anything in flight". Imperative code uses figbird.m directly.
+// The write-side story: useMutations (from createHooks(schema), which types it) returns
+// the provider instance's stateless write proxy; useAction carries per-action
+// pending/error; useMutating answers entity/service-level "is anything in flight".
+// Imperative code uses figbird.m directly.
 export { useAction } from './react/useAction.js'
 export { useMutating } from './react/useMutating.js'
 export { useMutationQueue } from './react/useMutationQueue.js'

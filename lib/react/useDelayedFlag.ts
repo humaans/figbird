@@ -55,7 +55,7 @@ export function useDelayedFlag(flag: boolean, delay = 400, minVisible = 0): bool
     return () => clearTimeout(t)
     // We intentionally avoid depending on `delayed` — the effect re-runs whenever the
     // source flag changes, which is the only time the timers need to (re)arm.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [flag, delay, minVisible])
 
   // Fast-path the legacy minVisible=0 behavior: hide the instant the source

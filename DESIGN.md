@@ -71,9 +71,12 @@ the contract.
 
 These are explicitly out of scope. They are not bad ideas — they are different products:
 
-- **SSR / RSC / streaming HTML.** Figbird targets live, socket-connected SPAs. The reveal model
-  assumes a long-lived process that owns the realtime event stream. Server-rendered first paint
-  is a different machine; we do not try to be both.
+- **SSR / RSC as a designed-for target.** Figbird targets live, socket-connected SPAs. The reveal
+  model assumes a long-lived process that owns the realtime event stream. Server rendering works
+  as a consequence rather than a design goal: with a streaming renderer
+  (`renderToPipeableStream`) and a per-request instance, cold reads suspend on the server and
+  render real data (`renderToString` cannot wait on Suspense and renders fallbacks). There is no
+  cache hand-off, so the client refetches during hydration; RSC is not supported.
 - **Offline-first / local writes against a replica.** Mutations are remote-first with optimistic
   cache writes layered on top. There is no local persistence layer, no rebase against an
   authoritative log, no operational-transform conflict resolution.
