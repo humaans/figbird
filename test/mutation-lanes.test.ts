@@ -273,8 +273,14 @@ test('mutations: null-id bulk removes apply every returned row', async t => {
   t.deepEqual(latest?.data, [])
 })
 
-test('mutation lanes: explicit optimistic create ids serialize dependent patches', async t => {
+test('mutation lanes: explicit optimistic create items serialize dependent patches', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
   const createGate = deferred<MockItem>()
   const patchGate = deferred<MockItem>()
   const calls: string[] = []
@@ -289,10 +295,15 @@ test('mutation lanes: explicit optimistic create ids serialize dependent patches
 
   const created = figbird.m.notes.create(
     { id: 10, content: 'wire create' },
-    { optimisticItem: { id: 10, content: 'optimistic create' } },
+    { optimisticItem: { id: 10, content: 'optimistic create', parentId: 1 } },
   )
   const patched = figbird.m.notes.patch(10, { content: 'dependent patch' })
   t.deepEqual(calls, ['create'])
+  t.like(
+    latest?.data?.find(note => note.id === 10),
+    { content: 'dependent patch', parentId: 1 },
+    'the patch projects over the explicit optimistic item, not the wire payload',
+  )
 
   createGate.resolve({ id: 10, content: 'server create' })
   await created

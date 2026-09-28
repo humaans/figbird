@@ -142,7 +142,7 @@ test('transactions: validate stable, unique entity ids before reserving lanes', 
       figbird.transaction(tx =>
         tx.m.notes.create({ id: 10, content: '' }, { optimisticItem: { id: 11, content: '' } }),
       ),
-    { message: /must preserve its payload id/ },
+    { message: /must send the optimistic item's id/ },
   )
   t.is(transactionCalls, 0)
   t.is(figbird.mutating.getSnapshot().length, 0)
@@ -494,6 +494,18 @@ test('id contract: an optimisticItem id must be the id the payload sends', t => 
   t.throws(() =>
     m.notes.create({ id: 10, content: '' }, { optimisticItem: { id: 11, content: '' } }),
   )
+  const unaligned = t.throws(() =>
+    m.notes.create(
+      [
+        { id: 10, content: '' },
+        { id: 11, content: '' },
+      ],
+      {
+        optimisticItem: [{ id: 10, content: '' }],
+      },
+    ),
+  )
+  t.regex(unaligned!.message, /one optimistic item per created record/)
   t.is(feathers.service('notes').counts.create, 0, 'nothing hit the wire')
 })
 
