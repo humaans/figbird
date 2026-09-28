@@ -21,6 +21,8 @@
   "files": [
     "dist",
     "lib",
+    "!dist/*/devtools",
+    "!lib/devtools",
     "CHANGELOG.md",
     "README.md",
     "LICENSE.md",
