@@ -388,7 +388,6 @@ export class WindowQueryRef<
         rowCount: state.data.length,
         continuation: metadata.continuation,
         total: metadata.total,
-        revision: metadata.revision,
       })
     }
     this.#rebuildData()

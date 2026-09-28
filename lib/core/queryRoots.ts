@@ -18,8 +18,6 @@ export interface RootMetadata {
   continuation: PageContinuation
   /** Server-reported result-set size, when the adapter supplied one. */
   total: number | undefined
-  /** Root row identity, excluding relation-only changes. */
-  revision: unknown
 }
 
 /** Common lifecycle for a single-query root and an accumulating page root. */
@@ -135,13 +133,8 @@ export class SingleQueryRoot<TMeta extends Record<string, unknown>> implements R
   }
 
   metadata(): RootMetadata {
-    const state = this.#queryRef.getSnapshot()
     const { continuation, total } = this.#queryRef.getPage()
-    return {
-      continuation,
-      total,
-      revision: state?.status === 'success' ? state.data : undefined,
-    }
+    return { continuation, total }
   }
 
   ensureFresh(staleTime?: number, graph?: QueryGraphRef): void {
@@ -401,7 +394,6 @@ export class PagedQueryRoot<
     return {
       continuation: this.#pageRefs.at(-1)?.getPage().continuation ?? { kind: 'done' },
       total: this.#computeTotal(),
-      revision: this.#lastAllPagesData,
     }
   }
 

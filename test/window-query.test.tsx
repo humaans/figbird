@@ -468,7 +468,13 @@ function createCursorWindowApp(initialRows: Item[]) {
   const adapter = new FeathersAdapter(feathers, {
     pagination: { items: cursorPagination() },
   })
-  const figbird = new Figbird({ schema, adapter, retry: false, eventBatchInterval: 0 })
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    retry: false,
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+  })
   return {
     calls,
     figbird,
@@ -477,6 +483,9 @@ function createCursorWindowApp(initialRows: Item[]) {
     },
     replaceRows(next: Item[]) {
       rows = next
+    },
+    emit(event: string, item: Item) {
+      for (const listener of listeners.get(event) ?? []) listener(item)
     },
   }
 }
@@ -547,5 +556,54 @@ test('window query: cursor strategy walks short pages and rebuilds invalid check
   t.is(ref.getSnapshot(seek).status, 'success')
   t.is(ref.getSnapshot(seek).data.get(7)?.id, 7)
   ref.releaseColdStart(seek)
+  read.unsubscribe()
+})
+
+test('window query: cursor pages survive value patches to page zero', async t => {
+  const rows = makeRows(8)
+  const app = createCursorWindowApp(rows)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 4,
+  })
+  const range = { start: 5, end: 6 }
+  const read = readSettledWindow(ref, range)
+  await read.promise
+  const settled = (done: (data: ReturnType<typeof ref.getSnapshot>['data']) => boolean) =>
+    new Promise<void>(resolve => {
+      const unsubscribe = ref.subscribe(
+        state => {
+          if (state.status === 'success' && !state.isFetching && done(state.data)) {
+            unsubscribe()
+            resolve()
+          }
+        },
+        { range },
+      )
+    })
+
+  // A value-only patch refetches page zero but keeps the cursor chain behind it.
+  app.calls.length = 0
+  const patched = { ...rows[0]!, title: 'Patched' }
+  app.replaceRows([patched, ...rows.slice(1)])
+  const afterPatch = settled(data => data.get(0)?.title === 'Patched')
+  app.emit('patched', patched)
+  await afterPatch
+  t.deepEqual(
+    app.calls.map(call => call.after),
+    [null],
+  )
+  t.is(ref.getSnapshot(range).data.get(5)?.id, 6)
+
+  // A membership change still walks the chain again past page zero.
+  app.calls.length = 0
+  const created = { id: 99, ownerId: 1, rank: 0, title: 'Inserted' }
+  app.replaceRows([created, patched, ...rows.slice(1)])
+  const afterCreate = settled(data => data.get(0)?.id === 99)
+  app.emit('created', created)
+  await afterCreate
+  t.is(app.calls[0]?.after, null)
+  t.true(app.calls.some(call => call.after !== null))
   read.unsubscribe()
 })

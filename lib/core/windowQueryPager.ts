@@ -2,6 +2,7 @@ import type { PageCursor } from '../adapters/adapter.js'
 import type { PageContinuation } from '../adapters/queryPage.js'
 import type { QueryAST } from './queryBuilder.js'
 import type { RelationalRootOverride } from './relationalQuery.js'
+import { sameValue } from './valueEquality.js'
 
 export interface PagerRange {
   start: number
@@ -19,7 +20,6 @@ export interface PagerPageSuccess {
   rowCount: number
   continuation: PageContinuation
   total: number | undefined
-  revision: unknown
 }
 
 export interface WindowPagerAccess {
@@ -151,7 +151,7 @@ export class CursorWindowPager implements WindowPager {
   #context: WindowPagerContext
   #cursorAt = new Map<number, PageCursor | undefined>([[0, undefined]])
   #terminalIndex: number | undefined
-  #rootRevision: unknown
+  #rootChain: Pick<PagerPageSuccess, 'rowCount' | 'continuation' | 'total'> | undefined
 
   constructor(context: WindowPagerContext) {
     this.#context = context
@@ -246,10 +246,13 @@ export class CursorWindowPager implements WindowPager {
 
   pageSucceeded(page: PagerPageSuccess): void {
     if (page.start === 0) {
-      if (this.#rootRevision !== undefined && this.#rootRevision !== page.revision) {
+      // Later pages hang off page zero's continuation. A value-only change to its
+      // rows keeps the chain; a new end cursor, row count, or total invalidates it.
+      const chain = { rowCount: page.rowCount, continuation: page.continuation, total: page.total }
+      if (this.#rootChain !== undefined && !sameValue(this.#rootChain, chain)) {
         this.#resetDescendants()
       }
-      this.#rootRevision = page.revision
+      this.#rootChain = chain
     }
     if (page.total !== undefined) {
       this.#context.access.setTotal(page.total)
@@ -273,7 +276,7 @@ export class CursorWindowPager implements WindowPager {
   reset(): void {
     this.#cursorAt = new Map([[0, undefined]])
     this.#terminalIndex = undefined
-    this.#rootRevision = undefined
+    this.#rootChain = undefined
   }
 
   #ensurePath(target: number): void {

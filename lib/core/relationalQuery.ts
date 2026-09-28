@@ -377,7 +377,6 @@ export class RelationalQueryRef<
       this.#root?.metadata() ?? {
         continuation: { kind: 'done' },
         total: undefined,
-        revision: undefined,
       }
     )
   }
