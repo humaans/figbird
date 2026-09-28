@@ -646,6 +646,28 @@ failures are never silent: rollback is global, `useAction` gives every action an
 slot, and the events channel sees everything. `confirmed` is greppable on purpose. It
 names your critical surfaces.
 
+### Reporting failed writes
+
+A write nobody awaits (`void m.issues.patch(...)`) still rolls back when it fails, but
+nothing tells the user why. Subscribe once to [figbird.events](#figbirdevents) for an
+app-wide notice. Every failed write emits `mutate:error`, including custom methods, queued
+writes, and transactions:
+
+```ts
+import { isMutationSupersededError, MutationQueueDiscardedError } from 'figbird'
+
+figbird.events.subscribe(event => {
+  if (event.kind !== 'mutate:error') return
+  const { error } = event
+  if (isMutationSupersededError(error) || error instanceof MutationQueueDiscardedError) return
+  toast.error(`Couldn't save your change: ${error.message}`)
+})
+```
+
+Superseded and discarded writes never reached the server. Figbird cancelled them because an
+earlier write failed, a remove made them obsolete, or a queue was discarded. Skip them so
+each failure is reported once.
+
 ### Writes to the same record are serialized
 
 Figbird sends CRUD calls for the same service and id in call order. Calls for different
