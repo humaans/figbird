@@ -49,8 +49,11 @@ export interface FieldOperators<V> {
  * (`$regex`), `$or`, and dynamically-built filter objects.
  */
 export type WhereClause<TItem> = {
-  [K in keyof TItem & string]?: TItem[K] | FieldOperators<TItem[K]>
+  [K in keyof TItem & string]?: FilterValue<TItem[K]> | FieldOperators<FilterValue<TItem[K]>>
 } & Record<string, unknown>
+
+/** Plain string fields also take a `Date`, which `.where()` sends as its ISO string. */
+type FilterValue<V> = string extends V ? V | Date : V
 
 /**
  * Query AST that represents a query with optional relations.
@@ -75,6 +78,24 @@ export type QueryAST = QueryOperation & {
   server?: boolean
   /** Point-in-time result: fetched once, untouched by realtime; refetch() only. */
   snapshot?: boolean
+}
+
+/**
+ * Replace Date values with their ISO strings — the form they take on the wire and
+ * in cached rows. Keeping a Date in the query would make it compare against ISO
+ * string rows (which never match) and merge as an empty object.
+ */
+function datesToIso(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString()
+  if (Array.isArray(value)) return value.map(datesToIso)
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, datesToIso(v)]))
+  }
+  return value
 }
 
 /**
@@ -187,7 +208,7 @@ export class QueryBuilder<
   ): QueryBuilder<S, TService, TItem, TRelated, TCardinality, K> {
     return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
-      query: deepMerge(this.#state.query, query),
+      query: deepMerge(this.#state.query, datesToIso(query) as FeathersQuery),
     }) as QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>
   }
 

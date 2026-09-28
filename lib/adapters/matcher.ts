@@ -17,7 +17,12 @@ export interface PrepareQueryOptions {
 }
 
 function cleanQuery(query: QueryValue, operators: string[], filters: string[]): QueryValue {
-  if (Array.isArray(query)) {
+  // Rows arrive over the wire with dates as ISO strings, so compare against that
+  // form — a Date operand never matches a string (and would otherwise be rebuilt
+  // below as an empty object).
+  if ((query as unknown) instanceof Date) {
+    return (query as unknown as Date).toISOString()
+  } else if (Array.isArray(query)) {
     return query.map(value => cleanQuery(value, operators, filters)) as QueryValue
   } else if (isObject(query)) {
     const result: Query = {}
