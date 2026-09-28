@@ -1328,14 +1328,18 @@ const log = memoryChangeLog({ size: 10_000 })
 const sequencer = hybridClock()
 
 // after the service's own hooks, so the stamp survives validation
-app.service('people').hooks(versioned({ sequencer, log }))
-app.service('teams').hooks(versioned({ sequencer, log }))
+const scope = (row: Record<string, unknown>) => row.tenantId as string
+app.service('people').hooks(versioned({ sequencer, log, scope }))
+app.service('teams').hooks(versioned({ sequencer, log, scope }))
 
 app.use(
   'figbird/sync',
   figbirdSync({
     log,
+    sequencer,
     services: ['people', 'teams'],
+    // only replay a caller its own tenant's changes
+    scope: params => (params.user as User | undefined)?.tenantId,
     ordering: { people: { preset: 'postgres', numeric: ['salary'] } },
   }),
 )
@@ -1352,15 +1356,20 @@ const figbird = new Figbird({
 })
 ```
 
-- Rows gain a `_v` field (`versionField`). Staleness compares versions instead of timestamps,
-  so an outdated response loses to a newer row even without `updatedAt`. Allow `_v` through your
-  schemas.
-- On reconnect the adapter asks for the changes since the highest `_v` it saw on an event and
-  applies them like realtime events; active queries don't refetch.
+- Rows gain a `_v` field (`versionField`). Versions order realtime deliveries, so an
+  out-of-order event loses to a newer row even without `updatedAt`; fetched rows are judged by
+  timestamps as before. Allow `_v` through your schemas.
+- On reconnect the adapter asks for the changes since the highest `_v` it saw (or the server's
+  head) and applies them like realtime events. Settled queries don't refetch; queries that were
+  loading or failed still do.
 - Replayed rows are read through your services with the caller's params, so users only receive
-  rows they may read; a changed row they can't read replays as removed.
-- The client falls back to refetching whenever the replay can't be served: no event seen yet,
-  the log no longer holds the gap (`Gone`), an error, or a listened service that isn't versioned.
+  rows they may read; a changed row the read doesn't return makes the client reconcile the
+  queries that might hold it. Without `scope`, callers learn other tenants' changed ids.
+- The client falls back to refetching whenever the replay can't be served: the log no longer
+  holds the gap, the cursor is older than `maxAge` or the gap exceeds `maxChanges` (`Gone`), an
+  error, another disconnect meanwhile, or a listened service that isn't versioned.
+- The hook stamps `_v` before the write, which isn't commit-ordered. In production let the
+  database assign it inside the write (`versioned({ assign: 'database' })`).
 - `memoryChangeLog` is per process: use it on a single node only. Multi-node deployments need a
   shared log (a Postgres outbox or Redis stream implementing `ChangeLog`).
 

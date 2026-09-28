@@ -1564,19 +1564,21 @@ to today's behaviour whenever a capability is missing or fails.
 
 Yes — a small one, with four parts and no handshake:
 
-1. **The version field.** Every write through the `versioned` hooks stores `_v`: the change
-   sequence of the row's last write, and a later write to a row must get a greater `_v`. Rows carry
-   it everywhere they already go — events, `find`/`get` responses, mutation results — so it
-   needs no envelope.
-2. **The cursor.** The client's cursor is the highest `_v` it has seen _on a realtime event_.
-   Fetched rows never advance it: a response's versions say nothing about events for rows the
-   response didn't contain.
+1. **The version field.** Every write through the `versioned` hooks stores `_v`, the change
+   sequence of the row's last write. Rows carry it everywhere they already go — events,
+   `find`/`get` responses, mutation results — so it needs no envelope.
+2. **The cursor.** The client's cursor is the highest `_v` it has seen _on a realtime event_, or
+   the server's head (`get('head')`, the sequencer's current value) when it hasn't seen one yet
+   or has just run a reconnect sweep. Fetched rows never advance it: a response's versions say
+   nothing about events for rows the response didn't contain.
 3. **The sync endpoint.** `find({ query: { since, services } })` returns
    `{ cursor, services, changes: [{ service, type, id, item }] }`: the latest change per
-   `(service, id)` with `seq >= since - overlap`, in sequence order. `item` is the current row,
-   read through the app's own service with the caller's params; a removed row, or one the caller
-   can no longer read, comes back as `{ type: 'removed', item: { id, _v } }`. `services` names
-   the requested services the answer covers. A log that can't answer throws
+   `(service, id)` with `seq >= since - overlap`, in sequence order, limited to the caller's
+   scope. `item` is the current row, read through the app's own service with the caller's params.
+   Only a logged removal comes back as `removed` (`item: { id, _v }`); a changed row the read
+   doesn't return comes back as `invalidated` (`item: { id }`), because "not returned" may mean
+   unreadable, outside the service's default scope, or a service that ignores `$in`. `services`
+   names the requested services the answer covers. A replay it can't or won't serve throws
    `{ name: 'Gone', code: 410 }`. Replaying a change the client already has is harmless, which
    is what lets the server be generous (the overlap, inclusive `since`).
 4. **The ordering declaration.** `get('ordering')` returns
@@ -1585,32 +1587,74 @@ Yes — a small one, with four parts and no handshake:
    in [Ordering And Completeness](#ordering-and-completeness), declared by the side that knows it.
 
 Capability negotiation is by presence. The client uses a replay only when it has a cursor, the
-request succeeds, the response is well-formed, and it covers every service the client listens to.
-Anything else — an old server with no sync service, `Gone`, a timeout, an unversioned service —
-reports a plain reconnect and the store runs its usual reconnect sweep. Rows without `_v` compare
-by timestamp as before, so mixed data degrades per row, not per app.
+request succeeds, no disconnect or reconnect happened meanwhile, the response is well-formed and
+covers every service the client listens to, and applying it doesn't throw. Anything else — an old
+server, `Gone`, a timeout, an unversioned service — reports a plain reconnect and the store runs
+its usual reconnect sweep. Rows without `_v` compare by timestamp as before, so mixed data
+degrades per row, not per app.
+
+**What a replayed reconnect still reconciles.** A replay keeps _settled_ results current. The
+store still sweeps every query that isn't settled — never fetched, failed, or with a fetch in
+flight across the outage — because nothing else would recover it.
+
+**The client applies a changed row according to where it came from.** Replayed `created`/
+`patched`/`updated` changes go to the same realtime handlers as live events; `invalidated`
+changes go as id-only events, which the store already treats as "reconcile the queries that might
+hold this row".
 
 **Why applying a replay after live events is safe.** The reconnected socket receives live events
 while the replay request is in flight, and the server reads rows after it reads the log, so a
-live event can be newer than a replayed row, or remove it. Versions make the order irrelevant:
+live event can be newer than a replayed row, or remove it:
 
-- The store already rejects a `patched`/`updated` row older than its cache; with versions that
-  check is exact instead of timestamp-approximate.
+- The store rejects a `patched`/`updated` delivery older than its cache; versions make that check
+  exact where they differ (ties fall through to timestamps: a multi-row write shares a version).
 - The adapter records the version of every row seen live while the replay is in flight and drops
   replayed changes for those rows at the same or an older version. This covers what the store's
   check doesn't: `created` events aren't staleness-checked, and a replayed row must not resurrect
   a row removed meanwhile (removals get a fresh `_v`, so they win).
 - Events after the response are ordinary events.
 
-Two server-side properties close the remaining gaps. A sequence is taken before a write and logged
-after it commits, so a slow write can be logged — and emitted — after faster writes with higher
-sequences; the sync service therefore replays from `since - overlap` (30 seconds by default).
-Writes that take longer than the overlap can still be missed. And `since` is inclusive, because a
-multi-row patch shares one sequence and the client may have received only some of its events.
+A sequence is taken before a write and logged after it commits, so a slow write can be logged —
+and emitted — after faster writes with higher sequences; the sync service therefore replays from
+`since - overlap` (30 seconds by default). Writes that take longer can still be missed. And
+`since` is inclusive, because the client may have received only some events of a multi-row write.
 
 One deployment requirement: the replay must be served after the reconnected socket has rejoined
 its channels, or events between the log read and the join are lost. With Feathers authentication
 this holds, because requests wait for re-authentication, which is when `login` joins channels.
+
+### Commit order
+
+`versioned()` stamps `_v` in a before hook, which is **not commit-ordered**: of two concurrent
+writes to a row, the one stamped first can commit last, leaving the database with the _lower_
+version while the client already holds the higher one from the other write's event. Versions
+therefore only order _deliveries_ — events, replays, mutation results. A fetched row is the
+server's current answer and is judged by timestamps exactly as without sync (the adapter's
+`isItemStale` receives `{ source: 'fetch' }`); races between a fetch and events during it are
+already the fetch journal's job. So an inverted write can show the losing value until the next
+fetch of the row, but never permanently.
+
+For production, assign `_v` inside the write, under the row lock — a trigger or
+`SET _v = nextval('figbird_seq')` — and register `versioned({ assign: 'database', sequencer })`,
+which only logs the version the returned row carries. The sequencer must then draw from the same
+database sequence (`next()` may be async), since it still versions removals.
+
+### Scope and bounds
+
+- **Scope.** Without it, any caller asking for `since: 0` would learn the ids and write times of
+  every row in the allowed services, including other tenants'. `versioned({ scope })` records a
+  scope key on each log entry (typically the row's tenant) and `figbirdSync({ scope })` maps the
+  caller's params to the scopes it may see; only matching entries are replayed, entries without a
+  scope never are, and only matching entries move the cursor. Within a scope, removals and
+  invalidations still reveal that an id changed; clients act only on ids they hold. `get('head')`
+  is the sequencer's value, not a log position, so it reveals nobody's writes.
+- **Bounds.** `maxAge` (one hour of clock by default) answers `Gone` for an older cursor before
+  the log is read; `maxChanges` (1000) answers `Gone` when more distinct rows changed — a refetch
+  is then the cheaper way back. Time-based defaults (`overlap`, `maxAge`) come from the
+  sequencer's `unitsPerMs` and are required for a sequencer without one.
+- **Log failures.** A committed write whose log append fails is not failed (a retry could
+  duplicate it); the hook calls `log.lost(seq)`, and replays that would need the entry answer
+  `Gone`.
 
 ### Where the sequence number comes from
 
@@ -1618,18 +1662,17 @@ this holds, because requests wait for re-authentication, which is when `login` j
   monotonic across restarts without coordination, unique within a process, 1000 writes/ms before
   it runs ahead of the clock, and safe-integer until the year 2255. Separate nodes issue
   comparable (time-ordered) but not unique values, and none knows what the others issued; two
-  nodes writing the same row are ordered only as well as their clocks agree — no worse than
-  `updatedAt`, but a database sequence orders them strictly. Pass `last` (e.g. `max(_v)` at boot)
-  if the clock may step backwards across a restart.
+  nodes writing the same row are ordered only as well as their clocks agree. Pass `last` (e.g.
+  `max(_v)` at boot) if the clock may step backwards across a restart.
 - **In-memory log (shipped: `memoryChangeLog`).** Bounded, lost on restart, and — critically —
   per node. It answers `truncated` after a restart or once it has dropped needed entries, but in
   a multi-node deployment it answers _incompletely_: writes made on other nodes are simply absent.
   It is correct for single-node deployments only.
-- **Postgres outbox.** Insert `{ seq, service, id, type }` in the write's own transaction; `since`
-  is `WHERE seq >= $1`, retention a periodic `DELETE`. Restart-safe and shared across nodes. `_v`
-  can come from a sequence (`nextval`) instead of the clock; either way allocation order is not
-  commit order, so the overlap still applies. A column default plus an update trigger that sets
-  `_v` also versions raw writes.
+- **Postgres outbox.** Insert `{ seq, service, id, type, scope }` in the write's own transaction,
+  with `_v` assigned by the database in the same statement (`assign: 'database'`); `since` is
+  `WHERE seq >= $1`, `lost` a gap marker row, retention a periodic `DELETE`. Restart-safe, shared
+  across nodes, and commit-ordered per row; allocation order across rows is still not commit
+  order, so the overlap still applies. A trigger that sets `_v` also versions raw writes.
 - **Redis Streams.** `XADD ... MAXLEN ~ n` after commit, `XRANGE` to read. Stream ids are
   `ms-counter`, so a hybrid-clock cursor maps to a stream id by its millisecond part
   (`seq / 1000`); `truncated` is a cursor older than the stream's first entry. Shared and bounded,
@@ -1653,13 +1696,14 @@ live event or successful replay), and a phase (`live | replaying | refetching`),
 ### Efficiency
 
 - One integer column per versioned table, one sequencer call and one log append per written row.
-- The log holds ids only: small (tens of bytes per entry), no PII, cheap to retain. `size`
-  bounds the memory log; the Redis and Postgres logs bound by `MAXLEN` or a retention job.
-- Replay is collapsed: fifty patches to one row replay as one change.
+- The log holds ids and scope keys only: small, no row data, cheap to retain. `size` bounds the
+  memory log; the Redis and Postgres logs bound by `MAXLEN` or a retention job.
+- Replay is collapsed (fifty patches to one row replay as one change) and bounded by `maxAge` and
+  `maxChanges`.
 - Authorized reads are batched: one `find` with `$in` per service per 100 ids.
 - A reconnect costs one request whose size tracks the changes missed, instead of one refetch per
-  active query. The worst case — a long disconnect on a busy system — is `Gone` and today's sweep,
-  plus one cheap request.
+  active query; invalidations cost a reconcile of that service's queries. The worst case is
+  `Gone` and today's sweep, plus one cheap request.
 
 ### Maintenance and deployment
 
@@ -1954,8 +1998,9 @@ sync engine for a fraction of the machine. Nothing else in this document depends
 
 The experimental [Sync Protocol](#sync-protocol-experimental) takes rung 1 as _replay_ rather than
 gap detection: one global sequence, stored on each row as its version, doubles as the event
-cursor, and a reconnect replays the missed changes instead of refetching. Row versions also make
-per-row staleness exact. Rung 2 (a version on read responses, guarding membership) is not built.
+cursor, and a reconnect replays the missed changes instead of refetching. Row versions also order
+out-of-order deliveries per row. Rung 2 (a version on read responses, guarding membership) is not
+built.
 
 ### Count Queries
 
