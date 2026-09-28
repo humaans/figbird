@@ -2438,6 +2438,156 @@ it('realtime: a null FK leaves predicates that match a missing relation to the s
   unsub()
 })
 
+it('realtime: the server decides membership through a many relation', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second issue', status: 'open', creatorId: 1 },
+        },
+      },
+      comments: { data: { 1: { id: 1, issueId: 1, authorId: 1, body: 'By Alice' } } },
+    },
+    { queryAwareFind: true },
+  )
+  // The join a real server resolves for `comments.authorId`.
+  const issues = feathers.service('issues')
+  const find = issues.find.bind(issues)
+  issues.find = (async ({ query: { 'comments.authorId': authorId, ...query } = {} } = {}) => {
+    const result = await find({ query })
+    const comments = Object.values(feathers.service('comments').data)
+    const data = result.data.filter(issue =>
+      comments.some(comment => comment.issueId === issue.id && comment.authorId === authorId),
+    )
+    return { ...result, total: data.length, data }
+  }) as typeof issues.find
+  const byBob = figbird.query(figbird.q.issues.where({ 'comments.authorId': 2 }))
+  const unsub = byBob.subscribe(() => {})
+  await flushTasks()
+  const ids = () => (byBob.getSnapshot().data as Issue[]).map(issue => issue.id)
+  t.deepEqual(ids(), [])
+
+  await issues.create({ id: 3, title: 'Third issue', status: 'open', creatorId: 1 })
+  await flushTasks()
+  t.deepEqual(ids(), [], 'a new issue without a matching comment stays out')
+
+  await feathers.service('comments').create({ id: 2, issueId: 2, authorId: 2, body: 'By Bob' })
+  await flushTasks()
+  t.deepEqual(ids(), [2], 'a matching comment brings its issue in')
+
+  unsub()
+})
+
+it('realtime: junction and embed dependencies reconcile a relation-filtered root', async t => {
+  const junction = createJunctionApp()
+  const embed = createEmbedApp()
+  const roles2 = junction.figbird.query(junction.figbird.q.roles2.where({ 'members.name': 'Dan' }))
+  const roles = embed.figbird.query(embed.figbird.q.roles.where({ 'membersPreview.name': 'Erin' }))
+  const unsubs = [roles2.subscribe(() => {}), roles.subscribe(() => {})]
+  await flushTasks()
+  const roles2Finds = junction.feathers.service('roles2').counts.find
+  const rolesFinds = embed.feathers.service('roles').counts.find
+
+  await junction.feathers.service('roleMembers').create({ id: 5, roleId: 3, userId: 4 })
+  await embed.feathers.service('people').patch(5, { name: 'Erin E.' })
+  await flushTasks()
+
+  t.is(junction.feathers.service('roles2').counts.find, roles2Finds + 1, 'a junction row')
+  t.is(embed.feathers.service('roles').counts.find, rolesFinds + 1, 'an embedded row')
+
+  for (const unsub of unsubs) unsub()
+})
+
+it('realtime: a relation-filtered window reconciles a visible row it cannot decide', async t => {
+  const { figbird, feathers } = createApp()
+  // No query fetches users, so creators are never cached.
+  const ref = figbird.query(
+    figbird.q.issues.where({ 'creator.name': 'Alice' }).orderBy('id').limit(2),
+  )
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the window reconciles')
+
+  unsub()
+})
+
+it('realtime: a relation-filtered paginated root keeps its loaded pages on related changes', async t => {
+  const { figbird, feathers } = createApp()
+  const ref = figbird.query(
+    figbird.q.issues.where({ 'comments.authorId': 1 }).orderBy('id').paginate({ pageSize: 1 }),
+  )
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  ref.loadMore()
+  await flushTasks()
+  t.is(ref.getSnapshot().data?.length, 2)
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('comments').create({ id: 9, issueId: 3, authorId: 1, body: 'New' })
+  await flushTasks()
+
+  t.is(ref.getSnapshot().data?.length, 2, 'loaded pages survive')
+  t.is(feathers.service('issues').counts.find, findCount + 2, 'each loaded page reconciles')
+
+  unsub()
+})
+
+it('local reads: a materialized service answers a relation filter only when related rows decide it', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second issue', status: 'open', creatorId: 2 },
+        },
+      },
+      users: {
+        data: {
+          1: { id: 1, name: 'Alice', email: 'alice@example.com' },
+          2: { id: 2, name: 'Bob', email: 'bob@example.com' },
+        },
+      },
+    },
+    { queryAwareFind: true },
+  )
+  const subscribe = (ref: { subscribe: (listener: () => void) => () => void }) =>
+    unsubs.push(ref.subscribe(() => {}))
+  const unsubs: Array<() => void> = []
+  subscribe(figbird.query(figbird.q.issues.all()))
+  subscribe(figbird.query(figbird.q.users.where({ id: 1 })))
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  subscribe(figbird.query(figbird.q.issues.where({ 'creator.name': 'Alice' }).orderBy('id')))
+  await flushTasks()
+  t.is(
+    feathers.service('issues').counts.find,
+    findCount + 1,
+    "Bob isn't cached: the server answers",
+  )
+
+  subscribe(figbird.query(figbird.q.users.all()))
+  await flushTasks()
+  const byBob = figbird.query(figbird.q.issues.where({ 'creator.name': 'Bob' }).orderBy('id'))
+  subscribe(byBob)
+  await flushTasks()
+  t.deepEqual(
+    (byBob.getSnapshot().data as Issue[]).map(issue => issue.id),
+    [2],
+  )
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'every creator is cached')
+
+  for (const unsub of unsubs) unsub()
+})
+
 it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
   interface FilterDocument {
     id: number
@@ -3664,6 +3814,16 @@ test('explain: classifies nodes with structured reasons', t => {
   // A paginated root is a window even without explicit $limit in the builder query.
   const paginated = figbird.explain(figbird.q.issues.paginate({ pageSize: 10 }))
   t.is(paginated.nodes[0]!.class, 'server-window')
+
+  // Filters through a many relation leave membership to the server; one-hop paths stay local.
+  const relational = figbird.explain(figbird.q.issues.where({ 'comments.authorId': 1 })).nodes[0]!
+  t.is(relational.class, 'server-authoritative')
+  t.deepEqual(
+    relational.reasons.filter(reason => reason.code === 'relational-filter'),
+    [{ code: 'relational-filter', detail: 'comments.authorId' }],
+  )
+  const oneHop = figbird.explain(figbird.q.issues.where({ 'creator.name': 'Alice' })).nodes[0]!
+  t.is(oneHop.class, 'local-exact')
 })
 
 test('inspect: stable read-only projection of live queries', async t => {
