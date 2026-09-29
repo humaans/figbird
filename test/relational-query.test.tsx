@@ -2646,6 +2646,34 @@ it('realtime: a relation-filtered window reconciles a visible row it cannot deci
   unsub()
 })
 
+it('realtime: a visible window row the matcher cannot decide still takes new values', async t => {
+  const feathers = mockFeathers({
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 } } },
+    users: { data: {} },
+  })
+  // A hidden tab defers the reconcile, so only the local merge can show the patch.
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    visibility: { isHidden: () => true, onChange: () => () => {} },
+  })
+  const ref = figbird.query(
+    figbird.q.issues.where({ 'creator.name': 'Alice' }).orderBy('id').limit(2),
+  )
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+  t.deepEqual(
+    (ref.getSnapshot().data as Issue[]).map(issue => issue.title),
+    ['Renamed'],
+  )
+
+  unsub()
+})
+
 it('realtime: a relation-filtered paginated root keeps its loaded pages on related changes', async t => {
   const { figbird, feathers } = createApp()
   const ref = figbird.query(

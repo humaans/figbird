@@ -339,7 +339,10 @@ function applyMergeEventToQuery<TMeta>(
       hasItem: service.itemQueryIndex.get(itemId)?.has(queryId) ?? false,
       getId,
     })
-    if (result.action === 'refetch') return 'reconcile'
+    if (result.action === 'refetch') {
+      if (result.replaceVisible) applyVisibleEventEffect(context, queryId, event, 'replace')
+      return 'reconcile'
+    }
     if (result.action === 'noop' || query.state.status !== 'success') return 'ignored'
 
     commitQuery(service, {
@@ -626,7 +629,8 @@ export function replayFetchedQueryFromEvents<TMeta>({
 
 type WindowMergeResult =
   | { action: 'noop' }
-  | { action: 'refetch' }
+  /** `replaceVisible`: a visible row still shows its new values until the refetch lands. */
+  | { action: 'refetch'; replaceVisible?: boolean }
   | {
       action: 'merge'
       data: unknown[]
@@ -700,7 +704,9 @@ function mergeEventIntoWindow<TMeta>({
       ? query.maintenance.matches(previousItem)
       : type === 'removed' && query.maintenance.matches(item)
   // Membership local state can't decide is unprovable by definition.
-  if (matches === 'unknown' || wasMember === 'unknown') return { action: 'refetch' }
+  if (matches === 'unknown' || wasMember === 'unknown') {
+    return { action: 'refetch', replaceVisible: hasItem && matches !== false }
+  }
 
   if (!hasItem) {
     if (!matches) {
