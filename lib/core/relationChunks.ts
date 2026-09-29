@@ -11,9 +11,8 @@ interface Chunk<TMeta extends Record<string, unknown>> {
   unsub: () => void
 }
 
-function isLoading(chunk: Chunk<Record<string, unknown>>): boolean {
-  const state = chunk.queryRef.getSnapshot()
-  return !state || state.status === 'loading'
+function isResolved(chunk: Chunk<Record<string, unknown>>): boolean {
+  return chunk.queryRef.getSnapshot()?.status === 'success'
 }
 
 export interface ChunkedRelationSnapshot {
@@ -43,7 +42,9 @@ const MAX_SPARSE_CHUNKS = 4
  *
  * Growth one id at a time (a live feed of creates) would leave a query and
  * subscription per id, so once too many chunks are sparse, their ids are fetched
- * again in merged chunks. The sparse chunks keep serving until those resolve.
+ * again in merged chunks. The sparse chunks keep serving until those resolve, and
+ * no merge starts while any chunk is unresolved: one in flight or failed would
+ * otherwise be opened again on every sync.
  * Generally, a chunk is released once every referenced id it holds is served by a
  * newer resolved chunk, or it holds none.
  */
@@ -87,7 +88,7 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
     )
     if (
       sparse.length + (fetched.length > 0 ? 1 : 0) > MAX_SPARSE_CHUNKS &&
-      !this.#chunks.some(isLoading)
+      this.#chunks.every(isResolved)
     ) {
       const merged = new Set(sparse.flatMap(chunk => chunk.values))
       fetched = values.filter(value => !held.has(value) || merged.has(value))

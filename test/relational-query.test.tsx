@@ -1497,6 +1497,62 @@ it('useQuery: relation ids arriving one at a time merge into a bounded set of ch
   unmount()
 })
 
+it('useQuery: a failed chunk merge is not retried on every sync', async t => {
+  const ids = [1, 2, 3, 4, 5]
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'Issue 1', status: 'open', creatorId: 1 } } },
+      users: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, name: `User ${id}`, email: `${id}@example.com` }]),
+        ),
+      },
+    },
+    { queryAwareFind: true },
+  )
+  const users = feathers.service('users')
+  const find = users.find.bind(users)
+  // Single-id chunks load; the merged request for several ids fails.
+  users.find = ((params?: { query?: { id?: { $in?: unknown[] } } }) =>
+    (params?.query?.id?.$in?.length ?? 0) > 1
+      ? Promise.reject(new Error('merge failed'))
+      : find(params as never)) as never
+
+  const ref = figbird.query(figbird.q.issues.related('creator'))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  for (const id of ids.slice(1)) {
+    await feathers
+      .service('issues')
+      .create({ id, title: `Issue ${id}`, status: 'open', creatorId: id })
+    await flushTasks()
+  }
+  const chunkSubscriptions = () =>
+    figbird
+      .inspect()
+      .filter(row => row.serviceName === 'users')
+      .reduce((sum, row) => sum + row.subscriberCount, 0)
+  const afterMerge = chunkSubscriptions()
+
+  // Root changes with no new creator ids re-sync the relation.
+  for (let i = 0; i < 3; i++) {
+    await feathers.service('issues').patch(1, { title: `Renamed ${i}` })
+    await flushTasks()
+  }
+
+  t.is(chunkSubscriptions(), afterMerge, 'no new chunk per sync')
+  const snapshot = ref.getSnapshot()
+  t.deepEqual(
+    (snapshot.data as Array<Issue & { creator: { id: number } | null }>)
+      .filter(issue => issue.creator?.id === issue.creatorId)
+      .map(issue => issue.id),
+    [1, 2, 3, 4],
+    'the sparse chunks keep serving the ids they hold',
+  )
+  unsub()
+})
+
 it('useQuery: ids that leave a still-live chunk stop driving nested relations', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers } = createTestApp(
