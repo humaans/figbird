@@ -20,7 +20,7 @@ import {
 } from '../lib'
 import { compileRelations } from '../lib/core/relationPlan.js'
 import { REACT_19, dom, it } from './dom.js'
-import { createTestApp, mockFeathers } from './helpers'
+import { createTestApp, mockFeathers, waitFor } from './helpers'
 
 // Tagged-union variant of useQuery — the shape the deleted useRelationalQuery had.
 function useStatusQuery<
@@ -711,7 +711,7 @@ test('QueryBuilder: where() keeps both sets of $or alternatives', async t => {
   await ref.suspensePromise()
   const before = (ref.getSnapshot().data as Array<{ id: number }>).length
   await feathers.service('issues').create({ id: 99, title: 'x', status: 'open', creatorId: 3 })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is((ref.getSnapshot().data as Array<{ id: number }>).length, before)
   t.is(figbird.explain(query).nodes[0]!.class, 'local-exact')
   unsubscribe()
@@ -756,12 +756,13 @@ test('matcher: Date operands match ISO string rows through realtime patches', as
     params: { query: { $or: [{ effectiveAt: { $gte: since } }] } },
   })
   const unsubscribe = ref.subscribe(() => {})
-  const ids = () => (ref.getSnapshot()?.data as Array<{ id: number }> | null)?.map(row => row.id)
-  await new Promise(resolve => setTimeout(resolve, 10))
+  const rows = () => ref.getSnapshot()?.data as Array<{ id: number; title: string }> | null
+  const ids = () => rows()?.map(row => row.id)
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial find')
   t.deepEqual(ids(), [2, 3])
 
   await feathers.service('employments').patch(2, { title: 'Renamed' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => rows()?.[0]?.title === 'Renamed', 'the realtime patch')
   t.deepEqual(ids(), [2, 3], 'a realtime patch keeps the matching row')
   unsubscribe()
 })
@@ -967,7 +968,7 @@ test('figbird.query: inactive server-maintained cache-first query refetches on n
   const initialFindCount = periodsService.counts.find
 
   await periodsService.patch(1, { balance: 12 })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
 
   t.is(periodsService.counts.find, initialFindCount)
 
@@ -1022,7 +1023,7 @@ test('figbird.query: unsupported query operators are auto server-maintained', as
   const initialFindCount = peopleService.counts.find
 
   await peopleService.patch(1, { name: 'Alicia' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => peopleService.counts.find > initialFindCount, 'the reconcile refetch')
 
   t.is(peopleService.counts.find, initialFindCount + 1)
   unsubscribe()
@@ -1074,13 +1075,14 @@ test('figbird.query: inactive server-windowed query merges provable events; next
     status: 'active',
     startDate: '2025-05-01',
   })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  // Dana sorts strictly to the front of the full window, so window maintenance
+  // merges the event into the inactive cached query — the next subscription reads
+  // the already-correct data without any refetch.
+  const names = () =>
+    ((queryRef.getSnapshot()?.data ?? []) as Employee[]).map(person => person.name)
+  await waitFor(() => names()[0] === 'Dana', 'the realtime merge')
 
   t.is(peopleService.counts.find, initialFindCount)
-
-  // Dana sorts strictly to the front of the full window, so window maintenance
-  // merged the event into the inactive cached query — the next subscription reads
-  // the already-correct data without any refetch.
   const snapshot = queryRef.getSnapshot()
   t.is(snapshot?.status, 'success')
   t.deepEqual(
@@ -1089,7 +1091,7 @@ test('figbird.query: inactive server-windowed query merges provable events; next
   )
 
   const resubscribeUnsubscribe = queryRef.subscribe(() => {})
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   resubscribeUnsubscribe()
 
   t.is(peopleService.counts.find, initialFindCount)
@@ -1142,7 +1144,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
     }
   })
 
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => latestNames.length > 0, 'the initial find')
 
   t.deepEqual(latestNames, ['Alice'])
   const initialFindCount = peopleService.counts.find
@@ -1152,7 +1154,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
     1: { id: 1, companyId: 1, name: 'Alicia', status: 'active' },
   }
   reconnectEvents.emit('reconnect')
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => latestNames[0] === 'Alicia', 'the reconnect refetch')
 
   t.is(peopleService.counts.find, initialFindCount + 1)
   t.deepEqual(latestNames, ['Alicia'])
@@ -4160,13 +4162,13 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   const beforeUnrelatedPatch = exhaustive.getSnapshot()
   exhaustiveNotifications = 0
   await figbird.m.issues.patch(2, { title: 'Closed issue updated' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(exhaustive.getSnapshot(), beforeUnrelatedPatch)
   t.is(exhaustiveNotifications, 0)
 
   // Realtime maintains the set; the windowed subset recomputes locally — still no fetch.
   await feathers.service('issues').create({ id: 9, title: 'Newest', status: 'open', creatorId: 1 })
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await waitFor(() => winRef.getSnapshot().data?.[0]?.id === 9, 'the realtime create')
   t.deepEqual(
     (winRef.getSnapshot().data as Issue[]).map(issue => issue.id),
     [9, 3],
@@ -4178,7 +4180,7 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   )
 
   await figbird.m.issues.patch(1, { title: 'ZZZ' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(allRef.getSnapshot().data?.at(-1)?.id, 1, 'patches restore exhaustive query order')
 
   feathers.service('issues').data[1] = { id: 1, title: 'AAA', status: 'open', creatorId: 1 }
@@ -4234,7 +4236,7 @@ test('.all(): materialized reads stay local only when their ordering is knowable
 
   hidden = false
   reconnectEvents.emit('reconnect')
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await flushTasks()
   const settled = figbird.getState().get('issues')?.queries.get(exhaustive.details().queryId)
   t.is(settled?.pending, false, 'local reconciliation settles pending work')
   const beforeEnsureFresh = exhaustive.getSnapshot()
@@ -4328,7 +4330,7 @@ test('.all(): accepts filters — complete slice, no materialization; rejects wi
 
   // The complete slice is maintained by local realtime merges, not refetches.
   await feathers.service('issues').create({ id: 9, title: 'E', status: 'open', creatorId: 1 })
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await waitFor(() => openRef.getSnapshot().data?.length === 4, 'the realtime create')
   t.deepEqual((openRef.getSnapshot().data as Issue[]).map(issue => issue.id).sort(), [1, 3, 4, 9])
   t.is(feathers.service('issues').counts.find, findsAfterAll, 'realtime maintenance stays local')
 
@@ -5784,7 +5786,7 @@ test('.all(): get(id) answers locally from the materialized service', async t =>
 
   // Realtime keeps the locally-served get fresh — still no roundtrip.
   await feathers.service('issues').patch(1, { title: 'Renamed' })
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await waitFor(() => (ref.getSnapshot().data as Issue).title === 'Renamed', 'the realtime patch')
   t.is((ref.getSnapshot().data as Issue).title, 'Renamed')
   t.is(feathers.service('issues').counts.get, getsAfterAll)
 

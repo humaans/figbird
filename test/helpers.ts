@@ -56,6 +56,15 @@ export async function waitForEmissions(): Promise<void> {
   })
 }
 
+/** Poll until `predicate` holds, for effects that settle on no single awaitable signal. */
+export async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 1000
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${message}`)
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
 export { matchesQuery, service, sortRows } from '../lib/testing.js'
 export type { TestItem } from '../lib/testing.js'
 

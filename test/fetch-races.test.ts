@@ -11,7 +11,7 @@ import {
 } from '../lib'
 import { FetchEventJournal, MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
 import type { ProcessedCacheEvent } from '../lib/core/queryTypes'
-import { mockFeathers, type TestItem } from './helpers'
+import { mockFeathers, waitFor, type TestItem } from './helpers'
 
 interface Note extends TestItem {
   id: number
@@ -26,16 +26,6 @@ const schema = createSchema({
     notes: service<{ item: Note }>(),
   },
 })
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-
-async function waitFor(predicate: () => boolean, message: string): Promise<void> {
-  const deadline = Date.now() + 1000
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${message}`)
-    await sleep(5)
-  }
-}
 
 function createApp(
   data: Record<string, Note>,
