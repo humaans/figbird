@@ -15,7 +15,6 @@ type RelationValue = string | number
 
 export interface RelationQueryPlan {
   service: string
-  serviceName: string
   /** The destination field the source values are matched against. */
   field: string
   query: Record<string, unknown>
@@ -60,7 +59,6 @@ function queryPlan(
   })
   return {
     service,
-    serviceName,
     field,
     query: bind({ $in: [] }),
     descriptor: value => ({

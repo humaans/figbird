@@ -163,10 +163,7 @@ export class MockService {
       rows = sortRows(
         rows.filter(item => matchesQuery(item, query)),
         query.$sort as Record<string, unknown> | undefined,
-        {
-          serviceName: this.name,
-          ...(this.options.compare ? { compare: this.options.compare } : {}),
-        },
+        this.options.compare,
       )
     }
 
@@ -328,11 +325,8 @@ export function matchesQuery(
 export function sortRows<T extends Record<string, unknown>>(
   rows: T[],
   sort: Record<string, unknown> | undefined,
-  {
-    compare = compareValues,
-    serviceName = '',
-  }: { compare?: ValueComparator; serviceName?: string } = {},
+  compare: ValueComparator = compareValues,
 ): T[] {
   if (!sort) return rows
-  return [...rows].sort(buildComparator(sort as Record<string, number>, { compare, serviceName }))
+  return [...rows].sort(buildComparator(sort as Record<string, number>, compare))
 }

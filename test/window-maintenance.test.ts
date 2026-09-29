@@ -2,7 +2,7 @@ import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
-import { postgresCompare, type ValueComparator } from '../lib/core/sort'
+import { compareValues, type ValueComparator } from '../lib/core/sort'
 import { mockFeathers } from './helpers'
 
 /**
@@ -397,7 +397,9 @@ test('defaultSort places creates into windows without $sort', async t => {
 test('a configured compare places creates like the backend orders them', async t => {
   // Postgres sorts nulls last ascending; the default comparator sorts them first,
   // which would insert the row at the top of the full window and evict 'c'.
-  const { figbird, notes } = createApp({ compare: postgresCompare })
+  const nullsLast: ValueComparator = (a, b) =>
+    a == null ? (b == null ? 0 : 1) : b == null ? -1 : compareValues(a, b)
+  const { figbird, notes } = createApp({ compare: nullsLast })
   const { texts, total, unsub } = await watch(figbird, { $sort: { rank: 1 }, $limit: 3 })
   const finds = notes.counts.find
 

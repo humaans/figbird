@@ -263,10 +263,9 @@ export class Figbird<
    *   server actually applies — divergence shows up as misplaced rows until the
    *   next fetch.
    * @param compare The backend's value ordering, used wherever figbird sorts rows
-   *   itself: `(a, b, { serviceName, field }) => number`, ascending. Defaults to
-   *   `compareValues` (nulls first, codepoint strings); `postgresCompare` puts
-   *   nulls last ascending and collates strings like ICU `en`. The same correctness contract as
-   *   `defaultSort`: it must mirror how the server orders values.
+   *   itself: `(a, b) => number`, ascending. Defaults to `compareValues` (nulls
+   *   first, codepoint strings). The same correctness contract as `defaultSort`:
+   *   it must mirror how the server orders values.
    */
   constructor({
     adapter,

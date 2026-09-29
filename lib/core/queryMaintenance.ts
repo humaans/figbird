@@ -73,9 +73,7 @@ export function compileQueryMaintenance({
         : () => false,
     matchesLocal: item =>
       (localMatcher ??= matcher(desc.method === 'find' ? filters : query))(item),
-    compare: effectiveSort
-      ? buildComparator(effectiveSort, { compare, serviceName: desc.serviceName })
-      : undefined,
+    compare: effectiveSort ? buildComparator(effectiveSort, compare) : undefined,
     limit,
     skip,
     isProjection: isProjectionQuery(query),

@@ -178,13 +178,13 @@ function collectOrders(
 ): Map<string, RowComparator> {
   for (const plan of plans) {
     if (plan.kind === 'missing') continue
-    const { definition, sort, destination } = plan
+    const { definition, sort } = plan
     if (
       sort &&
       plan.kind !== 'perParent' &&
       (definition.via || definition.cardinality === 'embedded')
     ) {
-      orders.set(plan.key, buildComparator(sort, { compare, serviceName: destination.serviceName }))
+      orders.set(plan.key, buildComparator(sort, compare))
     }
     collectOrders(plan.children, compare, orders)
   }

@@ -1171,17 +1171,18 @@ everything positional refetches.
 
 The same contract covers how values compare. By default figbird sorts nulls first and
 compares strings by codepoint. If your database orders values differently, pass its
-ordering as `compare`, and figbird uses it wherever it sorts rows itself:
+ordering as `compare`, an `(a, b) => number` for ascending order, and figbird uses it
+wherever it sorts rows itself. For Postgres's nulls-last default:
 
 ```ts
-import { Figbird, postgresCompare } from 'figbird'
+import { Figbird, compareValues } from 'figbird'
 
-const figbird = new Figbird({ adapter, schema, compare: postgresCompare })
+const figbird = new Figbird({
+  adapter,
+  schema,
+  compare: (a, b) => (a == null ? (b == null ? 0 : 1) : b == null ? -1 : compareValues(a, b)),
+})
 ```
-
-`postgresCompare` puts nulls last ascending and collates strings like ICU `en`, so use it
-only with a matching database collation (for example `en-x-icu`). A custom comparator
-receives `(a, b, { serviceName, field })` and returns a number, for ascending order.
 
 ### Teaching the client custom operators
 
