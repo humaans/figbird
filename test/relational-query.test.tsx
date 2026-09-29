@@ -1393,6 +1393,55 @@ it('useQuery: large relation id sets are fetched in bounded $in chunks', async t
   unmount()
 })
 
+test('useQuery: the adapter sets how many relation ids one $in request carries', async t => {
+  const ids = Array.from({ length: 250 }, (_, index) => index + 1)
+  const services = () => ({
+    issues: {
+      data: Object.fromEntries(
+        ids.map(id => [id, { id, title: `Issue ${id}`, status: 'open', creatorId: id }]),
+      ),
+    },
+    users: {
+      data: Object.fromEntries(ids.map(id => [id, { id, name: `User ${id}`, email: '' }])),
+    },
+  })
+  const creatorFetchSizes = async (
+    feathers: ReturnType<typeof mockFeathers>,
+    adapter: FeathersAdapter,
+  ) => {
+    const users = feathers.service('users')
+    const find = users.find.bind(users)
+    const sizes: number[] = []
+    users.find = (params => {
+      const query = params?.query as { id: { $in: unknown[] }; $skip?: number }
+      // Count requests, not pages: the mock serves 100 rows per page.
+      if (!query.$skip) sizes.push(query.id.$in.length)
+      return find(params)
+    }) as typeof find
+    const figbird = new Figbird({ schema, adapter })
+    const ref = figbird.query(figbird.q.issues.limit(250).related('creator'))
+    const unsubscribe = ref.subscribe(() => {})
+    await ref.suspensePromise()
+    unsubscribe()
+    figbird.dispose()
+    return sizes
+  }
+
+  // Over a socket, ids travel in the message body: one request carries them all.
+  const socketFeathers = mockFeathers(services(), { queryAwareFind: true })
+  Object.assign(socketFeathers, { io: new EventEmitter() })
+  const socketAdapter = new FeathersAdapter(socketFeathers)
+  t.is(socketAdapter.maxIdsPerQuery, 2500)
+  t.deepEqual(await creatorFetchSizes(socketFeathers, socketAdapter), [250])
+
+  const restFeathers = mockFeathers(services(), { queryAwareFind: true })
+  const configured = new FeathersAdapter(restFeathers, { maxIdsPerQuery: 200 })
+  t.deepEqual(await creatorFetchSizes(restFeathers, configured), [200, 50])
+  t.throws(() => new FeathersAdapter(restFeathers, { maxIdsPerQuery: 0 }), {
+    message: /positive integer/,
+  })
+})
+
 it('useQuery: relation ids arriving one at a time merge into a bounded set of chunks', async t => {
   const { render, unmount, flush, $ } = dom()
   const ids = Array.from({ length: 20 }, (_, index) => index + 1)

@@ -1,10 +1,7 @@
 import type { QueryRef } from './queryRef.js'
 
-/**
- * Upper bound on source ids per relation `$in` request. Larger id sets are split
- * across several ordinary queries so REST transports stay under URL length limits.
- */
-export const RELATION_CHUNK_SIZE = 100
+/** Source ids per relation `$in` request when the adapter doesn't say (`maxIdsPerQuery`). */
+export const DEFAULT_RELATION_CHUNK_SIZE = 100
 
 type SourceValue = string | number
 
@@ -32,10 +29,9 @@ export interface ChunkedRelationSnapshot {
 }
 
 /**
- * Chunks serving fewer referenced ids than this count as sparse. Past
- * MAX_SPARSE_CHUNKS of them, a sync merges their ids into fresh full chunks.
+ * Chunks serving fewer than half the chunk size of referenced ids count as sparse.
+ * Past MAX_SPARSE_CHUNKS of them, a sync merges their ids into fresh full chunks.
  */
-const SPARSE_CHUNK_SIZE = RELATION_CHUNK_SIZE / 2
 const MAX_SPARSE_CHUNKS = 4
 
 /**
@@ -58,6 +54,7 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
   #subscribe: (queryRef: QueryRef<unknown[], unknown, TMeta>, onSuccess: () => void) => () => void
   #sourceValueOf: (row: unknown) => SourceValue | undefined
   #onSuccess: () => void
+  #chunkSize: number
   #lastParts: unknown[][] = []
   #lastRows: unknown[] = []
 
@@ -69,11 +66,14 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
     sourceValueOf: (row: unknown) => SourceValue | undefined,
     /** Called whenever any chunk produces rows. */
     onSuccess: () => void,
+    /** Most source ids per `$in` request. */
+    chunkSize: number = DEFAULT_RELATION_CHUNK_SIZE,
   ) {
     this.#open = open
     this.#subscribe = subscribe
     this.#sourceValueOf = sourceValueOf
     this.#onSuccess = onSuccess
+    this.#chunkSize = chunkSize
   }
 
   sync(values: readonly SourceValue[]): void {
@@ -83,7 +83,7 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
     const held = new Set(this.#chunks.flatMap(chunk => chunk.values))
     let fetched = values.filter(value => !held.has(value))
     const sparse = this.#chunks.filter(
-      chunk => chunk.values.filter(value => live.has(value)).length < SPARSE_CHUNK_SIZE,
+      chunk => chunk.values.filter(value => live.has(value)).length < this.#chunkSize / 2,
     )
     if (
       sparse.length + (fetched.length > 0 ? 1 : 0) > MAX_SPARSE_CHUNKS &&
@@ -93,8 +93,8 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
       fetched = values.filter(value => !held.has(value) || merged.has(value))
     }
     const opened: Chunk<TMeta>[] = []
-    for (let i = 0; i < fetched.length; i += RELATION_CHUNK_SIZE) {
-      const chunkValues = fetched.slice(i, i + RELATION_CHUNK_SIZE)
+    for (let i = 0; i < fetched.length; i += this.#chunkSize) {
+      const chunkValues = fetched.slice(i, i + this.#chunkSize)
       opened.push({ values: chunkValues, queryRef: this.#open(chunkValues), unsub: () => {} })
     }
     this.#chunks = [...this.#chunks, ...opened]
