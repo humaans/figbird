@@ -738,17 +738,15 @@ it('cursor paginate: failed prefix rebuild stays atomic and retries its depth', 
   unmount()
 })
 
-it('cursor paginate: failed prefix rebuild surfaces loadMoreError until refetch', async t => {
+it('cursor paginate: failed prefix rebuild surfaces loadMoreError and loadMore retries it', async t => {
   const { render, unmount, flush, $ } = dom()
   const cursorApp = createCursorApp(makeRows(7), 3, { retry: false })
   let loadMore: (() => void) | undefined
-  let refetch: (() => void) | undefined
 
   function List() {
     const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
     useLayoutEffect(() => {
       loadMore = result.loadMore
-      refetch = result.refetch
     })
     return (
       <div
@@ -781,12 +779,16 @@ it('cursor paginate: failed prefix rebuild surfaces loadMoreError until refetch'
   t.is($('.items')?.getAttribute('data-load-more-error'), 'failed cursor:3')
 
   await flush(async () => {
-    refetch?.()
+    loadMore?.()
     await new Promise(resolve => setTimeout(resolve, 20))
   })
 
-  t.is($('.items')?.getAttribute('data-ids'), '99,1,2')
+  t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
   t.is($('.items')?.getAttribute('data-load-more-error'), '')
+  t.deepEqual(
+    cursorApp.calls.slice(-2).map(call => call.query.$after),
+    [null, 'cursor:3'],
+  )
   unmount()
 })
 

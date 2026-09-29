@@ -352,6 +352,12 @@ export class PagedQueryRoot<
   }
 
   loadMore(graph?: QueryGraphRef): void {
+    if (this.#reconcile.phase === 'failed') {
+      // Retry the failed rebuild: page zero fetching restarts it at the depth
+      // it was rebuilding.
+      this.#pageRefs[0]?.refetch({ graph })
+      return
+    }
     if (this.#reconcile.phase !== 'idle') return
     if (this.#isLoadingMore || !this.#hasMoreSticky || this.#pageRefs.length === 0) return
 
@@ -571,8 +577,8 @@ export class PagedQueryRoot<
       rows: current.rows,
       previousQueryIds: current.previousQueryIds,
     }
-    // loadMore() is blocked until the next rebuild or refetch, so surface the
-    // failure where callers already offer a retry.
+    // Surface the failure where callers already offer a retry; loadMore()
+    // restarts the rebuild.
     this.#loadMoreError = error
     this.#onChange()
   }
