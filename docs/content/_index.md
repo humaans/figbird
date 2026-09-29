@@ -826,9 +826,10 @@ atomic or durable. An unfinished keyed queue can survive component navigation, b
 queue survives a page reload. Register a parent create before a child create that
 references it.
 
-A numeric `retry` repeats only updates, patches, and removes. A failed create or custom
-method may already have been applied, so those retry only when a `retry` function returns
-`true` for them; do that only when the server handles them idempotently.
+A numeric `retry` repeats updates, patches, removes, and creates that carry their id (a
+repeat can't create a second record). An id-less create or a custom method may already
+have been applied, so those retry only when a `retry` function returns `true` for them;
+do that only when the server handles them idempotently.
 
 ### Creates and ids: the id contract
 
@@ -1797,8 +1798,9 @@ const reconnectable = useMutationQueue(autosave, `issue:${issueId}`)
 
 `defineMutationQueue(config?)` creates an immutable policy value. Keep it at module scope.
 The optional `schedule` function controls debounce timing; `retry` and `retryDelay`
-control automatic retries. A numeric `retry` applies to updates, patches, and removes;
-creates and custom methods retry only when a `retry` function returns `true` for them.
+control automatic retries. A numeric `retry` applies to updates, patches, removes, and
+creates with ids; id-less creates and custom methods retry only when a `retry` function
+returns `true` for them.
 
 `useMutationQueue()` returns a serial queue with an `m` write proxy. Pass a definition to
 use its policy. Pass a definition and key to reconnect to unfinished work after a remount.

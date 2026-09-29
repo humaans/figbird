@@ -877,6 +877,7 @@ export class Figbird<
   #createMutationQueue(config: MutationQueueConfig): MutationQueue<S> {
     this.queryStore.assertActive()
     const host: MutationQueueHost = {
+      getId: item => this.adapter.getId(item),
       registerMutation: (desc, control) => {
         const resolve = (value: MutationDescriptor): MutationDescriptor => ({
           ...value,
