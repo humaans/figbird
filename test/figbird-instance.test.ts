@@ -531,6 +531,10 @@ test('realtime events for rows no query references leave the entity cache bounde
   const events = MAX_RETAINED_UNREFERENCED_ENTITIES * 2
   for (let id = 2; id <= events + 1; id++) {
     feathers.service('notes').emit('created', { id, content: 'unrelated', tag: 'other' })
+  }
+  // Each create re-sorts the materialized root, so the posts stay few.
+  const posts = 100
+  for (let id = 2; id <= posts + 1; id++) {
     feathers.service('posts').emit('created', { id, title: 'new', body: 'kept' })
   }
 
@@ -538,7 +542,7 @@ test('realtime events for rows no query references leave the entity cache bounde
   t.is(notes.size, 1 + MAX_RETAINED_UNREFERENCED_ENTITIES, 'unreferenced rows are bounded')
   t.true(notes.has('1'), 'the referenced row stays')
   t.true(notes.has(String(events + 1)), 'the most recently touched rows stay')
-  t.is(figbird.getState().get('posts')!.entities.size, events + 1, 'materialized keeps every row')
+  t.is(figbird.getState().get('posts')!.entities.size, posts + 1, 'materialized keeps every row')
   releaseNarrow()
   releaseAll()
 })

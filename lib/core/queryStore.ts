@@ -165,7 +165,7 @@ export const DEFAULT_GC_TIME = 30 * 60_000
  * root row against its related row. Without it both fall back to a refetch, so the
  * most recently changed rows are worth keeping — but only up to a bound.
  */
-export const MAX_RETAINED_UNREFERENCED_ENTITIES = 1000
+export const MAX_RETAINED_UNREFERENCED_ENTITIES = 5000
 
 export interface DevtoolsCacheEditResult {
   ok: boolean
