@@ -12,6 +12,12 @@ import { datesToIso } from './wireDates.js'
 export const ABSENT = Symbol('figbird.absent')
 export type ProjectedEntity = unknown | typeof ABSENT
 
+interface OptimisticData {
+  data: unknown
+  /** An explicit optimistic item, which replaces the entity rather than patching it. */
+  explicit: boolean
+}
+
 export interface MutationLaneEntry {
   desc: MutationDescriptor
   optimistic: boolean
@@ -66,7 +72,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
   readonly #lanes = new Map<string, MutationLaneState<TEntry>>()
   readonly #getId: (item: unknown) => ItemId | undefined
   readonly #isItemStale: (current: unknown, next: unknown) => boolean
-  readonly #wireForms = new WeakMap<MutationDescriptor, unknown>()
+  readonly #wireForms = new WeakMap<MutationDescriptor, OptimisticData>()
 
   constructor(
     getId: (item: unknown) => ItemId | undefined,
@@ -372,35 +378,40 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
 
   /** Projections hold Dates in wire form, so they match like the rows the server sends. */
   #applyIntent(current: ProjectedEntity, desc: MutationDescriptor): ProjectedEntity {
-    const explicit =
-      desc.optimistic !== undefined && desc.optimistic !== true && desc.optimistic !== false
-        ? this.#wireForm(desc, desc.optimistic)
-        : null
-    if (desc.method === 'create') return explicit ?? this.#wireForm(desc, desc.data)
     if (desc.method === 'remove') return ABSENT
-    if (explicit !== null) return explicit
+    const { data, explicit } = this.#optimisticData(desc)
+    if (desc.method === 'create' || explicit) return data
 
     const currentRecord =
       current !== ABSENT && current && typeof current === 'object'
         ? (current as Record<string, unknown>)
         : null
-    const data = this.#wireForm(desc, desc.optimisticPatch ?? desc.data) as Record<string, unknown>
-    if (!currentRecord && this.#getId(data) === undefined) return current
-    return { ...(currentRecord ?? {}), ...data }
+    const patch = data as Record<string, unknown>
+    if (!currentRecord && this.#getId(patch) === undefined) return current
+    return { ...(currentRecord ?? {}), ...patch }
   }
 
   /**
-   * Optimistic data in the form server rows carry (Dates as ISO strings). A write's
-   * data is re-projected on every lane transition; converting it once per write
-   * keeps the projected item's identity stable across those passes. Keyed by the
-   * descriptor (one per call), not the app's data object, which an app may reuse
+   * The data a write projects — an explicit optimistic item, else its payload (or
+   * `optimisticPatch`) — in the form server rows carry (Dates as ISO strings). A
+   * write's data is re-projected on every lane transition; converting it once per
+   * write keeps the projected item's identity stable across those passes. Keyed by
+   * the descriptor (one per call), not the app's data object, which an app may reuse
    * and mutate between writes.
    */
-  #wireForm(desc: MutationDescriptor, value: unknown): unknown {
-    if (this.#wireForms.has(desc)) return this.#wireForms.get(desc)
-    const converted = datesToIso(value)
-    this.#wireForms.set(desc, converted)
-    return converted
+  #optimisticData(desc: Exclude<MutationDescriptor, { method: 'remove' }>): OptimisticData {
+    let wire = this.#wireForms.get(desc)
+    if (!wire) {
+      const explicit = desc.optimistic != null && typeof desc.optimistic !== 'boolean'
+      const value = explicit
+        ? desc.optimistic
+        : desc.method === 'create'
+          ? desc.data
+          : (desc.optimisticPatch ?? desc.data)
+      wire = { data: datesToIso(value), explicit }
+      this.#wireForms.set(desc, wire)
+    }
+    return wire
   }
 
   #require(lane: MutationLane): MutationLaneState<TEntry> {
