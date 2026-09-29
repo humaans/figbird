@@ -2426,6 +2426,29 @@ it('realtime: a null FK is a known absence, so the other $or branch keeps the ro
   unmount()
 })
 
+it('realtime: a string foreign key resolves the cached row with that numeric id', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: '1' } } },
+    users: { data: { 1: { id: 1, name: 'Alice', email: 'alice@example.com' } } },
+  })
+  const users = figbird.query(figbird.q.users)
+  const byAlice = figbird.query(figbird.q.issues.where({ 'creator.name': 'Alice' }))
+  const unsubs = [users.subscribe(() => {}), byAlice.subscribe(() => {})]
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+
+  t.deepEqual(
+    (byAlice.getSnapshot().data as Issue[]).map(issue => issue.title),
+    ['Renamed'],
+  )
+  t.is(feathers.service('issues').counts.find, findCount, 'decided locally, no refetch')
+
+  for (const unsub of unsubs) unsub()
+})
+
 it('realtime: a visible row the matcher cannot decide still takes new values', async t => {
   const feathers = mockFeathers({
     issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 } } },
