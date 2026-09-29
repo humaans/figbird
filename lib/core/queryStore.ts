@@ -23,13 +23,15 @@ import {
   type FetchResponseMode,
 } from './fetchRebase.js'
 import { ABSENT, type ProjectionChange } from './mutationLanes.js'
+import type { ForeignKey } from './schema.js'
 import {
   applyEventsToService,
   applyVisibleEventToQuery,
   createServiceState,
   diffCompleteSet,
+  findInsertIndex,
   groupEventsByService,
-  isUnfilteredFindQuery,
+  isCompleteSetQuery,
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
   updateQueriesFromEvents,
@@ -44,6 +46,7 @@ import {
   type FindQueryConfig,
   type GetQueryConfig,
   type ItemId,
+  type MatchResult,
   type MutationDescriptor,
   type ProcessedProjectionEvent,
   type ProcessedCacheEvent,
@@ -61,6 +64,7 @@ import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
 import { normalizeError } from './errors.js'
 import { isWithinStaleTime } from './staleTime.js'
 import { sameValue } from './valueEquality.js'
+import { compareValues, type ValueComparator } from './sort.js'
 
 /**
  * Where the store learns whether the tab is visible. Injectable for tests and
@@ -153,6 +157,16 @@ export const QUERY_FETCH_HISTORY_LIMIT = 50
 export const DEFAULT_STALE_TIME = 5 * 60_000
 export const DEFAULT_GC_TIME = 30 * 60_000
 
+/**
+ * Realtime-touched rows no query references that a service keeps anyway (see
+ * #trimUnreferencedEntities). A cached row is the event's known previous value:
+ * window merges use it to prove an entering row is new, and relational filters to
+ * skip refetches when a dependency's filtered fields didn't change, or to match a
+ * root row against its related row. Without it both fall back to a refetch, so the
+ * most recently changed rows are worth keeping — but only up to a bound.
+ */
+export const MAX_RETAINED_UNREFERENCED_ENTITIES = 5000
+
 export interface DevtoolsCacheEditResult {
   ok: boolean
   error?: string
@@ -189,6 +203,8 @@ export class QueryStore<
   #retention: QueryRetention
   #disposed = false
   #dependencyOwners = new Map<string, number>()
+  /** Per service, realtime-touched keys nothing referenced, oldest touch first. */
+  #unreferencedEntities = new Map<string, Set<EntityKey>>()
   #globalListeners: Set<(state: Map<string, ServiceState<TMeta>>) => void> = new Set()
   #processedEventListeners: Set<(event: ProcessedCacheEvent) => void> = new Set()
   #invalidationListeners: Set<(event: RealtimeInvalidation) => void> = new Set()
@@ -207,6 +223,7 @@ export class QueryStore<
   #hiddenAt: number | null
 
   #defaultSort: Record<string, number> | undefined
+  #compare: ValueComparator
   #retry: number | false
   #retryDelay: RetryDelay
   #reconnectJitter: readonly [number, number]
@@ -235,6 +252,8 @@ export class QueryStore<
     reconnectJitter = [0, 3000],
     visibility,
     defaultSort,
+    compare = compareValues,
+    foreignKeys,
     clock = systemClock,
   }: {
     adapter: Adapter<TParams, TMeta, TQuery>
@@ -265,6 +284,14 @@ export class QueryStore<
      * until the next fetch.
      */
     defaultSort?: Record<string, number>
+    /**
+     * The backend's value ordering for sorting rows locally (nulls, collation,
+     * value types). Defaults to `compareValues`. Like `defaultSort`, it must
+     * mirror the server's actual order.
+     */
+    compare?: ValueComparator
+    /** Direct `one` relations by service path; writes wait for the creates they reference. */
+    foreignKeys?: ReadonlyMap<string, readonly ForeignKey[]>
     /** @internal Deterministic policy time for tests. */
     clock?: Clock
   }) {
@@ -279,10 +306,12 @@ export class QueryStore<
     )
     this.#adapter = adapter
     this.#defaultSort = defaultSort
+    this.#compare = compare
     this.#eventBatchInterval = eventBatchInterval
     this.#telemetry = new QueryTelemetry()
     this.#mutationExecutor = new MutationExecutor({
       adapter,
+      ...(foreignKeys !== undefined ? { foreignKeys } : {}),
       cache: {
         getEntity: (serviceName, id) => this.#getEntity(serviceName, id),
         ingest: (serviceName, event, cause) => this.#processEvent(serviceName, event, cause),
@@ -406,6 +435,7 @@ export class QueryStore<
     this.#executions.clear()
     this.#reconnectQueryIds.clear()
     this.#dependencyOwners.clear()
+    this.#unreferencedEntities.clear()
     this.#eventQueue = []
     this.#appliedEventQueue = []
     this.#globalListeners.clear()
@@ -418,6 +448,11 @@ export class QueryStore<
   }
 
   // Public store API
+  /** The value comparator every local sort uses, including relational assembly's. */
+  get compare(): ValueComparator {
+    return this.#compare
+  }
+
   /** The instance's observability event emitter — the store is its single owner. */
   get events(): FigbirdEventEmitter {
     return this.#telemetry.events
@@ -573,6 +608,7 @@ export class QueryStore<
         desc,
         config: config as QueryConfig<unknown, unknown>,
         defaultSort: this.#defaultSort,
+        compare: this.#compare,
         localOperators: locallySupportedOperators(this.#adapter, desc.serviceName),
         matcher: filters =>
           this.#resolveMatcher(desc.serviceName, config as QueryConfig<unknown, unknown>, filters),
@@ -980,10 +1016,17 @@ export class QueryStore<
 
     try {
       const local = this.#tryLocalGet(query) ?? this.#selectMaterializedFind(query)
-      const result = await (local ?? this.#fetch(queryId))
+      const answered = await (local ?? this.#fetch(queryId))
       const endedAt = this.#clock.now()
       const durationMs = endedAt - startedAt
       const current = this.#getQuery(queryId)
+      // A local answer is read again at commit: a materialized root that committed
+      // during the await (this query still loading, so not maintained by it) would
+      // otherwise be overwritten by the older answer.
+      const result =
+        local && current
+          ? (this.#tryLocalGet(current) ?? this.#selectMaterializedFind(current) ?? answered)
+          : answered
       if (current && this.#executions.get(queryId) === execution) {
         const journal = this.#fetchEventJournal.read(journalCursor)
         if (journal.overflowed) {
@@ -1053,6 +1096,7 @@ export class QueryStore<
       return isCurrent ? { kind: 'failed', error } : { kind: 'stale' }
     } finally {
       this.#fetchEventJournal.end(journalCursor)
+      this.#trimUnreferencedEntities(trace.serviceName)
     }
   }
 
@@ -1117,10 +1161,62 @@ export class QueryStore<
         })
       }
       const findConfig = config as FindQueryConfig<unknown, unknown>
-      return findConfig.allPages
-        ? this.#adapter.findAll(desc.serviceName, desc.params as TParams)
-        : this.#adapter.find(desc.serviceName, desc.params as TParams)
+      if (!findConfig.allPages) return this.#adapter.find(desc.serviceName, desc.params as TParams)
+      const all = this.#adapter.findAll(desc.serviceName, desc.params as TParams)
+      return isCompleteSetQuery(query)
+        ? all.then(result => this.#addUnlistedRows(queryId, result))
+        : all
     }
+  }
+
+  /**
+   * A complete-set response is read page by page, and a remove landing between offset
+   * pages makes the walk step over a row, which the complete-set diff would then
+   * delete service-wide. So before the response commits, the root's rows it lacks are
+   * looked up by id: the ones still there join it — in sort order when the root has
+   * one, appended otherwise — and only the rest read as removed. Events meanwhile land
+   * in this fetch's journal like any other, and an adapter without `findByIds` keeps
+   * reading every unlisted row as removed.
+   */
+  async #addUnlistedRows(
+    queryId: string,
+    result: QueryResponse<unknown[], TMeta>,
+  ): Promise<QueryResponse<unknown[], TMeta>> {
+    const query = this.#getQuery(queryId)
+    const service = query && this.#state.get(query.desc.serviceName)
+    if (!this.#adapter.findByIds || !query || !service) return result
+
+    const listed = new Set<EntityKey>()
+    for (const item of result.data) {
+      const id = this.#adapter.getId(item)
+      if (id !== undefined) listed.add(entityKey(id))
+    }
+    const unlisted = new Map<EntityKey, ItemId>()
+    for (const key of query.rows.ids) {
+      const entity = listed.has(key) ? undefined : service.entities.get(key)
+      const id = entity === undefined ? undefined : this.#adapter.getId(entity)
+      if (id !== undefined) unlisted.set(key, id)
+    }
+    if (unlisted.size === 0) return result
+
+    let found: unknown[]
+    try {
+      found = await this.#adapter.findByIds(query.desc.serviceName, [...unlisted.values()])
+    } catch {
+      // The lookup only narrows removals: if the service rejects it (e.g. a strict
+      // query schema without the id field), the unlisted rows read as removed, as
+      // they did before it existed, rather than failing the refetch.
+      return result
+    }
+    const data = [...result.data]
+    const { compare } = query.maintenance
+    for (const item of found) {
+      const id = this.#adapter.getId(item)
+      // A server that ignores the id filter answers with rows nobody asked about.
+      if (id === undefined || !unlisted.delete(entityKey(id))) continue
+      data.splice(compare ? findInsertIndex(data, item, compare) : data.length, 0, item)
+    }
+    return { ...result, data }
   }
 
   /**
@@ -1166,7 +1262,7 @@ export class QueryStore<
     const q = queryOfParams(desc.params)
     if (q && Object.keys(q).length > 0) {
       // classification === 'get' guarantees the conditions are locally evaluable.
-      if (!query.maintenance.matchesLocal(entity)) return null
+      if (query.maintenance.matchesLocal(entity) !== true) return null
     }
 
     return { data: entity } as QueryResponse<unknown, TMeta | undefined>
@@ -1209,7 +1305,11 @@ export class QueryStore<
     // discovered by sibling queries, which must not widen derived local finds.
     for (const id of root.rows.ids) {
       const entity = service.entities.get(id)
-      if (entity !== undefined && matchesLocal(entity)) rows.push(entity)
+      if (entity === undefined) continue
+      const match = matchesLocal(entity)
+      // A row local state can't decide makes the local answer unprovable.
+      if (match === 'unknown') return null
+      if (match) rows.push(entity)
     }
     rows.sort(compare)
     const total = rows.length
@@ -1358,11 +1458,7 @@ export class QueryStore<
       }
       for (const event of activeOverlayEvents) journaledItemIds.add(event.itemId)
 
-      const findConfig = query.config as FindQueryConfig<unknown, unknown>
-      const isCompleteSet =
-        query.desc.method === 'find' &&
-        Boolean(findConfig.allPages) &&
-        isUnfilteredFindQuery(query.desc.params)
+      const isCompleteSet = isCompleteSetQuery(query)
       const previousRootEntities: Map<EntityKey, unknown> | null = isCompleteSet ? new Map() : null
       if (previousRootEntities) {
         for (const itemId of query.rows.ids) {
@@ -1384,7 +1480,8 @@ export class QueryStore<
             query.desc.method === 'find' &&
             query.config.realtime === 'merge' &&
             !isServerMaintained(query.maintenance.classification) &&
-            !query.maintenance.matches(item)
+            // An undecidable item keeps the server's word for it.
+            query.maintenance.matches(item) === false
           ),
       })
       const nextItemIds = new Set(rebasedResponse.itemIds)
@@ -1886,7 +1983,15 @@ export class QueryStore<
       })
       for (const queryId of selectedQueries) {
         const query = service.queries.get(queryId)
-        if (!query || this.#reapplyMaterializedFind(service, query) !== 'changed') continue
+        if (!query) continue
+        const result = this.#reapplyMaterializedFind(service, query)
+        if (result === 'unavailable') {
+          // A row local state can't decide made the local answer unprovable.
+          reconcileQueryIds.add(queryId)
+          queryEffects?.set(queryId, 'reconcile')
+          continue
+        }
+        if (result !== 'changed') continue
         touch(queryId)
         queryEffects?.set(queryId, 'merged')
       }
@@ -2096,6 +2201,15 @@ export class QueryStore<
           }
           this.#publishRealtimeInvalidations(serviceName, invalidations)
         }
+
+        // Trim only after every listener has seen the batch: relational filters
+        // resolve rows of other services from the cache while reacting.
+        for (const { serviceName, effects } of followups) {
+          this.#trimUnreferencedEntities(
+            serviceName,
+            effects.map(({ event }) => event.itemId),
+          )
+        }
       }
     } finally {
       this.#processingEventQueue = false
@@ -2106,8 +2220,8 @@ export class QueryStore<
     for (const listener of this.#processedEventListeners) {
       try {
         listener(event)
-      } catch {
-        // Internal invalidation listeners should not break the event loop.
+      } catch (error) {
+        this.#reportListenerError('processed-event', error)
       }
     }
   }
@@ -2161,8 +2275,8 @@ export class QueryStore<
     for (const listener of this.#invalidationListeners) {
       try {
         listener(event)
-      } catch {
-        // Internal invalidation listeners should not break the event loop.
+      } catch (error) {
+        this.#reportListenerError('invalidation', error)
       }
     }
   }
@@ -2171,8 +2285,8 @@ export class QueryStore<
     for (const listener of this.#projectionSettlementListeners) {
       try {
         listener(event)
-      } catch {
-        // Internal invalidation listeners should not break mutation settlement.
+      } catch (error) {
+        this.#reportListenerError('projection-settlement', error)
       }
     }
   }
@@ -2559,18 +2673,57 @@ export class QueryStore<
     if (service?.materialized || this.#dependencyOwners.has(serviceName)) return
     if (service) {
       for (const key of service.entities.keys()) {
-        if (
-          !service.itemQueryIndex.has(key) &&
-          !this.#mutationExecutor.hasPending(serviceName, key)
-        ) {
-          service.entities.delete(key)
-        }
+        if (this.#isUnreferenced(service, serviceName, key)) service.entities.delete(key)
       }
       if (service.queries.size > 0 || service.entities.size > 0) return
       this.#state.delete(serviceName)
     }
+    this.#unreferencedEntities.delete(serviceName)
     this.#realtime.get(serviceName)?.()
     this.#realtime.delete(serviceName)
+  }
+
+  /**
+   * The per-batch counterpart of #pruneService: of the rows a realtime batch touched
+   * that no query references, keep the most recently touched
+   * MAX_RETAINED_UNREFERENCED_ENTITIES and drop the rest, visiting only the touched
+   * keys and the evicted ones. Rows with events journaled for an in-flight fetch stay
+   * until it settles — its response rebases them over the cached entity. A
+   * materialized service keeps everything.
+   */
+  #trimUnreferencedEntities(serviceName: string, touched: readonly EntityKey[] = []): void {
+    const service = this.#state.get(serviceName)
+    if (!service || service.materialized) {
+      this.#unreferencedEntities.delete(serviceName)
+      return
+    }
+    let keys = this.#unreferencedEntities.get(serviceName)
+    for (const key of touched) {
+      if (!this.#isUnreferenced(service, serviceName, key)) continue
+      keys ??= new Set()
+      // Re-insert so iteration order stays oldest touch first.
+      keys.delete(key)
+      keys.add(key)
+    }
+    if (!keys) return
+    this.#unreferencedEntities.set(serviceName, keys)
+    if (keys.size <= MAX_RETAINED_UNREFERENCED_ENTITIES) return
+
+    const journaled = this.#fetchEventJournal.journaledItemIds(serviceName)
+    for (const key of keys) {
+      if (keys.size <= MAX_RETAINED_UNREFERENCED_ENTITIES) break
+      if (journaled.has(key)) continue
+      keys.delete(key)
+      if (this.#isUnreferenced(service, serviceName, key)) service.entities.delete(key)
+    }
+  }
+
+  #isUnreferenced(service: ServiceState<TMeta>, serviceName: string, key: EntityKey): boolean {
+    return (
+      service.entities.has(key) &&
+      !service.itemQueryIndex.has(key) &&
+      !this.#mutationExecutor.hasPending(serviceName, key)
+    )
   }
 
   // Internal helpers
@@ -2583,9 +2736,9 @@ export class QueryStore<
     serviceName: string,
     config: QueryConfig<unknown, unknown>,
     filters: Record<string, unknown> | undefined,
-  ): (item: unknown) => boolean {
+  ): (item: unknown) => MatchResult {
     return config.matcher
-      ? (config.matcher(filters as never) as (item: unknown) => boolean)
+      ? (config.matcher(filters as never) as (item: unknown) => MatchResult)
       : (this.#adapter.matcher(filters as TQuery | undefined, undefined, {
           serviceName,
         }) as (item: unknown) => boolean)
@@ -2635,7 +2788,10 @@ export class QueryStore<
     }
   }
 
-  #reportListenerError(kind: 'query' | 'global', error: unknown): void {
+  #reportListenerError(
+    kind: 'query' | 'global' | 'processed-event' | 'invalidation' | 'projection-settlement',
+    error: unknown,
+  ): void {
     try {
       console.error(`figbird: ${kind} listener threw`, error)
     } catch {

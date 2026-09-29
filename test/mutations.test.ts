@@ -1,11 +1,15 @@
 import test from 'ava'
 import {
+  createSchema,
+  FeathersAdapter,
   feathersTransactions,
   FeathersTransactionError,
+  Figbird,
   type FigbirdEvent,
   type QueryState,
+  service,
 } from '../lib'
-import { createTestApp, waitForEmissions } from './helpers'
+import { createTestApp, mockFeathers, waitForEmissions } from './helpers'
 import {
   collectEvents,
   deferred,
@@ -658,6 +662,300 @@ test('id contract: a failed optimistic create rolls the item back out of the cac
   t.false(latest?.data?.some(note => note.id === 77))
   t.is(latest?.data?.length, 2)
   t.is(patchCalls, 0)
+})
+
+test('id contract: a write that references a pending create waits for it and fails with it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  const renders: number[][] = []
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+    renders.push(latest.data?.map(note => note.id) ?? [])
+  })
+  await new Promise(r => setTimeout(r, 10))
+
+  const gates = new Map<number, ReturnType<typeof deferred<MockItem>>>()
+  feathers.service('notes').create = ((data: Note) => {
+    gates.set(data.id, deferred<MockItem>())
+    return gates.get(data.id)!.promise
+  }) as never
+
+  const parent = m.notes.create({ id: 10, content: 'parent' })
+  const child = m.notes.create({ id: 11, content: 'child', parentId: 10 })
+  t.deepEqual([...gates.keys()], [10], 'the child waits for the record it references')
+  gates.get(10)!.resolve({ id: 10, content: 'parent' })
+  await parent
+  t.deepEqual([...gates.keys()], [10, 11])
+  gates.get(11)!.resolve({ id: 11, content: 'child', parentId: 10 })
+  await child
+
+  // A foreign key from a route param is a string; it references the numeric id.
+  const numericParent = m.notes.create({ id: 30, content: 'parent' })
+  const stringRef = m.notes.create({ id: 31, content: 'child', parentId: '30' as never })
+  t.false(gates.has(31), 'a string foreign key waits for the numeric create')
+  gates.get(30)!.resolve({ id: 30, content: 'parent' })
+  await numericParent
+  gates.get(31)!.resolve({ id: 31, content: 'child' })
+  await stringRef
+
+  const doomed = m.notes.create({ id: 20, content: 'doomed parent' })
+  const orphan = m.notes.create({ id: 21, content: 'orphan', parentId: 20 })
+  t.true(latest?.data?.some(note => note.id === 21))
+  const rejected = t.throwsAsync(doomed, { message: 'rejected' })
+  const cancelled = t.throwsAsync(orphan, { message: /references failed/ })
+  gates.get(20)!.reject(new Error('rejected'))
+  await Promise.all([rejected, cancelled])
+  await waitForEmissions()
+  t.false(gates.has(21))
+  t.false(latest?.data?.some(note => note.id === 21))
+  t.false(
+    renders.some(ids => ids.includes(21) && !ids.includes(20)),
+    'the child rolls back with its parent, never shown alone',
+  )
+})
+
+test('id contract: references follow the id field the adapter names, whatever reads it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  // A custom extractor reads ids of one type only; which field it reads is explicit.
+  const numericId = (item: unknown) => {
+    const id = (item as { id?: unknown }).id
+    return typeof id === 'number' ? id : undefined
+  }
+  const configs = [
+    { label: 'the default extractor', options: {} },
+    { label: 'a named custom extractor', options: { idField: numericId, idFieldName: 'id' } },
+  ]
+  for (const { label, options } of configs) {
+    const feathers = mockFeathers(services())
+    const adapter = new FeathersAdapter(feathers, options)
+    const figbird = new Figbird({ schema: related, adapter, eventBatchInterval: 0 })
+    const gates = new Map<number, ReturnType<typeof deferred<MockItem>>>()
+    feathers.service('notes').create = ((data: Note) => {
+      gates.set(data.id, deferred<MockItem>())
+      return gates.get(data.id)!.promise
+    }) as never
+
+    const parent = figbird.m.notes.create({ id: 10, content: 'parent' })
+    const child = figbird.m.notes.create({ id: 11, content: 'child', parentId: 10 })
+    t.deepEqual([...gates.keys()], [10], `${label}: the child waits for its parent`)
+    gates.get(10)!.resolve({ id: 10, content: 'parent' })
+    await parent
+    gates.get(11)!.resolve({ id: 11, content: 'child', parentId: 10 })
+    await child
+    figbird.dispose()
+  }
+
+  const unnamed = new FeathersAdapter(mockFeathers(services()), { idField: numericId })
+  t.false(unnamed.isIdField('notes', 'id'), 'an unnamed extractor names no id field')
+  t.true(new FeathersAdapter(mockFeathers(services())).isIdField('notes', '_id'))
+  t.false(new FeathersAdapter(mockFeathers(services())).isIdField('notes', 'parentId'))
+})
+
+test('id contract: a batch create that references a failed create is never shown alone', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const renders: number[][] = []
+  ref.subscribe(state => {
+    renders.push((state as QueryState<Note[], Record<string, unknown>>).data?.map(n => n.id) ?? [])
+  })
+  await new Promise(r => setTimeout(r, 10))
+
+  const parentGate = deferred<MockItem>()
+  feathers.service('notes').create = (() => parentGate.promise) as never
+
+  const doomed = t.throwsAsync(m.notes.create({ id: 20, content: 'doomed parent' }))
+  // A batch create joins no lane, so it rolls back outside the parent's lane settlement.
+  const orphans = t.throwsAsync(m.notes.create([{ id: 21, content: 'orphan', parentId: 20 }]), {
+    message: /references failed/,
+  })
+  t.true(renders.at(-1)?.includes(21))
+  parentGate.reject(new Error('rejected'))
+  await Promise.all([doomed, orphans])
+  await waitForEmissions()
+  t.false(renders.at(-1)?.includes(21))
+  t.false(
+    renders.some(ids => ids.includes(21) && !ids.includes(20)),
+    'the batch rolls back with its parent, never shown alone',
+  )
+})
+
+test('id contract: transactions, batch creates, and coalesced patches hold for referenced creates', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers, adapter } = createTestApp(related, services())
+  const { m } = figbird
+  const sent: string[] = []
+  const parents = new Map<number, ReturnType<typeof deferred<MockItem>>>()
+  const notes = feathers.service('notes')
+  const create = notes.create.bind(notes)
+  const patch = notes.patch.bind(notes)
+  notes.create = ((data: MockItem | MockItem[]) => {
+    if (Array.isArray(data)) sent.push('batch')
+    else if (parents.has(data.id)) return parents.get(data.id)!.promise
+    return create(data as never)
+  }) as never
+  notes.patch = ((id: number, data: Partial<MockItem>) => {
+    sent.push('patch')
+    return patch(id, data)
+  }) as never
+  adapter.transaction = operations => {
+    sent.push('transaction')
+    return Promise.resolve(operations.map(operation => operation.args[0]))
+  }
+
+  // Creates inside one transaction commit together; they do not hold for each other.
+  await figbird.transaction(tx => {
+    tx.m.notes.create({ id: 5, content: 'parent' })
+    tx.m.notes.create({ id: 6, content: 'child', parentId: 5 })
+  })
+  sent.length = 0
+
+  parents.set(10, deferred<MockItem>())
+  const parent = m.notes.create({ id: 10, content: 'parent' })
+  const batch = m.notes.create([{ id: 12, content: 'batch', parentId: 10 }])
+  const transaction = figbird.transaction(tx => {
+    tx.m.notes.create({ id: 13, content: 'transaction', parentId: 10 })
+  })
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const coalesced = queue.m.notes.patch(1, { content: 'moved' })
+  void queue.m.notes.patch(1, { parentId: 10 })
+  queue.flush()
+  await new Promise(r => setTimeout(r, 10))
+  t.deepEqual(sent, [], 'every write waits for the record it references')
+  parents.get(10)!.resolve({ id: 10, content: 'parent' })
+  await Promise.all([parent, batch, transaction, coalesced])
+  t.deepEqual(sent.sort(), ['batch', 'patch', 'transaction'])
+
+  parents.set(20, deferred<MockItem>())
+  const doomed = t.throwsAsync(m.notes.create({ id: 20, content: 'doomed' }))
+  const batchOrphan = t.throwsAsync(m.notes.create([{ id: 22, content: 'x', parentId: 20 }]), {
+    message: /references failed/,
+  })
+  const transactionOrphan = t.throwsAsync(
+    figbird.transaction(tx => {
+      tx.m.notes.create({ id: 23, content: 'x', parentId: 20 })
+    }),
+    { message: /references failed/ },
+  )
+  parents.get(20)!.reject(new Error('rejected'))
+  await Promise.all([doomed, batchOrphan, transactionOrphan])
+})
+
+test('id contract: a coalesced patch that stops naming a pending create stops waiting for it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const notes = feathers.service('notes')
+  const parentGate = deferred<MockItem>()
+  notes.create = (() => parentGate.promise) as never
+  const patch = notes.patch.bind(notes)
+  const patched: Array<Partial<MockItem>> = []
+  notes.patch = ((id: number, data: Partial<MockItem>) => {
+    patched.push(data)
+    return patch(id, data)
+  }) as never
+
+  const doomed = t.throwsAsync(figbird.m.notes.create({ id: 10, content: 'parent' }))
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const first = queue.m.notes.patch(1, { parentId: 10 })
+  const moved = queue.m.notes.patch(1, { parentId: null } as never)
+  queue.flush()
+  await new Promise(r => setTimeout(r, 10))
+  t.deepEqual(patched, [{ parentId: null }], 'the merged patch no longer waits for the create')
+
+  parentGate.reject(new Error('rejected'))
+  await doomed
+  await Promise.all([first, moved])
+  t.pass('the failed create does not roll back a patch that no longer names it')
+})
+
+test('id contract: a write holds for its referenced create before observers see it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let edit: Promise<unknown> | undefined
+  ref.subscribe(state => {
+    const notes = (state as QueryState<Note[], Record<string, unknown>>).data
+    // An observer that writes to the new row the moment it appears drains its lane.
+    if (!edit && notes?.some(note => note.id === 11)) edit = m.notes.patch(11, { content: 'edit' })
+  })
+  await new Promise(r => setTimeout(r, 10))
+
+  const created: number[] = []
+  const parentGate = deferred<MockItem>()
+  const notes = feathers.service('notes')
+  const create = notes.create.bind(notes)
+  notes.create = ((data: MockItem) => {
+    created.push(data.id)
+    return data.id === 10 ? parentGate.promise : create(data)
+  }) as never
+
+  const parent = m.notes.create({ id: 10, content: 'parent' })
+  const child = m.notes.create({ id: 11, content: 'child', parentId: 10 })
+  t.truthy(edit)
+  t.deepEqual(created, [10], 'the child still waits for the record it references')
+  parentGate.resolve({ id: 10, content: 'parent' })
+  await Promise.all([parent, child, edit])
+  t.deepEqual(created, [10, 11])
+})
+
+test('id contract: a reverse one relation does not hold a write behind a create', async t => {
+  const related = createSchema({
+    services: {
+      notes: service<{ item: Note }>(),
+      people: service<{ item: { id: number; name: string } }>().at('api/people'),
+    },
+    relationships: {
+      // The note points at the person; the person's id says nothing about which note.
+      people: ({ one }) => ({
+        pinned: one({ sourceField: 'id', destService: 'notes', destField: 'parentId' }),
+      }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const note = deferred<MockItem>()
+  feathers.service('notes').create = (() => note.promise) as never
+
+  const failed = t.throwsAsync(m.notes.create({ id: 5, content: 'note', parentId: 5 }))
+  const person = m.people.create({ id: 5, name: 'Grace' })
+  note.reject(new Error('rejected'))
+  await failed
+  t.is((await person).name, 'Grace', 'the person does not fail with the note that has its id')
 })
 
 test('create-id tracking: optimistic creates with client ids are visible to useMutating by id', async t => {

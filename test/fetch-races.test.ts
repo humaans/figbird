@@ -11,7 +11,7 @@ import {
 } from '../lib'
 import { FetchEventJournal, MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
 import type { ProcessedCacheEvent } from '../lib/core/queryTypes'
-import { mockFeathers, type TestItem } from './helpers'
+import { mockFeathers, waitFor, type TestItem } from './helpers'
 
 interface Note extends TestItem {
   id: number
@@ -27,16 +27,6 @@ const schema = createSchema({
   },
 })
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-
-async function waitFor(predicate: () => boolean, message: string): Promise<void> {
-  const deadline = Date.now() + 1000
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${message}`)
-    await sleep(5)
-  }
-}
-
 function createApp(
   data: Record<string, Note>,
   {
@@ -45,12 +35,14 @@ function createApp(
     retryDelay,
     clock,
     isInvalidationEvent,
+    pageSizeWhenFetchingAll,
   }: {
     eventBatchInterval?: number
     retry?: number | false
     retryDelay?: RetryDelay
     clock?: TestClock
     isInvalidationEvent?: (event: RealtimeEventContext) => boolean
+    pageSizeWhenFetchingAll?: number
   } = {},
 ) {
   const feathers = mockFeathers({ notes: { data } }, { queryAwareFind: true })
@@ -59,6 +51,9 @@ function createApp(
     ...(clock ? { clock } : {}),
     adapter: new FeathersAdapter(feathers, {
       ...(isInvalidationEvent ? { isInvalidationEvent } : {}),
+      ...(pageSizeWhenFetchingAll
+        ? { defaultPageSizeWhenFetchingAll: pageSizeWhenFetchingAll }
+        : {}),
     }),
     eventBatchInterval,
     reconcileCooldown: 0,
@@ -382,6 +377,309 @@ test('a complete-set refetch does not delete a row created during the fetch', as
   t.false(processed.some(event => event.type === 'removed' && event.itemId === '2'))
   unsub()
   unsubProcessed()
+})
+
+test('a create landing between findAll pages does not duplicate rows', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        10: { id: 10, content: 'ten', rank: 10 },
+        11: { id: 11, content: 'eleven', rank: 11 },
+        12: { id: 12, content: 'twelve', rank: 12 },
+        13: { id: 13, content: 'thirteen', rank: 13 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === 1) {
+      notes.data = { ...notes.data, 5: { id: 5, content: 'five', rank: 5 } }
+    }
+    return page
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  // Row 5 sorts before the pages already read; its created event delivers it.
+  const result = await adapter.findAll('notes')
+  t.deepEqual(ids(result.data), [10, 11, 12, 13])
+})
+
+test('a findAll page of only repeated rows does not end the walk while the total says more', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        10: { id: 10, content: 'ten', rank: 10 },
+        11: { id: 11, content: 'eleven', rank: 11 },
+        12: { id: 12, content: 'twelve', rank: 12 },
+        13: { id: 13, content: 'thirteen', rank: 13 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === 1) {
+      notes.data = {
+        ...notes.data,
+        5: { id: 5, content: 'five', rank: 5 },
+        6: { id: 6, content: 'six', rank: 6 },
+      }
+    }
+    return page
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  // A page's worth of creates ahead of the offset repeats the whole first page.
+  const result = await adapter.findAll('notes')
+  t.deepEqual(ids(result.data), [10, 11, 12, 13])
+})
+
+test('a remove landing between findAll pages does not delete the skipped row', async t => {
+  const { figbird, notes } = createApp(
+    {
+      1: { id: 1, content: 'one', rank: 1 },
+      2: { id: 2, content: 'two', rank: 2 },
+      3: { id: 3, content: 'three', rank: 3 },
+      4: { id: 4, content: 'four', rank: 4 },
+    },
+    { pageSizeWhenFetchingAll: 2 },
+  )
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { allPages: true })
+  const processed: ProcessedCacheEvent[] = []
+  const unsubProcessed = figbird.queryStore.subscribeToProcessedEvents(event => {
+    processed.push(event)
+  })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial complete fetch')
+
+  // Removing row 1 after the refetch's first page shifts row 3 onto the page
+  // already read, so the next `$skip` steps over it.
+  const find = notes.find.bind(notes)
+  const firstRefetchPage = notes.counts.find + 1
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === firstRefetchPage) {
+      const removed = notes.data[1]!
+      notes.data = { ...notes.data }
+      delete notes.data[1]
+      notes.emit('removed', removed)
+    }
+    return page
+  }
+  ref.refetch()
+
+  await waitFor(
+    () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
+    'the complete refetch',
+  )
+  t.deepEqual(ids(ref.getSnapshot()!.data), [2, 3, 4])
+  t.true(figbird.getState().get('notes')!.entities.has('3'))
+  t.false(processed.some(event => event.type === 'removed' && event.itemId === '3'))
+  unsub()
+  unsubProcessed()
+})
+
+test('a remove and an append landing between findAll pages do not delete the skipped row', async t => {
+  const { figbird, notes } = createApp(
+    {
+      1: { id: 1, content: 'one', rank: 1 },
+      2: { id: 2, content: 'two', rank: 2 },
+      3: { id: 3, content: 'three', rank: 3 },
+      4: { id: 4, content: 'four', rank: 4 },
+    },
+    { pageSizeWhenFetchingAll: 2 },
+  )
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { $sort: { rank: 1 } } } },
+    { allPages: true },
+  )
+  const processed: ProcessedCacheEvent[] = []
+  const unsubProcessed = figbird.queryStore.subscribeToProcessedEvents(event => {
+    processed.push(event)
+  })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial complete fetch')
+
+  // Removing row 1 and appending row 5 after the refetch's first page keeps the
+  // total and the row count equal with no row repeated, yet the next `$skip`
+  // steps over row 3.
+  const find = notes.find.bind(notes)
+  const firstRefetchPage = notes.counts.find + 1
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === firstRefetchPage) {
+      const removed = notes.data[1]!
+      const created = { id: 5, content: 'five', rank: 5 }
+      notes.data = { ...notes.data, 5: created }
+      delete notes.data[1]
+      notes.emit('removed', removed)
+      notes.emit('created', created)
+    }
+    return page
+  }
+  ref.refetch()
+
+  await waitFor(
+    () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
+    'the complete refetch',
+  )
+  t.deepEqual(ids(ref.getSnapshot()!.data), [2, 3, 4, 5])
+  t.true(figbird.getState().get('notes')!.entities.has('3'))
+  t.false(processed.some(event => event.type === 'removed' && event.itemId === '3'))
+  unsub()
+  unsubProcessed()
+})
+
+test('a rejected lookup of unlisted rows does not fail the complete refetch', async t => {
+  const { figbird, notes } = createApp({
+    1: { id: 1, content: 'one', rank: 1 },
+    2: { id: 2, content: 'two', rank: 2 },
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { allPages: true })
+  const unsub = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial complete fetch')
+
+  // Row 2 was removed out of band; a strict query schema rejects the id lookup.
+  delete notes.data[2]
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    if ((params?.query as Record<string, unknown> | undefined)?.id) {
+      throw new Error('query schema rejects id')
+    }
+    return find(params)
+  }
+  ref.refetch()
+
+  await waitFor(
+    () => ref.getSnapshot()?.status === 'success' && !ref.getSnapshot()?.isFetching,
+    'the complete refetch',
+  )
+  t.is(ref.getSnapshot()?.error ?? null, null)
+  t.deepEqual(ids(ref.getSnapshot()!.data), [1], 'the unlisted row reads as removed')
+  unsub()
+})
+
+test('findAll terminates when the service ignores $skip', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'one', rank: 1 },
+        2: { id: 2, content: 'two', rank: 2 },
+        3: { id: 3, content: 'three', rank: 3 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    if (notes.counts.find >= 20) throw new Error('findAll kept paging')
+    return find({ ...params, query: { ...params?.query, $skip: 0 } })
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  // The repeated page ends the walk; the store looks up rows it never reached.
+  const result = await adapter.findAll('notes')
+  t.deepEqual(ids(result.data), [1, 2])
+  t.is(notes.counts.find, 2)
+})
+
+test('findAll reads a busy service that creates rows during every walk', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'one', rank: 1 },
+        2: { id: 2, content: 'two', rank: 2 },
+        3: { id: 3, content: 'three', rank: 3 },
+        4: { id: 4, content: 'four', rank: 4 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  // Every page lands alongside a create, so the total never holds still.
+  notes.find = async params => {
+    const page = await find(params)
+    const id = 100 + notes.counts.find
+    notes.data = { ...notes.data, [id]: { id, content: 'new', rank: id } }
+    return page
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  const result = await adapter.findAll('notes')
+  const read = ids(result.data)
+  t.deepEqual(read.slice(0, 4), [1, 2, 3, 4])
+  t.is(new Set(read).size, read.length, 'no row is read twice')
+})
+
+test('findAll accepts a service that ignores paging and returns every row', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        1: { id: 1, content: 'one', rank: 1 },
+        2: { id: 2, content: 'two', rank: 2 },
+        3: { id: 3, content: 'three', rank: 3 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  // paginate: false and no $limit/$skip support: a bare array of everything.
+  notes.find = (async () => (await find({ query: {} })).data) as never
+
+  // With a page size the first page overfills it; without one, a bare array's page
+  // size is its own length, so only the repeat on the next page ends the walk.
+  for (const options of [{ defaultPageSizeWhenFetchingAll: 2 }, {}]) {
+    const result = await new FeathersAdapter(feathers, options).findAll('notes')
+    t.deepEqual(ids(result.data), [1, 2, 3])
+  }
+})
+
+test('a local answer committing after a root refetch reads the refetched root', async t => {
+  // A find answered from the materialized service computes its rows, awaits, then
+  // commits. A root refetch committing in that gap skips the still-loading find, so
+  // the find must read the root again rather than commit the rows it computed. The
+  // gap is one microtask; starting the find 0..20 microtasks after the root's
+  // response is released lands one start in it, whatever the root's chain length.
+  for (let delay = 0; delay <= 20; delay++) {
+    const { figbird, notes } = createApp({ 1: { id: 1, content: 'one', rank: 1 } })
+    const root = figbird.queryDesc({ serviceName: 'notes', method: 'find' }, { allPages: true })
+    const unsubRoot = root.subscribe(() => {})
+    await waitFor(() => root.getSnapshot()?.status === 'success', 'the materializing fetch')
+
+    notes.data = { ...notes.data, 2: { id: 2, content: 'two', rank: 2 } }
+    const find = notes.find.bind(notes)
+    let release!: () => void
+    const released = new Promise<void>(resolve => (release = resolve))
+    notes.find = async params => {
+      const page = await find(params)
+      await released
+      return page
+    }
+    root.refetch()
+    await flushTasks()
+
+    release()
+    for (let i = 0; i < delay; i++) await null
+    const local = figbird.queryDesc({
+      serviceName: 'notes',
+      method: 'find',
+      params: { query: { $sort: { rank: 1 } } },
+    })
+    // Like a render-time read: the fetch starts before anyone subscribes, so no
+    // follow-up fetch repairs a stale commit.
+    local.ensureFresh()
+    await waitFor(() => !root.getSnapshot()?.isFetching, 'the root refetch')
+    await flushTasks()
+    const unsubLocal = local.subscribe(() => {})
+
+    t.deepEqual(ids(local.getSnapshot()!.data), [1, 2], `started ${delay} microtasks later`)
+    unsubLocal()
+    unsubRoot()
+    figbird.dispose()
+  }
 })
 
 test('a provable window merge survives an older reconcile response', async t => {

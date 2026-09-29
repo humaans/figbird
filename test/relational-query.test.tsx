@@ -18,8 +18,9 @@ import {
   type QueryBuilder,
   type StandardSchemaV1,
 } from '../lib'
+import { compileRelations } from '../lib/core/relationPlan.js'
 import { REACT_19, dom, it } from './dom.js'
-import { createTestApp, mockFeathers } from './helpers'
+import { createTestApp, mockFeathers, waitFor } from './helpers'
 
 // Tagged-union variant of useQuery — the shape the deleted useRelationalQuery had.
 function useStatusQuery<
@@ -662,6 +663,58 @@ test('QueryBuilder: where() merges queries', t => {
   const ast = query.toAST()
 
   t.deepEqual(ast.query, { status: 'open', creatorId: 1 })
+  t.deepEqual(
+    q.issues
+      .where({ createdAt: { $gte: '2025-01-01' } })
+      .where({ createdAt: { $lt: '2026-01-01' } })
+      .toAST().query,
+    { createdAt: { $gte: '2025-01-01', $lt: '2026-01-01' } },
+    'different operators on one field merge',
+  )
+  t.deepEqual(q.issues.where({ status: 'open' }).where({ status: 'open' }).toAST().query, {
+    status: 'open',
+  })
+})
+
+test('QueryBuilder: where() keeps both conditions on a field constrained twice', t => {
+  const { q } = createApp().figbird
+
+  t.deepEqual(
+    q.issues
+      .where({ status: { $in: ['open', 'triage'] } })
+      .where({ status: { $in: ['triage', 'closed'] } })
+      .toAST().query,
+    { $and: [{ status: { $in: ['open', 'triage'] } }, { status: { $in: ['triage', 'closed'] } }] },
+    'a second $in narrows instead of replacing the first',
+  )
+  t.deepEqual(q.issues.where({ creatorId: 1 }).where({ creatorId: 2 }).toAST().query, {
+    $and: [{ creatorId: 1 }, { creatorId: 2 }],
+  })
+})
+
+test('QueryBuilder: where() keeps both sets of $or alternatives', async t => {
+  const { figbird, feathers } = createApp()
+  const query = figbird.q.issues
+    .where({ $or: [{ status: 'open' }, { status: 'triage' }] })
+    .where({ $or: [{ creatorId: 1 }, { creatorId: 2 }] })
+
+  t.deepEqual(query.toAST().query, {
+    $and: [
+      { $or: [{ status: 'open' }, { status: 'triage' }] },
+      { $or: [{ creatorId: 1 }, { creatorId: 2 }] },
+    ],
+  })
+
+  // Still maintained locally: a realtime create matching only one group stays out.
+  const ref = figbird.query(query)
+  const unsubscribe = ref.subscribe(() => {})
+  await ref.suspensePromise()
+  const before = (ref.getSnapshot().data as Array<{ id: number }>).length
+  await feathers.service('issues').create({ id: 99, title: 'x', status: 'open', creatorId: 3 })
+  await flushTasks()
+  t.is((ref.getSnapshot().data as Array<{ id: number }>).length, before)
+  t.is(figbird.explain(query).nodes[0]!.class, 'local-exact')
+  unsubscribe()
 })
 
 test('QueryBuilder: Date values merge as ISO strings', t => {
@@ -674,10 +727,13 @@ test('QueryBuilder: Date values merge as ISO strings', t => {
       .where({ createdAt: since, $or: [{ dueAt: { $in: [since] } }] })
       .toAST().query,
     {
-      createdAt: '2025-01-01T00:00:00.000Z',
+      $and: [
+        { createdAt: { $gte: '2025-01-01T00:00:00.000Z' } },
+        { createdAt: '2025-01-01T00:00:00.000Z' },
+      ],
       $or: [{ dueAt: { $in: ['2025-01-01T00:00:00.000Z'] } }],
     },
-    'a later Date value replaces the earlier filter instead of merging as an empty object',
+    'a later Date value is kept as an ISO string instead of merging as an empty object',
   )
 })
 
@@ -700,13 +756,55 @@ test('matcher: Date operands match ISO string rows through realtime patches', as
     params: { query: { $or: [{ effectiveAt: { $gte: since } }] } },
   })
   const unsubscribe = ref.subscribe(() => {})
-  const ids = () => (ref.getSnapshot()?.data as Array<{ id: number }> | null)?.map(row => row.id)
-  await new Promise(resolve => setTimeout(resolve, 10))
+  const rows = () => ref.getSnapshot()?.data as Array<{ id: number; title: string }> | null
+  const ids = () => rows()?.map(row => row.id)
+  await waitFor(() => ref.getSnapshot()?.status === 'success', 'the initial find')
   t.deepEqual(ids(), [2, 3])
 
   await feathers.service('employments').patch(2, { title: 'Renamed' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => rows()?.[0]?.title === 'Renamed', 'the realtime patch')
   t.deepEqual(ids(), [2, 3], 'a realtime patch keeps the matching row')
+  unsubscribe()
+})
+
+test('matcher: an optimistic row with a Date field joins a live Date filter immediately', async t => {
+  const { figbird, feathers } = createTestApp(exactQuerySchema, {
+    employments: {
+      data: {
+        2: { id: 2, personId: 1, effectiveAt: '2025-04-23T09:00:00.000Z', title: 'Current' },
+      },
+    },
+  })
+  const since = new Date('2025-01-01T00:00:00.000Z')
+  const ref = figbird.query(figbird.q.employments.where({ effectiveAt: { $gte: since } }))
+  const unsubscribe = ref.subscribe(() => {})
+  await ref.suspensePromise()
+  const ids = () => ref.getSnapshot().data!.map(row => row.id)
+  t.deepEqual(ids(), [2])
+
+  feathers.service('employments').create = (() => new Promise(() => {})) as never
+  void figbird.m.employments.create({
+    id: 4,
+    personId: 1,
+    effectiveAt: new Date('2025-05-01T09:00:00.000Z') as unknown as string,
+    title: 'Next',
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.deepEqual(ids(), [2, 4], 'the pending row matches before the server echoes it')
+
+  // A form library may reuse and mutate one values object across writes.
+  feathers.service('employments').patch = (() => new Promise(() => {})) as never
+  const form = { title: 'First', effectiveAt: new Date('2025-06-01T00:00:00.000Z') }
+  void figbird.m.employments.patch(2, form as never)
+  form.title = 'Second'
+  form.effectiveAt = new Date('2025-07-01T00:00:00.000Z')
+  void figbird.m.employments.patch(2, form as never)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.like(
+    ref.getSnapshot().data!.find(row => row.id === 2),
+    { title: 'Second', effectiveAt: '2025-07-01T00:00:00.000Z' },
+    'the second write projects its own values',
+  )
   unsubscribe()
 })
 
@@ -870,7 +968,7 @@ test('figbird.query: inactive server-maintained cache-first query refetches on n
   const initialFindCount = periodsService.counts.find
 
   await periodsService.patch(1, { balance: 12 })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
 
   t.is(periodsService.counts.find, initialFindCount)
 
@@ -925,7 +1023,7 @@ test('figbird.query: unsupported query operators are auto server-maintained', as
   const initialFindCount = peopleService.counts.find
 
   await peopleService.patch(1, { name: 'Alicia' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => peopleService.counts.find > initialFindCount, 'the reconcile refetch')
 
   t.is(peopleService.counts.find, initialFindCount + 1)
   unsubscribe()
@@ -977,13 +1075,14 @@ test('figbird.query: inactive server-windowed query merges provable events; next
     status: 'active',
     startDate: '2025-05-01',
   })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  // Dana sorts strictly to the front of the full window, so window maintenance
+  // merges the event into the inactive cached query — the next subscription reads
+  // the already-correct data without any refetch.
+  const names = () =>
+    ((queryRef.getSnapshot()?.data ?? []) as Employee[]).map(person => person.name)
+  await waitFor(() => names()[0] === 'Dana', 'the realtime merge')
 
   t.is(peopleService.counts.find, initialFindCount)
-
-  // Dana sorts strictly to the front of the full window, so window maintenance
-  // merged the event into the inactive cached query — the next subscription reads
-  // the already-correct data without any refetch.
   const snapshot = queryRef.getSnapshot()
   t.is(snapshot?.status, 'success')
   t.deepEqual(
@@ -992,7 +1091,7 @@ test('figbird.query: inactive server-windowed query merges provable events; next
   )
 
   const resubscribeUnsubscribe = queryRef.subscribe(() => {})
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   resubscribeUnsubscribe()
 
   t.is(peopleService.counts.find, initialFindCount)
@@ -1045,7 +1144,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
     }
   })
 
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => latestNames.length > 0, 'the initial find')
 
   t.deepEqual(latestNames, ['Alice'])
   const initialFindCount = peopleService.counts.find
@@ -1055,7 +1154,7 @@ test('figbird.query: reconnect refetches active queries after missed events', as
     1: { id: 1, companyId: 1, name: 'Alicia', status: 'active' },
   }
   reconnectEvents.emit('reconnect')
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => latestNames[0] === 'Alicia', 'the reconnect refetch')
 
   t.is(peopleService.counts.find, initialFindCount + 1)
   t.deepEqual(latestNames, ['Alicia'])
@@ -1241,6 +1340,283 @@ it('useQuery: sorted many relations batch all pages and retain nested live data'
     3,
     'sort-only relations merge realtime events locally',
   )
+  unmount()
+})
+
+it('useQuery: large relation id sets are fetched in bounded $in chunks', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const ids = Array.from({ length: 250 }, (_, index) => index + 1)
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, title: `Issue ${id}`, status: 'open', creatorId: id }]),
+        ),
+      },
+      users: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, name: `User ${id}`, email: `${id}@example.com` }]),
+        ),
+      },
+    },
+    { queryAwareFind: true },
+  )
+  const users = feathers.service('users')
+  const find = users.find.bind(users)
+  const inSizes: number[] = []
+  users.find = (params => {
+    const id = params?.query?.id as { $in: unknown[] }
+    inSizes.push(id.$in.length)
+    return find(params)
+  }) as typeof find
+
+  function Issues() {
+    const issues = useQuery(figbird.q.issues.limit(250).related('creator'))
+    return (
+      <div
+        className='issues'
+        data-resolved={issues.filter(issue => issue.creator?.id === issue.creatorId).length}
+      />
+    )
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  t.is($('.issues')!.getAttribute('data-resolved'), '250')
+  t.deepEqual(inSizes, [100, 100, 50])
+  unmount()
+})
+
+it('useQuery: relation ids arriving one at a time merge into a bounded set of chunks', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const ids = Array.from({ length: 20 }, (_, index) => index + 1)
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'Issue 1', status: 'open', creatorId: 1 } } },
+      users: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, name: `User ${id}`, email: `${id}@example.com` }]),
+        ),
+      },
+    },
+    { queryAwareFind: true },
+  )
+
+  const unresolved: number[] = []
+  function Issues() {
+    const issues = useQuery(figbird.q.issues.related('creator'))
+    // Only the newest issue may wait for its creator: merging never blanks loaded ones.
+    unresolved.push(issues.slice(0, -1).filter(issue => !issue.creator).length)
+    return (
+      <div
+        className='issues'
+        data-resolved={issues.filter(issue => issue.creator?.id === issue.creatorId).length}
+      />
+    )
+  }
+
+  const userChunks = () =>
+    figbird.inspect().filter(row => row.serviceName === 'users' && row.subscriberCount > 0)
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  for (const id of ids.slice(1)) {
+    await flush(async () => {
+      await feathers
+        .service('issues')
+        .create({ id, title: `Issue ${id}`, status: 'open', creatorId: id })
+    })
+  }
+
+  t.is($('.issues')!.getAttribute('data-resolved'), '20')
+  t.true(userChunks().length <= 5, `${userChunks().length} creator chunks`)
+  t.true(unresolved.every(count => count === 0))
+  unmount()
+})
+
+it('useQuery: a failed chunk merge is not retried on every sync', async t => {
+  const ids = [1, 2, 3, 4, 5]
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'Issue 1', status: 'open', creatorId: 1 } } },
+      users: {
+        data: Object.fromEntries(
+          ids.map(id => [id, { id, name: `User ${id}`, email: `${id}@example.com` }]),
+        ),
+      },
+    },
+    { queryAwareFind: true },
+  )
+  const users = feathers.service('users')
+  const find = users.find.bind(users)
+  // Single-id chunks load; the merged request for several ids fails.
+  users.find = ((params?: { query?: { id?: { $in?: unknown[] } } }) =>
+    (params?.query?.id?.$in?.length ?? 0) > 1
+      ? Promise.reject(new Error('merge failed'))
+      : find(params as never)) as never
+
+  const ref = figbird.query(figbird.q.issues.related('creator'))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  for (const id of ids.slice(1)) {
+    await feathers
+      .service('issues')
+      .create({ id, title: `Issue ${id}`, status: 'open', creatorId: id })
+    await flushTasks()
+  }
+  const chunkSubscriptions = () =>
+    figbird
+      .inspect()
+      .filter(row => row.serviceName === 'users')
+      .reduce((sum, row) => sum + row.subscriberCount, 0)
+  const afterMerge = chunkSubscriptions()
+
+  // Root changes with no new creator ids re-sync the relation.
+  for (let i = 0; i < 3; i++) {
+    await feathers.service('issues').patch(1, { title: `Renamed ${i}` })
+    await flushTasks()
+  }
+
+  t.is(chunkSubscriptions(), afterMerge, 'no new chunk per sync')
+  const snapshot = ref.getSnapshot()
+  t.deepEqual(
+    (snapshot.data as Array<Issue & { creator: { id: number } | null }>)
+      .filter(issue => issue.creator?.id === issue.creatorId)
+      .map(issue => issue.id),
+    [1, 2, 3, 4],
+    'the sparse chunks keep serving the ids they hold',
+  )
+  unsub()
+})
+
+it('useQuery: ids that leave a still-live chunk stop driving nested relations', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second', status: 'open', creatorId: 1 },
+        },
+      },
+      comments: { data: { 1: { id: 1, issueId: 1, authorId: 1, body: 'Hi' } } },
+      users: { data: {} },
+      reactions: { data: {} },
+    },
+    { queryAwareFind: true },
+  )
+
+  function Issues() {
+    const issues = useQuery(
+      figbird.q.issues.where({ status: 'open' }).related('comments', c => c.related('reactions')),
+    )
+    return <div className='issues' data-ids={issues.map(issue => issue.id).join(',')} />
+  }
+
+  const reactionChunks = () =>
+    figbird
+      .inspect()
+      .filter(row => row.serviceName === 'reactions' && row.subscriberCount > 0)
+      .map(row => (row.query as { commentId: { $in: number[] } }).commentId.$in)
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.deepEqual(reactionChunks(), [[1]])
+
+  // Comment 2 lands in the comments chunk for issues [1, 2], and its reactions are
+  // fetched in a chunk of their own.
+  await flush(async () => {
+    await feathers.service('comments').create({ id: 2, issueId: 2, authorId: 1, body: 'New' })
+  })
+  t.deepEqual(reactionChunks(), [[1], [2]])
+
+  // Issue 2 leaves the root; the comments chunk stays live for issue 1.
+  await flush(async () => {
+    await feathers.service('issues').patch(2, { status: 'closed' })
+  })
+  t.is($('.issues')!.getAttribute('data-ids'), '1')
+  t.deepEqual(reactionChunks(), [[1]])
+  unmount()
+})
+
+it('useQuery: an errored chunk does not stop nested relations of healthy chunks', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'First', status: 'open', creatorId: 1 } } },
+      comments: { data: { 1: { id: 1, issueId: 1, authorId: 1, body: 'Hi' } } },
+      users: { data: {} },
+      reactions: { data: {} },
+    },
+    { queryAwareFind: true },
+  )
+  const comments = feathers.service('comments')
+  const find = comments.find.bind(comments)
+  comments.find = (params => {
+    const issueId = params?.query?.issueId as { $in: number[] }
+    return issueId.$in.includes(2) ? Promise.reject(new Error('chunk failed')) : find(params)
+  }) as typeof find
+
+  function Issues() {
+    const { data, error } = useQueryResult(
+      figbird.q.issues.related('comments', c => c.related('reactions')),
+    )
+    return <div className='issues' data-error={error?.message ?? ''} data-count={data.length} />
+  }
+
+  const reactionChunks = () =>
+    figbird
+      .inspect()
+      .filter(row => row.serviceName === 'reactions' && row.subscriberCount > 0)
+      .map(row => (row.query as { commentId: { $in: number[] } }).commentId.$in)
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Issues />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+  t.deepEqual(reactionChunks(), [[1]])
+
+  // Issue 2's comments chunk fails; issue 1's chunk keeps syncing its nested relations.
+  await flush(async () => {
+    await feathers
+      .service('issues')
+      .create({ id: 2, title: 'Second', status: 'open', creatorId: 1 })
+  })
+  await flush(async () => {
+    await comments.create({ id: 3, issueId: 1, authorId: 1, body: 'New' })
+  })
+  t.is($('.issues')!.getAttribute('data-count'), '2')
+  t.is($('.issues')!.getAttribute('data-error'), 'chunk failed')
+  t.deepEqual(reactionChunks(), [[1], [3]])
   unmount()
 })
 
@@ -1913,6 +2289,412 @@ it('realtime: relation-path filters match root events through cached relations',
   )
 
   unmount()
+})
+
+it('realtime: a filter through a many relation keeps server rows and reconciles root events', async t => {
+  const { App, figbird, feathers } = createApp()
+  const { render, unmount, flush, $all } = dom()
+
+  function Issues() {
+    const issues = useStatusQuery(figbird.q.issues.where({ 'comments.authorId': 1 }))
+    if (issues.status !== 'success') return <div>Loading</div>
+    return (
+      <ul>
+        {issues.data.map(issue => (
+          <li key={issue.id} className='issue'>
+            {issue.title}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  render(
+    <App>
+      <Issues />
+    </App>,
+  )
+  await flush()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'First issue, renamed' })
+  await flush()
+
+  t.deepEqual(
+    $all('.issue').map(node => node.innerHTML),
+    ['First issue, renamed', 'Second issue', 'Third issue'],
+  )
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the root reconciles with the server')
+
+  unmount()
+})
+
+it('realtime: related-service bursts reconcile a relation-filtered root through the cooldown', async t => {
+  const clock = new TestClock()
+  const feathers = mockFeathers({
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 } } },
+    comments: { data: {} },
+  })
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    clock,
+    eventBatchInterval: 0,
+    reconcileCooldown: 60_000,
+  })
+  const ref = figbird.query(figbird.q.issues.where({ 'comments.authorId': 1 }))
+  const unsub = ref.subscribe(() => {})
+  await clock.advance(0)
+  const findCount = feathers.service('issues').counts.find
+
+  for (let id = 10; id < 15; id++) {
+    await feathers.service('comments').create({ id, issueId: 1, authorId: 2, body: 'Unrelated' })
+    await clock.advance(0)
+  }
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the leading edge reconciles once')
+
+  await clock.advance(60_000)
+  t.is(feathers.service('issues').counts.find, findCount + 2, 'one trailing reconcile')
+
+  unsub()
+})
+
+it('realtime: root-only predicates decide rows whose related row is not cached', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: { data: { 1: { id: 1, title: 'Open', status: 'open', creatorId: 1 } } },
+      users: { data: { 1: { id: 1, name: 'Alice', email: 'alice@example.com' } } },
+    },
+    { queryAwareFind: true },
+  )
+  // No query fetches users, so creator rows are never cached.
+  const closedByBob = figbird.query(
+    figbird.q.issues.where({ status: 'closed', 'creator.name': 'Bob' }),
+  )
+  const openOrBob = figbird.query(
+    figbird.q.issues.where({ $or: [{ status: 'open' }, { 'creator.name': 'Bob' }] }),
+  )
+  const unsubs = [closedByBob.subscribe(() => {}), openOrBob.subscribe(() => {})]
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').create({ id: 2, title: 'New', status: 'open', creatorId: 1 })
+  await flushTasks()
+
+  t.deepEqual(
+    (openOrBob.getSnapshot().data as Issue[]).map(issue => issue.id),
+    [1, 2],
+    'the open branch admits the create locally',
+  )
+  t.is(feathers.service('issues').counts.find, findCount, 'neither query needs the server')
+
+  for (const unsub of unsubs) unsub()
+})
+
+it('realtime: a null FK is a known absence, so the other $or branch keeps the row', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, {
+    issues: { data: { 1: { id: 1, title: 'Unassigned', status: 'open', creatorId: null } } },
+    users: { data: {} },
+  })
+  const { render, unmount, flush, $all } = dom()
+
+  function Issues() {
+    const issues = useStatusQuery(
+      figbird.q.issues.where({ $or: [{ status: 'open' }, { 'creator.name': 'Alice' }] }),
+    )
+    if (issues.status !== 'success') return <div>Loading</div>
+    return (
+      <ul>
+        {issues.data.map(issue => (
+          <li key={issue.id} className='issue'>
+            {issue.title}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  render(
+    <App>
+      <Issues />
+    </App>,
+  )
+  await flush()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Still unassigned' })
+  await flush()
+
+  t.deepEqual(
+    $all('.issue').map(node => node.innerHTML),
+    ['Still unassigned'],
+  )
+  t.is(feathers.service('issues').counts.find, findCount, 'decided locally, no refetch')
+
+  unmount()
+})
+
+it('realtime: a string foreign key resolves the cached row with that numeric id', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: '1' } } },
+    users: { data: { 1: { id: 1, name: 'Alice', email: 'alice@example.com' } } },
+  })
+  const users = figbird.query(figbird.q.users)
+  const byAlice = figbird.query(figbird.q.issues.where({ 'creator.name': 'Alice' }))
+  const unsubs = [users.subscribe(() => {}), byAlice.subscribe(() => {})]
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+
+  t.deepEqual(
+    (byAlice.getSnapshot().data as Issue[]).map(issue => issue.title),
+    ['Renamed'],
+  )
+  t.is(feathers.service('issues').counts.find, findCount, 'decided locally, no refetch')
+
+  for (const unsub of unsubs) unsub()
+})
+
+it('realtime: a visible row the matcher cannot decide still takes new values', async t => {
+  const feathers = mockFeathers({
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 } } },
+    users: { data: {} },
+  })
+  // A hidden tab defers the reconcile, so only the local merge can show the patch.
+  let hidden = true
+  let onVisibilityChange = () => {}
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    visibility: {
+      isHidden: () => hidden,
+      onChange: listener => {
+        onVisibilityChange = listener
+        return () => {}
+      },
+    },
+  })
+  const ref = figbird.query(figbird.q.issues.where({ 'creator.name': 'Alice' }))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+  t.deepEqual(
+    (ref.getSnapshot().data as Issue[]).map(issue => issue.title),
+    ['Renamed'],
+  )
+
+  hidden = false
+  onVisibilityChange()
+  await flushTasks()
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'membership still reconciles')
+
+  unsub()
+})
+
+it('realtime: a null FK leaves predicates that match a missing relation to the server', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    { issues: { data: {} }, users: { data: {} } },
+    { queryAwareFind: true },
+  )
+  // The server's join decides whether an unassigned issue satisfies $ne.
+  const notAlice = figbird.query(figbird.q.issues.where({ 'creator.name': { $ne: 'Alice' } }))
+  const unsub = notAlice.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').create({ id: 1, title: 'New', status: 'open', creatorId: null })
+  await flushTasks()
+
+  t.deepEqual(notAlice.getSnapshot().data, [], 'the server excludes the unassigned issue')
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the root reconciles')
+
+  unsub()
+})
+
+it('realtime: the server decides membership through a many relation', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second issue', status: 'open', creatorId: 1 },
+        },
+      },
+      comments: { data: { 1: { id: 1, issueId: 1, authorId: 1, body: 'By Alice' } } },
+    },
+    { queryAwareFind: true },
+  )
+  // The join a real server resolves for `comments.authorId`.
+  const issues = feathers.service('issues')
+  const find = issues.find.bind(issues)
+  issues.find = (async ({ query: { 'comments.authorId': authorId, ...query } = {} } = {}) => {
+    const result = await find({ query })
+    const comments = Object.values(feathers.service('comments').data)
+    const data = result.data.filter(issue =>
+      comments.some(comment => comment.issueId === issue.id && comment.authorId === authorId),
+    )
+    return { ...result, total: data.length, data }
+  }) as typeof issues.find
+  const byBob = figbird.query(figbird.q.issues.where({ 'comments.authorId': 2 }))
+  const unsub = byBob.subscribe(() => {})
+  await flushTasks()
+  const ids = () => (byBob.getSnapshot().data as Issue[]).map(issue => issue.id)
+  t.deepEqual(ids(), [])
+
+  await issues.create({ id: 3, title: 'Third issue', status: 'open', creatorId: 1 })
+  await flushTasks()
+  t.deepEqual(ids(), [], 'a new issue without a matching comment stays out')
+
+  await feathers.service('comments').create({ id: 2, issueId: 2, authorId: 2, body: 'By Bob' })
+  await flushTasks()
+  t.deepEqual(ids(), [2], 'a matching comment brings its issue in')
+
+  unsub()
+})
+
+it('realtime: junction and embed dependencies reconcile a relation-filtered root', async t => {
+  const junction = createJunctionApp()
+  const embed = createEmbedApp()
+  const roles2 = junction.figbird.query(junction.figbird.q.roles2.where({ 'members.name': 'Dan' }))
+  const roles = embed.figbird.query(embed.figbird.q.roles.where({ 'membersPreview.name': 'Erin' }))
+  const unsubs = [roles2.subscribe(() => {}), roles.subscribe(() => {})]
+  await flushTasks()
+  const roles2Finds = junction.feathers.service('roles2').counts.find
+  const rolesFinds = embed.feathers.service('roles').counts.find
+
+  await junction.feathers.service('roleMembers').create({ id: 5, roleId: 3, userId: 4 })
+  await embed.feathers.service('people').patch(5, { name: 'Erin E.' })
+  await flushTasks()
+
+  t.is(junction.feathers.service('roles2').counts.find, roles2Finds + 1, 'a junction row')
+  t.is(embed.feathers.service('roles').counts.find, rolesFinds + 1, 'an embedded row')
+
+  for (const unsub of unsubs) unsub()
+})
+
+it('realtime: a relation-filtered window reconciles a visible row it cannot decide', async t => {
+  const { figbird, feathers } = createApp()
+  // No query fetches users, so creators are never cached.
+  const ref = figbird.query(
+    figbird.q.issues.where({ 'creator.name': 'Alice' }).orderBy('id').limit(2),
+  )
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'the window reconciles')
+
+  unsub()
+})
+
+it('realtime: a visible window row the matcher cannot decide still takes new values', async t => {
+  const feathers = mockFeathers({
+    issues: { data: { 1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 } } },
+    users: { data: {} },
+  })
+  // A hidden tab defers the reconcile, so only the local merge can show the patch.
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    visibility: { isHidden: () => true, onChange: () => () => {} },
+  })
+  const ref = figbird.query(
+    figbird.q.issues.where({ 'creator.name': 'Alice' }).orderBy('id').limit(2),
+  )
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+
+  await feathers.service('issues').patch(1, { title: 'Renamed' })
+  await flushTasks()
+  t.deepEqual(
+    (ref.getSnapshot().data as Issue[]).map(issue => issue.title),
+    ['Renamed'],
+  )
+
+  unsub()
+})
+
+it('realtime: a relation-filtered paginated root keeps its loaded pages on related changes', async t => {
+  const { figbird, feathers } = createApp()
+  const ref = figbird.query(
+    figbird.q.issues.where({ 'comments.authorId': 1 }).orderBy('id').paginate({ pageSize: 1 }),
+  )
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  ref.loadMore()
+  await flushTasks()
+  t.is(ref.getSnapshot().data?.length, 2)
+  const findCount = feathers.service('issues').counts.find
+
+  await feathers.service('comments').create({ id: 9, issueId: 3, authorId: 1, body: 'New' })
+  await flushTasks()
+
+  t.is(ref.getSnapshot().data?.length, 2, 'loaded pages survive')
+  t.is(feathers.service('issues').counts.find, findCount + 2, 'each loaded page reconciles')
+
+  unsub()
+})
+
+it('local reads: a materialized service answers a relation filter only when related rows decide it', async t => {
+  const { figbird, feathers } = createTestApp(
+    schema,
+    {
+      issues: {
+        data: {
+          1: { id: 1, title: 'First issue', status: 'open', creatorId: 1 },
+          2: { id: 2, title: 'Second issue', status: 'open', creatorId: 2 },
+        },
+      },
+      users: {
+        data: {
+          1: { id: 1, name: 'Alice', email: 'alice@example.com' },
+          2: { id: 2, name: 'Bob', email: 'bob@example.com' },
+        },
+      },
+    },
+    { queryAwareFind: true },
+  )
+  const subscribe = (ref: { subscribe: (listener: () => void) => () => void }) =>
+    unsubs.push(ref.subscribe(() => {}))
+  const unsubs: Array<() => void> = []
+  subscribe(figbird.query(figbird.q.issues.all()))
+  subscribe(figbird.query(figbird.q.users.where({ id: 1 })))
+  await flushTasks()
+  const findCount = feathers.service('issues').counts.find
+
+  subscribe(figbird.query(figbird.q.issues.where({ 'creator.name': 'Alice' }).orderBy('id')))
+  await flushTasks()
+  t.is(
+    feathers.service('issues').counts.find,
+    findCount + 1,
+    "Bob isn't cached: the server answers",
+  )
+
+  subscribe(figbird.query(figbird.q.users.all()))
+  await flushTasks()
+  const byBob = figbird.query(figbird.q.issues.where({ 'creator.name': 'Bob' }).orderBy('id'))
+  subscribe(byBob)
+  await flushTasks()
+  t.deepEqual(
+    (byBob.getSnapshot().data as Issue[]).map(issue => issue.id),
+    [2],
+  )
+  t.is(feathers.service('issues').counts.find, findCount + 1, 'every creator is cached')
+
+  for (const unsub of unsubs) unsub()
 })
 
 it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
@@ -3141,6 +3923,16 @@ test('explain: classifies nodes with structured reasons', t => {
   // A paginated root is a window even without explicit $limit in the builder query.
   const paginated = figbird.explain(figbird.q.issues.paginate({ pageSize: 10 }))
   t.is(paginated.nodes[0]!.class, 'server-window')
+
+  // Filters through a many relation leave membership to the server; one-hop paths stay local.
+  const relational = figbird.explain(figbird.q.issues.where({ 'comments.authorId': 1 })).nodes[0]!
+  t.is(relational.class, 'server-authoritative')
+  t.deepEqual(
+    relational.reasons.filter(reason => reason.code === 'relational-filter'),
+    [{ code: 'relational-filter', detail: 'comments.authorId' }],
+  )
+  const oneHop = figbird.explain(figbird.q.issues.where({ 'creator.name': 'Alice' })).nodes[0]!
+  t.is(oneHop.class, 'local-exact')
 })
 
 test('inspect: stable read-only projection of live queries', async t => {
@@ -3267,13 +4059,13 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   const beforeUnrelatedPatch = exhaustive.getSnapshot()
   exhaustiveNotifications = 0
   await figbird.m.issues.patch(2, { title: 'Closed issue updated' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(exhaustive.getSnapshot(), beforeUnrelatedPatch)
   t.is(exhaustiveNotifications, 0)
 
   // Realtime maintains the set; the windowed subset recomputes locally — still no fetch.
   await feathers.service('issues').create({ id: 9, title: 'Newest', status: 'open', creatorId: 1 })
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await waitFor(() => winRef.getSnapshot().data?.[0]?.id === 9, 'the realtime create')
   t.deepEqual(
     (winRef.getSnapshot().data as Issue[]).map(issue => issue.id),
     [9, 3],
@@ -3285,7 +4077,7 @@ test('.all(): materialized reads stay local only when their ordering is knowable
   )
 
   await figbird.m.issues.patch(1, { title: 'ZZZ' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await flushTasks()
   t.is(allRef.getSnapshot().data?.at(-1)?.id, 1, 'patches restore exhaustive query order')
 
   feathers.service('issues').data[1] = { id: 1, title: 'AAA', status: 'open', creatorId: 1 }
@@ -3341,7 +4133,7 @@ test('.all(): materialized reads stay local only when their ordering is knowable
 
   hidden = false
   reconnectEvents.emit('reconnect')
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await flushTasks()
   const settled = figbird.getState().get('issues')?.queries.get(exhaustive.details().queryId)
   t.is(settled?.pending, false, 'local reconciliation settles pending work')
   const beforeEnsureFresh = exhaustive.getSnapshot()
@@ -3435,7 +4227,7 @@ test('.all(): accepts filters — complete slice, no materialization; rejects wi
 
   // The complete slice is maintained by local realtime merges, not refetches.
   await feathers.service('issues').create({ id: 9, title: 'E', status: 'open', creatorId: 1 })
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await waitFor(() => openRef.getSnapshot().data?.length === 4, 'the realtime create')
   t.deepEqual((openRef.getSnapshot().data as Issue[]).map(issue => issue.id).sort(), [1, 3, 4, 9])
   t.is(feathers.service('issues').counts.find, findsAfterAll, 'realtime maintenance stays local')
 
@@ -4263,6 +5055,210 @@ it('junction: realtime — patching a destination user updates the assembled vie
   unmount()
 })
 
+it('junction and embed: windows apply per parent and orderBy orders junction destinations', async t => {
+  const junctionApp = createJunctionApp()
+  const users = junctionApp.feathers.service('users2')
+  const findUsers = users.find.bind(users)
+  const userQueries: Array<Record<string, unknown> | undefined> = []
+  users.find = (params => {
+    userQueries.push(params?.query)
+    return findUsers(params)
+  }) as typeof findUsers
+  const embedApp = createEmbedApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function Members() {
+    const roles = useQuery(
+      junctionApp.figbird.q.roles2.related('members', u => u.orderBy('name', 'desc')),
+    )
+    return (
+      <div
+        className='members'
+        data-names={roles.map(role => role.members.map(u => u.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  // Each role's first member by name, desc — windowed per parent, not across parents.
+  function TopMembers() {
+    const roles = useQuery(
+      junctionApp.figbird.q.roles2.related('members', u => u.orderBy('name', 'desc').limit(1)),
+    )
+    return (
+      <div
+        className='top-members'
+        data-names={roles.map(role => role.members.map(u => u.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  function Previews() {
+    const roles = useQuery(embedApp.figbird.q.roles.related('membersPreview', p => p.limit(2)))
+    return (
+      <div
+        className='previews'
+        data-names={roles.map(role => role.membersPreview.map(p => p.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  render(
+    <>
+      <junctionApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Members />
+          <TopMembers />
+        </React.Suspense>
+      </junctionApp.App>
+      <embedApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Previews />
+        </React.Suspense>
+      </embedApp.App>
+    </>,
+  )
+  await flush()
+
+  t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Cara,Bob|')
+  t.is($('.top-members')!.getAttribute('data-names'), 'Bob|Cara|')
+  t.false(
+    userQueries.some(query => query?.$limit === 1),
+    'the window is applied per parent, not sent as a shared $limit',
+  )
+  t.is($('.previews')!.getAttribute('data-names'), 'Cara,Alice|Bob|')
+  unmount()
+})
+
+test('junction: a destination window compiles to a per-parent slice; a junction-hop window is rejected', t => {
+  const { figbird } = createJunctionApp()
+  const ast = figbird.q.roles2.related('members').toAST()
+  const windowed = {
+    ...ast,
+    related: { members: { ...ast.related.members!, query: { $skip: 1, $limit: 1 } } },
+  }
+  const [plan] = compileRelations(windowed, junctionSchema, 'merge')
+  t.like(plan, { kind: 'junction', listWindow: { start: 1, end: 2, fetchEnd: undefined } })
+
+  const viaWindowed = createSchema({
+    services: {
+      roles2: service<Role2Service>(),
+      roleMembers: service<RoleMemberService>(),
+      users2: service<User2Service>(),
+    },
+    relationships: {
+      roles2: ({ many }) => ({
+        members: many(
+          {
+            sourceField: 'id',
+            destService: 'roleMembers',
+            destField: 'roleId',
+            query: { $skip: 1 },
+          },
+          { sourceField: 'userId', destService: 'users2', destField: 'id' },
+        ),
+      }),
+    },
+  })
+  t.throws(() => compileRelations(ast, viaWindowed, 'merge'), {
+    message: /windows its junction service "roleMembers"/,
+  })
+})
+
+it('junction and embed: orderBy holds when new destination ids arrive in a later chunk', async t => {
+  const junctionApp = createJunctionApp()
+  const embedApp = createEmbedApp()
+  const { render, unmount, flush, $ } = dom()
+
+  function Members() {
+    const roles = useQuery(
+      junctionApp.figbird.q.roles2.related('members', u => u.orderBy('name', 'desc')),
+    )
+    return (
+      <div
+        className='members'
+        data-names={roles.map(role => role.members.map(u => u.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  function Previews() {
+    const roles = useQuery(
+      embedApp.figbird.q.roles.related('membersPreview', p => p.orderBy('name', 'desc')),
+    )
+    return (
+      <div
+        className='previews'
+        data-names={roles.map(role => role.membersPreview.map(p => p.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  render(
+    <>
+      <junctionApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Members />
+        </React.Suspense>
+      </junctionApp.App>
+      <embedApp.App>
+        <React.Suspense fallback={<div>Loading...</div>}>
+          <Previews />
+        </React.Suspense>
+      </embedApp.App>
+    </>,
+  )
+  await flush()
+  t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Cara,Bob|')
+  t.is($('.previews')!.getAttribute('data-names'), 'Dan,Cara,Alice|Bob|')
+
+  // Dan and Erin are new destination ids, so each is fetched in a chunk of its own.
+  await flush(async () => {
+    await junctionApp.feathers.service('roleMembers').create({ id: 5, roleId: 2, userId: 4 })
+    await embedApp.feathers.service('roles').patch(2, { membersPreview: [2, 5] })
+  })
+  t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Dan,Cara,Bob|')
+  t.is($('.previews')!.getAttribute('data-names'), 'Dan,Cara,Alice|Erin,Bob|')
+  unmount()
+})
+
+it('embed: an unsorted window slices each id list in one batched fetch', async t => {
+  const { App, figbird, feathers } = createEmbedApp()
+  const { render, unmount, flush, $ } = dom()
+  const people = feathers.service('people')
+  const find = people.find.bind(people)
+  const requested: unknown[] = []
+  people.find = (params => {
+    requested.push(params?.query?.id)
+    return find(params)
+  }) as typeof find
+
+  function Previews() {
+    const first = useQuery(figbird.q.roles.related('membersPreview', p => p.limit(1)))
+    const filtered = useQuery(
+      figbird.q.roles.related('membersPreview', p => p.where({ name: 'Dan' }).limit(1)),
+    )
+    const names = (roles: typeof first) =>
+      roles.map(role => role.membersPreview.map(p => p.name).join(',')).join('|')
+    return <div className='previews' data-first={names(first)} data-filtered={names(filtered)} />
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div>Loading...</div>}>
+        <Previews />
+      </React.Suspense>
+    </App>,
+  )
+  await flush()
+
+  // Role 1 lists [3, 1, 4] and role 2 lists [2]; the window is the head of each list,
+  // after the filter when there is one.
+  t.is($('.previews')!.getAttribute('data-first'), 'Cara|Bob|')
+  t.is($('.previews')!.getAttribute('data-filtered'), 'Dan||')
+  t.deepEqual(requested, [{ $in: [2, 3] }, { $in: [1, 2, 3, 4] }])
+  unmount()
+})
+
 it('junction: empty parent set (no find match) resolves with no junction fetch needed', async t => {
   const { App, figbird, feathers } = createJunctionApp()
   const { render, unmount, flush, $ } = dom()
@@ -4687,7 +5683,7 @@ test('.all(): get(id) answers locally from the materialized service', async t =>
 
   // Realtime keeps the locally-served get fresh — still no roundtrip.
   await feathers.service('issues').patch(1, { title: 'Renamed' })
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await waitFor(() => (ref.getSnapshot().data as Issue).title === 'Renamed', 'the realtime patch')
   t.is((ref.getSnapshot().data as Issue).title, 'Renamed')
   t.is(feathers.service('issues').counts.get, getsAfterAll)
 

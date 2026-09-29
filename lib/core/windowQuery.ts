@@ -83,6 +83,10 @@ interface WindowPage<T, S extends Schema, TParams, TMeta extends Record<string, 
   unsubscribe: () => void
   staleTime: number
   lastUsed: number
+  /** Set when the page loaded but broke the pagination protocol. */
+  failure: Error | undefined
+  /** Served from a cache entry the rebuilt chain can't trust; refetching. */
+  revalidating: boolean
 }
 
 interface WindowQueryOptions {
@@ -148,6 +152,10 @@ export class WindowQueryRef<
   #version = 0
   #data: ReadonlyMap<number, T> = EMPTY_DATA
   #total: number | undefined
+  // Set while a cursor chain rebuild replaces retired pages: their rows by index,
+  // shown until the rebuild settles. Pages the rebuild creates must not trust the
+  // query cache, which still holds rows fetched along the old chain.
+  #retired: Map<number, T> | null = null
   #snapshotCache = new Map<string, { version: number; state: WindowQueryState<T> }>()
 
   constructor(
@@ -177,15 +185,28 @@ export class WindowQueryRef<
         pages: () => Array.from(this.#pages.keys(), start => this.#pagerPage(start)!),
         ensure: (start: number) => this.#ensurePage(start),
         drop: (start: number) => this.#dropPage(start),
+        retire: (start: number) => {
+          const retired = (this.#retired ??= new Map())
+          const state = this.#pages.get(start)?.ref.getSnapshot()
+          if (state?.status === 'success') {
+            state.data.forEach((item, index) => retired.set(start + index, item))
+          }
+          this.#dropPage(start)
+        },
         touch: (start: number) => this.#touchPage(start),
+        fail: (start: number, error: Error) => {
+          const page = this.#pages.get(start)
+          if (page) page.failure = error
+        },
         total: () => this.#total,
         setTotal: (total: number) => {
           this.#total = total
         },
       },
     }
-    this.#pager = host.adapter.pageSource?.(serviceName)
-      ? new CursorWindowPager(context)
+    const pageSource = host.adapter.pageSource?.(serviceName)
+    this.#pager = pageSource
+      ? new CursorWindowPager(context, pageSource.cursorStability)
       : new OffsetWindowPager(context)
   }
 
@@ -235,7 +256,7 @@ export class WindowQueryRef<
       const page = this.#pages.get(start)
       return page ? [page] : []
     })
-    const missing = !this.#pager.rangeReady(range)
+    const missing = !this.#pager.rangeReady(range) && !this.#retiredRowsCover(range)
     let isFetching = false
     let coldError: Error | null = null
     let backgroundError: Error | null = null
@@ -243,7 +264,10 @@ export class WindowQueryRef<
       const state = page.ref.getSnapshot()
       if (state.isFetching) isFetching = true
       if (state.status === 'error') coldError ??= state.error
-      if (state.status === 'success') backgroundError ??= state.error
+      if (state.status === 'success') {
+        coldError ??= page.failure ?? null
+        backgroundError ??= state.error
+      }
     }
     for (const start of this.#pager.fetchingStarts(range, this.#config.preloadPages)) {
       if (this.#pages.get(start)?.ref.getSnapshot().isFetching) isFetching = true
@@ -335,8 +359,10 @@ export class WindowQueryRef<
   #syncPages(): void {
     const desired = this.#desiredStarts()
     this.#pager.sync(desired)
+    const rebuilt = this.#retired !== null && !this.#anyPageFetching()
+    if (rebuilt) this.#retired = null
     this.#syncPageFreshness()
-    if (this.#evictPages(this.#pager.protectedStarts(desired))) {
+    if (this.#evictPages(this.#pager.protectedStarts(desired)) || rebuilt) {
       this.#rebuildData()
       this.#version += 1
       this.#snapshotCache.clear()
@@ -369,11 +395,17 @@ export class WindowQueryRef<
       unsubscribe: () => {},
       staleTime,
       lastUsed: ++this.#clock,
+      failure: undefined,
+      revalidating: false,
     }
     this.#pages.set(start, page)
     page.unsubscribe = ref.subscribe(() => this.#pageChanged(start), {
       staleTime,
     })
+    if (this.#retired && ref.getSnapshot().status === 'success') {
+      page.revalidating = true
+      ref.refetch()
+    }
     this.#pageChanged(start)
   }
 
@@ -381,14 +413,17 @@ export class WindowQueryRef<
     const page = this.#pages.get(start)
     if (!page) return
     const state = page.ref.getSnapshot()
-    if (state.status === 'success') {
+    if (!state.isFetching) page.revalidating = false
+    // A revalidating page's cached rows would advance the chain along old cursors.
+    if (state.status === 'success' && !page.revalidating) {
       const metadata = page.ref.rootMetadata()
+      page.failure = undefined
       this.#pager.pageSucceeded({
         start,
         rowCount: state.data.length,
+        ids: state.data.map(item => this.#host.adapter.getId(item)),
         continuation: metadata.continuation,
         total: metadata.total,
-        revision: metadata.revision,
       })
     }
     this.#rebuildData()
@@ -401,6 +436,9 @@ export class WindowQueryRef<
 
   #rebuildData(): void {
     const data = new Map<number, T>()
+    for (const [index, item] of this.#retired ?? []) {
+      if (index < (this.#total ?? Infinity)) data.set(index, item)
+    }
     const pages = Array.from(this.#pages.values()).sort((a, b) => a.start - b.start)
     for (const page of pages) {
       const state = page.ref.getSnapshot()
@@ -450,6 +488,22 @@ export class WindowQueryRef<
     }
   }
 
+  #retiredRowsCover(range: WindowRange): boolean {
+    if (!this.#retired) return false
+    const end = Math.min(range.end, this.#total ?? range.end)
+    for (let index = range.start; index < end; index++) {
+      if (!this.#data.has(index)) return false
+    }
+    return true
+  }
+
+  #anyPageFetching(): boolean {
+    for (const page of this.#pages.values()) {
+      if (page.ref.getSnapshot().isFetching) return true
+    }
+    return false
+  }
+
   #touchPage(start: number): void {
     const page = this.#pages.get(start)
     if (page) page.lastUsed = ++this.#clock
@@ -457,7 +511,8 @@ export class WindowQueryRef<
 
   #evictPages(protectedStarts: ReadonlySet<number>): boolean {
     let evicted = false
-    while (this.#pages.size > this.#config.maxPages) {
+    const retained = this.#pager.retainedPages(this.#config.maxPages)
+    while (this.#pages.size > retained) {
       const candidates = Array.from(this.#pages.values())
         .filter(page => !protectedStarts.has(page.start))
         .sort((a, b) => a.lastUsed - b.lastUsed)
@@ -519,6 +574,7 @@ export class WindowQueryRef<
     for (const page of this.#pages.values()) page.unsubscribe()
     this.#pages.clear()
     this.#pager.reset()
+    this.#retired = null
     this.#data = EMPTY_DATA
     this.#total = undefined
     this.#snapshotCache.clear()

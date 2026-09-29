@@ -121,6 +121,17 @@ export interface Adapter<
 
   findAll(serviceName: string, params?: TParams): Promise<QueryResponse<unknown[], TMeta>>
 
+  /**
+   * Optional: read the rows with these ids that still exist, in any order. A
+   * complete-set (`.all()`) response read page by page can miss a row when another
+   * is removed between pages; before reading a row it lacks as removed, the store
+   * asks here, and only ids this answer omits count as removed. Without it, every
+   * row the response lacks is removed.
+   */
+  findByIds?:
+    | ((serviceName: string, ids: readonly (string | number)[]) => Promise<unknown[]>)
+    | undefined
+
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 
   /**
@@ -161,6 +172,15 @@ export interface Adapter<
    * and stays silent on presence checks), not the adapter's.
    */
   getId(item: unknown): string | number | undefined
+
+  /**
+   * Optional: whether `field` of the service's rows holds the id `getId` reads.
+   * Figbird follows a relation by entity key only when it targets the destination's
+   * id field: a write then waits for a pending create it references, and a
+   * relational filter finds the related row directly. Without it, writes don't wait
+   * and relational filters match related rows by field value.
+   */
+  isIdField?(serviceName: string, field: string): boolean
 
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 

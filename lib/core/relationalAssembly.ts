@@ -7,7 +7,9 @@
  */
 
 import type { RelationPlan } from './relationPlan.js'
+import type { RelationshipDef } from './schema.js'
 import { getFieldValue } from './relationalFilters.js'
+import { buildComparator, type ValueComparator } from './sort.js'
 
 export type AssembledRelationData =
   | { kind: 'none' }
@@ -16,20 +18,15 @@ export type AssembledRelationData =
   | { kind: 'perParent'; byParent: Map<string, unknown[]> }
 
 /**
- * Dedupe + sort + stable-encode a set of key values. The encoded key is what relation
- * subs compare to detect "same source set, nothing to re-fetch" — every sync path must
- * produce it identically or subscriptions churn.
+ * Dedupe + sort a set of key values, so the `$in` chunks opened for them (and so
+ * their query identities) don't depend on parent order.
  */
-export function sourceSet(raw: (string | number)[]): { values: (string | number)[]; key: string } {
-  const values = [...new Set(raw)].sort()
-  return { values, key: JSON.stringify(values) }
+export function sourceSet(raw: (string | number)[]): (string | number)[] {
+  return [...new Set(raw)].sort()
 }
 
-/** Collect the deduped, sorted values of `field` across parents, with the stable key. */
-export function uniqueSourceValues(
-  parentData: unknown[],
-  field: string,
-): { values: (string | number)[]; key: string } {
+/** Collect the deduped, sorted values of `field` across parents. */
+export function uniqueSourceValues(parentData: unknown[], field: string): (string | number)[] {
   return sourceSet(
     parentData
       .map(item => getFieldValue(item, field))
@@ -42,15 +39,43 @@ export function uniqueSourceValues(
  * carry an array of `string | number` at `field`; non-array or missing values become
  * `undefined` so callers can treat them as "no edges from this parent".
  */
-export function getFieldValueAsList(item: unknown, field: string): (string | number)[] | undefined {
+function getFieldValueAsList(item: unknown, field: string): (string | number)[] | undefined {
   const value = (item as Record<string, unknown>)[field]
   if (!Array.isArray(value)) return undefined
   return value.filter((v): v is string | number => typeof v === 'string' || typeof v === 'number')
 }
 
+/**
+ * The ids an `embed` relation reads from a parent's list: all of them, or the prefix
+ * an unfiltered list window needs.
+ */
+export function embeddedIds(
+  item: unknown,
+  plan: Pick<Exclude<RelationPlan, { kind: 'missing' }>, 'definition' | 'listWindow'>,
+): (string | number)[] | undefined {
+  const list = getFieldValueAsList(item, plan.definition.sourceField)
+  return list && plan.listWindow ? list.slice(0, plan.listWindow.fetchEnd) : list
+}
+
 /** Stable key for a parent source value (used by per-parent windowed relations). */
 export function sourceValueKey(value: string | number): string {
   return JSON.stringify(value)
+}
+
+/**
+ * The destination filter a parent's own windowed query runs with, keyed stably. An
+ * `embed` parent windows over its id list; other relations over their source value.
+ */
+export function perParentSource(
+  item: unknown,
+  relDef: RelationshipDef,
+): { key: string; filter: string | number | { $in: (string | number)[] } } | undefined {
+  if (relDef.cardinality === 'embedded') {
+    const list = getFieldValueAsList(item, relDef.sourceField)
+    return list?.length ? { key: JSON.stringify(list), filter: { $in: list } } : undefined
+  }
+  const value = getFieldValue(item, relDef.sourceField)
+  return value === undefined ? undefined : { key: sourceValueKey(value), filter: value }
 }
 
 interface RelationIndex {
@@ -135,6 +160,37 @@ function buildIndexes(
   return indexes
 }
 
+type RowComparator = (a: unknown, b: unknown) => number
+
+function inOrder(items: unknown[], order: RowComparator | undefined): unknown[] {
+  return order && items.length > 1 ? [...items].sort(order) : items
+}
+
+/**
+ * Junction and embed edges carry their own order; an explicit sort overrides it.
+ * Items are sorted per parent with the store's comparator rather than by result
+ * position, because a relation's rows span several independently sorted chunks.
+ */
+function collectOrders(
+  plans: RelationPlan[],
+  compare: ValueComparator,
+  orders = new Map<string, RowComparator>(),
+): Map<string, RowComparator> {
+  for (const plan of plans) {
+    if (plan.kind === 'missing') continue
+    const { definition, sort } = plan
+    if (
+      sort &&
+      plan.kind !== 'perParent' &&
+      (definition.via || definition.cardinality === 'embedded')
+    ) {
+      orders.set(plan.key, buildComparator(sort, compare))
+    }
+    collectOrders(plan.children, compare, orders)
+  }
+  return orders
+}
+
 // First match wins — mirrors a linear scan's short-circuit semantics.
 function firstMatchIndex(items: unknown[], destField: string): Map<string | number, unknown> {
   const byKey = new Map<string | number, unknown>()
@@ -153,6 +209,7 @@ function firstMatchIndex(items: unknown[], destField: string): Map<string | numb
  */
 interface AssemblyContext {
   relationData: Map<string, AssembledRelationData>
+  orders: Map<string, RowComparator>
   indexCache: Map<string, CachedRelationIndex>
   indexesByPath: Map<string | null, Map<string, RelationIndex>>
   previousByPath: Map<string | null, WeakMap<object, Record<string, unknown>>>
@@ -194,11 +251,20 @@ function assembleRelations(
       let matchedItems: unknown[]
 
       if (rel?.kind === 'perParent') {
-        const sourceValue = getFieldValue(item, relDef.sourceField)
-        matchedItems =
-          sourceValue === undefined ? [] : (rel.byParent.get(sourceValueKey(sourceValue)) ?? [])
+        const source = perParentSource(item, relDef)
+        const rows = source ? (rel.byParent.get(source.key) ?? []) : []
+        // Each parent's window arrives in server order.
+        matchedItems = rows
+        if (relDef.cardinality === 'one') {
+          let found: unknown = matchedItems[0] ?? null
+          if (hasNested && found) {
+            found = assembleRelations([found], children, key, context)[0] ?? null
+          }
+          result[relName] = found
+          continue
+        }
       } else if (relDef.cardinality === 'embedded') {
-        const sourceList = getFieldValueAsList(item, relDef.sourceField)
+        const sourceList = embeddedIds(item, plan)
         matchedItems = []
         if (sourceList) {
           // Walk the parent's id list (preserves the server-chosen order) and look up
@@ -207,6 +273,10 @@ function assembleRelations(
             const found = index?.byKey?.get(id)
             if (found) matchedItems.push(found)
           }
+        }
+        matchedItems = inOrder(matchedItems, context.orders.get(key))
+        if (plan.listWindow) {
+          matchedItems = matchedItems.slice(plan.listWindow.start, plan.listWindow.end)
         }
       } else if (relDef.via) {
         // Two-hop: walk this parent's junction rows, then collect dest items keyed
@@ -222,6 +292,10 @@ function assembleRelations(
             const found = index?.byKey?.get(destId)
             if (found) matchedItems.push(found)
           }
+        }
+        matchedItems = inOrder(matchedItems, context.orders.get(key))
+        if (plan.listWindow) {
+          matchedItems = matchedItems.slice(plan.listWindow.start, plan.listWindow.end)
         }
         // A chained `one` resolves to the first (declared-selective) match, or null.
         if (relDef.cardinality === 'one') {
@@ -274,7 +348,8 @@ function reuseArray(previous: unknown, next: unknown[]): unknown[] {
 }
 
 /** Each query retains row identities and indexes for the latest relation arrays. */
-export function createRelationAssembler(plans: RelationPlan[]) {
+export function createRelationAssembler(plans: RelationPlan[], compare: ValueComparator) {
+  const orders = collectOrders(plans, compare)
   const previousByPath = new Map<string | null, WeakMap<object, Record<string, unknown>>>()
   const indexCache = new Map<string, CachedRelationIndex>()
   let previous: unknown[] = []
@@ -295,6 +370,7 @@ export function createRelationAssembler(plans: RelationPlan[]) {
       previous,
       assembleRelations(items, plans, null, {
         relationData,
+        orders,
         indexesByPath: new Map(),
         indexCache,
         previousByPath,

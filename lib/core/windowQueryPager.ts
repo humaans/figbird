@@ -2,6 +2,7 @@ import type { PageCursor } from '../adapters/adapter.js'
 import type { PageContinuation } from '../adapters/queryPage.js'
 import type { QueryAST } from './queryBuilder.js'
 import type { RelationalRootOverride } from './relationalQuery.js'
+import { sameValue } from './valueEquality.js'
 
 export interface PagerRange {
   start: number
@@ -17,9 +18,9 @@ export interface PagerPage {
 export interface PagerPageSuccess {
   start: number
   rowCount: number
+  ids: ReadonlyArray<string | number | undefined>
   continuation: PageContinuation
   total: number | undefined
-  revision: unknown
 }
 
 export interface WindowPagerAccess {
@@ -27,7 +28,14 @@ export interface WindowPagerAccess {
   pages(): Iterable<PagerPage>
   ensure(start: number): void
   drop(start: number): void
+  /**
+   * Drop a page whose rows no longer sit on the cursor chain. Its replacement is
+   * revalidated rather than served from the query cache.
+   */
+  retire(start: number): void
   touch(start: number): void
+  /** Surface a loaded page that broke the pagination protocol as that page's error. */
+  fail(start: number, error: Error): void
   total(): number | undefined
   setTotal(total: number): void
 }
@@ -39,6 +47,8 @@ export interface WindowPager {
   rangeReady(range: PagerRange): boolean
   sync(targets: ReadonlySet<number>): void
   protectedStarts(targets: ReadonlySet<number>): ReadonlySet<number>
+  /** The retention budget, in this pager's pages, for `maxPages` configured-size pages. */
+  retainedPages(maxPages: number): number
   rootOverride(start: number): RelationalRootOverride
   pageSucceeded(page: PagerPageSuccess): void
   reset(): void
@@ -71,13 +81,22 @@ function targetStarts(
 
 export class OffsetWindowPager implements WindowPager {
   #context: WindowPagerContext
+  // Pages tile the index space at the size the server actually serves, which a
+  // server cap (Feathers' paginate.max) can hold below the configured pageSize.
+  #pageSize: number
 
   constructor(context: WindowPagerContext) {
     this.#context = context
+    this.#pageSize = context.pageSize
   }
 
   targetStarts(range: PagerRange, preloadPages: number): number[] {
-    return targetStarts(range, preloadPages, this.#context.pageSize, this.#context.access.total())
+    return targetStarts(
+      range,
+      preloadPages * this.#pagesPerConfiguredPage(),
+      this.#pageSize,
+      this.#context.access.total(),
+    )
   }
 
   requiredStarts(range: PagerRange): number[] {
@@ -102,8 +121,12 @@ export class OffsetWindowPager implements WindowPager {
     return targets
   }
 
+  retainedPages(maxPages: number): number {
+    return maxPages * this.#pagesPerConfiguredPage()
+  }
+
   rootOverride(start: number): RelationalRootOverride {
-    const { ast, pageSize, serviceName } = this.#context
+    const { ast, serviceName } = this.#context
     return {
       descriptor: {
         serviceName,
@@ -111,7 +134,7 @@ export class OffsetWindowPager implements WindowPager {
         params: {
           query: {
             ...ast.query,
-            $limit: pageSize,
+            $limit: this.#pageSize,
             $skip: start,
           },
         },
@@ -127,19 +150,41 @@ export class OffsetWindowPager implements WindowPager {
 
   pageSucceeded(page: PagerPageSuccess): void {
     if (page.total !== undefined) this.#context.access.setTotal(page.total)
+    if (page.continuation.kind !== 'offset') return
+    const served = page.continuation.offset - page.start
+    if (served <= 0 || served >= this.#pageSize) return
+    // A capped page leaves a gap before the next planned start. Re-plan at the
+    // served size and drop pages that no longer sit on its boundaries.
+    this.#pageSize = served
+    for (const { start } of Array.from(this.#context.access.pages())) {
+      if (start % served !== 0) this.#context.access.drop(start)
+    }
   }
 
-  reset(): void {}
+  reset(): void {
+    this.#pageSize = this.#context.pageSize
+  }
+
+  // `preloadPages` and `maxPages` count configured-size pages, so a server cap
+  // keeps the preloaded and retained row counts rather than shrinking them.
+  #pagesPerConfiguredPage(): number {
+    return Math.ceil(this.#context.pageSize / this.#pageSize)
+  }
 }
 
 export class CursorWindowPager implements WindowPager {
   #context: WindowPagerContext
   #cursorAt = new Map<number, PageCursor | undefined>([[0, undefined]])
+  #cursorStability: 'ordering' | undefined
   #terminalIndex: number | undefined
-  #rootRevision: unknown
+  #rootChain:
+    | (Pick<PagerPageSuccess, 'rowCount' | 'continuation' | 'total'> &
+        Partial<Pick<PagerPageSuccess, 'ids'>>)
+    | undefined
 
-  constructor(context: WindowPagerContext) {
+  constructor(context: WindowPagerContext, cursorStability: 'ordering' | undefined) {
     this.#context = context
+    this.#cursorStability = cursorStability
   }
 
   targetStarts(range: PagerRange, preloadPages: number): number[] {
@@ -206,6 +251,10 @@ export class CursorWindowPager implements WindowPager {
     return starts
   }
 
+  retainedPages(maxPages: number): number {
+    return maxPages
+  }
+
   rootOverride(start: number): RelationalRootOverride {
     const cursor = this.#cursorAt.get(start)
     const { ast, pageSize, serviceName } = this.#context
@@ -231,10 +280,21 @@ export class CursorWindowPager implements WindowPager {
 
   pageSucceeded(page: PagerPageSuccess): void {
     if (page.start === 0) {
-      if (this.#rootRevision !== undefined && this.#rootRevision !== page.revision) {
+      // Later pages hang off page zero's end cursor, and their absolute starts off
+      // its row count and the total; a value-only change to its rows keeps them.
+      // Only an `ordering` cursor promises to stay valid while those hold. Any other
+      // cursor is opaque — a position-encoded one repeats when a row moves out of
+      // page zero — so its row ids must match too.
+      const chain = {
+        rowCount: page.rowCount,
+        continuation: page.continuation,
+        total: page.total,
+        ...(this.#cursorStability === 'ordering' ? {} : { ids: page.ids }),
+      }
+      if (this.#rootChain !== undefined && !sameValue(this.#rootChain, chain)) {
         this.#resetDescendants()
       }
-      this.#rootRevision = page.revision
+      this.#rootChain = chain
     }
     if (page.total !== undefined) {
       this.#context.access.setTotal(page.total)
@@ -248,7 +308,11 @@ export class CursorWindowPager implements WindowPager {
       return
     }
     if (page.rowCount === 0) {
-      throw new Error('Native window page reported hasMore without returning rows')
+      this.#context.access.fail(
+        page.start,
+        new Error('Native window page reported hasMore without returning rows'),
+      )
+      return
     }
     if (page.continuation.kind === 'cursor') {
       this.#cursorAt.set(page.start + page.rowCount, page.continuation.cursor)
@@ -258,7 +322,7 @@ export class CursorWindowPager implements WindowPager {
   reset(): void {
     this.#cursorAt = new Map([[0, undefined]])
     this.#terminalIndex = undefined
-    this.#rootRevision = undefined
+    this.#rootChain = undefined
   }
 
   #ensurePath(target: number): void {
@@ -316,7 +380,7 @@ export class CursorWindowPager implements WindowPager {
 
   #resetDescendants(): void {
     for (const page of Array.from(this.#context.access.pages())) {
-      if (page.start > 0) this.#context.access.drop(page.start)
+      if (page.start > 0) this.#context.access.retire(page.start)
     }
     this.#cursorAt = new Map([[0, undefined]])
     this.#terminalIndex = undefined

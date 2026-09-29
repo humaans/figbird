@@ -322,15 +322,14 @@ must be treated as server-window for the same reason any windowed dependency for
 parent server-window: the visible related set isn't the complete set, so a missing match
 might exist outside the window.
 
+Local decisions are three-valued: match, no match, or unknown. Only paths through single-hop
+`one` relations are evaluated locally. A null FK means there is no related row; a related row
+that isn't cached is unknown, and the store keeps the current result and reconciles instead of
+guessing. Paths through `many`, junction, `embed`, or two-hop relations need the complete related
+set, so they make the root server-authoritative (`relational-filter` in `explain()`).
+
 Open questions:
 
-- The matcher must handle the case where a new parent event arrives but its related entity
-  hasn't been fetched yet. Conservative answer: hold the parent in a pending state until the
-  relation leaf is fetched, then evaluate. This extends today's "fetch missing relation leaf"
-  path with a "membership undecided until leaf arrives" state.
-- `$or` predicates that span parent and relation fields (e.g. "issue.priority === 'urgent' OR
-  issue.assignee.role === 'owner'"). The server can express this; the client matcher needs
-  the same expressivity. v1 can restrict to AND-of-predicates and grow later.
 - Cross-relation filters that span sibling relations (`'assignee.teamId': X AND
 'reviewer.role': 'admin'`). Should work by extension of the same matcher rules; document
   explicitly when implemented.
@@ -350,6 +349,10 @@ window (total-only). What the client cannot know — whether an uncached row sli
 window after a removal, anything that shifts the page start of a skipped window, boundary ties —
 reconciles by refetch. Sort position is judged by `$sort`, falling back to the configured
 `defaultSort` (the backend's implicit order — a correctness contract like custom operators).
+
+Values within a sort field compare through the instance's `compare` option, the same kind of
+correctness contract: a comparator that disagrees with the backend can insert or evict the wrong
+rows in a window until the next fetch.
 
 Server-derived ordering, such as search rank or permission-aware priority, should be treated as
 server-authoritative.
@@ -660,9 +663,11 @@ intents immediately but reach the adapter one at a time. A lane keeps the last a
 as its base and folds the remaining create/update/patch/remove intents over that base after every
 acknowledgement or failure. This prevents an older response from replacing newer optimistic state
 and makes rollback compositional: remove only the failed intent, then replay what remains. A failed
-create cancels the queued writes that depended on the identity. Different records stay parallel;
-id-less confirmed creates, batch creates, and opaque custom methods have no record key and keep the
-direct path.
+create cancels the queued writes that depended on the identity. Different records stay parallel,
+except that a write whose data references a record with a pending create (through a direct `one`
+relation to its id) waits for that create, so a child never reaches the server before its parent,
+and rolls back with it if the create fails. Id-less confirmed creates, batch creates, and opaque
+custom methods have no record key and keep the direct path.
 
 The active intent overlay participates in fetch rebasing even when it predates the fetch cursor.
 Locally exact query nodes consume projected entity events immediately. Reconciliation that needs

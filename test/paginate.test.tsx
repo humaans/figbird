@@ -496,6 +496,53 @@ it('useQueryResult + paginate: composes with .related() — relations attach to 
   unmount()
 })
 
+it('useQueryResult + paginate: loadMore fetches relations for the new page only', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const { App, figbird, feathers } = createPaginateApp({ totalIssues: 4 })
+  const comments = feathers.service('comments')
+  const find = comments.find.bind(comments)
+  const requested: unknown[] = []
+  comments.find = (params => {
+    requested.push(params?.query?.issueId)
+    return find(params)
+  }) as typeof find
+
+  let loadMoreFn: (() => void) | null = null
+  const renders: string[] = []
+
+  function IssueList() {
+    const { data, loadMore } = useQueryResult(
+      figbird.q.issues.orderBy('rank', 'asc').paginate({ pageSize: 2 }).related('comments'),
+    )
+    useLayoutEffect(() => {
+      loadMoreFn = loadMore
+    })
+    const rows = data.map(issue => `${issue.id}:${issue.comments.length}`).join('|')
+    renders.push(rows)
+    return <div className='issues' data-rows={rows} />
+  }
+
+  render(
+    <App>
+      <React.Suspense fallback={<div className='fallback'>...</div>}>
+        <IssueList />
+      </React.Suspense>
+    </App>,
+  )
+
+  await flush()
+  await flush(() => loadMoreFn!())
+
+  t.is($('.issues')!.getAttribute('data-rows'), '1:1|2:1|3:1|4:1')
+  t.deepEqual(requested, [{ $in: [1, 2] }, { $in: [3, 4] }])
+  t.true(
+    renders.every(rows => rows.startsWith('1:1|2:1')),
+    'loaded parents keep their relations while the new page resolves',
+  )
+
+  unmount()
+})
+
 it('useQueryResult + paginate: realtime create that provably sorts into a page merges locally', async t => {
   const { render, unmount, flush, $ } = dom()
   const { App, figbird, feathers, issuesService } = createPaginateApp({ totalIssues: 5 })

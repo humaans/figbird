@@ -30,6 +30,7 @@ export const LOCAL_QUERY_OPERATORS = new Set([
   '$gte',
   '$ne',
   '$or',
+  '$and',
 ])
 export const SERVER_WINDOW_QUERY_FILTERS = new Set(['$limit', '$skip', '$sort'])
 /** Filters that change returned row shape, so their results are not canonical entities. */
@@ -47,6 +48,7 @@ export interface ClassificationReason {
     | 'select-projection'
     | 'server-only-operator'
     | 'window-filter'
+    | 'relational-filter'
     | 'snapshot'
   detail?: string
 }
@@ -182,10 +184,25 @@ export function isProjectionQuery(query: unknown): boolean {
   return found
 }
 
+/**
+ * Why a root is server-authoritative by plan rather than by its operators: an
+ * explicit `.server()`, and relational filters the client can't evaluate (see
+ * `relationalFilterServerReasons`). Shared by root execution and explanation.
+ */
+export function rootServerReasons(
+  explicitServer: boolean,
+  relationalFilterReasons: readonly ClassificationReason[],
+): ClassificationReason[] {
+  return [
+    ...(explicitServer ? [{ code: 'server-flag' as const, detail: '.server()' }] : []),
+    ...relationalFilterReasons,
+  ]
+}
+
 /** One plan shared by paginated-root execution and static explanation. */
 export interface RootPaginationPlan {
   kind: 'offset' | 'sequential'
-  /** Sequential continuations and explicit `.server()` roots are server-authoritative. */
+  /** Sequential continuations and server-authoritative roots are server-authoritative. */
   server: boolean
   /** Structured reasons used by `figbird.explain()`. */
   serverReasons: ClassificationReason[]
@@ -193,7 +210,7 @@ export interface RootPaginationPlan {
 
 export function planRootPagination(
   nativeSequential: boolean,
-  explicitServer: boolean,
+  rootReasons: readonly ClassificationReason[],
 ): RootPaginationPlan {
   const serverReasons: ClassificationReason[] = []
   if (nativeSequential) {
@@ -202,9 +219,7 @@ export function planRootPagination(
       detail: 'adapter-native sequential pagination',
     })
   }
-  if (explicitServer) {
-    serverReasons.push({ code: 'server-flag', detail: '.server()' })
-  }
+  serverReasons.push(...rootReasons)
   return {
     kind: nativeSequential ? 'sequential' : 'offset',
     server: serverReasons.length > 0,

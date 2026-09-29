@@ -2,6 +2,8 @@ import { TestClock } from './clock.js'
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
+import { MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
+import { MAX_RETAINED_UNREFERENCED_ENTITIES } from '../lib/core/queryStore'
 import { createSchema, service } from '../lib/core/schema'
 import type { FindResult } from '../lib/testing'
 import { mockFeathers } from './helpers'
@@ -508,4 +510,72 @@ test('figbird.query keeps $sort precedence in query identity', t => {
     figbird.query(figbird.q.notes.where({ content: 'b', tag: 'a' }).orderBy('tag')),
     'filter key order still does not affect identity',
   )
+})
+
+test('realtime events for rows no query references leave the entity cache bounded', async t => {
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'kept', tag: 'narrow' } } },
+    posts: { data: { 1: { id: 1, title: 'first', body: 'kept' } } },
+  })
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+  })
+  const narrow = figbird.query(figbird.q.notes.where({ tag: 'narrow' }))
+  const releaseNarrow = narrow.subscribe(() => {})
+  const all = figbird.query(figbird.q.posts.all())
+  const releaseAll = all.subscribe(() => {})
+  await Promise.all([narrow.suspensePromise(), all.suspensePromise()])
+
+  const events = MAX_RETAINED_UNREFERENCED_ENTITIES * 2
+  for (let id = 2; id <= events + 1; id++) {
+    feathers.service('notes').emit('created', { id, content: 'unrelated', tag: 'other' })
+  }
+  // Each create re-sorts the materialized root, so the posts stay few.
+  const posts = 100
+  for (let id = 2; id <= posts + 1; id++) {
+    feathers.service('posts').emit('created', { id, title: 'new', body: 'kept' })
+  }
+
+  const notes = figbird.getState().get('notes')!.entities
+  t.is(notes.size, 1 + MAX_RETAINED_UNREFERENCED_ENTITIES, 'unreferenced rows are bounded')
+  t.true(notes.has('1'), 'the referenced row stays')
+  t.true(notes.has(String(events + 1)), 'the most recently touched rows stay')
+  t.is(figbird.getState().get('posts')!.entities.size, posts + 1, 'materialized keeps every row')
+  releaseNarrow()
+  releaseAll()
+})
+
+test('a fetch that never settles does not suspend the entity cache bound', async t => {
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'kept', tag: 'narrow' } } },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  notes.find = params =>
+    params?.query?.tag === 'hung' ? new Promise<FindResult>(() => {}) : find(params)
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+  })
+  const narrow = figbird.query(figbird.q.notes.where({ tag: 'narrow' }))
+  const releaseNarrow = narrow.subscribe(() => {})
+  await narrow.suspensePromise()
+  const releaseHung = figbird.query(figbird.q.notes.where({ tag: 'hung' })).subscribe(() => {})
+
+  const events = MAX_RETAINED_UNREFERENCED_ENTITIES * 3
+  for (let id = 2; id <= events + 1; id++) {
+    notes.emit('created', { id, content: 'unrelated', tag: 'other' })
+  }
+
+  // Only rows journaled for the pending fetch to rebase over outlast the bound.
+  const entities = figbird.getState().get('notes')!.entities
+  t.true(
+    entities.size <= 1 + Math.max(MAX_RETAINED_UNREFERENCED_ENTITIES, MAX_FETCH_JOURNAL_EVENTS),
+  )
+  t.true(entities.has('1'), 'the referenced row stays')
+  releaseHung()
+  releaseNarrow()
 })

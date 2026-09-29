@@ -429,6 +429,21 @@ it('cursor paginate: stable visible updates merge locally; ordering changes rebu
   unmount()
 })
 
+test('cursor paginate: $and filters keep the stable-update fast path', async t => {
+  const { figbird } = createCursorApp(makeRows(3))
+  const ref = figbird.query(
+    figbird.q.items
+      .where({ $or: [{ rank: 1 }, { rank: 2 }] })
+      .where({ $or: [{ id: 2 }, { id: 3 }] })
+      .orderBy('rank', 'asc')
+      .paginate({ pageSize: 3 }),
+  )
+  const unsubscribe = ref.subscribe(() => {})
+  await ref.suspensePromise()
+  t.is(figbird.inspectRelational()[0]?.pagination?.realtime, 'merge-or-reconcile')
+  unsubscribe()
+})
+
 it('cursor paginate: without a cursor stability contract, visible updates rebuild', async t => {
   const { render, unmount, flush } = dom()
   const initialRows = makeRows(3).map(row => ({ ...row, title: `Item ${row.id}` }))

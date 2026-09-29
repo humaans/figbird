@@ -18,6 +18,8 @@ import {
   type ScheduledMutationControl,
 } from './mutationQueue.js'
 import type { QueryTelemetry } from './queryTelemetry.js'
+import type { ForeignKey } from './schema.js'
+import { datesToIso } from './wireDates.js'
 import {
   entityKey,
   type ItemId,
@@ -83,6 +85,25 @@ interface QueuedMutation {
   attempt: GatedMutationAttempt
   cause?: MutationTraceCause
   transaction?: QueuedTransaction
+  /** Writes holding for this create, aborted in the same settlement when it fails. */
+  referencedBy?: Set<ReferencingWrite>
+}
+
+/** A write held until the creates its data references succeed. */
+interface ReferencingWrite {
+  attempt: GatedMutationAttempt
+  transaction?: QueuedTransaction
+  /** The creates the write waits for, each with the release of its wait. */
+  holds: Map<QueuedMutation, () => void>
+  /** Roll the write back into `lanes`, because `parent` will never be created. */
+  abort(parent: MutationLane, lanes: Set<MutationLane>): void
+}
+
+function referenceFailed(write: string, parent: MutationLane): MutationSupersededError {
+  return new MutationSupersededError(
+    `figbird: cancelled ${write} because the create of the ` +
+      `"${parent.serviceName}"/${String(parent.id)} it references failed`,
+  )
 }
 
 interface QueuedTransaction {
@@ -97,6 +118,7 @@ export class MutationExecutor {
   #cache: MutationCache
   #telemetry: Pick<QueryTelemetry, 'emit' | 'mutationCause'>
   #mutationLanes: MutationLanes<QueuedMutation>
+  #foreignKeys: ReadonlyMap<string, readonly ForeignKey[]>
   #mutations = new MutationTracker()
   #disposed = false
 
@@ -104,14 +126,17 @@ export class MutationExecutor {
     adapter,
     cache,
     telemetry,
+    foreignKeys = new Map(),
   }: {
     adapter: MutationAdapter
     cache: MutationCache
     telemetry: Pick<QueryTelemetry, 'emit' | 'mutationCause'>
+    foreignKeys?: ReadonlyMap<string, readonly ForeignKey[]>
   }) {
     this.#adapter = adapter
     this.#cache = cache
     this.#telemetry = telemetry
+    this.#foreignKeys = foreignKeys
     this.#mutationLanes = new MutationLanes(
       item => this.#peekId(item),
       (current, next) => this.#adapter.isItemStale(current, next),
@@ -228,6 +253,20 @@ export class MutationExecutor {
         transaction,
       }
       transaction.entries.push({ lane, entry })
+      this.#awaitReferencedCreates(operation.desc, {
+        attempt: entry.attempt,
+        holds: new Map(),
+        transaction,
+        abort: (parent, lanes) =>
+          this.#abortTransaction(
+            transaction,
+            referenceFailed(
+              `the transaction writing "${lane.serviceName}"/${String(lane.id)}`,
+              parent,
+            ),
+            lanes,
+          ),
+      })
       const tracked = this.#trackMutation(
         {
           serviceName: operation.desc.serviceName,
@@ -258,7 +297,9 @@ export class MutationExecutor {
 
     // All affected services are projected before observers are notified.
     this.#cache.flush()
-    for (const { lane } of transaction.entries) this.#drainMutationLane(lane)
+    for (const { lane, entry } of transaction.entries) {
+      entry.attempt.whenReady(() => this.#drainMutationLane(lane))
+    }
 
     return Promise.all(promises).then(() => undefined)
   }
@@ -282,6 +323,7 @@ export class MutationExecutor {
         args,
       },
       control: undefined,
+      hold: attempt => this.#holdUnkeyed(desc, attempt),
       run: () => this.#adapter.mutate(serviceName, method, [...args]),
       hooks: {
         onSuccess: (item, { cause }) =>
@@ -373,7 +415,14 @@ export class MutationExecutor {
     optimistic: boolean,
     control?: ScheduledMutationControl,
   ): RegisteredMutation {
-    const optimisticItem = resolveCreateOptimisticItem(desc)
+    // Dates in wire form, like the lane projections of keyed creates.
+    const optimisticItem = datesToIso(resolveCreateOptimisticItem(desc))
+    let rolledBack = false
+    const rollback = (cause?: MutationTraceCause) => {
+      if (rolledBack) return
+      rolledBack = true
+      this.#cache.ingest(desc.serviceName, { type: 'removed', item: optimisticItem }, cause)
+    }
     return this.#registerUnkeyedMutation({
       tracking: {
         serviceName: desc.serviceName,
@@ -382,6 +431,7 @@ export class MutationExecutor {
         args,
       },
       control,
+      hold: attempt => this.#holdUnkeyed(desc, attempt, optimistic ? rollback : undefined),
       ...(optimistic
         ? {
             project: (cause?: MutationTraceCause) =>
@@ -400,7 +450,7 @@ export class MutationExecutor {
           this.#cache.ingest(desc.serviceName, { type: 'created', item }, cause),
         onError: (_error, { mutationId, cause }) => {
           if (!optimistic) return
-          this.#cache.ingest(desc.serviceName, { type: 'removed', item: optimisticItem }, cause)
+          rollback(cause)
           this.#telemetry.emit({
             kind: 'mutate:rollback',
             mutationId,
@@ -427,6 +477,7 @@ export class MutationExecutor {
         args,
       },
       control,
+      hold: attempt => this.#holdUnkeyed(desc, attempt),
       run: () => this.#adapter.mutate(desc.serviceName, desc.method, [...args]),
       hooks: {
         onSuccess: (item, { cause }) =>
@@ -492,11 +543,25 @@ export class MutationExecutor {
     )
 
     if (tracked.cause) entry.cause = tracked.cause
-    this.#cache.project(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
-    entry.attempt.whenReady(() => {
+    const write: ReferencingWrite = {
+      attempt: entry.attempt,
+      holds: new Map(),
+      abort: (parent, lanes) =>
+        this.#abortQueuedMutation(
+          lane,
+          entry,
+          referenceFailed(`"${lane.serviceName}"/${String(lane.id)}`, parent),
+          lanes,
+        ),
+    }
+    const onReady = () => {
       this.#expediteMutationPredecessors(lane, entry)
       this.#drainMutationLane(lane)
-    })
+    }
+    // Hold first: projecting notifies observers, whose writes to this lane drain it.
+    this.#awaitReferencedCreates(desc, write)
+    this.#cache.project(this.#mutationLanes.enqueue(lane, entry), true, tracked.cause)
+    entry.attempt.whenReady(onReady)
     this.#drainMutationLane(lane)
     return {
       promise: tracked.promise,
@@ -505,6 +570,8 @@ export class MutationExecutor {
         const projection = this.#mutationLanes.replaceTail(lane, entry, next)
         if (!projection) return false
         entry.args = this.#buildMutationArgs(next)
+        // Merged data can name a record that is still being created.
+        if (this.#awaitReferencedCreates(next, write)) entry.attempt.whenReady(onReady)
         this.#cache.project(projection, true, tracked.cause)
         this.#telemetry.emit({
           kind: 'mutate:update',
@@ -520,6 +587,101 @@ export class MutationExecutor {
       },
       cancel: error => this.#cancelQueuedMutation(lane, entry, error, tracked.cause),
     }
+  }
+
+  /**
+   * Lanes run in parallel, so a write whose data references a record that is still
+   * being created could reach the server first. It waits for that create, and is
+   * rolled back with it when the create fails (see #abortReferencingWrites). Creates
+   * in the write's own transaction commit with it instead. A coalesced patch is
+   * checked again, and stops waiting for (and failing with) a create it no longer
+   * names. Returns whether it added a wait. Waits cannot cycle: one is added only on
+   * a create already queued, while nothing waits on the write yet (it is new, or a
+   * patch at its lane's tail).
+   */
+  #awaitReferencedCreates(desc: MutationDescriptor, write: ReferencingWrite): boolean {
+    const referenced = this.#referencedCreates(desc, write)
+    let held = false
+    for (const create of referenced) {
+      if (write.holds.has(create)) continue
+      create.referencedBy ??= new Set()
+      create.referencedBy.add(write)
+      write.holds.set(create, write.attempt.waitFor(create.attempt.promise))
+      held = true
+    }
+    for (const [create, release] of write.holds) {
+      if (referenced.has(create)) continue
+      create.referencedBy?.delete(write)
+      write.holds.delete(create)
+      release()
+    }
+    return held
+  }
+
+  /** The pending creates a write's data names through the schema's direct `one` relations. */
+  #referencedCreates(desc: MutationDescriptor, write: ReferencingWrite): Set<QueuedMutation> {
+    const referenced = new Set<QueuedMutation>()
+    if (desc.method === 'remove') return referenced
+    const keys = this.#foreignKeys.get(desc.serviceName) ?? []
+    for (const item of Array.isArray(desc.data) ? desc.data : [desc.data]) {
+      if (!item || typeof item !== 'object') continue
+      for (const { sourceField, destService } of keys) {
+        const id = (item as Record<string, unknown>)[sourceField]
+        if (typeof id !== 'string' && typeof id !== 'number') continue
+        // Lanes key ids by entity key, so a route-string '10' finds the create of id 10.
+        const parentLane = this.#mutationLanes.get(destService, id)
+        const create = parentLane && this.#mutationLanes.pendingCreate(parentLane)
+        if (!create) continue
+        if (write.transaction && create.transaction === write.transaction) continue
+        referenced.add(create)
+      }
+    }
+    return referenced
+  }
+
+  /**
+   * Unkeyed writes join no lane, so a failed reference cancels them outside its
+   * settlement. `rollback` removes their optimistic rows at once, before that
+   * settlement is flushed, so they never show without the parent.
+   */
+  #holdUnkeyed(
+    desc: MutationDescriptor,
+    attempt: GatedMutationAttempt,
+    rollback?: () => void,
+  ): void {
+    this.#awaitReferencedCreates(desc, {
+      attempt,
+      holds: new Map(),
+      abort: parent => {
+        if (attempt.cancel(referenceFailed(`a ${desc.method} on "${desc.serviceName}"`, parent))) {
+          rollback?.()
+        }
+      },
+    })
+  }
+
+  /**
+   * Abort the writes holding for a create that will not happen, into the same
+   * `lanes` batch, so observers see the parent and its children leave together.
+   */
+  #abortReferencingWrites(
+    lane: MutationLane,
+    create: QueuedMutation,
+    lanes: Set<MutationLane>,
+  ): void {
+    for (const write of create.referencedBy ?? []) write.abort(lane, lanes)
+  }
+
+  #abortQueuedMutation(
+    lane: MutationLane,
+    entry: QueuedMutation,
+    error: Error,
+    lanes: Set<MutationLane>,
+  ): void {
+    if (!entry.attempt.pending) return
+    const settlement = this.#mutationLanes.abort(lane, entry, error)
+    if (settlement) this.#applyLaneSettlement(lane, entry, { ok: false, error }, settlement, lanes)
+    entry.attempt.cancel(error)
   }
 
   #drainMutationLane(lane: MutationLane): void {
@@ -599,6 +761,7 @@ export class MutationExecutor {
         this.#applyLaneSettlement(lane, entry, outcome, settlement, lanes)
       }
       entry.attempt.cancel(error)
+      this.#abortReferencingWrites(lane, entry, lanes)
     }
   }
 
@@ -655,9 +818,11 @@ export class MutationExecutor {
     cause?: TraceCause,
   ): void {
     if (!entry.attempt.cancel(error)) return
+    const lanes = new Set([lane])
     const projection = this.#mutationLanes.cancel(lane, entry)
-    if (projection) this.#cache.project(projection, true, cause)
-    this.#drainMutationLane(lane)
+    if (projection) this.#cache.project(projection, false, cause)
+    this.#abortReferencingWrites(lane, entry, lanes)
+    this.#finishLaneSettlements(lanes)
   }
 
   #settleQueuedMutation(
@@ -687,6 +852,7 @@ export class MutationExecutor {
     this.#cache.settle(settlement, !this.#mutationLanes.peekNext(lane), cause)
 
     this.#cancelSettledDependants(lane, entry, outcome, settlement.cancelled, lanes)
+    if (!outcome.ok) this.#abortReferencingWrites(lane, entry, lanes)
   }
 
   #finishLaneSettlements(lanes: ReadonlySet<MutationLane>): void {
@@ -723,6 +889,7 @@ export class MutationExecutor {
           `figbird: cancelled queued mutations for "${lane.serviceName}"/${String(lane.id)} ${reason}`,
         ),
       )
+      this.#abortReferencingWrites(lane, queued, lanes)
     }
   }
 
@@ -762,17 +929,21 @@ export class MutationExecutor {
   #registerUnkeyedMutation({
     tracking,
     control,
+    hold,
     project,
     run,
     hooks,
   }: {
     tracking: MutationTrackingEntry
     control: ScheduledMutationControl | undefined
+    /** Hold the attempt for other writes before it can start. */
+    hold?: (attempt: GatedMutationAttempt) => void
     project?: (cause?: MutationTraceCause) => void
     run: () => Promise<unknown>
     hooks?: MutationTrackingHooks<unknown>
   }): RegisteredMutation {
     const attempt = new GatedMutationAttempt(control)
+    hold?.(attempt)
     const tracked = this.#trackMutation(
       tracking,
       ({ cause }) => {

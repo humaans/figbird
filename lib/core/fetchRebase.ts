@@ -74,6 +74,12 @@ export class FetchEventJournal {
     }
   }
 
+  /** Items with events journaled for the service's in-flight fetches to rebase over. */
+  journaledItemIds(serviceName: string): Set<EntityKey> {
+    const journal = this.#services.get(serviceName)
+    return new Set(journal?.events.toArray().map(event => event.itemId))
+  }
+
   end(cursor: FetchJournalCursor): void {
     const journal = this.#services.get(cursor.serviceName)
     if (!journal) return

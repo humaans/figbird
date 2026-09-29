@@ -3,16 +3,20 @@ import {
   explainQueryNode,
   planRootPagination,
   rootAllPages,
+  rootServerReasons,
   type ExplainNode,
   type QueryNodeClass,
 } from './queryClassification.js'
+import { relationalFilterServerReasons } from './relationalFilters.js'
 import { resolveServicePath, type RelationshipDef, type Schema } from './schema.js'
 import type { FindDescriptor, FindQueryConfig } from './queryTypes.js'
 
 type RelationValue = string | number
 
-interface RelationQueryPlan {
+export interface RelationQueryPlan {
   service: string
+  /** The destination field the source values are matched against. */
+  field: string
   query: Record<string, unknown>
   descriptor(value: RelationValue | { $in: RelationValue[] }): FindDescriptor
   config: FindQueryConfig
@@ -22,6 +26,14 @@ interface PlannedRelation {
   name: string
   key: string
   definition: RelationshipDef
+  /** The refinement's or definition's `$sort`, which each parent's items follow. */
+  sort: Record<string, number> | null
+  /**
+   * An unsorted `embed` window, applied to each parent's list in assembly. Parents
+   * read their ids up to `fetchEnd`, and the matched items are sliced to
+   * `[start, end)`; a filtered window reads the whole list, as any id may not match.
+   */
+  listWindow: { start: number; end: number | undefined; fetchEnd: number | undefined } | null
   children: RelationPlan[]
   destination: RelationQueryPlan
 }
@@ -47,6 +59,7 @@ function queryPlan(
   })
   return {
     service,
+    field,
     query: bind({ $in: [] }),
     descriptor: value => ({
       serviceName,
@@ -54,6 +67,42 @@ function queryPlan(
       params: { query: bind(value) },
     }),
     config,
+  }
+}
+
+function embedWindow(query: Record<string, unknown>): NonNullable<PlannedRelation['listWindow']> {
+  const start = (query.$skip as number | undefined) ?? 0
+  const limit = query.$limit as number | undefined
+  const end = limit === undefined ? undefined : start + limit
+  const filtered = Object.keys(query).some(
+    key => key !== '$limit' && key !== '$skip' && key !== '$select',
+  )
+  return { start, end, fetchEnd: filtered ? undefined : end }
+}
+
+/** A list window is applied in assembly, so its destination fetch carries none. */
+function unwindowed(
+  query: Record<string, unknown>,
+  listWindow: PlannedRelation['listWindow'],
+): Record<string, unknown> {
+  if (!listWindow) return query
+  return Object.fromEntries(
+    Object.entries(query).filter(([key]) => key !== '$limit' && key !== '$skip'),
+  )
+}
+
+/**
+ * A window on a junction relation's destinations applies per parent in assembly
+ * (no single find on either service expresses it). A window on the junction hop
+ * itself, in the relationship definition's `via.query`, has no per-parent meaning.
+ */
+export function assertJunctionUnwindowed(name: string, definition: RelationshipDef): void {
+  const via = definition.via?.query ?? {}
+  if ('$limit' in via || '$skip' in via) {
+    throw new Error(
+      `related(): "${name}" windows its junction service "${definition.via!.destService}" in ` +
+        'the relationship definition; window the destination with .limit()/.skip() instead.',
+    )
   }
 }
 
@@ -68,18 +117,27 @@ export function compileRelations(
     const key = parentKey ? `${parentKey}.${name}` : name
     const definition = schema.relationships?.[ast.service]?.[name]
     if (!definition) return { kind: 'missing', key, name, service: ast.service }
+    assertJunctionUnwindowed(name, definition)
     const query = { ...child.query, ...definition.query }
+    const explicitSort = (query.$sort as Record<string, number> | undefined) ?? null
     const windowed = '$limit' in query || '$skip' in query
-    const strategy = definition.via
-      ? 'junction'
-      : windowed && definition.cardinality === 'many'
-        ? 'perParent'
-        : 'fanIn'
-    const allPages = !windowed
-    const hasSort = '$sort' in query
+    // An unsorted embed window follows each parent's list order, so it is a slice of
+    // the list: one shared `$in` fetch, windowed per parent in assembly. A junction
+    // window is sliced the same way, after ordering — no find expresses it per parent.
+    const listWindow = !windowed
+      ? null
+      : definition.via
+        ? { ...embedWindow(query), fetchEnd: undefined }
+        : definition.cardinality === 'embedded' && !explicitSort
+          ? embedWindow(query)
+          : null
+    // Other windows apply to each parent, so they can't ride on one shared `$in` fetch.
+    const perParent = windowed && !listWindow
+    const strategy = definition.via ? 'junction' : perParent ? 'perParent' : 'fanIn'
+    const allPages = !perParent
     const sort =
       strategy !== 'perParent' &&
-      !hasSort &&
+      !explicitSort &&
       (definition.cardinality === 'one' || definition.cardinality === 'embedded' || definition.via)
         ? { $sort: { [definition.destField]: 1 } }
         : {}
@@ -87,13 +145,15 @@ export function compileRelations(
       name,
       key,
       definition,
+      sort: explicitSort,
+      listWindow,
       children: compileRelations(child, schema, realtime, key),
       destination: queryPlan(
         schema,
         definition.destService,
         definition.destField,
-        { ...child.query, ...sort },
-        definition.query ?? {},
+        { ...unwindowed(child.query, listWindow), ...sort },
+        unwindowed(definition.query ?? {}, listWindow),
         {
           realtime,
           fetchPolicy: 'swr',
@@ -126,13 +186,18 @@ export function explainQuery(
   hasNativePagination: (serviceName: string) => boolean,
 ): ExplainNode[] {
   const snapshot = Boolean(ast.snapshot)
+  const rootReasons = rootServerReasons(
+    Boolean(ast.server),
+    relationalFilterServerReasons(schema, ast),
+  )
   const pagination =
     ast.kind === 'paginate'
-      ? planRootPagination(hasNativePagination(ast.service), Boolean(ast.server))
+      ? planRootPagination(hasNativePagination(ast.service), rootReasons)
       : null
+  const serverReasons = pagination?.serverReasons ?? rootReasons
   const root = explainQueryNode(ast.query, {
-    server: pagination?.server ?? ast.server,
-    ...(pagination ? { serverReasons: pagination.serverReasons } : {}),
+    server: serverReasons.length > 0,
+    serverReasons,
     allPages: rootAllPages(ast.kind),
     localOperators: localOperatorsFor(ast.service),
     snapshot,

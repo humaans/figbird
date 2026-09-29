@@ -131,6 +131,62 @@ test('window query: offset jumps directly, assembles relations, and evicts dista
   second.unsubscribe()
 })
 
+test('window query: offset pages tile a server-capped page size without gaps', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    items: { data: keyed(makeRows(30)) },
+    owners: { data: {} },
+  })
+  // Like Feathers' paginate.max: the server serves at most 4 rows per page.
+  const items = feathers.service('items')
+  const find = items.find.bind(items)
+  items.find = ((params: { query?: Record<string, unknown> } = {}) =>
+    find({ ...params, query: { ...params.query, $limit: 4 } })) as never
+  const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 10,
+    preloadPages: 0,
+    maxPages: 10,
+  })
+
+  const range = { start: 0, end: 20 }
+  const read = readSettledWindow(ref, range)
+  const state = await read.promise
+  t.is(state.status, 'success')
+  t.deepEqual(
+    Array.from({ length: 20 }, (_, index) => state.data.get(index)?.id),
+    Array.from({ length: 20 }, (_, index) => index + 1),
+  )
+  read.unsubscribe()
+})
+
+test('window query: a server page cap keeps the retained row budget', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    items: { data: keyed(makeRows(40)) },
+    owners: { data: {} },
+  })
+  const items = feathers.service('items')
+  const find = items.find.bind(items)
+  items.find = ((params: { query?: Record<string, unknown> } = {}) =>
+    find({ ...params, query: { ...params.query, $limit: 5 } })) as never
+  const ref = figbird.window(figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 10,
+    preloadPages: 0,
+    maxPages: 1,
+  })
+
+  const top = readSettledWindow(ref, { start: 0, end: 5 })
+  await top.promise
+  top.unsubscribe()
+  const deep = readSettledWindow(ref, { start: 30, end: 35 })
+  await deep.promise
+  await new Promise<void>(resolve => queueMicrotask(() => resolve()))
+
+  // One configured page is ten rows, so two capped five-row pages stay retained.
+  const data = ref.getSnapshot({ start: 30, end: 35 }).data
+  t.is(data.get(0)?.id, 1)
+  t.is(data.get(30)?.id, 31)
+  deep.unsubscribe()
+})
+
 test('window query: retention never evicts pages required by active readers', async t => {
   const { figbird } = createTestApp(schema, {
     items: { data: keyed(makeRows(80)) },
@@ -402,6 +458,7 @@ interface CursorCall {
 function createCursorWindowApp(initialRows: Item[]) {
   let rows = initialRows
   let failure: Error | null = null
+  let emptyPageAt: number | null = null
   const calls: CursorCall[] = []
   const listeners = new Map<string, Set<(item: unknown) => void>>()
   const cursorService = {
@@ -412,6 +469,10 @@ function createCursorWindowApp(initialRows: Item[]) {
       calls.push({ after, limit: requestedLimit })
       if (failure) throw failure
       const start = after ? Number(after.slice('cursor:'.length)) : 0
+      if (start === emptyPageAt) {
+        // A broken server: more rows promised, none returned.
+        return { data: [], limit: requestedLimit, hasNextPage: true, endCursor: 'cursor:stuck' }
+      }
       // Deliberately return short, non-terminal pages to prove that absolute
       // checkpoints follow actual row counts rather than requested page size.
       const data = rows.slice(start, start + Math.min(2, requestedLimit))
@@ -441,7 +502,13 @@ function createCursorWindowApp(initialRows: Item[]) {
   const adapter = new FeathersAdapter(feathers, {
     pagination: { items: cursorPagination() },
   })
-  const figbird = new Figbird({ schema, adapter, retry: false, eventBatchInterval: 0 })
+  const figbird = new Figbird({
+    schema,
+    adapter,
+    retry: false,
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+  })
   return {
     calls,
     figbird,
@@ -450,6 +517,12 @@ function createCursorWindowApp(initialRows: Item[]) {
     },
     replaceRows(next: Item[]) {
       rows = next
+    },
+    serveEmptyPageAt(index: number) {
+      emptyPageAt = index
+    },
+    emit(event: string, item: Item) {
+      for (const listener of listeners.get(event) ?? []) listener(item)
     },
   }
 }
@@ -520,5 +593,145 @@ test('window query: cursor strategy walks short pages and rebuilds invalid check
   t.is(ref.getSnapshot(seek).status, 'success')
   t.is(ref.getSnapshot(seek).data.get(7)?.id, 7)
   ref.releaseColdStart(seek)
+  read.unsubscribe()
+})
+
+test('window query: cursor pages survive value patches to page zero', async t => {
+  const rows = makeRows(8)
+  const app = createCursorWindowApp(rows)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 4,
+  })
+  const range = { start: 5, end: 6 }
+  const read = readSettledWindow(ref, range)
+  await read.promise
+  const settled = (done: (data: ReturnType<typeof ref.getSnapshot>['data']) => boolean) =>
+    new Promise<void>(resolve => {
+      const unsubscribe = ref.subscribe(
+        state => {
+          if (state.status === 'success' && !state.isFetching && done(state.data)) {
+            unsubscribe()
+            resolve()
+          }
+        },
+        { range },
+      )
+    })
+
+  // A value-only patch refetches page zero but keeps the cursor chain behind it.
+  app.calls.length = 0
+  const patched = { ...rows[0]!, title: 'Patched' }
+  app.replaceRows([patched, ...rows.slice(1)])
+  const afterPatch = settled(data => data.get(0)?.title === 'Patched')
+  app.emit('patched', patched)
+  await afterPatch
+  t.deepEqual(
+    app.calls.map(call => call.after),
+    [null],
+  )
+  t.is(ref.getSnapshot(range).data.get(5)?.id, 6)
+
+  // A membership change walks the chain again past page zero, refetching pages
+  // whose cursors repeat instead of serving their cached, shifted rows.
+  app.calls.length = 0
+  const created = { id: 99, ownerId: 1, rank: 0, title: 'Inserted' }
+  app.replaceRows([created, patched, ...rows.slice(1)])
+  const afterCreate = settled(data => data.get(0)?.id === 99)
+  app.emit('created', created)
+  await afterCreate
+  t.deepEqual(
+    app.calls.map(call => call.after),
+    [null, 'cursor:2', 'cursor:4'],
+  )
+  t.is(ref.getSnapshot(range).data.get(5)?.id, 5)
+  read.unsubscribe()
+})
+
+test('window query: a cursor chain rebuild keeps the old rows visible', async t => {
+  const rows = makeRows(8)
+  const app = createCursorWindowApp(rows)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 5,
+  })
+  const range = { start: 6, end: 7 }
+  const read = readSettledWindow(ref, range)
+  await read.promise
+
+  // A create at the tail changes the total, so later pages rebuild from page zero.
+  const statuses: string[] = []
+  const created = { id: 9, ownerId: 1, rank: 9, title: 'Tail' }
+  app.replaceRows([...rows, created])
+  const rebuilt = new Promise<void>(resolve => {
+    const unsubscribe = ref.subscribe(
+      state => {
+        statuses.push(state.status)
+        if (state.total === 9 && !state.isFetching) {
+          unsubscribe()
+          resolve()
+        }
+      },
+      { range },
+    )
+  })
+  app.emit('created', created)
+  await rebuilt
+  t.true(statuses.length > 1)
+  t.true(statuses.every(status => status === 'success'))
+  t.is(ref.getSnapshot(range).data.get(6)?.id, 7)
+  read.unsubscribe()
+})
+
+test('window query: an opaque cursor chain rebuilds when page zero membership changes', async t => {
+  const rows = makeRows(8)
+  const app = createCursorWindowApp(rows)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 5,
+  })
+  const range = { start: 0, end: 8 }
+  const read = readSettledWindow(ref, range)
+  await read.promise
+  const ids = () =>
+    Array.from({ length: 8 }, (_, index) => ref.getSnapshot(range).data.get(index)?.id)
+
+  // Row 1 moves to the end: page zero keeps its row count, `cursor:2` and the
+  // total, but its rows changed, so the position-encoded cursors behind it moved.
+  const moved = { ...rows[0]!, rank: 100 }
+  app.replaceRows([...rows.slice(1), moved])
+  const rebuilt = new Promise<void>(resolve => {
+    const unsubscribe = ref.subscribe(
+      state => {
+        if (state.data.get(0)?.id === 2 && !state.isFetching) {
+          unsubscribe()
+          resolve()
+        }
+      },
+      { range },
+    )
+  })
+  app.emit('patched', moved)
+  await rebuilt
+  t.deepEqual(ids(), [2, 3, 4, 5, 6, 7, 8, 1])
+  read.unsubscribe()
+})
+
+test('window query: a cursor page with more rows but none returned surfaces an error', async t => {
+  const app = createCursorWindowApp(makeRows(8))
+  app.serveEmptyPageAt(4)
+  const ref = app.figbird.window(app.figbird.q.items.orderBy('rank', 'asc'), {
+    pageSize: 3,
+    preloadPages: 0,
+    maxPages: 4,
+  })
+  const read = readSettledWindow(ref, { start: 5, end: 6 })
+  const state = await read.promise
+  t.is(state.status, 'error')
+  t.is(state.error?.message, 'Native window page reported hasMore without returning rows')
+  t.is(ref.getSnapshot({ start: 0, end: 4 }).status, 'success')
   read.unsubscribe()
 })

@@ -33,7 +33,12 @@ export type MutationQueueRetryDelay =
 export interface MutationQueueConfig {
   /** Scheduling policy. Omit for an immediate serial queue. */
   schedule?: (operation: MutationQueueOperation) => MutationSchedule
-  /** Automatic retries after the first failed attempt. Defaults to false. */
+  /**
+   * Automatic retries after the first failed attempt. Defaults to false. A number
+   * retries updates, patches, removes, and creates that carry their id. An id-less
+   * create or a custom method whose failed attempt reached the server would apply
+   * twice, so those retry only when a function returns true for them.
+   */
   retry?: MutationQueueRetry
   /** Delay before an automatic retry. Defaults to 0. */
   retryDelay?: MutationQueueRetryDelay
@@ -108,6 +113,8 @@ export interface RegisteredMutation {
 
 /** @internal */
 export interface MutationQueueHost {
+  /** The adapter's id reader: a create whose data carries its id is safe to repeat. */
+  getId(item: unknown): string | number | undefined
   registerMutation(desc: MutationDescriptor, control: ScheduledMutationControl): RegisteredMutation
   registerCall(
     serviceName: string,
@@ -376,7 +383,7 @@ export class MutationQueue<S extends Schema> {
     operation: MutationQueueOperation,
   ): boolean {
     if (retry === false) return false
-    if (typeof retry === 'number') return attempt <= retry
+    if (typeof retry === 'number') return this.#isRepeatable(operation) && attempt <= retry
     try {
       return retry(error, attempt, operation)
     } catch {
@@ -466,6 +473,22 @@ export class MutationQueue<S extends Schema> {
         // Listener errors must never alter mutation transport or settlement.
       }
     }
+  }
+
+  /**
+   * Whether repeating a failed attempt that may have reached the server still
+   * converges on one server state. A create that carries its id does: a repeat
+   * creates the record or finds the id taken. An id-less create or a custom method
+   * may apply twice.
+   */
+  #isRepeatable(operation: MutationQueueOperation): boolean {
+    if (operation.method === 'create') {
+      const items = Array.isArray(operation.data) ? operation.data : [operation.data]
+      return items.length > 0 && items.every(item => this.#host.getId(item) !== undefined)
+    }
+    return (
+      operation.method === 'update' || operation.method === 'patch' || operation.method === 'remove'
+    )
   }
 
   #schedule(operation: MutationQueueOperation): MutationSchedule {

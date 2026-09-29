@@ -187,6 +187,14 @@ export function cursorPagination({
 
 const OFFSET_PAGINATION: FeathersOffsetPagination = { kind: 'offset' }
 
+/** Upper bound on ids per `findByIds` request, keeping REST URLs under length limits. */
+const FIND_BY_IDS_CHUNK_SIZE = 100
+
+const defaultIdField: IdExtractor = item => {
+  const obj = item as Record<string, unknown>
+  return (obj.id ?? obj._id) as string | number | undefined
+}
+
 /** Explicitly keep one Feathers service on the built-in `$limit`/`$skip` path. */
 export function offsetPagination(): FeathersOffsetPagination {
   return OFFSET_PAGINATION
@@ -389,6 +397,12 @@ function isFeathersTransactionResult(value: unknown): value is FeathersTransacti
 
 export interface FeathersAdapterOptions {
   idField?: IdFieldType
+  /**
+   * The field a function `idField` reads, which figbird can't see into. Naming it
+   * lets writes wait for pending creates they reference and `.all()` refetches look
+   * rows up by id. A string `idField` names itself; the default reads `id` or `_id`.
+   */
+  idFieldName?: string
   updatedAtField?: UpdatedAtFieldType
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
@@ -440,6 +454,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
 > {
   feathers: FeathersClient
   #idField: IdFieldType
+  #idFieldNames: ReadonlySet<string>
   #updatedAtField: UpdatedAtFieldType
   #defaultPageSize: number | undefined
   #defaultPageSizeWhenFetchingAll: number | undefined
@@ -448,6 +463,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #pagination: Record<string, FeathersPagination>
   #isInvalidationEvent: ((event: RealtimeEventContext) => boolean) | undefined
   transaction?: Adapter['transaction']
+  findByIds?: Adapter['findByIds']
 
   /** Names of custom operators registered for every service. */
   get customOperators(): readonly string[] {
@@ -482,10 +498,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   constructor(
     feathers: FeathersClient,
     {
-      idField = (item: unknown) => {
-        const obj = item as Record<string, unknown>
-        return (obj.id ?? obj._id) as string | number | undefined
-      },
+      idField = defaultIdField,
+      idFieldName,
       updatedAtField = (item: unknown) => {
         const obj = item as Record<string, unknown>
         return (obj.updatedAt ?? obj.updated_at) as string | Date | number | null | undefined
@@ -501,6 +515,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   ) {
     this.feathers = feathers
     this.#idField = idField
+    const namedIdField = typeof idField === 'string' ? idField : idFieldName
+    this.#idFieldNames = new Set(
+      namedIdField !== undefined ? [namedIdField] : idField === defaultIdField ? ['id', '_id'] : [],
+    )
     this.#updatedAtField = updatedAtField
     this.#defaultPageSize = defaultPageSize
     this.#defaultPageSizeWhenFetchingAll = defaultPageSizeWhenFetchingAll
@@ -510,6 +528,12 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#isInvalidationEvent = isInvalidationEvent
     if (transactions) {
       this.transaction = operations => transactions(this.feathers, operations)
+    }
+    // Rows can be queried by id only through a named field; the default reads `id`
+    // (or `_id`) and queries `id`.
+    const [idQueryField] = this.#idFieldNames
+    if (idQueryField !== undefined) {
+      this.findByIds = (serviceName, ids) => this.#findByIds(serviceName, idQueryField, ids)
     }
   }
 
@@ -633,6 +657,14 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     return this.#_find(serviceName, params)
   }
 
+  /**
+   * Offset services are read page by page by `$skip`, best effort: a write landing
+   * between pages shifts the offsets. A create repeats a row, dropped here by id; a
+   * remove steps over one, which the store looks up (`findByIds`) before reading it
+   * as removed. A page that adds no new rows ends the walk unless the total says
+   * rows remain past it (a page's worth of creates landed ahead of the offset), so a
+   * service ignoring `$skip` or `$limit` still can't page forever.
+   */
   async findAll(
     serviceName: string,
     params?: FeathersParams<TQuery>,
@@ -652,6 +684,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       data: [],
       meta: { total: -1, limit: 0, skip: 0 },
     }
+    const seen = new Set<string | number>()
     let $skip = 0
 
     while (true) {
@@ -661,18 +694,46 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       )
 
       result.meta = { ...result.meta, ...meta }
-      result.data.push(...data)
+      let progressed = false
+      for (const item of data) {
+        const id = this.getId(item)
+        if (id !== undefined) {
+          if (seen.has(id)) continue
+          seen.add(id)
+        }
+        result.data.push(item)
+        progressed = true
+      }
 
+      // allow total to be -1 to indicate that total will not be available on this endpoint
+      const hasTotal = meta.total > 0
       const done =
         data.length === 0 ||
         data.length < meta.limit ||
-        // allow total to be -1 to indicate that total will not be available on this endpoint
-        (meta.total > 0 && result.data.length >= meta.total)
+        (!progressed && !(hasTotal && $skip + data.length < meta.total)) ||
+        (hasTotal && result.data.length >= meta.total)
 
       if (done) return result
 
-      $skip = result.data.length
+      $skip += data.length
     }
+  }
+
+  async #findByIds(
+    serviceName: string,
+    idQueryField: string,
+    ids: readonly (string | number)[],
+  ): Promise<unknown[]> {
+    const chunks: (string | number)[][] = []
+    for (let i = 0; i < ids.length; i += FIND_BY_IDS_CHUNK_SIZE) {
+      chunks.push(ids.slice(i, i + FIND_BY_IDS_CHUNK_SIZE))
+    }
+    const pages = await Promise.all(
+      chunks.map(chunk =>
+        this.findAll(serviceName, { query: { [idQueryField]: { $in: chunk } } as TQuery }),
+      ),
+    )
+    return pages.flatMap(page => page.data)
   }
 
   async #findAllByCursor(
@@ -887,6 +948,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     return typeof this.#idField === 'string'
       ? ((item as Record<string, unknown>)[this.#idField] as string | number | undefined)
       : this.#idField(item)
+  }
+
+  isIdField(_serviceName: string, field: string): boolean {
+    return this.#idFieldNames.has(field)
   }
 
   #getUpdatedAt(item: unknown): string | Date | number | null | undefined {

@@ -279,10 +279,11 @@ interface BaseQueryConfig<TItem = unknown, TQuery = unknown> {
    * Receives the prepared query object; returns a predicate for items.
    * Provide this if your adapter needs custom client-side matching logic.
    * Note: For find queries, the matcher works with individual items, not arrays.
+   * Return `'unknown'` when local state can't decide an item (see `MatchResult`).
    * Queries with a matcher use isolated cache identity because functions cannot
    * be serialized into a stable shared cache key.
    */
-  matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => boolean
+  matcher?: (query: TQuery | undefined) => (item: ElementType<TItem>) => MatchResult
 
   /**
    * Explicit cache-sharing key for custom matchers. Queries with the same
@@ -352,9 +353,12 @@ export type CombinedConfig<TItem = unknown, TQuery = unknown> =
   | CombinedFindConfig<TItem, TQuery>
 
 /**
- * Item matcher function type
+ * A local membership decision. `'unknown'` means local state can't decide — e.g. a
+ * relational filter whose related row isn't cached. The store then keeps the
+ * current result as it is and reconciles the query with the server, rather than
+ * guessing a row in or out.
  */
-export type ItemMatcher<T> = (item: T) => boolean
+export type MatchResult = boolean | 'unknown'
 
 /**
  * Helper type to infer data type from schema and query descriptor

@@ -317,6 +317,37 @@ test('mutation queue: a throwing retry predicate preserves the terminal failure'
   await t.throwsAsync(() => pending, { message: 'offline' })
 })
 
+test('mutation queue: a retry count repeats a create only when it carries its id', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  let calls = 0
+  feathers.service('notes').create = ((data: Partial<Note>) => {
+    calls += 1
+    return calls === 1 ? Promise.reject(new Error('timeout')) : Promise.resolve({ id: 99, ...data })
+  }) as never
+
+  // A repeat with the same id can't create a second record: the server creates it
+  // or rejects the id as taken.
+  const counted = figbird.createMutationQueue({ retry: 2 })
+  await counted.m.notes.create({ id: 10, content: 'client id' })
+  t.is(calls, 2, 'a create with its id retries')
+
+  // An id-less create whose first attempt reached the server would be applied twice.
+  calls = 0
+  const pending = counted.m.notes.confirmed.create({ content: 'server id' } as Note)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(calls, 1, 'the server may already have applied the first attempt')
+  t.is(counted.status, 'failed')
+  counted.discard()
+  await t.throwsAsync(() => pending, { message: 'timeout' })
+
+  calls = 0
+  const optedIn = figbird.createMutationQueue({
+    retry: (_error, attempt, operation) => operation.method === 'create' && attempt <= 1,
+  })
+  await optedIn.m.notes.confirmed.create({ content: 'idempotent' } as Note)
+  t.is(calls, 2)
+})
+
 test('mutation queue: policy is fixed when the queue is created', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const firstAttempt = deferred<MockItem>()

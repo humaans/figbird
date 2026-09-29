@@ -57,6 +57,8 @@ export {
 } from './core/figbird.js'
 export type { MutationQueue } from './core/mutationQueue.js'
 export { ItemRemovedError, isItemRemovedError } from './core/errors.js'
+export { compareValues } from './core/sort.js'
+export type { ValueComparator } from './core/sort.js'
 
 // schema
 export { createSchema, service } from './core/schema.js'
@@ -123,6 +125,7 @@ export type {
   FeathersTransactionsOptions,
 } from './adapters/feathers.js'
 export { matcher } from './adapters/matcher.js'
+export type { MatchResult } from './core/queryTypes.js'
 
 // Adapter interface and types
 export type {
