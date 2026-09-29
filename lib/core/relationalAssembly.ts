@@ -18,20 +18,15 @@ export type AssembledRelationData =
   | { kind: 'perParent'; byParent: Map<string, unknown[]> }
 
 /**
- * Dedupe + sort + stable-encode a set of key values. The encoded key is what relation
- * subs compare to detect "same source set, nothing to re-fetch" — every sync path must
- * produce it identically or subscriptions churn.
+ * Dedupe + sort a set of key values, so the `$in` chunks opened for them (and so
+ * their query identities) don't depend on parent order.
  */
-export function sourceSet(raw: (string | number)[]): { values: (string | number)[]; key: string } {
-  const values = [...new Set(raw)].sort()
-  return { values, key: JSON.stringify(values) }
+export function sourceSet(raw: (string | number)[]): (string | number)[] {
+  return [...new Set(raw)].sort()
 }
 
-/** Collect the deduped, sorted values of `field` across parents, with the stable key. */
-export function uniqueSourceValues(
-  parentData: unknown[],
-  field: string,
-): { values: (string | number)[]; key: string } {
+/** Collect the deduped, sorted values of `field` across parents. */
+export function uniqueSourceValues(parentData: unknown[], field: string): (string | number)[] {
   return sourceSet(
     parentData
       .map(item => getFieldValue(item, field))

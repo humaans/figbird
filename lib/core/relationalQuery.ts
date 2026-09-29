@@ -1129,9 +1129,9 @@ export class RelationalQueryRef<
         const list = embeddedIds(item, plan)
         if (list) for (const v of list) all.push(v)
       }
-      query.sync(sourceSet(all).values)
+      query.sync(sourceSet(all))
     } else {
-      query.sync(uniqueSourceValues(parentData, relDef.sourceField).values)
+      query.sync(uniqueSourceValues(parentData, relDef.sourceField))
     }
     // Also covers an unchanged id set whose chunks already resolved: their nested
     // relations still need syncing.
@@ -1253,7 +1253,7 @@ export class RelationalQueryRef<
       sub = entry
       this.#relationSubs.set(plan.key, sub)
     }
-    sub.junction.sync(uniqueSourceValues(parentData, plan.definition.via!.sourceField).values)
+    sub.junction.sync(uniqueSourceValues(parentData, plan.definition.via!.sourceField))
     this.#syncDestFromJunction(sub, plan)
   }
 
