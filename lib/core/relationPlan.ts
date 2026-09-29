@@ -94,21 +94,16 @@ function unwindowed(
 }
 
 /**
- * A junction relation has no single find on either service that expresses a
- * per-parent window over destination rows, so a window on either hop is an error.
+ * A window on a junction relation's destinations applies per parent in assembly
+ * (no single find on either service expresses it). A window on the junction hop
+ * itself, in the relationship definition's `via.query`, has no per-parent meaning.
  */
-export function assertJunctionUnwindowed(
-  name: string,
-  definition: RelationshipDef,
-  query: Record<string, unknown>,
-): void {
-  if (!definition.via) return
-  const hops = [{ ...query, ...definition.query }, definition.via.query ?? {}]
-  if (hops.some(hop => '$limit' in hop || '$skip' in hop)) {
+export function assertJunctionUnwindowed(name: string, definition: RelationshipDef): void {
+  const via = definition.via?.query ?? {}
+  if ('$limit' in via || '$skip' in via) {
     throw new Error(
-      `related(): "${name}" goes through the junction service "${definition.via.destService}", ` +
-        'so .limit()/.skip() cannot apply per parent — no single find on either service ' +
-        'expresses that window. Relate the junction service directly and window it instead.',
+      `related(): "${name}" windows its junction service "${definition.via!.destService}" in ` +
+        'the relationship definition; window the destination with .limit()/.skip() instead.',
     )
   }
 }
@@ -124,14 +119,20 @@ export function compileRelations(
     const key = parentKey ? `${parentKey}.${name}` : name
     const definition = schema.relationships?.[ast.service]?.[name]
     if (!definition) return { kind: 'missing', key, name, service: ast.service }
-    assertJunctionUnwindowed(name, definition, child.query)
+    assertJunctionUnwindowed(name, definition)
     const query = { ...child.query, ...definition.query }
     const explicitSort = (query.$sort as Record<string, number> | undefined) ?? null
     const windowed = '$limit' in query || '$skip' in query
     // An unsorted embed window follows each parent's list order, so it is a slice of
-    // the list: one shared `$in` fetch, windowed per parent in assembly.
-    const listWindow =
-      windowed && definition.cardinality === 'embedded' && !explicitSort ? embedWindow(query) : null
+    // the list: one shared `$in` fetch, windowed per parent in assembly. A junction
+    // window is sliced the same way, after ordering — no find expresses it per parent.
+    const listWindow = !windowed
+      ? null
+      : definition.via
+        ? { ...embedWindow(query), fetchEnd: undefined }
+        : definition.cardinality === 'embedded' && !explicitSort
+          ? embedWindow(query)
+          : null
     // Other windows apply to each parent, so they can't ride on one shared `$in` fetch.
     const perParent = windowed && !listWindow
     const strategy = definition.via ? 'junction' : perParent ? 'perParent' : 'fanIn'

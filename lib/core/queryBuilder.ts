@@ -487,7 +487,7 @@ export class QueryBuilder<
       throw new Error('related(): refinements must return a find query')
     }
     relatedAST.cardinality = relDef.cardinality === 'one' ? 'one' : 'many'
-    assertJunctionUnwindowed(name, relDef, relatedAST.query)
+    assertJunctionUnwindowed(name, relDef)
 
     return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,

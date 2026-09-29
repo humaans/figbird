@@ -299,6 +299,9 @@ function assembleRelations(
           }
         }
         matchedItems = inOrder(matchedItems, context.orders.get(key))
+        if (plan.listWindow) {
+          matchedItems = matchedItems.slice(plan.listWindow.start, plan.listWindow.end)
+        }
         // A chained `one` resolves to the first (declared-selective) match, or null.
         if (relDef.cardinality === 'one') {
           let found: unknown = matchedItems[0] ?? null

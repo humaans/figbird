@@ -4997,10 +4997,13 @@ it('junction: realtime — patching a destination user updates the assembled vie
 
 it('junction and embed: windows apply per parent and orderBy orders junction destinations', async t => {
   const junctionApp = createJunctionApp()
-  t.throws(() => junctionApp.figbird.q.roles2.related('members', u => u.limit(1)), {
-    message: /junction service "roleMembers".*cannot apply per parent/,
-  })
-
+  const users = junctionApp.feathers.service('users2')
+  const findUsers = users.find.bind(users)
+  const userQueries: Array<Record<string, unknown> | undefined> = []
+  users.find = (params => {
+    userQueries.push(params?.query)
+    return findUsers(params)
+  }) as typeof findUsers
   const embedApp = createEmbedApp()
   const { render, unmount, flush, $ } = dom()
 
@@ -5011,6 +5014,19 @@ it('junction and embed: windows apply per parent and orderBy orders junction des
     return (
       <div
         className='members'
+        data-names={roles.map(role => role.members.map(u => u.name).join(',')).join('|')}
+      />
+    )
+  }
+
+  // Each role's first member by name, desc — windowed per parent, not across parents.
+  function TopMembers() {
+    const roles = useQuery(
+      junctionApp.figbird.q.roles2.related('members', u => u.orderBy('name', 'desc').limit(1)),
+    )
+    return (
+      <div
+        className='top-members'
         data-names={roles.map(role => role.members.map(u => u.name).join(',')).join('|')}
       />
     )
@@ -5031,6 +5047,7 @@ it('junction and embed: windows apply per parent and orderBy orders junction des
       <junctionApp.App>
         <React.Suspense fallback={<div>Loading...</div>}>
           <Members />
+          <TopMembers />
         </React.Suspense>
       </junctionApp.App>
       <embedApp.App>
@@ -5043,20 +5060,24 @@ it('junction and embed: windows apply per parent and orderBy orders junction des
   await flush()
 
   t.is($('.members')!.getAttribute('data-names'), 'Bob,Alice|Cara,Bob|')
+  t.is($('.top-members')!.getAttribute('data-names'), 'Bob|Cara|')
+  t.false(
+    userQueries.some(query => query?.$limit === 1),
+    'the window is applied per parent, not sent as a shared $limit',
+  )
   t.is($('.previews')!.getAttribute('data-names'), 'Cara,Alice|Bob|')
   unmount()
 })
 
-test('junction: plan compilation rejects windows on either hop', t => {
+test('junction: a destination window compiles to a per-parent slice; a junction-hop window is rejected', t => {
   const { figbird } = createJunctionApp()
   const ast = figbird.q.roles2.related('members').toAST()
   const windowed = {
     ...ast,
-    related: { members: { ...ast.related.members!, query: { $limit: 1 } } },
+    related: { members: { ...ast.related.members!, query: { $skip: 1, $limit: 1 } } },
   }
-  t.throws(() => compileRelations(windowed, junctionSchema, 'merge'), {
-    message: /junction service "roleMembers".*cannot apply per parent/,
-  })
+  const [plan] = compileRelations(windowed, junctionSchema, 'merge')
+  t.like(plan, { kind: 'junction', listWindow: { start: 1, end: 2, fetchEnd: undefined } })
 
   const viaWindowed = createSchema({
     services: {
@@ -5079,7 +5100,7 @@ test('junction: plan compilation rejects windows on either hop', t => {
     },
   })
   t.throws(() => compileRelations(ast, viaWindowed, 'merge'), {
-    message: /cannot apply per parent/,
+    message: /windows its junction service "roleMembers"/,
   })
 })
 
