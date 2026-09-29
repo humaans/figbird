@@ -399,6 +399,12 @@ function isFeathersTransactionResult(value: unknown): value is FeathersTransacti
 
 export interface FeathersAdapterOptions {
   idField?: IdFieldType
+  /**
+   * The field a function `idField` reads, which figbird can't see into. Naming it
+   * lets writes wait for pending creates they reference and `.all()` refetches look
+   * rows up by id. A string `idField` names itself; the default reads `id` or `_id`.
+   */
+  idFieldName?: string
   updatedAtField?: UpdatedAtFieldType
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
@@ -456,6 +462,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
 > {
   feathers: FeathersClient
   #idField: IdFieldType
+  #idFieldNames: ReadonlySet<string>
   #updatedAtField: UpdatedAtFieldType
   #defaultPageSize: number | undefined
   #defaultPageSizeWhenFetchingAll: number | undefined
@@ -501,6 +508,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     feathers: FeathersClient,
     {
       idField = defaultIdField,
+      idFieldName,
       updatedAtField = (item: unknown) => {
         const obj = item as Record<string, unknown>
         return (obj.updatedAt ?? obj.updated_at) as string | Date | number | null | undefined
@@ -517,6 +525,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   ) {
     this.feathers = feathers
     this.#idField = idField
+    const namedIdField = typeof idField === 'string' ? idField : idFieldName
+    this.#idFieldNames = new Set(
+      namedIdField !== undefined ? [namedIdField] : idField === defaultIdField ? ['id', '_id'] : [],
+    )
     this.#updatedAtField = updatedAtField
     this.#defaultPageSize = defaultPageSize
     this.#defaultPageSizeWhenFetchingAll = defaultPageSizeWhenFetchingAll
@@ -537,8 +549,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     }
     // Rows can be queried by id only through a named field; the default reads `id`
     // (or `_id`) and queries `id`.
-    const idQueryField =
-      typeof idField === 'string' ? idField : idField === defaultIdField ? 'id' : undefined
+    const [idQueryField] = this.#idFieldNames
     if (idQueryField !== undefined) {
       this.findByIds = (serviceName, ids) => this.#findByIds(serviceName, idQueryField, ids)
     }
@@ -955,6 +966,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     return typeof this.#idField === 'string'
       ? ((item as Record<string, unknown>)[this.#idField] as string | number | undefined)
       : this.#idField(item)
+  }
+
+  isIdField(_serviceName: string, field: string): boolean {
+    return this.#idFieldNames.has(field)
   }
 
   #getUpdatedAt(item: unknown): string | Date | number | null | undefined {

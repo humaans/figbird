@@ -167,7 +167,7 @@ function substituteLeaves(query: unknown, keys: ReadonlySet<string>, value: bool
 export function createRelationalFilterMatcher<TMeta extends Record<string, unknown>>(
   schema: Schema,
   getState: () => Map<string, ServiceState<TMeta>>,
-  getId: (item: unknown) => string | number | undefined,
+  isIdField: (serviceName: string, field: string) => boolean,
   serviceName: string,
   query: unknown,
   compile: (query: unknown) => (item: unknown) => boolean,
@@ -188,7 +188,7 @@ export function createRelationalFilterMatcher<TMeta extends Record<string, unkno
 
   return item => {
     const materialized = materializeRelationalFilterItem(
-      { schema, state: getState(), getId },
+      { schema, state: getState(), isIdField },
       serviceName,
       item,
       paths,
@@ -337,11 +337,11 @@ export function shouldRefetchRelationalFilterQuery(
   return itemChangedFields(event.previousItem, event.item, dep.fields)
 }
 
-/** What relation hops are followed through: the schema and the entity cache. */
+/** What relation hops are followed through: the schema, the entity cache, and its keys. */
 interface CacheContext<TMeta extends Record<string, unknown>> {
   schema: Schema
   state: Map<string, ServiceState<TMeta>>
-  getId: (item: unknown) => string | number | undefined
+  isIdField: (serviceName: string, field: string) => boolean
 }
 
 /**
@@ -404,7 +404,7 @@ function materializeRelationPath<TMeta extends Record<string, unknown>>(
  * follow, an FK missing from the item, or a related row that isn't cached.
  */
 function resolveRelatedItem<TMeta extends Record<string, unknown>>(
-  { schema, state, getId }: CacheContext<TMeta>,
+  { schema, state, isIdField }: CacheContext<TMeta>,
   relDef: RelationshipDef,
   item: Record<string, unknown>,
 ): unknown {
@@ -413,7 +413,8 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   if (sourceValue === null) return null
   if (typeof sourceValue !== 'string' && typeof sourceValue !== 'number') return undefined
 
-  const destState = state.get(resolveServicePath(schema, relDef.destService))
+  const destService = resolveServicePath(schema, relDef.destService)
+  const destState = state.get(destService)
   if (!destState) return undefined
 
   // Fast path: the entity cache is keyed by adapter id, and destField is nearly always
@@ -423,7 +424,7 @@ function resolveRelatedItem<TMeta extends Record<string, unknown>>(
   const direct = destState.entities.get(entityKey(sourceValue))
   // When destField is the id field, the map key is the only place the row can be,
   // and entity keys match a string FK '10' to id 10 the way the server's join does.
-  if (getId({ [relDef.destField]: sourceValue }) === sourceValue) return direct
+  if (isIdField(destService, relDef.destField)) return direct
   // Otherwise the map key and destField are different fields; verify the candidate.
   if (direct !== undefined && getFieldValue(direct, relDef.destField) === sourceValue) {
     return direct

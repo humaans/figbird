@@ -1,13 +1,15 @@
 import test from 'ava'
 import {
   createSchema,
+  FeathersAdapter,
   feathersTransactions,
   FeathersTransactionError,
+  Figbird,
   type FigbirdEvent,
   type QueryState,
   service,
 } from '../lib'
-import { createTestApp, waitForEmissions } from './helpers'
+import { createTestApp, mockFeathers, waitForEmissions } from './helpers'
 import {
   collectEvents,
   deferred,
@@ -718,6 +720,48 @@ test('id contract: a write that references a pending create waits for it and fai
     renders.some(ids => ids.includes(21) && !ids.includes(20)),
     'the child rolls back with its parent, never shown alone',
   )
+})
+
+test('id contract: references follow the id field the adapter names, whatever reads it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  // A custom extractor reads ids of one type only; which field it reads is explicit.
+  const numericId = (item: unknown) => {
+    const id = (item as { id?: unknown }).id
+    return typeof id === 'number' ? id : undefined
+  }
+  const configs = [
+    { label: 'the default extractor', options: {} },
+    { label: 'a named custom extractor', options: { idField: numericId, idFieldName: 'id' } },
+  ]
+  for (const { label, options } of configs) {
+    const feathers = mockFeathers(services())
+    const adapter = new FeathersAdapter(feathers, options)
+    const figbird = new Figbird({ schema: related, adapter, eventBatchInterval: 0 })
+    const gates = new Map<number, ReturnType<typeof deferred<MockItem>>>()
+    feathers.service('notes').create = ((data: Note) => {
+      gates.set(data.id, deferred<MockItem>())
+      return gates.get(data.id)!.promise
+    }) as never
+
+    const parent = figbird.m.notes.create({ id: 10, content: 'parent' })
+    const child = figbird.m.notes.create({ id: 11, content: 'child', parentId: 10 })
+    t.deepEqual([...gates.keys()], [10], `${label}: the child waits for its parent`)
+    gates.get(10)!.resolve({ id: 10, content: 'parent' })
+    await parent
+    gates.get(11)!.resolve({ id: 11, content: 'child', parentId: 10 })
+    await child
+    figbird.dispose()
+  }
+
+  const unnamed = new FeathersAdapter(mockFeathers(services()), { idField: numericId })
+  t.false(unnamed.isIdField('notes', 'id'), 'an unnamed extractor names no id field')
+  t.true(new FeathersAdapter(mockFeathers(services())).isIdField('notes', '_id'))
+  t.false(new FeathersAdapter(mockFeathers(services())).isIdField('notes', 'parentId'))
 })
 
 test('id contract: a batch create that references a failed create is never shown alone', async t => {

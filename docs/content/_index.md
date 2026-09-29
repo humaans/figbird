@@ -1556,6 +1556,8 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
    attempt cannot fix; adapters without it treat all query errors as retryable
 6. Optionally implement `findByIds(serviceName, ids)` so an `.all()` refetch checks the rows
    its response lacks before treating them as removed
+7. Optionally implement `isIdField(serviceName, field)` to say which field holds a service's
+   id. Writes then wait for pending creates they reference through a `one` relation
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 
@@ -2038,7 +2040,8 @@ const adapter = new FeathersAdapter(feathers, options)
 
 - `feathers` — feathers client
 - `options`
-  - `idField` — string or function, defaults to `item => item.id || item._id`. Use a string (e.g. `'_id'`) when the id isn't `id`, so `.all()` refetches can look rows up by it
+  - `idField` — string or function, defaults to `item => item.id || item._id`. Use a string (e.g. `'_id'`) when the id isn't `id`
+  - `idFieldName` — the field a function `idField` reads; without it, writes don't wait for the creates they reference and `.all()` refetches can't look rows up by id
   - `updatedAtField` — string or function, defaults to `item => item.updatedAt || item.updated_at`; used to avoid overwriting newer cached data with older data when requests race
   - `defaultPageSize` — default `query.$limit` when fetching, unset by default so the server decides
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`

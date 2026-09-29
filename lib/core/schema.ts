@@ -602,17 +602,15 @@ export interface ForeignKey {
   destService: string
 }
 
-const ID_PROBE = 'figbird:id-probe'
-
 /**
  * Each service path's direct `one` relations to a destination's id, the references a
  * write can make. A `one` to another field (a person's profile found by
- * `profiles.personId`) is a reference the other way. `getId` is the adapter's id
- * reader: a field is the id field when a row holding only that field has its value as id.
+ * `profiles.personId`) is a reference the other way. `isIdField` is the adapter's
+ * statement of which field holds a service's id.
  */
 export function foreignKeys(
   schema: Schema | undefined,
-  getId: (item: unknown) => string | number | undefined,
+  isIdField: (serviceName: string, field: string) => boolean,
 ): Map<string, ForeignKey[]> {
   const keys = new Map<string, ForeignKey[]>()
   for (const [name, relations] of Object.entries(schema?.relationships ?? {})) {
@@ -621,7 +619,7 @@ export function foreignKeys(
         relation =>
           relation.cardinality === 'one' &&
           relation.via === undefined &&
-          getId({ [relation.destField]: ID_PROBE }) === ID_PROBE,
+          isIdField(resolveServicePath(schema, relation.destService), relation.destField),
       )
       .map(({ sourceField, destService }) => ({
         sourceField,

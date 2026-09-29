@@ -181,6 +181,15 @@ export interface Adapter<
    */
   getId(item: unknown): string | number | undefined
 
+  /**
+   * Optional: whether `field` of the service's rows holds the id `getId` reads.
+   * Figbird follows a relation by entity key only when it targets the destination's
+   * id field: a write then waits for a pending create it references, and a
+   * relational filter finds the related row directly. Without it, writes don't wait
+   * and relational filters match related rows by field value.
+   */
+  isIdField?(serviceName: string, field: string): boolean
+
   isItemStale(currItem: unknown, nextItem: unknown): boolean
 
   // Matcher is typed with TQuery but works with unknown items

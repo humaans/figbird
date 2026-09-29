@@ -69,6 +69,7 @@ const WINDOWED_RELATION_FANOUT_WARN_THRESHOLD = 10
 export interface RelationalQueryHost<TParams, TMeta extends Record<string, unknown>, TQuery> {
   adapter: {
     getId(item: unknown): string | number | undefined
+    isIdField?(serviceName: string, field: string): boolean
     matcher(
       query: TQuery | undefined,
       options?: unknown,
@@ -1362,7 +1363,7 @@ export class RelationalQueryRef<
       createRelationalFilterMatcher(
         this.#schema,
         () => this.#host.getState(),
-        item => this.#host.adapter.getId(item),
+        (service, field) => this.#host.adapter.isIdField?.(service, field) ?? false,
         ast.service,
         query,
         filters =>
