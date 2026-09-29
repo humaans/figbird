@@ -220,14 +220,7 @@ function IssueList({ status }: { status: string }) {
 
 `.where()` autocompletes and type-checks the fields of the service's item type, and also admits everything it can't statically know: dotted relational paths (`'creator.teamId'`), server-only operators (`$regex`), and dynamically-built filter objects.
 
-Successive `.where()` calls AND together. New fields, and new operators on a field, merge into one query object; conditions that would overwrite each other — two `$or` groups, or two values or operators for the same field — are both kept under `$and`, so the service must accept `$and` (check strict query schemas and operator whitelists):
-
-```ts
-q.issues.where({ status: 'open' }).where({ priority: { $gte: 50 } })
-// { status: 'open', priority: { $gte: 50 } }
-q.issues.where({ status: { $ne: 'closed' } }).where({ status: { $ne: 'archived' } })
-// { $and: [{ status: { $ne: 'closed' } }, { status: { $ne: 'archived' } }] }
-```
+Successive `.where()` calls AND together. When two calls constrain the same field, both conditions are sent under `$and`, so the service must accept `$and`.
 
 `.get(id)` is the resource-endpoint fetch (`GET /issues/:id`) with "this must exist"
 semantics: a cold fetch of a missing row enters the error state, while realtime removal
@@ -303,7 +296,7 @@ intermediate rows match a parent, the first resolves — make the first hop sele
 
 Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service's realtime events.
 
-Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. Each `IN (...)` carries at most the adapter's `maxIdsPerQuery` ids — larger sets split into several requests. The Feathers adapter defaults to 2500 over a socket transport and 100 over REST, where ids travel in the URL; set `new FeathersAdapter(feathers, { maxIdsPerQuery })` to match what your API handles best — and when new parents arrive (another page, a realtime create, a changed foreign key) only their new ids are fetched while the loaded relations stay live (ids that trickle in a few at a time are periodically regrouped into full requests, without blanking what's loaded). The exception is a **windowed relation** like `.related('recent', i => i.orderBy(...).limit(5))`, which needs one query _per parent_ because per-parent windows can't be expressed as a single find. Figbird warns past 10 parents and points at `embed` as the batched alternative. Sorting alone stays batched and fetches all matching rows across server pages. Only `$limit` or `$skip`, supplied by the builder or the relationship definition, requires a per-parent window — for single-hop `many` and `one` relations (a `one` takes the first row of its parent's window), and for `embed` with `.orderBy()`, where each parent's query sends its whole id list. An unsorted `embed` window stays batched: it takes each parent's list in order, after any filter, and without a filter `.limit(3)` fetches only the first three ids of every list. A junction window stays batched too: no single find can window a junction's destinations per parent, so Figbird fetches the relation unwindowed and slices each parent's ordered items — `.orderBy('name').limit(3)` gives every parent its first three. `.orderBy()` on a junction or `embed` relation orders each parent's items by the destination's sort.
+Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. Each `IN (...)` carries at most the adapter's `maxIdsPerQuery` ids (for Feathers, 2500 over a socket and 100 over REST). The exception is a **windowed relation** like `.related('recent', i => i.orderBy(...).limit(5))`, which needs one query _per parent_ because per-parent windows can't be expressed as a single find. Figbird warns past 10 parents and points at `embed` as the batched alternative. Sorting alone stays batched and fetches all matching rows across server pages, and junction and unsorted `embed` windows stay batched too: each parent's items are sliced after the fetch.
 
 You can also filter parents by a field on a related entity, with a dotted path:
 
@@ -311,7 +304,7 @@ You can also filter parents by a field on a related entity, with a dotted path:
 q.issues.where({ 'creator.teamId': 5 })
 ```
 
-The server resolves the join; on the client, Figbird's matcher evaluates the path against the entity cache so realtime events keep the result fresh. When it can't decide a row (the related row isn't cached), it refetches the root instead of guessing. Paths through `many`, junction, or `embed` relations are left to the server: the root is server-authoritative, and realtime changes on the involved services refetch it.
+The server resolves the join; on the client, Figbird's matcher evaluates the path against the entity cache so realtime events keep the result fresh. Paths through `many`, junction, or `embed` relations are left to the server.
 
 ## Suspense
 
@@ -470,10 +463,7 @@ The hook detects the adapter's pagination capability:
 - Offset services jump straight to any requested index with `$skip` and `$limit`.
 - Cursor services walk forward from their nearest known cursor checkpoint. They do
   not pretend a cursor is a random-access offset; a future seek-capable adapter can
-  optimize that walk without changing the hook API. Realtime events refetch the
-  first block; when its end cursor, row count, or `total` changes, or which rows it
-  holds (unless the service declares `cursorStability: 'ordering'`), later blocks
-  rebuild along a fresh cursor chain while their previous rows stay visible.
+  optimize that walk without changing the hook API.
 
 When the server reports `total`, give it to the virtualizer as its item count to get
 a full-size scrollbar and direct scrollbar jumps. Restoring a saved scroll offset is
@@ -636,10 +626,8 @@ updates immediately and everywhere, and a server error rolls the change back eve
 at once, emitting `mutate:rollback` for observability. Most product surfaces want this
 mode: task lists, inline edits, comments.
 
-The optimistic row stores `Date` values as ISO strings, the form the server's row will
-carry, so it matches date filters the same way before and after the server responds.
-The request payload keeps the `Date` values you passed. Declare date fields as strings
-in the service's `item` type, since that is what the rows you read hold.
+Optimistic rows store `Date` values as ISO strings, like the rows the server sends, so
+declare date fields as strings in the service's `item` type.
 
 Some surfaces are different. When the user must know the change saved before walking
 away (settings, policies, anything contractual), opt out with the `confirmed` variant.
@@ -656,30 +644,10 @@ Two things make the default safe. First, **awaiting is unaffected**: the promise
 on the server response in both modes, so a flow that awaits and then shows "saved" behaves
 identically. Optimism only controls when the _cache_ shows the change. Second,
 failures are never silent: rollback is global, `useAction` gives every action an `error`
-slot, and the events channel sees everything. `confirmed` is greppable on purpose. It
-names your critical surfaces.
-
-### Reporting failed writes
-
-A write nobody awaits (`void m.issues.patch(...)`) still rolls back when it fails, but
-nothing tells the user why. Subscribe once to [figbird.events](#figbirdevents) for an
-app-wide notice. Every failed write emits `mutate:error`, including custom methods, queued
-writes, and transactions:
-
-```ts
-import { isMutationSupersededError, MutationQueueDiscardedError } from 'figbird'
-
-figbird.events.subscribe(event => {
-  if (event.kind !== 'mutate:error') return
-  const { error } = event
-  if (isMutationSupersededError(error) || error instanceof MutationQueueDiscardedError) return
-  toast.error(`Couldn't save your change: ${error.message}`)
-})
-```
-
-Superseded and discarded writes never reached the server. Figbird cancelled them because an
-earlier write failed, a remove made them obsolete, or a queue was discarded. Skip them so
-each failure is reported once.
+slot, and the events channel sees everything: every failed write emits `mutate:error` on
+[figbird.events](#figbirdevents), the place to report writes nobody awaits (skip
+`isMutationSupersededError` ones, which never reached the server). `confirmed` is
+greppable on purpose. It names your critical surfaces.
 
 ### Writes to the same record are serialized
 
@@ -704,12 +672,7 @@ version. If a patch fails, Figbird removes that change and reapplies the later o
 create fails, Figbird cancels the writes that depend on its id.
 
 A write whose data references a record through a schema `one` relation waits while that
-record's create is pending. `m.comments.create({ id, issueId })` reaches the server only
-after the `m.issues.create({ id: issueId })` before it succeeds, and it rolls back with
-the issue if that create fails. Figbird follows only the written record's own relation
-fields, not relations further along the path, and only relations that name the other
-record by its id. Batch creates, transactions, and coalesced queue patches wait the same
-way; creates inside one transaction commit together and do not wait for each other.
+record's create is pending, and rolls back with it if the create fails.
 
 Confirmed writes with the same service and id follow the same ordering, so they cannot
 overtake optimistic writes. Id-less confirmed creates, batch creates, and custom methods
@@ -863,19 +826,9 @@ atomic or durable. An unfinished keyed queue can survive component navigation, b
 queue survives a page reload. Register a parent create before a child create that
 references it.
 
-A numeric `retry` repeats failed updates, patches, and removes only. A create or custom
-method whose attempt timed out may already have been applied, so repeating it could
-create a duplicate or run the method twice. Those operations pause the queue on their
-first failure unless a `retry` function returns `true` for them. Opt in only when the
-server treats the create's client-generated id, or the method, idempotently:
-
-```ts
-// The server upserts creates by id, so they are safe to repeat; custom methods are not.
-const sync = defineMutationQueue({
-  retry: (_error, attempt, operation) =>
-    attempt <= 2 && ['create', 'update', 'patch', 'remove'].includes(operation.method),
-})
-```
+A numeric `retry` repeats only updates, patches, and removes. A failed create or custom
+method may already have been applied, so those retry only when a `retry` function returns
+`true` for them; do that only when the server handles them idempotently.
 
 ### Creates and ids: the id contract
 
@@ -1216,44 +1169,19 @@ query. With no `$sort` and no `defaultSort`, membership still merges where it's
 exact (visible patches keep their position, underfilled first pages append) and
 everything positional refetches.
 
-The same contract covers how individual values compare. By default figbird sorts
-nulls first and compares strings by codepoint, which is not how every database
-orders them: Postgres puts nulls last ascending (first descending) and collates
-strings by locale, so `'B'` sorts between `'b'` and `'c'`. Pass the backend's value
-ordering as `compare`, and figbird uses it everywhere it sorts rows itself — window
-merges, local finds against materialized services, and the `figbird/testing` mock
-server when given the same option:
+The same contract covers how values compare. By default figbird sorts nulls first and
+compares strings by codepoint. If your database orders values differently, pass its
+ordering as `compare`, and figbird uses it wherever it sorts rows itself:
 
 ```ts
 import { Figbird, postgresCompare } from 'figbird'
 
-const figbird = new Figbird({
-  adapter,
-  schema,
-  compare: postgresCompare,
-})
+const figbird = new Figbird({ adapter, schema, compare: postgresCompare })
 ```
 
-`postgresCompare` collates strings like ICU `en`, so use it only when the database
-collation does too (for example `en-x-icu`). A glibc `en_US` collation ignores
-punctuation and spaces at the first level, so `'a-c'` sorts after `'ab'` there but
-before it in ICU; a `COLLATE "C"` database orders by codepoint, which the default
-comparator already mirrors.
-
-A comparator receives `(a, b, { serviceName, field })` and returns a negative,
-zero, or positive number for ascending order (`$sort: -1` negates it). The context
-covers columns your server returns in a different shape than it sorts them — for
-example `numeric` columns, which the `pg` driver returns as strings:
-
-```ts
-compare: (a, b, context) =>
-  context.field === 'amount' && a != null && b != null
-    ? Number(a) - Number(b)
-    : postgresCompare(a, b),
-```
-
-A mismatch has the same cost as a wrong `defaultSort`: on a full window a realtime
-row can be inserted or evicted in the wrong place until the next fetch.
+`postgresCompare` puts nulls last ascending and collates strings like ICU `en`, so use it
+only with a matching database collation (for example `en-x-icu`). A custom comparator
+receives `(a, b, { serviceName, field })` and returns a number, for ascending order.
 
 ### Teaching the client custom operators
 
@@ -1395,9 +1323,7 @@ A returning reader cancels eviction.
 `gcTime` controls memory retention independently of `staleTime`, which controls freshness.
 Set `gcTime: Infinity` to keep idle results for the instance's lifetime, or `0` to evict
 on the next timer turn. Unreferenced entities and unused service subscriptions are
-released when queries expire. Realtime events for rows no query references keep only the
-1,000 most recently changed such rows per service, so a busy service cannot grow the cache
-without bound. Complete unfiltered `.all()` materializations follow the
+released when queries expire. Complete unfiltered `.all()` materializations follow the
 same retention policy. After one expires, remaining queries fetch from the server until
 a new `.all()` read completes. To keep a full service available for local reads, hold
 `const prepared = figbird.prepare(figbird.q.notes.all())` and call `prepared.release()`
@@ -1628,10 +1554,8 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
 4. Optionally implement `subscribeToReconnect` so active queries refetch after connectivity gaps
 5. Optionally implement `isRetryableError` to return `false` for errors that another query
    attempt cannot fix; adapters without it treat all query errors as retryable
-6. Optionally implement `findByIds(serviceName, ids)` to return the rows with those ids that
-   still exist. An `.all()` refetch asks it about the rows its response lacks, since a page
-   walk can step over a row when another is removed between pages; without it, every row
-   the response lacks is removed
+6. Optionally implement `findByIds(serviceName, ids)` so an `.all()` refetch checks the rows
+   its response lacks before treating them as removed
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
 
@@ -2114,7 +2038,7 @@ const adapter = new FeathersAdapter(feathers, options)
 
 - `feathers` — feathers client
 - `options`
-  - `idField` — string or function, defaults to `item => item.id || item._id`. A string (or the default, which queries `id`) also lets an `.all()` refetch look rows up with `{ [idField]: { $in: ids } }` before reading a row missing from its pages as removed; a function can't be queried by, so such rows are removed right away
+  - `idField` — string or function, defaults to `item => item.id || item._id`. Use a string (e.g. `'_id'`) when the id isn't `id`, so `.all()` refetches can look rows up by it
   - `updatedAtField` — string or function, defaults to `item => item.updatedAt || item.updated_at`; used to avoid overwriting newer cached data with older data when requests race
   - `defaultPageSize` — default `query.$limit` when fetching, unset by default so the server decides
   - `defaultPageSizeWhenFetchingAll` — default `query.$limit` when fetching with `allPages`

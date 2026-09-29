@@ -323,23 +323,10 @@ parent server-window: the visible related set isn't the complete set, so a missi
 might exist outside the window.
 
 Local decisions are three-valued: match, no match, or unknown. Only paths through single-hop
-`one` relations are locally evaluable — they resolve to exactly one row, or to none when the
-FK is null. A null FK is a known absence: the path's predicates are false, and other `$or`
-branches still decide (`$or: [{ priority: 'urgent' }, { 'assignee.role': 'owner' }]` keeps an
-unassigned urgent issue). The exception is a predicate that also matches a missing value (`$ne`,
-`$nin`, null equality): locally it would hold, while a server join usually excludes the row, so
-it is unknown and the server decides. A related row that isn't cached, or an FK missing from the event, is
-unknown: the store keeps the current result and reconciles the root with the server instead
-of dropping the row or ignoring the create. An unknown predicate leaves the item unknown only
-when it could change the answer — the matcher evaluates the query with every undecided predicate
-true and with every one false, and the item is decided when both agree (`{ state: 'closed',
-'assignee.role': 'owner' }` rejects an open issue whatever its assignee).
-
-Paths through `many`, junction, `embed`, or two-hop `one` relations ask whether _some_ related
-row matches, which needs the complete related set. They classify the root
-server-authoritative (reason `relational-filter` in `explain()`): its own events reconcile it,
-and relevant changes on the related and junction services reconcile it too — through the same
-cooldown and hidden-tab gate, since related services are often the busiest.
+`one` relations are evaluated locally. A null FK means there is no related row; a related row
+that isn't cached is unknown, and the store keeps the current result and reconciles instead of
+guessing. Paths through `many`, junction, `embed`, or two-hop relations need the complete related
+set, so they make the root server-authoritative (`relational-filter` in `explain()`).
 
 Open questions:
 
@@ -363,13 +350,9 @@ window after a removal, anything that shifts the page start of a skipped window,
 reconciles by refetch. Sort position is judged by `$sort`, falling back to the configured
 `defaultSort` (the backend's implicit order — a correctness contract like custom operators).
 
-Values within a sort field compare through the instance's `compare` option (default: nulls
-first, numbers numerically, dates by time, other values by codepoint). It is the same kind of
-correctness contract: window merges use the comparator as proof of position, so a comparator
-that disagrees with the backend (nulls last, locale collation, numeric columns returned as
-strings) inserts or evicts the wrong rows — wrong membership, not just order — until the next
-fetch. Every place figbird sorts rows itself builds its row comparator from this one value
-comparator.
+Values within a sort field compare through the instance's `compare` option, the same kind of
+correctness contract: a comparator that disagrees with the backend can insert or evict the wrong
+rows in a window until the next fetch.
 
 Server-derived ordering, such as search rank or permission-aware priority, should be treated as
 server-authoritative.
@@ -681,17 +664,10 @@ as its base and folds the remaining create/update/patch/remove intents over that
 acknowledgement or failure. This prevents an older response from replacing newer optimistic state
 and makes rollback compositional: remove only the failed intent, then replay what remains. A failed
 create cancels the queued writes that depended on the identity. Different records stay parallel,
-except that a write whose data names a record with a pending create (through one of the schema's
-direct `one` relations to the destination's id field) waits for that create's acknowledgement;
-otherwise a child row could reach the server before its parent. If the create fails, a keyed write
-is aborted inside the create's settlement, so its optimism rolls back in the same cache transition
-and no view shows the child outliving a parent that never existed. Only the written record's own
-foreign keys are followed. Id-less confirmed creates, batch creates, and opaque custom methods have
-no record key and keep the direct path; the creates still hold for the records they reference, and
-a failed reference cancels them through their ordinary failure path. Transaction entries hold too,
-except for creates in the same transaction, which commit with them; a queued patch whose coalesced
-data gains a reference adds the hold before it is sent. A hold only ever targets a create already
-queued, while nothing waits on the holding write, so holds cannot deadlock.
+except that a write whose data references a record with a pending create (through a direct `one`
+relation to its id) waits for that create, so a child never reaches the server before its parent,
+and rolls back with it if the create fails. Id-less confirmed creates, batch creates, and opaque
+custom methods have no record key and keep the direct path.
 
 The active intent overlay participates in fetch rebasing even when it predates the fetch cursor.
 Locally exact query nodes consume projected entity events immediately. Reconciliation that needs
