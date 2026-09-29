@@ -444,6 +444,50 @@ test('cursor paginate: $and filters keep the stable-update fast path', async t =
   unsubscribe()
 })
 
+it('cursor paginate: a local merge into an earlier page keeps the drained chain done', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const initialRows = makeRows(6).map(row => ({ ...row, title: `Item ${row.id}` }))
+  const cursorApp = createCursorApp(initialRows)
+  let loadMore: (() => void) | undefined
+
+  function List() {
+    const result = useQueryResult(
+      cursorApp.figbird.q.items.orderBy('rank', 'asc').paginate({ pageSize: 3 }),
+    )
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
+    return (
+      <div
+        className='items'
+        data-rows={result.data.map(item => `${item.id}:${item.title}`).join(',')}
+        data-more={String(result.hasMore)}
+      />
+    )
+  }
+
+  render(
+    <cursorApp.App>
+      <React.Suspense fallback={<div>loading</div>}>
+        <List />
+      </React.Suspense>
+    </cursorApp.App>,
+  )
+  await flush()
+  await flush(() => loadMore?.())
+  t.is($('.items')?.getAttribute('data-more'), 'false')
+
+  const callsBeforePatch = cursorApp.calls.length
+  const renamed = { ...initialRows[1]!, title: 'Renamed' }
+  cursorApp.replaceRows(initialRows.map(row => (row.id === renamed.id ? renamed : row)))
+  await flush(() => cursorApp.emit('patched', renamed))
+
+  t.is(cursorApp.calls.length, callsBeforePatch)
+  t.true($('.items')?.getAttribute('data-rows')?.includes('2:Renamed'))
+  t.is($('.items')?.getAttribute('data-more'), 'false')
+  unmount()
+})
+
 it('cursor paginate: without a cursor stability contract, visible updates rebuild', async t => {
   const { render, unmount, flush } = dom()
   const initialRows = makeRows(3).map(row => ({ ...row, title: `Item ${row.id}` }))
@@ -687,6 +731,60 @@ it('cursor paginate: failed prefix rebuild stays atomic and retries its depth', 
   })
 
   t.is($('.items')?.getAttribute('data-ids'), '100,99,1,2,3,4')
+  t.deepEqual(
+    cursorApp.calls.slice(-2).map(call => call.query.$after),
+    [null, 'cursor:3'],
+  )
+  unmount()
+})
+
+it('cursor paginate: failed prefix rebuild surfaces loadMoreError and loadMore retries it', async t => {
+  const { render, unmount, flush, $ } = dom()
+  const cursorApp = createCursorApp(makeRows(7), 3, { retry: false })
+  let loadMore: (() => void) | undefined
+
+  function List() {
+    const result = useQueryResult(cursorApp.figbird.q.items.paginate({ pageSize: 3 }))
+    useLayoutEffect(() => {
+      loadMore = result.loadMore
+    })
+    return (
+      <div
+        className='items'
+        data-ids={result.data.map(item => item.id).join(',')}
+        data-load-more-error={result.loadMoreError?.message ?? ''}
+      />
+    )
+  }
+
+  render(
+    <cursorApp.App>
+      <React.Suspense fallback={<div>loading</div>}>
+        <List />
+      </React.Suspense>
+    </cursorApp.App>,
+  )
+  await flush()
+  await flush(() => loadMore?.())
+
+  const inserted = { id: 99, rank: 0 }
+  cursorApp.failNextCursor('cursor:3')
+  cursorApp.replaceRows([inserted, ...makeRows(7)])
+  await flush(async () => {
+    cursorApp.emit('created', inserted)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is($('.items')?.getAttribute('data-ids'), '1,2,3,4,5,6')
+  t.is($('.items')?.getAttribute('data-load-more-error'), 'failed cursor:3')
+
+  await flush(async () => {
+    loadMore?.()
+    await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  t.is($('.items')?.getAttribute('data-ids'), '99,1,2,3,4,5')
+  t.is($('.items')?.getAttribute('data-load-more-error'), '')
   t.deepEqual(
     cursorApp.calls.slice(-2).map(call => call.query.$after),
     [null, 'cursor:3'],

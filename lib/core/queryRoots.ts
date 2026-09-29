@@ -309,7 +309,7 @@ export class PagedQueryRoot<
           pendingSettle = undefined
           settle.onError(state.error)
         } else if (this.#reconcile.phase === 'running') {
-          this.#abortReconcile()
+          this.#abortReconcile(state.error)
         }
       } else if (state?.status === 'success') {
         if (pendingSettle && !state.isFetching) {
@@ -317,7 +317,13 @@ export class PagedQueryRoot<
           this.#isLoadingMore = false
           this.#loadMoreError = null
           this.#hasMoreSticky = queryRef.getPage().continuation.kind !== 'done'
-        } else if (!this.#isLoadingMore && !state.isFetching) {
+        } else if (
+          !this.#isLoadingMore &&
+          !state.isFetching &&
+          queryRef === this.#pageRefs.at(-1)
+        ) {
+          // Only the last page knows whether the chain continues; an earlier
+          // page settling (say, after a local realtime merge) always has a cursor.
           this.#hasMoreSticky = queryRef.getPage().continuation.kind !== 'done'
         }
       }
@@ -346,6 +352,12 @@ export class PagedQueryRoot<
   }
 
   loadMore(graph?: QueryGraphRef): void {
+    if (this.#reconcile.phase === 'failed') {
+      // Retry the failed rebuild: page zero fetching restarts it at the depth
+      // it was rebuilding.
+      this.#pageRefs[0]?.refetch({ graph })
+      return
+    }
     if (this.#reconcile.phase !== 'idle') return
     if (this.#isLoadingMore || !this.#hasMoreSticky || this.#pageRefs.length === 0) return
 
@@ -556,7 +568,7 @@ export class PagedQueryRoot<
     }
   }
 
-  #abortReconcile(): void {
+  #abortReconcile(error: Error): void {
     const current = this.#reconcile
     if (current.phase !== 'running') return
     this.#reconcile = {
@@ -565,6 +577,9 @@ export class PagedQueryRoot<
       rows: current.rows,
       previousQueryIds: current.previousQueryIds,
     }
+    // Surface the failure where callers already offer a retry; loadMore()
+    // restarts the rebuild.
+    this.#loadMoreError = error
     this.#onChange()
   }
 
