@@ -220,6 +220,15 @@ function IssueList({ status }: { status: string }) {
 
 `.where()` autocompletes and type-checks the fields of the service's item type, and also admits everything it can't statically know: dotted relational paths (`'creator.teamId'`), server-only operators (`$regex`), and dynamically-built filter objects.
 
+Successive `.where()` calls AND together. New fields, and new operators on a field, merge into one query object; conditions that would overwrite each other — two `$or` groups, or two values or operators for the same field — are both kept under `$and`, so the service must accept `$and` (check strict query schemas and operator whitelists):
+
+```ts
+q.issues.where({ status: 'open' }).where({ priority: { $gte: 50 } })
+// { status: 'open', priority: { $gte: 50 } }
+q.issues.where({ status: { $ne: 'closed' } }).where({ status: { $ne: 'archived' } })
+// { $and: [{ status: { $ne: 'closed' } }, { status: { $ne: 'archived' } }] }
+```
+
 `.get(id)` is the resource-endpoint fetch (`GET /issues/:id`) with "this must exist"
 semantics: a cold fetch of a missing row enters the error state, while realtime removal
 of a row you're viewing enters the error state with `ItemRemovedError` and null data. Use
