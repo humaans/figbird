@@ -668,8 +668,9 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
    * Offset services are read page by page by `$skip`, best effort: a write landing
    * between pages shifts the offsets. A create repeats a row, dropped here by id; a
    * remove steps over one, which the store looks up (`findByIds`) before reading it
-   * as removed. A page that adds no new rows ends the walk, so a service ignoring
-   * `$skip` or `$limit` can't page forever.
+   * as removed. A page that adds no new rows ends the walk unless the total says
+   * rows remain past it (a page's worth of creates landed ahead of the offset), so a
+   * service ignoring `$skip` or `$limit` still can't page forever.
    */
   async findAll(
     serviceName: string,
@@ -711,12 +712,13 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
         progressed = true
       }
 
+      // allow total to be -1 to indicate that total will not be available on this endpoint
+      const hasTotal = meta.total > 0
       const done =
         data.length === 0 ||
         data.length < meta.limit ||
-        !progressed ||
-        // allow total to be -1 to indicate that total will not be available on this endpoint
-        (meta.total > 0 && result.data.length >= meta.total)
+        (!progressed && !(hasTotal && $skip + data.length < meta.total)) ||
+        (hasTotal && result.data.length >= meta.total)
 
       if (done) return result
 

@@ -416,6 +416,37 @@ test('a create landing between findAll pages does not duplicate rows', async t =
   t.deepEqual(ids(result.data), [10, 11, 12, 13])
 })
 
+test('a findAll page of only repeated rows does not end the walk while the total says more', async t => {
+  const feathers = mockFeathers({
+    notes: {
+      data: {
+        10: { id: 10, content: 'ten', rank: 10 },
+        11: { id: 11, content: 'eleven', rank: 11 },
+        12: { id: 12, content: 'twelve', rank: 12 },
+        13: { id: 13, content: 'thirteen', rank: 13 },
+      },
+    },
+  })
+  const notes = feathers.service('notes')
+  const find = notes.find.bind(notes)
+  notes.find = async params => {
+    const page = await find(params)
+    if (notes.counts.find === 1) {
+      notes.data = {
+        ...notes.data,
+        5: { id: 5, content: 'five', rank: 5 },
+        6: { id: 6, content: 'six', rank: 6 },
+      }
+    }
+    return page
+  }
+  const adapter = new FeathersAdapter(feathers, { defaultPageSizeWhenFetchingAll: 2 })
+
+  // A page's worth of creates ahead of the offset repeats the whole first page.
+  const result = await adapter.findAll('notes')
+  t.deepEqual(ids(result.data), [10, 11, 12, 13])
+})
+
 test('a remove landing between findAll pages does not delete the skipped row', async t => {
   const { figbird, notes } = createApp(
     {
