@@ -132,14 +132,6 @@ export interface Adapter<
     | ((serviceName: string, ids: readonly (string | number)[]) => Promise<unknown[]>)
     | undefined
 
-  /**
-   * Optional: the most ids one `$in` request should carry. Relation fetches and
-   * `findByIds` split larger id sets across requests. Transports differ: ids in a
-   * socket message are cheap, ids in a REST query string hit URL length limits.
-   * Defaults to 100.
-   */
-  maxIdsPerQuery?: number | undefined
-
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 
   /**

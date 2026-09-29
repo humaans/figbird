@@ -187,10 +187,8 @@ export function cursorPagination({
 
 const OFFSET_PAGINATION: FeathersOffsetPagination = { kind: 'offset' }
 
-/** Ids per `$in` request over a socket, where they travel in the message body. */
-const SOCKET_MAX_IDS_PER_QUERY = 2500
-/** Ids per `$in` request over REST, where they travel in the URL. */
-const REST_MAX_IDS_PER_QUERY = 100
+/** Upper bound on ids per `findByIds` request, keeping REST URLs under length limits. */
+const FIND_BY_IDS_CHUNK_SIZE = 100
 
 const defaultIdField: IdExtractor = item => {
   const obj = item as Record<string, unknown>
@@ -409,12 +407,6 @@ export interface FeathersAdapterOptions {
   defaultPageSize?: number
   defaultPageSizeWhenFetchingAll?: number
   /**
-   * The most ids one `$in` request carries (relation fetches, id lookups); larger id
-   * sets are split across requests. Defaults to 2500 over a socket transport and 100
-   * over REST, where ids travel in the URL.
-   */
-  maxIdsPerQuery?: number
-  /**
    * Teach the client to evaluate custom query operators locally, so queries using
    * them stay realtime-mergeable instead of classifying server-authoritative.
    *
@@ -472,7 +464,6 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #isInvalidationEvent: ((event: RealtimeEventContext) => boolean) | undefined
   transaction?: Adapter['transaction']
   findByIds?: Adapter['findByIds']
-  readonly maxIdsPerQuery: number
 
   /** Names of custom operators registered for every service. */
   get customOperators(): readonly string[] {
@@ -515,7 +506,6 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       },
       defaultPageSize,
       defaultPageSizeWhenFetchingAll,
-      maxIdsPerQuery,
       operators = {},
       defaultPagination,
       pagination = {},
@@ -536,14 +526,6 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#defaultPagination = defaultPagination
     this.#pagination = pagination
     this.#isInvalidationEvent = isInvalidationEvent
-    if (maxIdsPerQuery !== undefined && (!Number.isInteger(maxIdsPerQuery) || maxIdsPerQuery < 1)) {
-      throw new Error(
-        `FeathersAdapter: maxIdsPerQuery must be a positive integer, got ${maxIdsPerQuery}`,
-      )
-    }
-    this.maxIdsPerQuery =
-      maxIdsPerQuery ??
-      (this.#getSocketIoConnectionSource() ? SOCKET_MAX_IDS_PER_QUERY : REST_MAX_IDS_PER_QUERY)
     if (transactions) {
       this.transaction = operations => transactions(this.feathers, operations)
     }
@@ -743,8 +725,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     ids: readonly (string | number)[],
   ): Promise<unknown[]> {
     const chunks: (string | number)[][] = []
-    for (let i = 0; i < ids.length; i += this.maxIdsPerQuery) {
-      chunks.push(ids.slice(i, i + this.maxIdsPerQuery))
+    for (let i = 0; i < ids.length; i += FIND_BY_IDS_CHUNK_SIZE) {
+      chunks.push(ids.slice(i, i + FIND_BY_IDS_CHUNK_SIZE))
     }
     const pages = await Promise.all(
       chunks.map(chunk =>

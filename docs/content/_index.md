@@ -296,7 +296,7 @@ intermediate rows match a parent, the first resolves — make the first hop sele
 
 Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service's realtime events.
 
-Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. Each `IN (...)` carries at most the adapter's `maxIdsPerQuery` ids (for Feathers, 2500 over a socket and 100 over REST). The exception is a **windowed relation** like `.related('recent', i => i.orderBy(...).limit(5))`, which needs one query _per parent_ because per-parent windows can't be expressed as a single find. Figbird warns past 10 parents and points at `embed` as the batched alternative. Sorting alone stays batched and fetches all matching rows across server pages, and junction and unsorted `embed` windows stay batched too: each parent's items are sliced after the fetch.
+Relational queries fetch efficiently: a single `IN (...)` query per relation level (not per parent), junction traversal in two queries, `embed` in one. The exception is a **windowed relation** like `.related('recent', i => i.orderBy(...).limit(5))`, which needs one query _per parent_ because per-parent windows can't be expressed as a single find. Figbird warns past 10 parents and points at `embed` as the batched alternative. Sorting alone stays batched and fetches all matching rows across server pages, and junction and unsorted `embed` windows stay batched too: each parent's items are sliced after the fetch.
 
 You can also filter parents by a field on a related entity, with a dotted path:
 

@@ -76,7 +76,6 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
       context?: MatcherContext,
     ): (item: unknown) => boolean
     pageSource?(serviceName: string): PageSource<TParams, TMeta> | undefined
-    maxIdsPerQuery?: number | undefined
   }
   clock: Clock
   queryStore: {
@@ -1097,7 +1096,6 @@ export class RelationalQueryRef<
         ),
       row => getFieldValue(row, target.field),
       () => (onReady ? onReady() : this.#syncNestedFanIn(query, plan)),
-      this.#host.adapter.maxIdsPerQuery,
     )
     return query
   }
