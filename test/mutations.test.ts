@@ -720,6 +720,41 @@ test('id contract: a write that references a pending create waits for it and fai
   )
 })
 
+test('id contract: a batch create that references a failed create is never shown alone', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const { m } = figbird
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const renders: number[][] = []
+  ref.subscribe(state => {
+    renders.push((state as QueryState<Note[], Record<string, unknown>>).data?.map(n => n.id) ?? [])
+  })
+  await new Promise(r => setTimeout(r, 10))
+
+  const parentGate = deferred<MockItem>()
+  feathers.service('notes').create = (() => parentGate.promise) as never
+
+  const doomed = t.throwsAsync(m.notes.create({ id: 20, content: 'doomed parent' }))
+  // A batch create joins no lane, so it rolls back outside the parent's lane settlement.
+  const orphans = t.throwsAsync(m.notes.create([{ id: 21, content: 'orphan', parentId: 20 }]), {
+    message: /references failed/,
+  })
+  t.true(renders.at(-1)?.includes(21))
+  parentGate.reject(new Error('rejected'))
+  await Promise.all([doomed, orphans])
+  await waitForEmissions()
+  t.false(renders.at(-1)?.includes(21))
+  t.false(
+    renders.some(ids => ids.includes(21) && !ids.includes(20)),
+    'the batch rolls back with its parent, never shown alone',
+  )
+})
+
 test('id contract: transactions, batch creates, and coalesced patches hold for referenced creates', async t => {
   const related = createSchema({
     services: { notes: service<{ item: Note }>() },

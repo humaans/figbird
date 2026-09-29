@@ -414,6 +414,12 @@ export class MutationExecutor {
   ): RegisteredMutation {
     // Dates in wire form, like the lane projections of keyed creates.
     const optimisticItem = datesToIso(resolveCreateOptimisticItem(desc))
+    let rolledBack = false
+    const rollback = (cause?: MutationTraceCause) => {
+      if (rolledBack) return
+      rolledBack = true
+      this.#cache.ingest(desc.serviceName, { type: 'removed', item: optimisticItem }, cause)
+    }
     return this.#registerUnkeyedMutation({
       tracking: {
         serviceName: desc.serviceName,
@@ -422,7 +428,7 @@ export class MutationExecutor {
         args,
       },
       control,
-      hold: attempt => this.#holdUnkeyed(desc, attempt),
+      hold: attempt => this.#holdUnkeyed(desc, attempt, optimistic ? rollback : undefined),
       ...(optimistic
         ? {
             project: (cause?: MutationTraceCause) =>
@@ -441,7 +447,7 @@ export class MutationExecutor {
           this.#cache.ingest(desc.serviceName, { type: 'created', item }, cause),
         onError: (_error, { mutationId, cause }) => {
           if (!optimistic) return
-          this.#cache.ingest(desc.serviceName, { type: 'removed', item: optimisticItem }, cause)
+          rollback(cause)
           this.#telemetry.emit({
             kind: 'mutate:rollback',
             mutationId,
@@ -610,12 +616,23 @@ export class MutationExecutor {
     return held
   }
 
-  /** Unkeyed writes join no lane; a failed reference cancels them, and they roll back. */
-  #holdUnkeyed(desc: MutationDescriptor, attempt: GatedMutationAttempt): void {
+  /**
+   * Unkeyed writes join no lane, so a failed reference cancels them outside its
+   * settlement. `rollback` removes their optimistic rows at once, before that
+   * settlement is flushed, so they never show without the parent.
+   */
+  #holdUnkeyed(
+    desc: MutationDescriptor,
+    attempt: GatedMutationAttempt,
+    rollback?: () => void,
+  ): void {
     this.#awaitReferencedCreates(desc, {
       attempt,
-      abort: parent =>
-        attempt.cancel(referenceFailed(`a ${desc.method} on "${desc.serviceName}"`, parent)),
+      abort: parent => {
+        if (attempt.cancel(referenceFailed(`a ${desc.method} on "${desc.serviceName}"`, parent))) {
+          rollback?.()
+        }
+      },
     })
   }
 
