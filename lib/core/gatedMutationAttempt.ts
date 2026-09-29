@@ -41,18 +41,20 @@ export class GatedMutationAttempt {
   }
 
   /**
-   * Hold transport until `dependency` fulfils. A rejected dependency keeps the
-   * attempt held; its owner decides whether to cancel it.
+   * Hold transport until `dependency` fulfils or the returned release is called. A
+   * rejected dependency keeps the attempt held; its owner decides whether to cancel it.
    */
-  waitFor(dependency: Promise<unknown>): void {
+  waitFor(dependency: Promise<unknown>): () => void {
+    let held = true
+    const release = () => {
+      if (!held) return
+      held = false
+      this.#dependencies -= 1
+      this.#notifyIfReady()
+    }
     this.#dependencies += 1
-    dependency.then(
-      () => {
-        this.#dependencies -= 1
-        this.#notifyIfReady()
-      },
-      () => {},
-    )
+    dependency.then(release, () => {})
+    return release
   }
 
   start(run: () => Promise<unknown>): boolean {

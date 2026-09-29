@@ -93,6 +93,8 @@ interface QueuedMutation {
 interface ReferencingWrite {
   attempt: GatedMutationAttempt
   transaction?: QueuedTransaction
+  /** The creates the write waits for, each with the release of its wait. */
+  holds: Map<QueuedMutation, () => void>
   /** Roll the write back into `lanes`, because `parent` will never be created. */
   abort(parent: MutationLane, lanes: Set<MutationLane>): void
 }
@@ -253,6 +255,7 @@ export class MutationExecutor {
       transaction.entries.push({ lane, entry })
       this.#awaitReferencedCreates(operation.desc, {
         attempt: entry.attempt,
+        holds: new Map(),
         transaction,
         abort: (parent, lanes) =>
           this.#abortTransaction(
@@ -542,6 +545,7 @@ export class MutationExecutor {
     if (tracked.cause) entry.cause = tracked.cause
     const write: ReferencingWrite = {
       attempt: entry.attempt,
+      holds: new Map(),
       abort: (parent, lanes) =>
         this.#abortQueuedMutation(
           lane,
@@ -589,14 +593,36 @@ export class MutationExecutor {
    * Lanes run in parallel, so a write whose data references a record that is still
    * being created could reach the server first. It waits for that create, and is
    * rolled back with it when the create fails (see #abortReferencingWrites). Creates
-   * in the write's own transaction commit with it instead. Returns whether it added
-   * a wait. Waits cannot cycle: one is added only on a create already queued, while
-   * nothing waits on the write yet (it is new, or a patch at its lane's tail).
+   * in the write's own transaction commit with it instead. A coalesced patch is
+   * checked again, and stops waiting for (and failing with) a create it no longer
+   * names. Returns whether it added a wait. Waits cannot cycle: one is added only on
+   * a create already queued, while nothing waits on the write yet (it is new, or a
+   * patch at its lane's tail).
    */
   #awaitReferencedCreates(desc: MutationDescriptor, write: ReferencingWrite): boolean {
-    if (desc.method === 'remove') return false
-    const keys = this.#foreignKeys.get(desc.serviceName) ?? []
+    const referenced = this.#referencedCreates(desc, write)
     let held = false
+    for (const create of referenced) {
+      if (write.holds.has(create)) continue
+      create.referencedBy ??= new Set()
+      create.referencedBy.add(write)
+      write.holds.set(create, write.attempt.waitFor(create.attempt.promise))
+      held = true
+    }
+    for (const [create, release] of write.holds) {
+      if (referenced.has(create)) continue
+      create.referencedBy?.delete(write)
+      write.holds.delete(create)
+      release()
+    }
+    return held
+  }
+
+  /** The pending creates a write's data names through the schema's direct `one` relations. */
+  #referencedCreates(desc: MutationDescriptor, write: ReferencingWrite): Set<QueuedMutation> {
+    const referenced = new Set<QueuedMutation>()
+    if (desc.method === 'remove') return referenced
+    const keys = this.#foreignKeys.get(desc.serviceName) ?? []
     for (const item of Array.isArray(desc.data) ? desc.data : [desc.data]) {
       if (!item || typeof item !== 'object') continue
       for (const { sourceField, destService } of keys) {
@@ -605,15 +631,12 @@ export class MutationExecutor {
         // Lanes key ids by entity key, so a route-string '10' finds the create of id 10.
         const parentLane = this.#mutationLanes.get(destService, id)
         const create = parentLane && this.#mutationLanes.pendingCreate(parentLane)
-        if (!create || create.referencedBy?.has(write)) continue
+        if (!create) continue
         if (write.transaction && create.transaction === write.transaction) continue
-        create.referencedBy ??= new Set()
-        create.referencedBy.add(write)
-        write.attempt.waitFor(create.attempt.promise)
-        held = true
+        referenced.add(create)
       }
     }
-    return held
+    return referenced
   }
 
   /**
@@ -628,6 +651,7 @@ export class MutationExecutor {
   ): void {
     this.#awaitReferencedCreates(desc, {
       attempt,
+      holds: new Map(),
       abort: parent => {
         if (attempt.cancel(referenceFailed(`a ${desc.method} on "${desc.serviceName}"`, parent))) {
           rollback?.()

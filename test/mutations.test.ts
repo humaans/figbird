@@ -865,6 +865,38 @@ test('id contract: transactions, batch creates, and coalesced patches hold for r
   await Promise.all([doomed, batchOrphan, transactionOrphan])
 })
 
+test('id contract: a coalesced patch that stops naming a pending create stops waiting for it', async t => {
+  const related = createSchema({
+    services: { notes: service<{ item: Note }>() },
+    relationships: {
+      notes: ({ one }) => ({ parent: one({ sourceField: 'parentId', destService: 'notes' }) }),
+    },
+  })
+  const { figbird, feathers } = createTestApp(related, services())
+  const notes = feathers.service('notes')
+  const parentGate = deferred<MockItem>()
+  notes.create = (() => parentGate.promise) as never
+  const patch = notes.patch.bind(notes)
+  const patched: Array<Partial<MockItem>> = []
+  notes.patch = ((id: number, data: Partial<MockItem>) => {
+    patched.push(data)
+    return patch(id, data)
+  }) as never
+
+  const doomed = t.throwsAsync(figbird.m.notes.create({ id: 10, content: 'parent' }))
+  const queue = figbird.createMutationQueue({ schedule: () => ({ wait: 10_000 }) })
+  const first = queue.m.notes.patch(1, { parentId: 10 })
+  const moved = queue.m.notes.patch(1, { parentId: null } as never)
+  queue.flush()
+  await new Promise(r => setTimeout(r, 10))
+  t.deepEqual(patched, [{ parentId: null }], 'the merged patch no longer waits for the create')
+
+  parentGate.reject(new Error('rejected'))
+  await doomed
+  await Promise.all([first, moved])
+  t.pass('the failed create does not roll back a patch that no longer names it')
+})
+
 test('id contract: a write holds for its referenced create before observers see it', async t => {
   const related = createSchema({
     services: { notes: service<{ item: Note }>() },
