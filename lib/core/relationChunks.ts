@@ -28,9 +28,13 @@ export interface ChunkedRelationSnapshot {
 }
 
 /**
- * Chunks serving fewer than half the chunk size of referenced ids count as sparse.
- * Past MAX_SPARSE_CHUNKS of them, a sync merges their ids into fresh full chunks.
+ * Chunks serving fewer referenced ids than half the chunk size, or than
+ * MAX_SPARSE_CHUNK_IDS, count as sparse. Past MAX_SPARSE_CHUNKS of them, a sync
+ * merges their ids into fresh full chunks. The fixed cap keeps a large chunk size
+ * (a socket's 2500) from counting a merged chunk sparse, and refetching every
+ * loaded id, until it holds half of it.
  */
+const MAX_SPARSE_CHUNK_IDS = 50
 const MAX_SPARSE_CHUNKS = 4
 
 /**
@@ -56,6 +60,7 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
   #sourceValueOf: (row: unknown) => SourceValue | undefined
   #onSuccess: () => void
   #chunkSize: number
+  #sparseChunkIds: number
   #lastParts: unknown[][] = []
   #lastRows: unknown[] = []
 
@@ -75,6 +80,7 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
     this.#sourceValueOf = sourceValueOf
     this.#onSuccess = onSuccess
     this.#chunkSize = chunkSize
+    this.#sparseChunkIds = Math.min(chunkSize / 2, MAX_SPARSE_CHUNK_IDS)
   }
 
   sync(values: readonly SourceValue[]): void {
@@ -84,7 +90,7 @@ export class ChunkedRelationQuery<TMeta extends Record<string, unknown>> {
     const held = new Set(this.#chunks.flatMap(chunk => chunk.values))
     let fetched = values.filter(value => !held.has(value))
     const sparse = this.#chunks.filter(
-      chunk => chunk.values.filter(value => live.has(value)).length < this.#chunkSize / 2,
+      chunk => chunk.values.filter(value => live.has(value)).length < this.#sparseChunkIds,
     )
     if (
       sparse.length + (fetched.length > 0 ? 1 : 0) > MAX_SPARSE_CHUNKS &&

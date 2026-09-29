@@ -1497,6 +1497,60 @@ it('useQuery: relation ids arriving one at a time merge into a bounded set of ch
   unmount()
 })
 
+it('useQuery: large chunks stop regrouping trickling relation ids once they fill up', async t => {
+  const count = 200
+  const feathers = mockFeathers(
+    {
+      issues: { data: { 1: { id: 1, title: 'Issue 1', status: 'open', creatorId: 1 } } },
+      users: {
+        data: Object.fromEntries(
+          Array.from({ length: count }, (_, index) => [
+            index + 1,
+            { id: index + 1, name: `User ${index + 1}`, email: '' },
+          ]),
+        ),
+      },
+    },
+    { queryAwareFind: true },
+  )
+  const users = feathers.service('users')
+  const find = users.find.bind(users)
+  let requestedIds = 0
+  users.find = (params => {
+    const query = params?.query as { id: { $in: unknown[] }; $skip?: number }
+    if (!query.$skip) requestedIds += query.id.$in.length
+    return find(params)
+  }) as typeof find
+  // A socket-sized chunk: ids that trickle in must not be regrouped until it fills.
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers, { maxIdsPerQuery: 2500 }),
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+  })
+  const ref = figbird.query(figbird.q.issues.related('creator'))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  for (let id = 2; id <= count; id++) {
+    await feathers
+      .service('issues')
+      .create({ id, title: `Issue ${id}`, status: 'open', creatorId: id })
+    await flushTasks()
+  }
+
+  t.is(
+    (ref.getSnapshot().data as Array<Issue & { creator: { id: number } | null }>).filter(
+      issue => issue.creator?.id === issue.creatorId,
+    ).length,
+    count,
+  )
+  // As many as with 100-id chunks; a threshold scaled to the chunk size refetched
+  // every loaded id each few creates, 25 times the ids.
+  t.true(requestedIds < 10 * count, `${requestedIds} ids requested for ${count} creators`)
+  unsub()
+  figbird.dispose()
+})
+
 it('useQuery: a failed chunk merge is not retried on every sync', async t => {
   const ids = [1, 2, 3, 4, 5]
   const { figbird, feathers } = createTestApp(
