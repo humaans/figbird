@@ -32,6 +32,7 @@ function IssueDetail({ id }: { id: number }) {
 - **Live queries** — results update as records change, locally or via realtime events
 - **Suspense-native** — cold reads suspend, warm reads render synchronously
 - **Optimistic mutations, by default** — writes show immediately and roll back on failure everywhere at once
+- **Atomic transactions** — commit CRUD writes together through an adapter with server transaction support. See [Adapter-backed transactions](#adapter-backed-transactions)
 - **Query preparation** — routers and hover handlers warm the exact queries screens will read
 - **Full TypeScript** — one schema, inference across builders, relations, and mutations
 - **Framework-agnostic core** — works outside React for SSR, testing, or background sync
@@ -1560,8 +1561,28 @@ Figbird works with any REST / WebSocket / RPC API wrapped in a Figbird-compatibl
    its response lacks before treating them as removed
 7. Optionally implement `isIdField(serviceName, field)` to say which field holds a service's
    id. Writes then wait for pending creates they reference through a `one` relation
+8. Optionally implement `transaction(operations)` when the backend supports atomic CRUD
+   writes. See the contract below and [Adapter-backed transactions](#adapter-backed-transactions)
 
 For example, a `comments` resource maps to `GET /comments`, `GET /comments/:id`, `POST /comments`, `PUT/PATCH/DELETE /comments/:id`, with `find` returning `{ data, total, limit, skip }` or similar. See [`lib/adapters/feathers.ts`](https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts) for the reference implementation of the `Adapter` interface.
+
+The optional `Adapter.transaction` signature is:
+
+```ts
+transaction(operations: readonly AdapterTransactionOperation[]): Promise<readonly unknown[]>
+```
+
+Import `Adapter` and `AdapterTransactionOperation` from `figbird`. Each operation contains
+`serviceName`, a resolved transport path, `method`, one of `create`, `update`, `patch`, or
+`remove`, and `args`, the service method's arguments including any per-call params.
+Execute operations in array order inside one server transaction. Each operation must see
+earlier writes, so a create can precede another create referencing its id. Resolve only
+after commit, returning one mutation result per operation in the same order. Reject on
+failure after rolling back every server write. Figbird uses the results to update the
+cache and rejects responses with the wrong number of results.
+
+Leave this capability unset if the backend cannot guarantee atomic writes. Implementing
+it with separate requests or `Promise.all` cannot provide the required rollback semantics.
 
 ## Comparison
 
@@ -1781,6 +1802,33 @@ creates accept `params` and `optimisticItem`; updates and patches also accept th
 `figbird.m`.
 Like `q`, the proxy is callable for dynamic service names: `m(name)` is `m.<name>` with a
 string-typed door.
+
+## figbird.transaction
+
+```ts
+await figbird.transaction(tx => {
+  tx.m.issues.patch(issueId, { status: 'closed' })
+  tx.m.comments.confirmed.patch(commentId, { body: 'Resolved' })
+}) // Promise<void>
+```
+
+Collect typed CRUD writes across services and submit them through `Adapter.transaction`.
+The callback must be synchronous. `tx.m` supports `create`, `update`, `patch`, `remove`,
+and their `confirmed` variants, with the same payload and option types as `figbird.m`.
+These methods return `undefined`; await the outer promise for completion. Custom methods
+are not supported. In React, obtain the provider's instance with `useFigbird()`.
+
+Optimistic writes project, commit, and roll back as grouped cache updates. Confirmed
+writes update the cache at commit. The transaction waits for earlier writes to each
+affected record and holds those records until settlement. Creates require one payload
+per call with a stable id that the backend preserves, even for confirmed creates. Each
+service/id pair may appear only once.
+
+Figbird throws synchronously when the adapter has no transaction capability, the callback
+is async, or the collected writes violate the id requirements. The returned promise rejects
+on transport failure and resolves with no records after successful commit. See
+[Adapter-backed transactions](#adapter-backed-transactions) for create dependencies and
+[feathersTransactions](#featherstransactions) for the Feathers transport.
 
 ## defineMutationQueue and useMutationQueue
 
@@ -2020,7 +2068,7 @@ const figbird = new Figbird({
 | `prefetch(request, opts?)`                        | Idempotent speculative warming. Argumentless definitions can be passed directly. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
-| `transaction(fn)`                                 | Adapter-backed atomic CRUD collector. Optimistic projection, commit, and rollback are grouped across services. See [Adapter-backed transactions](#adapter-backed-transactions). |
+| `transaction(fn)`                                 | Adapter-backed atomic CRUD collector. Optimistic projection, commit, and rollback are grouped across services. See [figbird.transaction](#figbirdtransaction). |
 | `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
 | `mutating`                                        | Synchronous active-mutation tracker (`subscribe`/`getSnapshot`) — `useMutating` is its React binding.                                                       |
 | `explain(...)`                                    | Static classification report — see [figbird.explain](#figbirdexplain).                                                                                      |
@@ -2051,9 +2099,40 @@ const adapter = new FeathersAdapter(feathers, options)
   - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
   - `isInvalidationEvent` — identifies application-specific realtime notifications that carry an entity ID but no complete entity value; see [Invalidation-only events](#invalidation-only-events)
-  - `transactions` — optional atomic transaction transport; use `feathersTransactions()` for an application-provided `api/transactions` service, or set `serviceName` for an existing endpoint
+  - `transactions` — optional atomic transaction transport; see [feathersTransactions](#featherstransactions) for an application-provided `api/transactions` service, or set `serviceName` for an existing endpoint
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.
+
+## feathersTransactions
+
+```ts
+import { FeathersAdapter, feathersTransactions } from 'figbird'
+
+const adapter = new FeathersAdapter(feathersClient, {
+  transactions: feathersTransactions({
+    serviceName: 'api/transactions',
+    params: { headers: { 'X-Request-ID': requestId } },
+  }),
+})
+```
+
+Returns a `FeathersTransaction` transport for `FeathersAdapter`'s `transactions` option.
+Both helper options are optional. `serviceName` defaults to `api/transactions`; `params`
+passes Feathers params to that service's `create` call. Per-mutation params stay in each
+operation's arguments.
+
+The helper sends `{ serial: true, calls }`, with each call encoded as
+`[method, serviceName, ...args]`, and expects `{ data: [...] }` with one result per call in
+order. Successful entries use `{ status: 'fulfilled', value }`; rejected entries use
+`{ status: 'rejected', reason }`. The endpoint must execute the calls in order within one
+atomic transaction and roll back all writes if any call fails. The helper does not create
+this endpoint or provide server rollback itself.
+
+Any rejected entry causes a `FeathersTransactionError`, exported from `figbird`. Its
+`result.data` contains the ordered entries, including rejection reasons. Invalid response
+shapes or a mismatched result count cause an `Error`. Figbird rolls back the transaction's
+optimistic changes when the transport rejects. See [Adapter-backed transactions](#adapter-backed-transactions)
+for usage and create dependencies.
 
 ## createHooks
 
