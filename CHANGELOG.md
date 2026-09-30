@@ -55,10 +55,6 @@ Breaking changes from 0.23:
 - Replace `useService` and `useMethod` with `m.<service>` handles.
 - Internal deep imports are no longer exported. Use `figbird` or `figbird/testing`;
   `figbird/package.json` and `figbird/tsconfig.json` remain available.
-- Remove the internal `QUERY_DEFINITION_BRAND`, `QUERY_REQUEST_BRAND`, and
-  `useFigbirdMaybe` exports. Use `isQueryDefinition` / `isQueryRequest` to recognise query
-  inputs. `QueryBuilder` and `RelationalQueryRef` remain available as type-only exports;
-  create them through `figbird.q` and `figbird.query()`.
 
 Deprecated: `useFind` / `useGet` in favor of `useQuery` and builders, and
 `useMutation` in favor of `m`, `useAction`, and `useMutating`. These hooks remain
