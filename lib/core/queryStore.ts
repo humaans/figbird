@@ -19,7 +19,6 @@ import {
   applyEventsToService,
   applyVisibleEventToQuery,
   createServiceState,
-  findInsertIndex,
   isCompleteSetQuery,
   groupEventsByService,
   replayFetchedQueryFromEvents,
@@ -53,6 +52,7 @@ import { defaultRetryDelay, resolveRetryDelay } from './retryDelay.js'
 import { normalizeError } from './errors.js'
 import { isWithinStaleTime } from './staleTime.js'
 import { sameValue } from './valueEquality.js'
+import { findInsertIndex } from './windowDecision.js'
 import { compareValues, type ValueComparator } from './sort.js'
 
 /**
@@ -1226,7 +1226,7 @@ export class QueryStore<
     const desc = query.desc
     if (desc.method !== 'get') return null
     // Gets with non-local conditions stored as 'server-authoritative' at
-    // materialize time (see classifyStoredQuery) — never answered locally.
+    // materialize time — never answered locally.
     if (query.maintenance.classification !== 'get') return null
     const service = this.#state.get(desc.serviceName)
     if (!service) return null

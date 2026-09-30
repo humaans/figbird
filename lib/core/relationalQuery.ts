@@ -271,6 +271,8 @@ export class RelationalQueryRef<
   #name: string | undefined
   #rootOverride: RelationalRootOverride | null
   #relationPlans: RelationPlan[]
+  #pendingRelationSyncs = new Map<RelationPlan[], unknown[]>()
+  #syncingRelations = false
 
   constructor(
     host: RelationalQueryHost<TParams, TMeta, TQuery>,
@@ -950,24 +952,30 @@ export class RelationalQueryRef<
   }
 
   /**
-   * Reconciles relation subscriptions with the current parent data at this AST level.
-   * - Creates a relation subscription when needed
-   * - Grows it when new source values appear (e.g. a new root item introduced a new id):
-   *   only the new ids are fetched, in a new `$in` chunk; existing chunks stay live
-   * - Settles immediately when source values are empty so we don't hang on loading
-   *
-   * Recurses into nested relations when their parent query has resolved. Recursion happens
-   * both immediately (if the child query is already succeeded from a previous cycle) and
-   * lazily (child subscription callback calls back in).
-   *
-   * Three relation kinds are supported:
-   * - single-hop `'one'` / `'many'` — fan-in IN(...) on `destField` keyed by `sourceField`
-   * - `'embedded'` — `sourceField` is a list of dest ids on each parent; flat-mapped into
-   *   the same IN(...) shape, no junction
-   * - two-hop `'many'` (`relDef.via` set) — first fetch the junction service, then fetch
-   *   the destination keyed by ids collected from the junction
+   * Drain ready relation levels until no new work remains. Warm subscriptions can
+   * produce rows synchronously; they enqueue the next level instead of recursing.
+   * A level queued again while waiting uses its latest parent rows.
    */
   #syncRelations(parentData: unknown[], plans: RelationPlan[]): void {
+    if (plans.length === 0) return
+    this.#pendingRelationSyncs.set(plans, parentData)
+    if (this.#syncingRelations) return
+    this.#syncingRelations = true
+    try {
+      while (this.#pendingRelationSyncs.size > 0) {
+        const next = this.#pendingRelationSyncs.entries().next()
+        if (next.done) break
+        const [readyPlans, rows] = next.value
+        this.#pendingRelationSyncs.delete(readyPlans)
+        this.#syncRelationLevel(rows, readyPlans)
+      }
+    } finally {
+      this.#syncingRelations = false
+      this.#pendingRelationSyncs.clear()
+    }
+  }
+
+  #syncRelationLevel(parentData: unknown[], plans: RelationPlan[]): void {
     for (const plan of plans) {
       switch (plan.kind) {
         case 'missing':
@@ -1377,6 +1385,7 @@ export class RelationalQueryRef<
       this.#disposeRelationSub(sub)
     }
     this.#relationSubs.clear()
+    this.#pendingRelationSyncs.clear()
     this.#lastSnapshot = null
     this.#lastWrappedSnapshot = null
     this.#lastWrappedInner = null

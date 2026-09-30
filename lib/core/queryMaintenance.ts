@@ -1,6 +1,6 @@
 import {
-  classifyStoredQuery,
-  isProjectionQuery,
+  explainQueryNode,
+  type ClassificationReason,
   isServerMaintained,
   usesFetchOwnedRows,
   type StoredQueryClass,
@@ -27,6 +27,7 @@ export interface QueryMaintenance {
 
 /** Immutable execution rules kept out of subscriber-visible query state. */
 interface QueryPolicy {
+  classificationReasons: readonly ClassificationReason[]
   responseMode: FetchResponseMode
   /** Preferred row ownership; missing IDs still force a query to retain its own values. */
   rowSource: 'entities' | 'values'
@@ -82,12 +83,17 @@ export function compileQueryMaintenance({
   matcher: (query: Record<string, unknown> | undefined) => (item: unknown) => MatchResult
 }): QueryMaintenance {
   const query = queryOfParams(desc.params)
-  const classification = classifyStoredQuery(desc.method, query, {
-    server: config.server,
-    allPages: 'allPages' in config && config.allPages === true,
+  const explanation = explainQueryNode(query, {
+    server: desc.method === 'find' && config.server,
+    allPages: desc.method === 'get' || ('allPages' in config && config.allPages === true),
     localOperators,
+    snapshot: config.realtime === 'disabled',
   })
-  const isProjection = isProjectionQuery(query)
+  const classification =
+    desc.method === 'get' && explanation.class !== 'server-authoritative'
+      ? 'get'
+      : explanation.class
+  const isProjection = explanation.reasons.some(reason => reason.code === 'select-projection')
   const responseMode: FetchResponseMode =
     config.realtime === 'disabled'
       ? 'snapshot'
@@ -115,6 +121,7 @@ export function compileQueryMaintenance({
     isProjection,
   }
   policies.set(maintenance, {
+    classificationReasons: desc.method === 'find' ? explanation.reasons : [],
     responseMode,
     rowSource:
       responseMode !== 'entity' || config.fetchPolicy === 'network-only' ? 'values' : 'entities',

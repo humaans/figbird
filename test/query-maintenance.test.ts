@@ -77,7 +77,11 @@ test('compiled policies preserve the original rules in all 1,024 combinations', 
                 query,
               })
               t.deepEqual(
-                queryPolicy(maintenance),
+                Object.fromEntries(
+                  Object.entries(queryPolicy(maintenance)).filter(
+                    ([key]) => key !== 'classificationReasons',
+                  ),
+                ),
                 {
                   responseMode,
                   rowSource: ownsValues ? 'values' : 'entities',
