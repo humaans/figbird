@@ -804,6 +804,7 @@ export class RelationalQueryRef<
   }
 
   #setupRoot(): void {
+    this.#lifetime.graphStarted()
     this.#beginGraphRun()
     this.#subscribeToRelationalFilterInvalidations()
 
@@ -1330,10 +1331,7 @@ export class RelationalQueryRef<
    * eviction, a retry interns a fresh ref and cold-starts.
    */
   releaseColdStart(): void {
-    if (
-      this.#lifetime.reads.get('root')?.status === 'settled' &&
-      this.#lifetime.owners.size === 0
-    ) {
+    if (this.#lifetime.canEvictAbandonedRead()) {
       this.#scheduleCleanup()
     }
   }
@@ -1348,14 +1346,12 @@ export class RelationalQueryRef<
     return this.#lifetime.suspensePromise(() => {
       if (!this.#root) this.#setupRoot()
       this.#settleSuspense(this.getSnapshot())
-    }, this.#root === null)
+    })
   }
 
   /** @internal Release settled speculative work only when no owner adopted it. */
   canEvictAbandonedRead(): boolean {
-    return (
-      this.#lifetime.owners.size === 0 && this.#lifetime.reads.get('root')?.status === 'settled'
-    )
+    return this.#lifetime.canEvictAbandonedRead()
   }
 
   evictAbandonedRead(): boolean {

@@ -34,12 +34,12 @@ import {
 import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
 import {
   explainQueryNode,
-  isServerMaintained,
   type ClassificationReason,
   type ExplainReport,
   type QueryNodeClass,
 } from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
+import { queryPolicy } from './queryMaintenance.js'
 import { QueryRef } from './queryRef.js'
 import {
   DEFAULT_GC_TIME,
@@ -1024,7 +1024,7 @@ export class Figbird<
                 server: query.config.server,
                 allPages: 'allPages' in query.config && query.config.allPages === true,
                 localOperators: locallySupportedOperators(this.adapter, serviceName),
-                snapshot: query.config.realtime === 'disabled',
+                snapshot: queryPolicy(query.maintenance).responseMode === 'snapshot',
               })
             : null
         rows.push({
@@ -1044,13 +1044,7 @@ export class Figbird<
             : {}),
           classification: query.maintenance.classification,
           classificationReasons: explanation?.reasons ?? [],
-          realtimeStrategy:
-            query.config.realtime === 'disabled'
-              ? 'manual'
-              : query.config.realtime === 'refetch' ||
-                  isServerMaintained(query.maintenance.classification)
-                ? 'refetch'
-                : 'merge',
+          realtimeStrategy: queryPolicy(query.maintenance).realtimeStrategy,
           skipped: query.config.skip === true,
           status: query.state.status,
           isFetching: query.state.isFetching,

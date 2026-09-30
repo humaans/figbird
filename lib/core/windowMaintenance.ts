@@ -3,8 +3,8 @@ import { sameValue } from './valueEquality.js'
 import { commitQuery } from './queryResults.js'
 /**
  * Window maintenance and realtime event application — the pure algebra the query
- * store orchestrates. Everything here is a plain function over explicit inputs
- * (service state, queries, queued events); no store instance, no side channels.
+ * store orchestrates. Event application uses service state, queries, queued events,
+ * and their compiled policies without a store instance.
  *
  * The heart of the module is `mergeEventIntoWindow`, which decides whether a
  * realtime event's effect on a server-window query ($limit/$skip/$sort) is
@@ -12,6 +12,7 @@ import { commitQuery } from './queryResults.js'
  * "refetch" when it is not. The soundness argument lives on the function.
  */
 
+import { queryPolicy } from './queryMaintenance.js'
 import { isServerMaintained } from './queryClassification.js'
 import { ItemRemovedError } from './errors.js'
 import {
@@ -438,7 +439,7 @@ export function updateQueriesFromEvents<TMeta>({
   for (const event of appliedItems) {
     for (const [queryId, query] of service.queries) {
       if (queryId === excludeQueryId || excludeQueryIds?.has(queryId)) continue
-      if (!query.maintenance.mergeEvents) continue
+      if (!queryPolicy(query.maintenance).mergeEvents) continue
       const visible = service.itemQueryIndex.get(event.itemId)?.has(queryId) ?? false
       if (membershipScope === 'visible-only' && !visible) continue
       if (
@@ -511,7 +512,7 @@ export function reapplyQueryFromEntities<TMeta>({
   itemRemoved: (meta: TMeta) => TMeta
 }): QueryReapplyResult {
   const query = service.queries.get(queryId)
-  if (!query || !query.maintenance.mergeEvents) return 'ignored'
+  if (!query || !queryPolicy(query.maintenance).mergeEvents) return 'ignored'
   if (isServerMaintained(query.maintenance.classification)) return 'reconcile'
   if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
   if (!Array.isArray(query.state.data)) return 'ignored'
@@ -603,9 +604,9 @@ export function replayFetchedQueryFromEvents<TMeta>({
   }
   for (const event of events) {
     const query = service.queries.get(queryId)
-    if (!query || query.config.realtime === 'disabled') return
+    if (!query || queryPolicy(query.maintenance).responseMode === 'snapshot') return
 
-    const { mergeEvents, replayVisibleEvents } = query.maintenance
+    const { mergeEvents, replayVisibleEvents } = queryPolicy(query.maintenance)
     if (mergeEvents) {
       const result = applyMergeEventToQuery(context, queryId, event)
       if (result === 'applied' || !replayVisibleEvents) continue

@@ -1,5 +1,5 @@
 import { systemClock, type Clock, type ClockTimer } from './clock.js'
-import { compileQueryMaintenance } from './queryMaintenance.js'
+import { compileQueryMaintenance, queryPolicy } from './queryMaintenance.js'
 import { applyFetchCommit, buildFetchCommit, type StoreResponse } from './fetchCommit.js'
 import { queryPage, EMPTY_PAGE, type QueryPage } from '../adapters/queryPage.js'
 import { ReconcileScheduler, type ReconcilePreparation } from './reconcileScheduler.js'
@@ -1232,7 +1232,7 @@ export class QueryStore<
     if (!service) return null
     if (
       !service.materialized &&
-      (query.config.realtime !== 'merge' ||
+      (!queryPolicy(query.maintenance).mergeEvents ||
         !this.#mutationExecutor.hasOptimisticCreate(desc.serviceName, desc.resourceId))
     )
       return null
@@ -1310,7 +1310,8 @@ export class QueryStore<
     service: ServiceState<TMeta>,
     query: Query<unknown, TMeta>,
   ): 'unavailable' | 'unchanged' | 'changed' {
-    if (query.config.realtime !== 'merge' || query.state.status !== 'success') return 'unavailable'
+    if (!queryPolicy(query.maintenance).mergeEvents || query.state.status !== 'success')
+      return 'unavailable'
     const local = this.#selectMaterializedFind(query)
     if (!local) return 'unavailable'
     const previous = query.state.data
@@ -1386,7 +1387,7 @@ export class QueryStore<
       const getId = this.#getIdReader(query.desc.serviceName)
       const data = result.data
       const responseItems = Array.isArray(data) ? data : data == null ? [] : [data]
-      const responseMode = query.maintenance.responseMode
+      const responseMode = queryPolicy(query.maintenance).responseMode
       const rebasePlan = planFetchRebase({
         responseItems,
         journalEvents,
@@ -1423,25 +1424,22 @@ export class QueryStore<
         )
       }
 
-      const activeOverlayEvents = this.#mutationExecutor.overlayEvents(query.desc.serviceName)
-      for (const event of activeOverlayEvents) {
-        if (responseMode !== 'snapshot') {
-          this.#mutationExecutor.deferQueryIds(event.mutationLaneKey, [queryId])
-        }
-      }
       const plan = buildFetchCommit({
         service,
         query,
         result,
         source,
         rebasePlan,
-        overlayEvents: activeOverlayEvents,
+        pendingMutationEvents: this.#mutationExecutor.overlayEvents(query.desc.serviceName),
         getId,
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
         meta: ('meta' in result ? result.meta : undefined) || this.#adapter.emptyMeta(),
         fetchedAt: this.#clock.now(),
         ...(cause === undefined ? {} : { cause }),
       })
+      for (const laneKey of plan.deferredMutationLaneKeys) {
+        this.#mutationExecutor.deferQueryIds(laneKey, [queryId])
+      }
       hadEffectiveJournalEvents = rebasePlan.events.length > 0
       shouldRefetch = this.#executions.get(queryId)?.followup !== undefined
       if (plan.completeSet) {
@@ -1507,7 +1505,10 @@ export class QueryStore<
     if (shouldRefetch && shouldRunFollowup) {
       serverMaintainedQueriesToRefetch.delete(queryId)
       this.#queue(queryId, this.#takeFollowupFetchContext(queryId))
-    } else if (hadEffectiveJournalEvents && query?.config.realtime !== 'disabled') {
+    } else if (
+      hadEffectiveJournalEvents &&
+      (!query || queryPolicy(query.maintenance).responseMode !== 'snapshot')
+    ) {
       // Even exact replay cannot prove every server-maintained membership/order
       // edge. One gated trailing reconciliation guarantees convergence.
       serverMaintainedQueriesToRefetch.add(queryId)
@@ -1836,7 +1837,7 @@ export class QueryStore<
       for (const [queryId, query] of service.queries) {
         if (
           queryId !== excludeQueryId &&
-          query.config.realtime === 'merge' &&
+          queryPolicy(query.maintenance).mergeEvents &&
           query.state.status === 'success' &&
           this.#materializedFindSource(query)
         ) {
@@ -2117,7 +2118,8 @@ export class QueryStore<
     if (service) {
       for (const invalidation of invalidations) {
         for (const query of service.queries.values()) {
-          if (query.config.skip || query.config.realtime === 'disabled') continue
+          if (query.config.skip || queryPolicy(query.maintenance).responseMode === 'snapshot')
+            continue
           if (
             query.desc.method === 'get' &&
             entityKey(query.desc.resourceId) !== invalidation.itemId
@@ -2176,7 +2178,8 @@ export class QueryStore<
     if (!service) return []
     return [...service.queries.values()]
       .filter(
-        query => query.config.realtime === 'refetch' && this.#listenerCount(query.queryId) > 0,
+        query =>
+          queryPolicy(query.maintenance).refetchEvents && this.#listenerCount(query.queryId) > 0,
       )
       .map(query => query.queryId)
   }
@@ -2316,7 +2319,8 @@ export class QueryStore<
   #reconcilesAfterMissedEvents(query: Query<unknown, TMeta, unknown>): boolean {
     return (
       !query.config.skip &&
-      (query.config.realtime !== 'disabled' || this.#reconnectQueryIds.has(query.queryId))
+      (queryPolicy(query.maintenance).responseMode !== 'snapshot' ||
+        this.#reconnectQueryIds.has(query.queryId))
     )
   }
 

@@ -1,3 +1,4 @@
+import { queryPolicy } from './queryMaintenance.js'
 import { entityKey, type EntityKey, type Query, type ServiceState } from './queryTypes.js'
 
 /** Query membership is indexed by ID; fetch-owned results retain their returned values. */
@@ -36,7 +37,7 @@ export function commitQuery<TMeta>(
   }
   const ownsValues =
     next.state.status !== 'success' ||
-    next.maintenance.rowSource === 'values' ||
+    queryPolicy(next.maintenance).rowSource === 'values' ||
     ids.length !== items.length
   const rows: QueryRows = { kind: ownsValues ? 'values' : 'entities', ids, data: items }
 

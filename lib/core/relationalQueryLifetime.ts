@@ -78,12 +78,17 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     this.#prefetch = { at: now, release, timer }
   }
 
-  suspensePromise(start: () => void, startsGraph: boolean): Promise<void> {
+  graphStarted(): void {
+    this.#coldStartAwaitingSubscriber = this.owners.size === 0
+  }
+
+  canEvictAbandonedRead(): boolean {
+    return this.owners.size === 0 && this.reads.get('root')?.status === 'settled'
+  }
+
+  suspensePromise(start: () => void): Promise<void> {
     if (this.reads.get('root')?.status === 'settled') return Promise.resolve()
-    return this.read('root', null, () => {
-      if (startsGraph) this.#coldStartAwaitingSubscriber = this.owners.size === 0
-      start()
-    })
+    return this.read('root', null, start)
   }
 
   settleSuspense(error: Error | null): boolean {

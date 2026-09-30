@@ -23,6 +23,10 @@ export interface QueryMaintenance {
   limit: number | undefined
   skip: number
   isProjection: boolean
+}
+
+/** Immutable execution rules kept out of subscriber-visible query state. */
+interface QueryPolicy {
   responseMode: FetchResponseMode
   /** Preferred row ownership; missing IDs still force a query to retain its own values. */
   rowSource: 'entities' | 'values'
@@ -32,6 +36,16 @@ export interface QueryMaintenance {
   replayVisibleEvents: boolean
   /** Whether a newer entity can be rejected by the fetched query's local predicate. */
   rebaseMembership: boolean
+  refetchEvents: boolean
+  realtimeStrategy: 'manual' | 'refetch' | 'merge'
+}
+
+const policies = new WeakMap<QueryMaintenance, Readonly<QueryPolicy>>()
+
+export function queryPolicy(maintenance: QueryMaintenance): Readonly<QueryPolicy> {
+  const policy = policies.get(maintenance)
+  if (!policy) throw new Error('figbird: query maintenance has not been compiled')
+  return policy
 }
 
 /** Split window operators off a query so the rest can feed the local matcher. */
@@ -87,7 +101,7 @@ export function compileQueryMaintenance({
   // Local reads also serve queries with realtime disabled. Find matchers receive
   // only predicates here, while realtime matchers retain the original query input.
   let localMatcher: ((item: unknown) => MatchResult) | undefined
-  return {
+  const maintenance: QueryMaintenance = {
     classification,
     matches:
       config.realtime === 'merge' && classification !== 'server-authoritative'
@@ -99,6 +113,8 @@ export function compileQueryMaintenance({
     limit,
     skip,
     isProjection,
+  }
+  policies.set(maintenance, {
     responseMode,
     rowSource:
       responseMode !== 'entity' || config.fetchPolicy === 'network-only' ? 'values' : 'entities',
@@ -110,5 +126,13 @@ export function compileQueryMaintenance({
       config.fetchPolicy === 'network-only' ||
       isServerMaintained(classification),
     rebaseMembership: config.realtime === 'merge' && !isServerMaintained(classification),
-  }
+    refetchEvents: config.realtime === 'refetch',
+    realtimeStrategy:
+      config.realtime === 'disabled'
+        ? 'manual'
+        : config.realtime === 'refetch' || isServerMaintained(classification)
+          ? 'refetch'
+          : 'merge',
+  })
+  return maintenance
 }

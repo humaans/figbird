@@ -13,6 +13,10 @@ export class TestClock implements Clock {
   #nextId = 0
   #timers = new Map<number, { at: number; callback: () => void }>()
 
+  get pendingTimers(): number {
+    return this.#timers.size
+  }
+
   now(): number {
     return this.#now
   }

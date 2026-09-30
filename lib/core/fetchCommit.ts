@@ -1,5 +1,6 @@
 import type { PageResponse, QueryResponse } from '../adapters/adapter.js'
 import { rebaseResponseData, type FetchRebasePlan } from './fetchRebase.js'
+import { queryPolicy } from './queryMaintenance.js'
 import { commitQuery } from './queryResults.js'
 import {
   entityKey,
@@ -34,6 +35,7 @@ export interface FetchCommitPlan<TMeta> {
   entityEvents: QueuedEvent[]
   completeSet: CompleteSetCommit | null
   replayEvents: readonly ProcessedCacheEvent[]
+  deferredMutationLaneKeys: readonly string[]
 }
 
 /** Plan against the confirmed lane bases and current overlays without mutating the cache. */
@@ -43,7 +45,7 @@ export function buildFetchCommit<TMeta>({
   result,
   source,
   rebasePlan,
-  overlayEvents,
+  pendingMutationEvents,
   getId,
   isItemStale,
   meta,
@@ -55,17 +57,20 @@ export function buildFetchCommit<TMeta>({
   result: StoreResponse<TMeta>
   source: 'cache' | 'server'
   rebasePlan: FetchRebasePlan
-  overlayEvents: readonly ProcessedProjectionEvent[]
+  pendingMutationEvents: readonly ProcessedProjectionEvent[]
   meta: TMeta
   fetchedAt: number
   cause?: TraceCause
 }): FetchCommitPlan<TMeta> {
-  const mode = query.maintenance.responseMode
-  const overlays = mode === 'snapshot' ? [] : overlayEvents
+  const policy = queryPolicy(query.maintenance)
+  const mode = policy.responseMode
+  const queryMutationEvents = mode === 'snapshot' ? [] : pendingMutationEvents
   const latestEventById = new Map(rebasePlan.latestEventById)
-  for (const event of overlays) latestEventById.set(event.itemId, event)
+  for (const event of queryMutationEvents) latestEventById.set(event.itemId, event)
   const ignoredItemIds = new Set(rebasePlan.itemIds)
-  for (const event of overlayEvents) ignoredItemIds.add(event.itemId)
+  // Every pending mutation protects its canonical entity from a fetch overwrite,
+  // including snapshots, whose returned rows deliberately ignore those mutations.
+  for (const event of pendingMutationEvents) ignoredItemIds.add(event.itemId)
 
   const rebased = rebaseResponseData({
     data: result.data,
@@ -77,7 +82,7 @@ export function buildFetchCommit<TMeta>({
     canKeepCurrentItem: item =>
       !(
         query.desc.method === 'find' &&
-        query.maintenance.rebaseMembership &&
+        policy.rebaseMembership &&
         query.maintenance.matches(item) === false
       ),
   })
@@ -114,7 +119,7 @@ export function buildFetchCommit<TMeta>({
     completeSet = { previousEntities, nextItemIds, ignoredItemIds }
   }
 
-  const events = [...rebasePlan.events, ...overlays]
+  const events = [...rebasePlan.events, ...queryMutationEvents]
   const replayEvents =
     mode === 'entity'
       ? events
@@ -138,6 +143,7 @@ export function buildFetchCommit<TMeta>({
     entityEvents,
     completeSet,
     replayEvents,
+    deferredMutationLaneKeys: queryMutationEvents.map(event => event.mutationLaneKey),
   }
 }
 
