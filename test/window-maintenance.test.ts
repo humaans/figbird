@@ -8,7 +8,7 @@ import { mockFeathers } from './helpers'
 /**
  * Window maintenance: server-window finds merge realtime events locally when the
  * event's effect on the window is provable, and fall back to a refetch for the
- * rest. See mergeEventIntoWindow in lib/core/windowMaintenance.ts for the
+ * rest. See maintainWindow in lib/core/windowDecision.ts for the
  * soundness argument these tests exercise branch by branch.
  */
 

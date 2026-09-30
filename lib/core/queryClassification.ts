@@ -65,17 +65,6 @@ export interface ClassifyOptions {
   localOperators?: ReadonlySet<string> | undefined
 }
 
-/**
- * Classify a query node by how it can be maintained. `server: true` (the `.server()`
- * escape hatch) forces server-authoritative; `allPages: true` neutralises window
- * filters because the full result set is fetched, making membership locally provable;
- * `localOperators` extends the locally-evaluable operator set with adapter-registered
- * custom operators.
- */
-export function classifyQueryNode(query: unknown, options: ClassifyOptions = {}): QueryNodeClass {
-  return explainQueryNode(query, options).class
-}
-
 /** Explain-only affordances layered on top of classification. */
 export interface ExplainNodeOptions extends ClassifyOptions {
   /** Override the default `.server()` reason when another plan owns server authority. */
@@ -90,8 +79,7 @@ export interface ExplainNodeOptions extends ClassifyOptions {
 }
 
 /**
- * Like `classifyQueryNode`, but says *why*: returns the classification together with
- * the structured reasons that produced it. Powers `figbird.explain()`.
+ * Classify a query and retain the reasons for execution and diagnostics.
  */
 export function explainQueryNode(
   query: unknown,
@@ -175,15 +163,6 @@ function walkQueryKeysAtDepth(
   }
 }
 
-/** True when the query projects rows (`$select` anywhere) — its results are partial rows, not full entities. */
-export function isProjectionQuery(query: unknown): boolean {
-  let found = false
-  walkQueryKeys(query, key => {
-    if (PROJECTION_QUERY_FILTERS.has(key)) found = true
-  })
-  return found
-}
-
 /**
  * Why a root is server-authoritative by plan rather than by its operators: an
  * explicit `.server()`, and relational filters the client can't evaluate (see
@@ -233,41 +212,11 @@ export function rootAllPages(kind: string): boolean {
 }
 
 /**
- * True when every predicate in the query is evaluable by the local matcher.
- * Window filters are ignored — windowing doesn't affect whether a predicate can
- * be evaluated, only whether membership is provable.
- */
-export function isLocallyEvaluable(query: unknown, localOperators?: ReadonlySet<string>): boolean {
-  return classifyQueryNode(query, { allPages: true, localOperators }) === 'local-exact'
-}
-
-/**
  * A stored query's classification: `desc`/`config` are frozen at materialize time,
  * so this is computed once and carried on the `Query` record. `'get'` marks get
  * queries, which have no find classification.
  */
 export type StoredQueryClass = QueryNodeClass | 'get'
-
-/**
- * Classify a query at materialize time. Gets classify as 'get' — except when they
- * carry conditions the client can't evaluate (`.get(id).where({ $regex })`): those
- * are server-authoritative like any other non-local query, so realtime reconciles
- * them by refetch and the merge path never tries (and fails) to build a local
- * matcher for them. Gets deliberately ignore the `server` flag — a get is answered
- * by id either way. Finds classify per `classifyQueryNode`.
- */
-export function classifyStoredQuery(
-  method: 'get' | 'find',
-  query: Record<string, unknown> | undefined,
-  { server, allPages, localOperators }: ClassifyOptions = {},
-): StoredQueryClass {
-  if (method === 'get') {
-    return query && Object.keys(query).length > 0 && !isLocallyEvaluable(query, localOperators)
-      ? 'server-authoritative'
-      : 'get'
-  }
-  return classifyQueryNode(query, { server, allPages, localOperators })
-}
 
 /**
  * A query the client must not merge realtime events into blindly. Server-window

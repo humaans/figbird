@@ -1,16 +1,8 @@
 import { servedLimit } from '../adapters/queryPage.js'
+import { maintainWindow } from './windowDecision.js'
 import { sameValue } from './valueEquality.js'
 import { commitQuery } from './queryResults.js'
-/**
- * Window maintenance and realtime event application — the pure algebra the query
- * store orchestrates. Event application uses service state, queries, queued events,
- * and their compiled policies without a store instance.
- *
- * The heart of the module is `mergeEventIntoWindow`, which decides whether a
- * realtime event's effect on a server-window query ($limit/$skip/$sort) is
- * *provable* from local state — merging locally when it is, and reporting
- * "refetch" when it is not. The soundness argument lives on the function.
- */
+/** Apply entity changes and window decisions to queries before publishing effects. */
 
 import { queryPolicy } from './queryMaintenance.js'
 import { isServerMaintained } from './queryClassification.js'
@@ -20,7 +12,6 @@ import {
   type EntityKey,
   type ItemId,
   queryOfParams,
-  type EventType,
   type ProcessedCacheEvent,
   type Query,
   type QueryState,
@@ -62,25 +53,6 @@ export function isCompleteSetQuery<TMeta>(query: Query<unknown, TMeta, unknown>)
     query.config.allPages === true &&
     (!q || Object.keys(q).every(key => key === '$sort'))
   )
-}
-
-/** First index whose row sorts strictly after the item — ties insert after their equals. */
-export function findInsertIndex(
-  rows: unknown[],
-  item: unknown,
-  cmp: (a: unknown, b: unknown) => number,
-): number {
-  let lo = 0
-  let hi = rows.length
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1
-    if (cmp(item, rows[mid]) < 0) {
-      hi = mid
-    } else {
-      lo = mid + 1
-    }
-  }
-  return lo
 }
 
 export function groupEventsByService<TEvent extends { serviceName: string }>(
@@ -331,20 +303,37 @@ function applyMergeEventToQuery<TMeta>(
     if (query.maintenance.classification !== 'server-window' || query.desc.method !== 'find') {
       return 'reconcile'
     }
-    const result = mergeEventIntoWindow({
-      query,
-      type,
-      item,
-      previousItem,
-      itemId,
-      hasItem: service.itemQueryIndex.get(itemId)?.has(queryId) ?? false,
-      getId,
-    })
-    if (result.action === 'refetch') {
+    if (query.state.status !== 'success' || !Array.isArray(query.state.data)) return 'ignored'
+    const result = maintainWindow(
+      {
+        rows: query.rows.data,
+        skip: query.maintenance.skip,
+        limit:
+          query.maintenance.limit === undefined
+            ? undefined
+            : servedLimit(query.state.meta, query.maintenance.limit),
+      },
+      {
+        type,
+        item,
+        previousItem,
+        itemId,
+        hasItem: service.itemQueryIndex.get(itemId)?.has(queryId) ?? false,
+      },
+      {
+        matches: query.maintenance.matches,
+        compare: query.maintenance.compare,
+        keyOf: row => {
+          const id = getId(row)
+          return id === undefined ? undefined : entityKey(id)
+        },
+      },
+    )
+    if (result.type === 'refetch') {
       if (result.replaceVisible) applyVisibleEventEffect(context, queryId, event, 'replace')
       return 'reconcile'
     }
-    if (result.action === 'noop' || query.state.status !== 'success') return 'ignored'
+    if (result.type === 'noop') return 'ignored'
 
     commitQuery(service, {
       ...query,
@@ -617,202 +606,5 @@ export function replayFetchedQueryFromEvents<TMeta>({
       event,
       event.type === 'removed' ? 'remove' : 'replace',
     )
-  }
-}
-
-type WindowMergeResult =
-  | { action: 'noop' }
-  /** `replaceVisible`: a visible row still shows its new values until the refetch lands. */
-  | { action: 'refetch'; replaceVisible?: boolean }
-  | {
-      action: 'merge'
-      data: unknown[]
-      metaOp: 'added' | 'removed' | null
-    }
-
-/**
- * Try to merge one realtime event into a server-window find without a refetch.
- *
- * The soundness argument: the visible rows are a contiguous run of the server
- * result (positions `$skip .. $skip + rows.length`), and the window's predicate is
- * locally evaluable (anything non-local classifies server-authoritative). So an
- * event's effect on the window is provable whenever the item's position relative
- * to the run's boundaries is known:
- *
- * - a patch to a visible row that keeps its membership and sort position updates
- *   in place — no order knowledge needed when the sort keys didn't change;
- * - an underfilled window (`rows.length < $limit`) is the final page, so past-the-
- *   end inserts and removals of visible rows resolve like local-exact;
- * - an item sorting strictly inside the run belongs there — insert it and evict
- *   the overflow row (which slides back in on the next fetch of a later window);
- * - membership changes provably beyond the window only adjust the meta total.
- *
- * Everything unprovable returns `refetch` — the previous behavior for every event.
- * Order is judged by `$sort` when present, else the configured `defaultSort` (the
- * backend's implicit order). With neither, visible patches keep their position and
- * appends to an underfilled first page go to the end — membership stays exact,
- * order is approximate until the next fetch, which is the accepted trade.
- * Boundary ties refetch: the server's tiebreak decides membership there.
- */
-function mergeEventIntoWindow<TMeta>({
-  query,
-  type,
-  item,
-  previousItem,
-  itemId,
-  hasItem,
-  getId,
-}: {
-  query: Query<unknown, TMeta, unknown>
-  type: EventType
-  item: unknown
-  previousItem: unknown | null
-  itemId: EntityKey
-  hasItem: boolean
-  getId: (item: unknown) => ItemId | undefined
-}): WindowMergeResult {
-  const state = query.state
-  if (state.status !== 'success' || !Array.isArray(state.data)) return { action: 'noop' }
-
-  const { skip, compare: cmp } = query.maintenance
-  // A page the server capped below the requested $limit is full at the cap.
-  const limit =
-    query.maintenance.limit === undefined
-      ? undefined
-      : servedLimit(state.meta, query.maintenance.limit)
-  const rows = query.rows.data
-  const full = limit !== undefined && rows.length >= limit
-  const matches = type !== 'removed' && query.maintenance.matches(item)
-  const last = rows.length > 0 ? rows[rows.length - 1] : undefined
-  // Is an invisible member provably past the window? At skip 0 everything before
-  // the window is visible, so invisible ⇒ beyond; at an offset we need the
-  // comparator to prove it sorts after the last visible row.
-  const beyondWindow = (x: unknown) =>
-    skip === 0 ? true : cmp !== undefined && last !== undefined && cmp(x, last) > 0
-  // Prior result-set membership: judged by the cached previous entity when there is
-  // one; a removed event carries the full removed record, which serves the same
-  // purpose when the row was never cached (it lived beyond the window).
-  const wasMember =
-    previousItem != null
-      ? query.maintenance.matches(previousItem)
-      : type === 'removed' && query.maintenance.matches(item)
-  // Membership local state can't decide is unprovable by definition.
-  if (matches === 'unknown' || wasMember === 'unknown') {
-    return { action: 'refetch', replaceVisible: hasItem && matches !== false }
-  }
-
-  if (!hasItem) {
-    if (!matches) {
-      // Invisible before and after — only the result-set total can be affected.
-      if (!wasMember) return { action: 'noop' }
-      if (beyondWindow(previousItem ?? item)) {
-        return {
-          action: 'merge',
-          data: rows,
-          metaOp: 'removed',
-        }
-      }
-      // Left the result set from before the window — the page shifts.
-      return { action: 'refetch' }
-    }
-
-    // The item belongs to the result set now. A created item is certainly new; a
-    // cached non-matching previous certainly entered; an uncached patch at an
-    // offset window may have come from anywhere, including an earlier page.
-    const metaOp =
-      type === 'created' || (previousItem != null && !wasMember) ? ('added' as const) : null
-    if (skip > 0 && previousItem == null && type !== 'created') {
-      return { action: 'refetch' }
-    }
-    if (wasMember && !beyondWindow(previousItem)) {
-      // It was in the result set before the window start — its move shifts the page.
-      return { action: 'refetch' }
-    }
-    if (full && rows.length === 0) {
-      // `$limit: 0` — a count-only window.
-      if (metaOp === null) return { action: 'noop' }
-      return { action: 'merge', data: rows, metaOp }
-    }
-    if (!cmp) {
-      if (skip > 0 || full) return { action: 'refetch' }
-      // No order knowledge: membership is certain (underfilled first page = the
-      // complete result set), position is approximate — append.
-      return {
-        action: 'merge',
-        data: [...rows, item],
-        metaOp,
-      }
-    }
-    if (rows.length === 0) {
-      if (skip > 0) return { action: 'refetch' }
-      return { action: 'merge', data: [item], metaOp }
-    }
-    const i = findInsertIndex(rows, item, cmp)
-    if (i === 0 && skip > 0) return { action: 'refetch' } // sorts before the page
-    if (i === rows.length) {
-      if (!full) {
-        // Underfilled window = the final page: past-the-end still belongs here.
-        return {
-          action: 'merge',
-          data: [...rows, item],
-          metaOp,
-        }
-      }
-      if (cmp(item, rows[rows.length - 1]!) === 0) {
-        return { action: 'refetch' } // tied with the boundary row
-      }
-      // Strictly past a full window: the total changes, the visible rows don't.
-      if (metaOp === null) return { action: 'noop' }
-      return { action: 'merge', data: rows, metaOp }
-    }
-    const data = [...rows.slice(0, i), item, ...rows.slice(i)]
-    if (limit !== undefined && data.length > limit) {
-      data.pop()
-    }
-    return {
-      action: 'merge',
-      data,
-      metaOp,
-    }
-  }
-
-  if (!matches) {
-    // A visible row leaves. On a full window the replacement row is unknown.
-    if (full) return { action: 'refetch' }
-    return {
-      action: 'merge',
-      data: rows.filter(row => !itemHasKey(row, itemId, getId)),
-      metaOp: 'removed',
-    }
-  }
-
-  // Visible and still matching: update in place unless its sort position moved.
-  const index = rows.findIndex(row => itemHasKey(row, itemId, getId))
-  if (index === -1) return { action: 'refetch' } // index/data disagree — reconcile
-  if (!cmp || cmp(rows[index]!, item) === 0) {
-    // Sort keys unchanged (or order unknown — keep the position rather than guess).
-    return {
-      action: 'merge',
-      data: rows.map(row => (itemHasKey(row, itemId, getId) ? item : row)),
-      metaOp: null,
-    }
-  }
-  // The row moved: re-place it within the contiguous run.
-  const without = rows.filter(row => !itemHasKey(row, itemId, getId))
-  if (without.length === 0) {
-    return full || skip > 0
-      ? { action: 'refetch' }
-      : { action: 'merge', data: [item], metaOp: null }
-  }
-  const i = findInsertIndex(without, item, cmp)
-  if (i === 0 && skip > 0) return { action: 'refetch' } // may move before the page
-  if (i === without.length && full) {
-    // May move past the window while an unseen row takes its place.
-    return { action: 'refetch' }
-  }
-  return {
-    action: 'merge',
-    data: [...without.slice(0, i), item, ...without.slice(i)],
-    metaOp: null,
   }
 }

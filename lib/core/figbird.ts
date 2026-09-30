@@ -33,7 +33,6 @@ import {
 } from './queryBuilder.js'
 import { resolveQueryInput, type PreparedQuery, type QueryInput } from './queryDefinition.js'
 import {
-  explainQueryNode,
   type ClassificationReason,
   type ExplainReport,
   type QueryNodeClass,
@@ -1018,15 +1017,6 @@ export class Figbird<
         const stats = this.queryStore.getQueryStats(query.queryId)
         const generation = this.queryStore.getQueryGeneration(query.queryId)
         if (generation === undefined) continue
-        const explanation =
-          query.desc.method === 'find'
-            ? explainQueryNode(q, {
-                server: query.config.server,
-                allPages: 'allPages' in query.config && query.config.allPages === true,
-                localOperators: locallySupportedOperators(this.adapter, serviceName),
-                snapshot: queryPolicy(query.maintenance).responseMode === 'snapshot',
-              })
-            : null
         rows.push({
           queryId: query.queryId,
           generation,
@@ -1043,7 +1033,7 @@ export class Figbird<
               }
             : {}),
           classification: query.maintenance.classification,
-          classificationReasons: explanation?.reasons ?? [],
+          classificationReasons: queryPolicy(query.maintenance).classificationReasons,
           realtimeStrategy: queryPolicy(query.maintenance).realtimeStrategy,
           skipped: query.config.skip === true,
           status: query.state.status,
@@ -1117,7 +1107,7 @@ export interface InspectedQuery {
   /** Native adapter page details. Offset pages remain visible in `query` as `$skip`/`$limit`. */
   page?: { request: PageRequest; info?: PageInfo }
   classification: QueryNodeClass | 'get'
-  classificationReasons?: ClassificationReason[]
+  classificationReasons?: readonly Readonly<ClassificationReason>[]
   realtimeStrategy?: 'merge' | 'refetch' | 'manual'
   /** True when this entry was materialized with `skip: true`. */
   skipped?: boolean
