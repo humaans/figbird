@@ -55,8 +55,11 @@ try {
         const load = ${mode === 'module' ? 'specifier => import(specifier)' : 'specifier => Promise.resolve().then(() => require(specifier))'};
         (async () => {
           const library = await load('figbird');
-          for (const name of ['Figbird', 'createSchema', 'createHooks', 'useQuery', 'useGet', 'useFind', 'useMutation']) {
+          for (const name of ['Figbird', 'createSchema', 'createHooks', 'useQuery', 'useGet', 'useFind', 'useMutation', 'matcher']) {
             assert.equal(typeof library[name], 'function', name);
+          }
+          for (const name of ['QUERY_DEFINITION_BRAND', 'QUERY_REQUEST_BRAND', 'useFigbirdMaybe', 'QueryBuilder', 'RelationalQueryRef']) {
+            assert.equal(Object.hasOwn(library, name), false, name);
           }
           assert.equal(typeof (await load('figbird/testing')).mockFeathers, 'function');
           for (const path of ['core/queryStore', 'react/useQuery', 'adapters/feathers', 'devtools/Devtools', 'dist/esm/index.js']) {
@@ -69,13 +72,16 @@ try {
 
   const source = `
     import { Figbird, FeathersAdapter, createSchema, createHooks, service } from 'figbird'
+    import type { QueryBuilder, RelationalQueryRef } from 'figbird'
     import { mockFeathers } from 'figbird/testing'
     const schema = createSchema({ services: { notes: service<{ item: { id: number; title: string } }>() } })
     const client = mockFeathers({ notes: { data: { 1: { id: 1, title: 'one' } } } })
     const figbird = new Figbird({ schema, adapter: new FeathersAdapter(client) })
     const { useGet, useFind, useMutation } = createHooks(schema)
-    const query = figbird.query(figbird.q.notes.get(1))
-    const title: string | undefined = query.getSnapshot().data?.title
+    const builder: QueryBuilder<typeof schema, 'notes', { id: number; title: string }> = figbird.q.notes
+    const query = figbird.query(builder.get(1))
+    const snapshot: ReturnType<RelationalQueryRef<{ id: number; title: string } | null>['getSnapshot']> = query.getSnapshot()
+    const title: string | undefined = snapshot.data?.title
     void [title, useGet, useFind, useMutation]
     figbird.dispose()
   `
@@ -94,7 +100,9 @@ try {
     'consumer.mts',
     'consumer.cts',
   ])
-  console.log('Packed ESM, CommonJS, declarations, legacy hooks, and private exports verified.')
+  console.log(
+    'Packed ESM, CommonJS, declarations, type-only exports, legacy hooks, and private exports verified.',
+  )
 } finally {
   await rm(consumer, { recursive: true, force: true })
 }

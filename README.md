@@ -102,6 +102,10 @@ JavaScript entry points in both ESM and CommonJS. Internal `core/`, `react/`, `a
 and `devtools/` paths are private. Package metadata and the TypeScript configuration
 remain available as `figbird/package.json` and `figbird/tsconfig.json`.
 
+`QueryBuilder` and `RelationalQueryRef` are type-only exports. Create builders through
+`figbird.q` or the `q` returned by `createHooks(schema)`, and query references through
+`figbird.query(builder)`.
+
 Run `npm run package:check` to build and verify the packed package's exports and types.
 
 ## Releasing

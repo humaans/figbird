@@ -2096,8 +2096,7 @@ to the client, so the client refetches during hydration.
 ```
 
 The standalone `useFigbird()` export reads only the context instance and throws without a
-provider; `useFigbirdMaybe()` returns `undefined` instead. The typed `useFigbird` returned by a
-`createHooks` kit reads the same provider.
+provider. The typed `useFigbird` returned by a `createHooks` kit reads the same provider.
 
 # API: Observability
 

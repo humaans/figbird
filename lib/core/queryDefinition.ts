@@ -5,9 +5,8 @@
  */
 
 /**
- * Brand symbol used to identify `QueryDefinition` values at runtime.
- * Exported so other packages (router resolvers, devtools) can recognise definitions
- * without depending on the constructor surface.
+ * Internal brand used to identify `QueryDefinition` values at runtime.
+ * Consumers recognise definitions with `isQueryDefinition`.
  */
 export const QUERY_DEFINITION_BRAND: unique symbol = Symbol.for('figbird.queryDefinition')
 export const QUERY_REQUEST_BRAND: unique symbol = Symbol.for('figbird.queryRequest')
