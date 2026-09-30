@@ -11,6 +11,7 @@ import {
   type ServiceItem,
   type ServiceNames,
   type ServicePaths,
+  type ServiceQuery,
 } from '../../lib'
 
 // Test multi-service schema type inference with distinct types
@@ -35,6 +36,15 @@ interface PersonService {
 
 interface TaskService {
   item: Task
+  query: TaskQuery
+}
+
+interface TaskQuery {
+  completed?: boolean
+  priority?: number
+  assigneeId?: string
+  $search?: string
+  $asOf?: Date
 }
 
 interface ApiSchemaTypes {
@@ -109,6 +119,31 @@ export type TaskServiceByName = AppSchema['services']['tasks']
 export type PersonServiceItemByName = ServiceItem<AppSchema, 'people'>
 export type PersonServiceItem = ServiceDefinitionByPath<AppSchema, 'api/people'>['item']
 export type TaskServiceItem = ServiceDefinitionByPath<AppSchema, 'api/tasks'>['item']
+export type PersonItemIsPreserved = Assert<Equal<PersonServiceItem, Person>>
+export type TaskQueryIsPreserved = Assert<Equal<ServiceQuery<AppSchema, 'tasks'>, TaskQuery>>
+
+const asOf = new Date(0)
+
+export function TaskQueryInferenceFixture() {
+  useFind('api/tasks', {
+    query: { completed: false, priority: 1, assigneeId: '123', $search: 'test', $asOf: asOf },
+    matcher: query => item => {
+      const typedQuery: TaskQuery | undefined = query
+      const typedItem: Task = item
+      // @ts-expect-error Matcher items retain the task shape.
+      void item.email
+      // @ts-expect-error Matcher queries retain the custom query shape.
+      void query?.invalidProperty
+      return typedQuery?.completed === undefined || typedItem.completed === typedQuery.completed
+    },
+  })
+  // @ts-expect-error Query fields must be declared by the service.
+  useFind('api/tasks', { query: { invalidProperty: true } })
+  // @ts-expect-error Custom query operators retain their value types.
+  useFind('api/tasks', { query: { $asOf: '2024-01-01' } })
+  // @ts-expect-error Query fields retain their value types.
+  useFind('api/tasks', { query: { completed: 'false' } })
+}
 
 // Test the actual hooks - these types will be checked by the test
 export const people = useFind('api/people')

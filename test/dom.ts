@@ -18,6 +18,7 @@ interface DomHelpers {
   render: (el: ReactElement) => void
   unmount: () => void
   click: (el: Element) => void
+  input: (el: Element, value: string) => void
   flush: (fn?: () => Promise<void> | void) => Promise<void>
   $: (sel: string) => Element | null
   $all: (sel: string) => Element[]
@@ -32,6 +33,7 @@ export function dom(options?: RootOptions): DomHelpers {
   // This is necessary because JSDOM provides its own DOMWindow type that has slight differences
   // from the standard Window interface, but is functionally compatible for testing purposes.
   global.window = dom.window as unknown as Window & typeof globalThis
+  global.document = dom.window.document
   const domNode = dom.window.document.getElementById('root')!
   const root = createRoot(domNode, options)
 
@@ -67,6 +69,21 @@ export function dom(options?: RootOptions): DomHelpers {
     })
   }
 
+  function input(el: Element, value: string): void {
+    const prototype =
+      el instanceof dom.window.HTMLTextAreaElement
+        ? dom.window.HTMLTextAreaElement.prototype
+        : el instanceof dom.window.HTMLInputElement
+          ? dom.window.HTMLInputElement.prototype
+          : undefined
+    const setter = prototype && Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    if (!setter) throw new Error('Expected a text input or textarea')
+    act(() => {
+      setter.call(el, value)
+      el.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    })
+  }
+
   function $(sel: string): Element | null {
     return dom.window.document.querySelector(sel)
   }
@@ -84,7 +101,7 @@ export function dom(options?: RootOptions): DomHelpers {
     })
   }
 
-  return { root, render, unmount, click, flush, $, $all, act }
+  return { root, render, unmount, click, input, flush, $, $all, act }
 }
 
 export const swallowErrors = (yourTestFn: () => void): void => {
