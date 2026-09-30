@@ -975,6 +975,20 @@ export class RelationalQueryRef<
     }
   }
 
+  /**
+   * Reconcile subscriptions with the current parent rows at one relation level.
+   * New source values grow the subscription in new `$in` chunks; existing chunks
+   * stay live. Empty source values settle immediately rather than stay loading.
+   * Ready child rows enqueue their nested relation levels through #syncRelations.
+   *
+   * Three relation kinds are supported:
+   * - single-hop 'one' / 'many' queries use `$in` on `destField`, keyed by `sourceField`;
+   * - 'embedded' flattens each parent's list of destination ids into the same query,
+   *   without a junction;
+   * - two-hop 'many' with `via` fetches the junction first, then the destination
+   *   using ids collected from the junction.
+   * Windowed relations use a separate query per parent instead of a shared fan-in.
+   */
   #syncRelationLevel(parentData: unknown[], plans: RelationPlan[]): void {
     for (const plan of plans) {
       switch (plan.kind) {

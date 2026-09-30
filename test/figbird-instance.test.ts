@@ -579,3 +579,25 @@ test('a fetch that never settles does not suspend the entity cache bound', async
   releaseHung()
   releaseNarrow()
 })
+
+test('inspection reuses frozen compiled classification reasons', t => {
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(
+      mockFeathers({ notes: { data: { 1: { id: 1, content: 'hello' } } } }),
+    ),
+  })
+  t.teardown(() => figbird.dispose())
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { $limit: 1 } } },
+    { realtime: 'merge' },
+  )
+  const unsubscribe = ref.subscribe(() => {})
+  t.teardown(unsubscribe)
+
+  const reasons = figbird.inspect()[0]?.classificationReasons
+  t.deepEqual(reasons, [{ code: 'window-filter', detail: '$limit' }])
+  t.is(figbird.inspect()[0]?.classificationReasons, reasons)
+  t.true(Object.isFrozen(reasons))
+  for (const reason of reasons ?? []) t.true(Object.isFrozen(reason))
+})

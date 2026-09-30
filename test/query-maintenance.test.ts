@@ -1,4 +1,5 @@
 import test from 'ava'
+import { explainQueryNode } from '../lib/core/queryClassification.js'
 import { compileQueryMaintenance, queryPolicy } from '../lib/core/queryMaintenance.js'
 import type { QueryConfig, QueryDescriptor } from '../lib/core/queryTypes.js'
 import { compareValues } from '../lib/core/sort.js'
@@ -77,12 +78,17 @@ test('compiled policies preserve the original rules in all 1,024 combinations', 
                 query,
               })
               t.deepEqual(
-                Object.fromEntries(
-                  Object.entries(queryPolicy(maintenance)).filter(
-                    ([key]) => key !== 'classificationReasons',
-                  ),
-                ),
+                queryPolicy(maintenance),
                 {
+                  classificationReasons:
+                    method === 'find'
+                      ? explainQueryNode(query, {
+                          server,
+                          allPages,
+                          localOperators: new Set(),
+                          snapshot: realtime === 'disabled',
+                        }).reasons
+                      : [],
                   responseMode,
                   rowSource: ownsValues ? 'values' : 'entities',
                   mergeEvents:

@@ -43,10 +43,28 @@ export function findInsertIndex(
 }
 
 /**
- * Decide whether a change can be placed in the server's contiguous result window.
- * Known positions merge locally; boundary ties and unseen replacement rows refetch.
- * Without ordering, visible rows keep their position and underfilled first pages append.
- * The caller applies row changes and adapter-specific metadata only after this decision.
+ * Decide whether one realtime event can merge into a server window without a refetch.
+ *
+ * The visible rows are a contiguous run of the server result, at positions
+ * `$skip .. $skip + rows.length`, and the window's predicate is locally evaluable.
+ * Server-only predicates are classified as server-authoritative before this call.
+ * An event's effect is provable whenever its position relative to the run's
+ * boundaries is known:
+ *
+ * - a visible patch that keeps its membership and sort position updates in place;
+ * - an underfilled window is the final page, so past-the-end inserts and visible
+ *   removals resolve locally;
+ * - an item sorting strictly inside the run belongs there, so insert it and evict
+ *   any overflow row, which returns on the next fetch of a later window;
+ * - membership changes provably beyond the window only adjust the metadata total.
+ *
+ * Everything unprovable refetches, including shifts before an offset page and
+ * removals from a full window whose replacement row is unseen. The caller compiles
+ * the comparator from `$sort`, or from `defaultSort` matching the backend's implicit
+ * order. With neither, visible patches keep their position and an underfilled
+ * first page appends. Membership stays exact; order is approximate until a fetch.
+ * Boundary ties refetch because the server's tiebreak decides membership there.
+ * The caller applies row changes and adapter-specific metadata after the decision.
  */
 export function maintainWindow(
   state: WindowState,

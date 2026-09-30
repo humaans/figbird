@@ -1033,9 +1033,7 @@ export class Figbird<
               }
             : {}),
           classification: query.maintenance.classification,
-          classificationReasons: queryPolicy(query.maintenance).classificationReasons.map(
-            reason => ({ ...reason }),
-          ),
+          classificationReasons: queryPolicy(query.maintenance).classificationReasons,
           realtimeStrategy: queryPolicy(query.maintenance).realtimeStrategy,
           skipped: query.config.skip === true,
           status: query.state.status,
@@ -1109,7 +1107,7 @@ export interface InspectedQuery {
   /** Native adapter page details. Offset pages remain visible in `query` as `$skip`/`$limit`. */
   page?: { request: PageRequest; info?: PageInfo }
   classification: QueryNodeClass | 'get'
-  classificationReasons?: ClassificationReason[]
+  classificationReasons?: readonly Readonly<ClassificationReason>[]
   realtimeStrategy?: 'merge' | 'refetch' | 'manual'
   /** True when this entry was materialized with `skip: true`. */
   skipped?: boolean

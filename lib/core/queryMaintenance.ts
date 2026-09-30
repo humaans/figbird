@@ -27,7 +27,7 @@ export interface QueryMaintenance {
 
 /** Immutable execution rules kept out of subscriber-visible query state. */
 interface QueryPolicy {
-  classificationReasons: readonly ClassificationReason[]
+  classificationReasons: readonly Readonly<ClassificationReason>[]
   responseMode: FetchResponseMode
   /** Preferred row ownership; missing IDs still force a query to retain its own values. */
   rowSource: 'entities' | 'values'
@@ -121,7 +121,9 @@ export function compileQueryMaintenance({
     isProjection,
   }
   policies.set(maintenance, {
-    classificationReasons: desc.method === 'find' ? explanation.reasons : [],
+    classificationReasons: Object.freeze(
+      (desc.method === 'find' ? explanation.reasons : []).map(reason => Object.freeze(reason)),
+    ),
     responseMode,
     rowSource:
       responseMode !== 'entity' || config.fetchPolicy === 'network-only' ? 'values' : 'entities',
