@@ -29,8 +29,8 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "test": "npm run tsc && oxlint -c oxlintrc.json && oxfmt --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
-    "lint": "oxlint -c oxlintrc.json",
+    "test": "npm run tsc && npm run lint && oxfmt --check '**/*.{ts,tsx,js,jsx,css,yml}' && c8 ava",
+    "lint": "oxlint -c oxlintrc.json --deny-warnings",
     "tsc": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/figbird/tsconfig.tsbuildinfo",
     "ava": "ava",
     "format": "oxfmt --write '**/*.{ts,tsx,js,jsx,css,yml}'",

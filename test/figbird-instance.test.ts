@@ -1,4 +1,4 @@
-import { TestClock } from './clock.js'
+import { flushTasks, TestClock } from './clock.js'
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
 import { Figbird } from '../lib/core/figbird'
@@ -179,162 +179,45 @@ test('Figbird instance retains idle queries and releases owned resources on disp
   t.throws(() => new Figbird({ adapter, schema, gcTime: -1 }), { message: /gcTime/ })
 })
 
-test('figbird.query with get returns typed data', async t => {
+test('queryDesc reads each service independently with a schema', async t => {
+  const note = { id: 1, content: 'hello' }
+  const post = { id: 1, title: 'post title', body: 'post body' }
   const feathers = mockFeathers({
-    notes: {
-      data: {
-        1: { id: 1, content: 'hello' },
-      },
-    },
-    posts: {
-      data: {
-        1: { id: 1, title: 'post title', body: 'post body' },
-      },
-    },
+    notes: { data: { 1: note } },
+    posts: { data: { 1: post } },
   })
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+  const figbird = new Figbird({ schema, adapter: new FeathersAdapter(feathers) })
+  t.teardown(() => figbird.dispose())
 
-  const query = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
-  const result = await new Promise(resolve => {
-    query.subscribe(state => {
-      if (state.status === 'success') {
-        resolve(state.data)
-      }
-    })
-  })
+  const noteGet = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  const noteFind = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const postGet = figbird.queryDesc({ serviceName: 'posts', method: 'get', resourceId: 1 })
+  const postFind = figbird.queryDesc({ serviceName: 'posts', method: 'find' })
+  for (const query of [noteGet, noteFind, postGet, postFind]) {
+    t.teardown(query.subscribe(() => {}))
+  }
+  await flushTasks()
 
-  t.deepEqual(result, { id: 1, content: 'hello' })
+  t.deepEqual(noteGet.getSnapshot()?.data, note)
+  t.deepEqual(noteFind.getSnapshot()?.data, [note])
+  t.deepEqual(postGet.getSnapshot()?.data, post)
+  t.deepEqual(postFind.getSnapshot()?.data, [post])
 })
 
-test('figbird.query with find returns typed data', async t => {
-  const feathers = mockFeathers({
-    notes: {
-      data: {
-        1: { id: 1, content: 'hello' },
-      },
-    },
-    posts: {
-      data: {
-        1: { id: 1, title: 'post title', body: 'post body' },
-      },
-    },
-  })
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
+test('queryDesc supports get and find without a schema', async t => {
+  const note = { id: 1, content: 'hello' }
+  const feathers = mockFeathers({ notes: { data: { 1: note } } })
+  const figbird = new Figbird({ adapter: new FeathersAdapter(feathers) })
+  t.teardown(() => figbird.dispose())
 
-  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
-  const result = await new Promise(resolve => {
-    query.subscribe(state => {
-      if (state.status === 'success') {
-        resolve(state.data)
-      }
-    })
-  })
+  const get = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  const find = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  t.teardown(get.subscribe(() => {}))
+  t.teardown(find.subscribe(() => {}))
+  await flushTasks()
 
-  t.deepEqual(result, [{ id: 1, content: 'hello' }])
-})
-
-test('figbird.query with get returns typed data for the second service', async t => {
-  const feathers = mockFeathers({
-    notes: {
-      data: {
-        1: { id: 1, content: 'hello' },
-      },
-    },
-    posts: {
-      data: {
-        1: { id: 1, title: 'post title', body: 'post body' },
-      },
-    },
-  })
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
-
-  const query = figbird.queryDesc({ serviceName: 'posts', method: 'get', resourceId: 1 })
-  const result = await new Promise(resolve => {
-    query.subscribe(state => {
-      if (state.status === 'success') {
-        resolve(state.data)
-      }
-    })
-  })
-
-  t.deepEqual(result, { id: 1, title: 'post title', body: 'post body' })
-})
-
-test('figbird.query with find returns typed data for the second service', async t => {
-  const feathers = mockFeathers({
-    notes: {
-      data: {
-        1: { id: 1, content: 'hello' },
-      },
-    },
-    posts: {
-      data: {
-        1: { id: 1, title: 'post title', body: 'post body' },
-      },
-    },
-  })
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ schema, adapter })
-
-  const query = figbird.queryDesc({ serviceName: 'posts', method: 'find' })
-  const result = await new Promise(resolve => {
-    query.subscribe(state => {
-      if (state.status === 'success') {
-        resolve(state.data)
-      }
-    })
-  })
-
-  t.deepEqual(result, [{ id: 1, title: 'post title', body: 'post body' }])
-})
-
-test('figbird.query with get returns any data when no schema is provided', async t => {
-  const feathers = mockFeathers({
-    notes: {
-      data: {
-        1: { id: 1, content: 'hello' },
-      },
-    },
-  })
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ adapter })
-
-  const query = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
-  const result = await new Promise(resolve => {
-    query.subscribe(state => {
-      if (state.status === 'success') {
-        resolve(state.data)
-      }
-    })
-  })
-
-  t.deepEqual(result, { id: 1, content: 'hello' })
-})
-
-test('figbird.query with find returns any data when no schema is provided', async t => {
-  const feathers = mockFeathers({
-    notes: {
-      data: {
-        1: { id: 1, content: 'hello' },
-      },
-    },
-  })
-  const adapter = new FeathersAdapter(feathers)
-  const figbird = new Figbird({ adapter })
-
-  const query = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
-  const result = await new Promise(resolve => {
-    query.subscribe(state => {
-      if (state.status === 'success') {
-        resolve(state.data)
-      }
-    })
-  })
-
-  t.deepEqual(result, [{ id: 1, content: 'hello' }])
+  t.deepEqual(get.getSnapshot()?.data, note)
+  t.deepEqual(find.getSnapshot()?.data, [note])
 })
 
 test('figbird.mutate with create', async t => {
