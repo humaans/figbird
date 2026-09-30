@@ -25,7 +25,7 @@
 	<meta property="og:title" content="Figbird">
 	<meta property="og:description" content="Figbird A realtime, relational data layer for React &#43; Feathers applications. Used in production at Humaans.
 Figbird gives you one query hook that fetches an entity graph (a record together with its relations) and keeps it updated. When a record changes, whether in this component, another component, or on the server, every query referencing it re-renders with the new state. No cache invalidation, no manual refetching.
-function IssueDetail({ id }: { id: number }) { const issue = useQuery( q.issues.get(id).related(&#39;creator&#39;).related(&#39;comments&#39;).related(&#39;labels&#39;), ) return ( &lt;article&gt; &lt;h1&gt;{issue.title}&lt;/h1&gt; &lt;p&gt;by {issue.creator?.name}&lt;/p&gt; &lt;Comments comments={issue.comments} /&gt; &lt;/article&gt; ) } Why Figbird# Relational queries — declare relations once, .related() assembles entity graphs Live queries — results update as records change, locally or via realtime events Suspense-native — cold reads suspend, warm reads render synchronously Optimistic mutations, by default — writes show immediately and roll back on failure everywhere at once Query preparation — routers and hover handlers warm the exact queries screens will read Full TypeScript — one schema, inference across builders, relations, and mutations Framework-agnostic core — works outside React for SSR, testing, or background sync Installation# pnpm add figbird Quick Start# // figbird.ts — one module wires everything import { Figbird, FeathersAdapter, createSchema, service, createHooks } from &#39;figbird&#39; import { feathersClient } from &#39;./feathers&#39; interface Issue { id: number title: string status: &#39;open&#39; | &#39;closed&#39; creatorId: number } interface User { id: number name: string } interface Comment { id: number issueId: number authorId: number body: string } export const schema = createSchema({ services: { issues: service&lt;{ item: Issue }&gt;(), users: service&lt;{ item: User }&gt;(), comments: service&lt;{ item: Comment }&gt;(), }, relationships: { issues: ({ one, many }) =&gt; ({ creator: one({ sourceField: &#39;creatorId&#39;, destService: &#39;users&#39; }), comments: many({ sourceField: &#39;id&#39;, destService: &#39;comments&#39;, destField: &#39;issueId&#39; }), }), comments: ({ one }) =&gt; ({ author: one({ sourceField: &#39;authorId&#39;, destService: &#39;users&#39; }), }), }, }) export const figbird = new Figbird({ adapter: new FeathersAdapter(feathersClient), schema, }) // Pure, schema-bound React bindings. export const { useQuery, useQueryResult, useQueries, useQueryResults, q, useMutations, defineQuery, useAction, useMutating, } = createHooks(schema) import { FigbirdProvider } from &#39;figbird&#39; import { figbird, q, useMutations, useQuery } from &#39;./figbird&#39; function OpenIssues() { const m = useMutations() const issues = useQuery( q.issues.where({ status: &#39;open&#39; }).orderBy(&#39;id&#39;, &#39;desc&#39;).related(&#39;creator&#39;), ) return issues.map(issue =&gt; ( &lt;div key={issue.id}&gt; {issue.title} — {issue.creator?.name} {/* q reads, m writes — optimistic by default, rolled back on failure */} &lt;button onClick={() =&gt; m.issues.patch(issue.id, { status: &#39;closed&#39; })}&gt;Close&lt;/button&gt; &lt;/div&gt; )) } Render the application beneath a provider:">
+function IssueDetail({ id }: { id: number }) { const issue = useQuery( q.issues.get(id).related(&#39;creator&#39;).related(&#39;comments&#39;).related(&#39;labels&#39;), ) return ( &lt;article&gt; &lt;h1&gt;{issue.title}&lt;/h1&gt; &lt;p&gt;by {issue.creator?.name}&lt;/p&gt; &lt;Comments comments={issue.comments} /&gt; &lt;/article&gt; ) } Why Figbird# Relational queries — declare relations once, .related() assembles entity graphs Live queries — results update as records change, locally or via realtime events Suspense-native — cold reads suspend, warm reads render synchronously Optimistic mutations, by default — writes show immediately and roll back on failure everywhere at once Atomic transactions — commit CRUD writes together through an adapter with server transaction support. See Adapter-backed transactions Query preparation — routers and hover handlers warm the exact queries screens will read Full TypeScript — one schema, inference across builders, relations, and mutations Framework-agnostic core — works outside React for SSR, testing, or background sync Installation# pnpm add figbird Quick Start# // figbird.ts — one module wires everything import { Figbird, FeathersAdapter, createSchema, service, createHooks } from &#39;figbird&#39; import { feathersClient } from &#39;./feathers&#39; interface Issue { id: number title: string status: &#39;open&#39; | &#39;closed&#39; creatorId: number } interface User { id: number name: string } interface Comment { id: number issueId: number authorId: number body: string } export const schema = createSchema({ services: { issues: service&lt;{ item: Issue }&gt;(), users: service&lt;{ item: User }&gt;(), comments: service&lt;{ item: Comment }&gt;(), }, relationships: { issues: ({ one, many }) =&gt; ({ creator: one({ sourceField: &#39;creatorId&#39;, destService: &#39;users&#39; }), comments: many({ sourceField: &#39;id&#39;, destService: &#39;comments&#39;, destField: &#39;issueId&#39; }), }), comments: ({ one }) =&gt; ({ author: one({ sourceField: &#39;authorId&#39;, destService: &#39;users&#39; }), }), }, }) export const figbird = new Figbird({ adapter: new FeathersAdapter(feathersClient), schema, }) // Pure, schema-bound React bindings. export const { useQuery, useQueryResult, useQueries, useQueryResults, q, useMutations, defineQuery, useAction, useMutating, } = createHooks(schema) import { FigbirdProvider } from &#39;figbird&#39; import { figbird, q, useMutations, useQuery } from &#39;./figbird&#39; function OpenIssues() { const m = useMutations() const issues = useQuery( q.issues.where({ status: &#39;open&#39; }).orderBy(&#39;id&#39;, &#39;desc&#39;).related(&#39;creator&#39;), ) return issues.map(issue =&gt; ( &lt;div key={issue.id}&gt; {issue.title} — {issue.creator?.name} {/* q reads, m writes — optimistic by default, rolled back on failure */} &lt;button onClick={() =&gt; m.issues.patch(issue.id, { status: &#39;closed&#39; })}&gt;Close&lt;/button&gt; &lt;/div&gt; )) } Render the application beneath a provider:">
 	<meta property="og:locale" content="en_us">
 	<meta property="og:type" content="website">
 
@@ -131,6 +131,7 @@ function IssueDetail({ id }: { id: number }) { const issue = useQuery( q.issues.
         <li><a href="#usequeryresults">useQueryResults</a></li>
         <li><a href="#usewindowquery">useWindowQuery</a></li>
         <li><a href="#m-and-usemutations">m and useMutations</a></li>
+        <li><a href="#figbirdtransaction">figbird.transaction</a></li>
         <li><a href="#definemutationqueue-and-usemutationqueue">defineMutationQueue and useMutationQueue</a></li>
         <li><a href="#figbirdcreatemutationqueue">figbird.createMutationQueue</a></li>
         <li><a href="#useaction">useAction</a></li>
@@ -152,6 +153,7 @@ function IssueDetail({ id }: { id: number }) { const issue = useQuery( q.issues.
         <li><a href="#embed">embed</a></li>
         <li><a href="#figbird-1">Figbird</a></li>
         <li><a href="#feathersadapter">FeathersAdapter</a></li>
+        <li><a href="#featherstransactions">feathersTransactions</a></li>
         <li><a href="#createhooks">createHooks</a></li>
         <li><a href="#figbirdprovider">FigbirdProvider</a></li>
       </ul>
@@ -201,6 +203,7 @@ function IssueDetail({ id }: { id: number }) { const issue = useQuery( q.issues.
 <li><strong>Live queries</strong> — results update as records change, locally or via realtime events</li>
 <li><strong>Suspense-native</strong> — cold reads suspend, warm reads render synchronously</li>
 <li><strong>Optimistic mutations, by default</strong> — writes show immediately and roll back on failure everywhere at once</li>
+<li><strong>Atomic transactions</strong> — commit CRUD writes together through an adapter with server transaction support. See <a href="#adapter-backed-transactions">Adapter-backed transactions</a></li>
 <li><strong>Query preparation</strong> — routers and hover handlers warm the exact queries screens will read</li>
 <li><strong>Full TypeScript</strong> — one schema, inference across builders, relations, and mutations</li>
 <li><strong>Framework-agnostic core</strong> — works outside React for SSR, testing, or background sync</li>
@@ -350,6 +353,7 @@ from. There is no code generation.</p>
 </span></span><span class="line"><span class="cl">  <span class="c1">// a new builder every render, but the same query identity while `status` is stable
 </span></span></span><span class="line"><span class="cl"><span class="p">}</span>
 </span></span></code></pre></div><p><code>.where()</code> autocompletes and type-checks the fields of the service&rsquo;s item type, and also admits everything it can&rsquo;t statically know: dotted relational paths (<code>'creator.teamId'</code>), server-only operators (<code>$regex</code>), and dynamically-built filter objects.</p>
+<p>Successive <code>.where()</code> calls AND together. When two calls constrain the same field, both conditions are sent under <code>$and</code>, so the service must accept <code>$and</code>.</p>
 <p><code>.get(id)</code> is the resource-endpoint fetch (<code>GET /issues/:id</code>) with &ldquo;this must exist&rdquo;
 semantics: a cold fetch of a missing row enters the error state, while realtime removal
 of a row you&rsquo;re viewing enters the error state with <code>ItemRemovedError</code> and null data. Use
@@ -405,10 +409,10 @@ edge, fetched in two batched queries for any number of parents:</p>
 intermediate rows match a parent, the first resolves — make the first hop selective.</p>
 <p><code>destField</code> defaults to <code>'id'</code>. Each service&rsquo;s factory gets helpers scoped to it, so every field name above type-checks: <code>sourceField</code> against the source item, <code>destService</code> against the schema, <code>destField</code> against the destination item. A generated schema fails to compile at exactly the relationship that went stale.</p>
 <p>Relations stay live: a new comment, a renamed user, or a new junction row flows into the assembled result through the service&rsquo;s realtime events.</p>
-<p>Relational queries fetch efficiently: a single <code>IN (...)</code> query per relation level (not per parent), junction traversal in two queries, <code>embed</code> in one. The exception is a <strong>windowed relation</strong> like <code>.related('recent', i =&gt; i.orderBy(...).limit(5))</code>, which needs one query <em>per parent</em> because per-parent windows can&rsquo;t be expressed as a single find. Figbird warns past 10 parents and points at <code>embed</code> as the batched alternative.</p>
+<p>Relational queries fetch efficiently: a single <code>IN (...)</code> query per relation level (not per parent), junction traversal in two queries, <code>embed</code> in one. The exception is a <strong>windowed relation</strong> like <code>.related('recent', i =&gt; i.orderBy(...).limit(5))</code>, which needs one query <em>per parent</em> because per-parent windows can&rsquo;t be expressed as a single find. Figbird warns past 10 parents and points at <code>embed</code> as the batched alternative. Sorting alone stays batched and fetches all matching rows across server pages, and junction and unsorted <code>embed</code> windows stay batched too: each parent&rsquo;s items are sliced after the fetch. A junction window still fetches every related row, so for very large related sets, relate the junction service directly and window it there.</p>
 <p>You can also filter parents by a field on a related entity, with a dotted path:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="nx">q</span><span class="p">.</span><span class="nx">issues</span><span class="p">.</span><span class="nx">where</span><span class="p">({</span> <span class="s1">&#39;creator.teamId&#39;</span><span class="o">:</span> <span class="mi">5</span> <span class="p">})</span>
-</span></span></code></pre></div><p>The server resolves the join; on the client, Figbird&rsquo;s matcher evaluates the path against the entity cache so realtime events keep the result fresh.</p>
+</span></span></code></pre></div><p>The server resolves the join; on the client, Figbird&rsquo;s matcher evaluates the path against the entity cache so realtime events keep the result fresh. Paths through <code>many</code>, junction, or <code>embed</code> relations are left to the server.</p>
 <h2 id="suspense">Suspense<a class="heading-anchor" href="#suspense" aria-label="Link to this section">#</a></h2>
 <p><code>useQuery</code> is Suspense-native: a <strong>cold</strong> read (no cached data) throws a promise to the nearest <code>&lt;Suspense&gt;</code> boundary, and a cold <strong>error</strong> throws to the nearest error boundary. Warm reads render synchronously. In component code there is no loading branch:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-tsx" data-lang="tsx"><span class="line"><span class="cl"><span class="p">&lt;</span><span class="nt">Suspense</span> <span class="na">fallback</span><span class="o">=</span><span class="p">{&lt;</span><span class="nt">Skeleton</span> <span class="p">/&gt;}&gt;</span>
@@ -646,6 +650,8 @@ updates flow to every query referencing the data.</p>
 updates immediately and everywhere, and a server error rolls the change back everywhere
 at once, emitting <code>mutate:rollback</code> for observability. Most product surfaces want this
 mode: task lists, inline edits, comments.</p>
+<p>Optimistic rows store <code>Date</code> values as ISO strings, like the rows the server sends, so
+declare date fields as strings in the service&rsquo;s <code>item</code> type.</p>
 <p>Some surfaces are different. When the user must know the change saved before walking
 away (settings, policies, anything contractual), opt out with the <code>confirmed</code> variant.
 It shows the change only once it&rsquo;s real; the cache updates after the server acks:</p>
@@ -657,8 +663,10 @@ It shows the change only once it&rsquo;s real; the cache updates after the serve
 on the server response in both modes, so a flow that awaits and then shows &ldquo;saved&rdquo; behaves
 identically. Optimism only controls when the <em>cache</em> shows the change. Second,
 failures are never silent: rollback is global, <code>useAction</code> gives every action an <code>error</code>
-slot, and the events channel sees everything. <code>confirmed</code> is greppable on purpose. It
-names your critical surfaces.</p>
+slot, and the events channel sees everything: every failed write emits <code>mutate:error</code> on
+<a href="#figbirdevents">figbird.events</a>, the place to report writes nobody awaits (skip
+<code>isMutationSupersededError</code> ones, which never reached the server). <code>confirmed</code> is
+greppable on purpose. It names your critical surfaces.</p>
 <h3 id="writes-to-the-same-record-are-serialized">Writes to the same record are serialized<a class="heading-anchor" href="#writes-to-the-same-record-are-serialized" aria-label="Link to this section">#</a></h3>
 <p>Figbird sends CRUD calls for the same service and id in call order. Calls for different
 records can run in parallel. Every optimistic change still appears immediately:</p>
@@ -675,6 +683,8 @@ records can run in parallel. Every optimistic change still appears immediately:<
 then Figbird reapplies the remaining changes. An old response cannot resurrect an earlier
 version. If a patch fails, Figbird removes that change and reapplies the later ones. If a
 create fails, Figbird cancels the writes that depend on its id.</p>
+<p>A write whose data references a record through a schema <code>one</code> relation waits while that
+record&rsquo;s create is pending, and rolls back with it if the create fails.</p>
 <p>Confirmed writes with the same service and id follow the same ordering, so they cannot
 overtake optimistic writes. Id-less confirmed creates, batch creates, and custom methods
 have no single record id and do not join this ordering. Use a mutation queue when one
@@ -684,6 +694,62 @@ the writes must commit atomically.</p>
 queries update immediately. Relations assemble from cached data and fetch missing leaves.
 When the server must decide query membership or ordering, Figbird waits for the record&rsquo;s
 writes to settle before reconciling the query.</p>
+<h3 id="adapter-backed-transactions">Adapter-backed transactions<a class="heading-anchor" href="#adapter-backed-transactions" aria-label="Link to this section">#</a></h3>
+<p>Use <code>figbird.transaction()</code> when several CRUD writes must commit or roll back as one server
+operation. Transactions are a capability, not an emulation: Figbird throws if the adapter
+does not provide an atomic transport and never falls back to sequential requests.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">figbird</span><span class="p">.</span><span class="nx">transaction</span><span class="p">(</span><span class="nx">tx</span> <span class="o">=&gt;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">tx</span><span class="p">.</span><span class="nx">m</span><span class="p">.</span><span class="nx">tasks</span><span class="p">.</span><span class="nx">patch</span><span class="p">(</span><span class="nx">taskId</span><span class="p">,</span> <span class="p">{</span> <span class="nx">columnId</span>: <span class="kt">nextColumnId</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">tx</span><span class="p">.</span><span class="nx">m</span><span class="p">.</span><span class="nx">columns</span><span class="p">.</span><span class="nx">patch</span><span class="p">(</span><span class="nx">previousColumnId</span><span class="p">,</span> <span class="p">{</span> <span class="nx">count</span>: <span class="kt">previousCount</span> <span class="o">-</span> <span class="mi">1</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">tx</span><span class="p">.</span><span class="nx">m</span><span class="p">.</span><span class="nx">columns</span><span class="p">.</span><span class="nx">patch</span><span class="p">(</span><span class="nx">nextColumnId</span><span class="p">,</span> <span class="p">{</span> <span class="nx">count</span>: <span class="kt">nextCount</span> <span class="o">+</span> <span class="mi">1</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><p>The callback collects synchronously; its methods return no result, and the outer promise settles
+when the transaction commits. Payloads, patches, service names, and <code>confirmed</code> options retain
+the same schema inference as <code>m</code>. Optimistic operations project as one observer-visible cache
+update and roll back together. <code>tx.m.columns.confirmed.patch(...)</code> keeps that operation hidden
+until commit.</p>
+<p>Generate ids before collecting writes, using your application&rsquo;s id generator
+(for example, NanoID). Pass them directly as foreign keys:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">nanoid</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;nanoid&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">documentTypeId</span> <span class="o">=</span> <span class="nx">nanoid</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">documentId</span> <span class="o">=</span> <span class="nx">nanoid</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">figbird</span><span class="p">.</span><span class="nx">transaction</span><span class="p">(</span><span class="nx">tx</span> <span class="o">=&gt;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">tx</span><span class="p">.</span><span class="nx">m</span><span class="p">.</span><span class="nx">documentTypes</span><span class="p">.</span><span class="nx">create</span><span class="p">({</span> <span class="nx">id</span>: <span class="kt">documentTypeId</span><span class="p">,</span> <span class="nx">name</span><span class="o">:</span> <span class="s1">&#39;Contract&#39;</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">tx</span><span class="p">.</span><span class="nx">m</span><span class="p">.</span><span class="nx">documents</span><span class="p">.</span><span class="nx">create</span><span class="p">({</span> <span class="nx">id</span>: <span class="kt">documentId</span><span class="p">,</span> <span class="nx">documentTypeId</span><span class="p">,</span> <span class="nx">name</span><span class="o">:</span> <span class="s1">&#39;Employment contract&#39;</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><p>The adapter executes operations in collection order within the server transaction.
+Create referenced records first: the document type exists before the document is created.
+Figbird does not infer dependencies from payloads. The backend must accept and preserve
+the client-generated ids. The outer promise returns no records; read server-computed
+fields from the cache after commit.</p>
+<p>Transaction operations wait behind earlier writes to every affected record, then reserve those
+record lanes until the adapter transaction settles. Each entity can appear only once in a
+transaction. Create payloads must be collected one at a time and carry a stable id, including
+confirmed creates. An explicit <code>optimisticItem</code> must preserve that id. Multi-record ordering
+needs an identity before dispatch. The transaction DSL is
+CRUD-only; custom methods have adapter-specific argument and cache semantics.</p>
+<p>Bulk operations affect multiple records; transactions commit multiple operations atomically.
+For Feathers, configure an application-provided transaction endpoint. The recommended service
+name, and the helper&rsquo;s default, is <code>api/transactions</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">FeathersAdapter</span><span class="p">,</span> <span class="nx">feathersTransactions</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">transactions</span>: <span class="kt">feathersTransactions</span><span class="p">(),</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><p>The helper does not create the server endpoint. It calls the service&rsquo;s <code>create</code> method with
+<code>{ serial: true, calls }</code>, where each call is a <code>[method, serviceName, ...args]</code> tuple.
+The service must return <code>{ data: [...] }</code> with one ordered <code>{ status: 'fulfilled', value }</code> or
+<code>{ status: 'rejected', reason }</code> entry per call. It must execute calls sequentially inside one
+atomic transaction and roll back every write if any call fails. <code>feathersTransactions()</code>
+rejects the Figbird transaction if any entry rejects. Partial success is outside this API.</p>
+<p>Existing endpoints can keep their names. For example, Humaans uses <code>api/batch</code> for this
+transaction contract:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">transactions</span>: <span class="kt">feathersTransactions</span><span class="p">({</span> <span class="nx">serviceName</span><span class="o">:</span> <span class="s1">&#39;api/batch&#39;</span> <span class="p">}),</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><p>Use the <code>params</code> option to pass Feathers params to the transaction service&rsquo;s <code>create</code> call.</p>
 <h3 id="ordered-autosave-with-mutation-queues">Ordered autosave with mutation queues<a class="heading-anchor" href="#ordered-autosave-with-mutation-queues" aria-label="Link to this section">#</a></h3>
 <p><code>m</code> sends independent records in parallel. A feature such as a workflow editor may instead
 need one open-ended stream: create an action, create a task that references it, then accept
@@ -735,8 +801,11 @@ and its dependent writes are cancelled.</p>
 <p>Outside React, use <code>figbird.createMutationQueue(config)</code>. A mutation queue is ordered, not
 atomic or durable. An unfinished keyed queue can survive component navigation, but no
 queue survives a page reload. Register a parent create before a child create that
-references it. Enable retries for creates only when the server treats their
-client-generated ids idempotently.</p>
+references it.</p>
+<p>A numeric <code>retry</code> repeats updates, patches, removes, and creates that carry their id (a
+repeat can&rsquo;t create a second record). An id-less create or a custom method may already
+have been applied, so those retry only when a <code>retry</code> function returns <code>true</code> for them;
+do that only when the server handles them idempotently.</p>
 <h3 id="creates-and-ids-the-id-contract">Creates and ids: the id contract<a class="heading-anchor" href="#creates-and-ids-the-id-contract" aria-label="Link to this section">#</a></h3>
 <p><strong>Optimistic creates carry a client-generated id the server will accept.</strong> Everything
 downstream is built on identity: React keys, realtime echo dedup, navigation, child-row
@@ -898,6 +967,11 @@ through the destination&rsquo;s first subscriber commit. That initial subscriber
 result without another freshness check, even when other queries or code took longer to load.
 The adoption window then closes: retaining the handle longer only keeps the query pinned,
 and later mounts use the ordinary <code>staleTime</code> policy again.</p>
+<p>If an active <code>prefetch(request)</code> already warmed the query, the first <code>prepare(request)</code>
+adopts that read without fetching again, even with global <code>staleTime: 0</code>. This handover
+expires with the speculative pin and can be used only once. Later preparations use the
+ordinary freshness policy. An explicit <code>prepare(request, { staleTime })</code> overrides the
+handover, and errors and explicit refetches are still handled normally.</p>
 <h3 id="prefetch">prefetch<a class="heading-anchor" href="#prefetch" aria-label="Link to this section">#</a></h3>
 <p><code>prefetch()</code> is the idempotent, fire-and-forget sibling of <code>prepare()</code>, built for &ldquo;the user will probably need this&rdquo; moments like hover or viewport entry:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-tsx" data-lang="tsx"><span class="line"><span class="cl"><span class="p">&lt;</span><span class="nt">Row</span> <span class="na">onMouseEnter</span><span class="o">=</span><span class="p">{()</span> <span class="o">=&gt;</span> <span class="nx">prefetch</span><span class="p">(</span><span class="nx">issueDetail</span><span class="p">({</span> <span class="nx">id</span>: <span class="kt">issue.id</span> <span class="p">}))}</span> <span class="p">/&gt;</span>
@@ -934,7 +1008,26 @@ milliseconds, because it also controls automatic release. Ordinary query readers
 </span></span></span><span class="line"><span class="cl"><span class="c1">// }
 </span></span></span></code></pre></div><p>Use <code>.server()</code> on a builder when a query <em>looks</em> locally provable but isn&rsquo;t, say for server-computed virtual fields, permission-dependent membership, or search ranking:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="nx">q</span><span class="p">.</span><span class="nx">documents</span><span class="p">.</span><span class="nx">where</span><span class="p">({</span> <span class="nx">visibleTo</span>: <span class="kt">userId</span> <span class="p">}).</span><span class="nx">server</span><span class="p">()</span>
-</span></span></code></pre></div><h3 id="window-maintenance">Window maintenance<a class="heading-anchor" href="#window-maintenance" aria-label="Link to this section">#</a></h3>
+</span></span></code></pre></div><h3 id="invalidation-only-events">Invalidation-only events<a class="heading-anchor" href="#invalidation-only-events" aria-label="Link to this section">#</a></h3>
+<p>A <code>created</code>, <code>updated</code>, or <code>patched</code> realtime payload containing only the configured
+entity ID is an invalidation, not an entity. Figbird keeps the complete cached entity
+in place and reconciles affected active queries from the server; inactive queries are
+marked pending for their next subscriber. An ID-only <code>removed</code> event is different: the
+ID is the complete information needed to remove the entity, so removal applies
+immediately.</p>
+<p>Adapters can recognize application-specific invalidation payloads with
+<code>isInvalidationEvent</code>. This is useful when a notification carries an ID plus a marker
+or other routing metadata but still does not contain the entity&rsquo;s complete value:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathers</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">isInvalidationEvent</span><span class="o">:</span> <span class="p">({</span> <span class="kr">type</span><span class="p">,</span> <span class="nx">item</span> <span class="p">})</span> <span class="o">=&gt;</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">type</span> <span class="o">!==</span> <span class="s1">&#39;removed&#39;</span> <span class="o">&amp;&amp;</span>
+</span></span><span class="line"><span class="cl">    <span class="k">typeof</span> <span class="nx">item</span> <span class="o">===</span> <span class="s1">&#39;object&#39;</span> <span class="o">&amp;&amp;</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">item</span> <span class="o">!==</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span>
+</span></span><span class="line"><span class="cl">    <span class="s1">&#39;_invalidation&#39;</span> <span class="k">in</span> <span class="nx">item</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><p>Full entity payloads keep the normal classification-driven merge behavior. The
+callback is ignored for <code>removed</code> events, which remain authoritative removals.</p>
+<h3 id="window-maintenance">Window maintenance<a class="heading-anchor" href="#window-maintenance" aria-label="Link to this section">#</a></h3>
 <p>Server-window doesn&rsquo;t mean every event costs a roundtrip. The visible rows are a
 contiguous run of the server result, and the window&rsquo;s predicate is locally evaluable
 (anything non-local classifies server-authoritative) — so many event effects are
@@ -968,7 +1061,18 @@ into the wrong position until the next fetch — fix it by specifying <code>$sor
 query. With no <code>$sort</code> and no <code>defaultSort</code>, membership still merges where it&rsquo;s
 exact (visible patches keep their position, underfilled first pages append) and
 everything positional refetches.</p>
-<h3 id="teaching-the-client-custom-operators">Teaching the client custom operators<a class="heading-anchor" href="#teaching-the-client-custom-operators" aria-label="Link to this section">#</a></h3>
+<p>The same contract covers how values compare. By default figbird sorts nulls first and
+compares strings by codepoint. If your database orders values differently, pass its
+ordering as <code>compare</code>, an <code>(a, b) =&gt; number</code> for ascending order, and figbird uses it
+wherever it sorts rows itself. For Postgres&rsquo;s nulls-last default:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">Figbird</span><span class="p">,</span> <span class="nx">compareValues</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">adapter</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">schema</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">compare</span><span class="o">:</span> <span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="p">(</span><span class="nx">a</span> <span class="o">==</span> <span class="kc">null</span> <span class="o">?</span> <span class="p">(</span><span class="nx">b</span> <span class="o">==</span> <span class="kc">null</span> <span class="o">?</span> <span class="nx">0</span> : <span class="kt">1</span><span class="p">)</span> <span class="o">:</span> <span class="nx">b</span> <span class="o">==</span> <span class="kc">null</span> <span class="o">?</span> <span class="o">-</span><span class="nx">1</span> : <span class="kt">compareValues</span><span class="p">(</span><span class="nx">a</span><span class="p">,</span> <span class="nx">b</span><span class="p">)),</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><h3 id="teaching-the-client-custom-operators">Teaching the client custom operators<a class="heading-anchor" href="#teaching-the-client-custom-operators" aria-label="Link to this section">#</a></h3>
 <p>The inverse escape hatch: when your API has a custom operator the client <em>could</em>
 evaluate, register it on the adapter and queries using it stay realtime-mergeable
 instead of classifying server-authoritative. The canonical example is <code>$asOf</code> on
@@ -1065,6 +1169,25 @@ starts a new retry budget.</p>
 </span></span><span class="line"><span class="cl"><span class="nx">figbird</span><span class="p">.</span><span class="nx">queryDesc</span><span class="p">(</span><span class="nx">desc</span><span class="p">,</span> <span class="p">{</span> <span class="nx">retry</span>: <span class="kt">1</span><span class="p">,</span> <span class="nx">retryDelay</span>: <span class="kt">250</span> <span class="p">})</span>
 </span></span></code></pre></div><p>Each network attempt emits its own fetch lifecycle events and contributes to the query&rsquo;s
 fetch and error counts in <code>inspect()</code>.</p>
+<h3 id="cache-retention-and-instance-disposal">Cache retention and instance disposal<a class="heading-anchor" href="#cache-retention-and-instance-disposal" aria-label="Link to this section">#</a></h3>
+<p>By default, idle query results are retained for thirty minutes after their last reader
+releases them. Configure this with <code>new Figbird({ adapter, schema, gcTime: 30 * 60_000 })</code>.
+A returning reader cancels eviction.
+<code>gcTime</code> controls memory retention independently of <code>staleTime</code>, which controls freshness.
+Set <code>gcTime: Infinity</code> to keep idle results for the instance&rsquo;s lifetime, or <code>0</code> to evict
+on the next timer turn. Unreferenced entities and unused service subscriptions are
+released when queries expire. Complete unfiltered <code>.all()</code> materializations follow the
+same retention policy. After one expires, remaining queries fetch from the server until
+a new <code>.all()</code> read completes. To keep a full service available for local reads, hold
+<code>const prepared = figbird.prepare(figbird.q.notes.all())</code> and call <code>prepared.release()</code>
+when that ownership ends. <code>gcTime: Infinity</code> retains all idle queries for the instance lifetime.</p>
+<p>After unmounting an instance&rsquo;s readers, call <code>figbird.dispose()</code> to release its cache,
+realtime and connection subscriptions, visibility listener, speculative reads, and
+devtools sessions. Calling it twice is harmless. New queries and mutations are rejected.
+Already registered writes finish in order; owned mutation queues flush their pending work
+and discard after a terminal failure instead of waiting for an owner to retry. Late fetch
+and mutation responses cannot repopulate the disposed cache. Disposal does not disconnect
+the adapter&rsquo;s shared transport.</p>
 <h3 id="freezing-a-query-snapshot">Freezing a query: .snapshot()<a class="heading-anchor" href="#freezing-a-query-snapshot" aria-label="Link to this section">#</a></h3>
 <p><code>.snapshot()</code> fetches once and then ignores realtime entirely, for the root and every
 relation under it: no merges, no event-triggered refetches. <code>refetch()</code> is the only way it
@@ -1072,6 +1195,10 @@ moves. Frozen and live reads of the same filters don&rsquo;t share a cache entry
 changes what the data means). Use it for audit views, diff screens, &ldquo;results as of when
 you searched&rdquo;.</p>
 <h3 id="exhaustive-reads-all">Exhaustive reads: .all()<a class="heading-anchor" href="#exhaustive-reads-all" aria-label="Link to this section">#</a></h3>
+<p>Live finds with a known sort order over a fully materialized service recompute locally
+after data changes. They do not wait for the network reconciliation cooldown or tab
+visibility. Snapshot queries and reads requiring server evaluation keep their existing
+behavior.</p>
 <p><code>.all()</code> fetches <strong>every row matching the query</strong>. All pages are drained, so the server&rsquo;s
 default page cap never silently truncates the result. Without it, an unwindowed find returns a
 single server page; that cap is the safety mechanism (an unbounded query shouldn&rsquo;t slurp the
@@ -1221,8 +1348,26 @@ realtime echo like a real server would</li>
 <li>Optionally implement <code>subscribeToReconnect</code> so active queries refetch after connectivity gaps</li>
 <li>Optionally implement <code>isRetryableError</code> to return <code>false</code> for errors that another query
 attempt cannot fix; adapters without it treat all query errors as retryable</li>
+<li>Optionally implement <code>findByIds(serviceName, ids)</code> so an <code>.all()</code> refetch checks the rows
+its response lacks before treating them as removed</li>
+<li>Optionally implement <code>isIdField(serviceName, field)</code> to say which field holds a service&rsquo;s
+id. Writes then wait for pending creates they reference through a <code>one</code> relation</li>
+<li>Optionally implement <code>transaction(operations)</code> when the backend supports atomic CRUD
+writes. See the contract below and <a href="#adapter-backed-transactions">Adapter-backed transactions</a></li>
 </ol>
 <p>For example, a <code>comments</code> resource maps to <code>GET /comments</code>, <code>GET /comments/:id</code>, <code>POST /comments</code>, <code>PUT/PATCH/DELETE /comments/:id</code>, with <code>find</code> returning <code>{ data, total, limit, skip }</code> or similar. See <a href="https://github.com/humaans/figbird/blob/master/lib/adapters/feathers.ts"><code>lib/adapters/feathers.ts</code></a> for the reference implementation of the <code>Adapter</code> interface.</p>
+<p>The optional <code>Adapter.transaction</code> signature is:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="nx">transaction</span><span class="p">(</span><span class="nx">operations</span>: <span class="kt">readonly</span> <span class="nx">AdapterTransactionOperation</span><span class="p">[])</span><span class="o">:</span> <span class="nx">Promise</span><span class="p">&lt;</span><span class="nt">readonly</span> <span class="na">unknown</span><span class="err">[]</span><span class="p">&gt;</span>
+</span></span></code></pre></div><p>Import <code>Adapter</code> and <code>AdapterTransactionOperation</code> from <code>figbird</code>. Each operation contains
+<code>serviceName</code>, a resolved transport path, <code>method</code>, one of <code>create</code>, <code>update</code>, <code>patch</code>, or
+<code>remove</code>, and <code>args</code>, the service method&rsquo;s arguments including any per-call params.
+Execute operations in array order inside one server transaction. Each operation must see
+earlier writes, so a create can precede another create referencing its id. Resolve only
+after commit, returning one mutation result per operation in the same order. Reject on
+failure after rolling back every server write. Figbird uses the results to update the
+cache and rejects responses with the wrong number of results.</p>
+<p>Leave this capability unset if the backend cannot guarantee atomic writes. Implementing
+it with separate requests or <code>Promise.all</code> cannot provide the required rollback semantics.</p>
 <h2 id="comparison">Comparison<a class="heading-anchor" href="#comparison" aria-label="Link to this section">#</a></h2>
 <p>Every data library is a bet on where your app&rsquo;s complexity lives. Figbird bets on a
 <strong>server-authoritative backend with realtime events</strong>, read by <strong>long-lived, app-shaped
@@ -1302,7 +1447,7 @@ builder. See <a href="#queries">Queries</a> and <a href="#relations">Relations</
 	<tbody>
 			<tr>
 					<td><code>.where(filters)</code></td>
-					<td>Merge filter conditions (deep-merged across calls); typed against the item, admits dotted paths and <code>$</code> operators</td>
+					<td>Add filter conditions (calls AND together); typed against the item, admits dotted paths and <code>$</code> operators</td>
 			</tr>
 			<tr>
 					<td><code>.orderBy(field, dir?)</code></td>
@@ -1393,6 +1538,11 @@ are blocks currently loading. The hook is Suspense-native for its first window a
 keeps the previous window mounted during later movement; pass <code>{ suspense: false }</code>
 for the tagged-union form. It accepts the same <code>skip</code> and <code>staleTime</code> options and the
 same builder, bound-request, and argumentless-definition inputs as <code>useQuery</code>.</p>
+<p>When the requested range has data, a background fetch failure preserves <code>status: 'success'</code>
+and exposes <code>error</code>, both through <code>figbird.window(...).getSnapshot(range)</code> and the hook.
+In non-Suspense mode, moving to an unloaded range returns <code>status: 'loading'</code> with the
+retained sparse map; a failed range returns <code>status: 'error'</code>. Suspense mode keeps an
+already-settled reader mounted during those range changes.</p>
 <p>Offset adapters jump directly; cursor adapters advance sequentially and reuse cursor
 checkpoints. Relations, filtering, and sorting are part of each fetched block. See
 <a href="#virtualized-windows">Virtualized windows</a> for lifecycle and restoration semantics.</p>
@@ -1416,6 +1566,26 @@ creates accept <code>params</code> and <code>optimisticItem</code>; updates and 
 <code>figbird.m</code>.
 Like <code>q</code>, the proxy is callable for dynamic service names: <code>m(name)</code> is <code>m.&lt;name&gt;</code> with a
 string-typed door.</p>
+<h2 id="figbirdtransaction">figbird.transaction<a class="heading-anchor" href="#figbirdtransaction" aria-label="Link to this section">#</a></h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="k">await</span> <span class="nx">figbird</span><span class="p">.</span><span class="nx">transaction</span><span class="p">(</span><span class="nx">tx</span> <span class="o">=&gt;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">tx</span><span class="p">.</span><span class="nx">m</span><span class="p">.</span><span class="nx">issues</span><span class="p">.</span><span class="nx">patch</span><span class="p">(</span><span class="nx">issueId</span><span class="p">,</span> <span class="p">{</span> <span class="nx">status</span><span class="o">:</span> <span class="s1">&#39;closed&#39;</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">tx</span><span class="p">.</span><span class="nx">m</span><span class="p">.</span><span class="nx">comments</span><span class="p">.</span><span class="nx">confirmed</span><span class="p">.</span><span class="nx">patch</span><span class="p">(</span><span class="nx">commentId</span><span class="p">,</span> <span class="p">{</span> <span class="nx">body</span><span class="o">:</span> <span class="s1">&#39;Resolved&#39;</span> <span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span> <span class="c1">// Promise&lt;void&gt;
+</span></span></span></code></pre></div><p>Collect typed CRUD writes across services and submit them through <code>Adapter.transaction</code>.
+The callback must be synchronous. <code>tx.m</code> supports <code>create</code>, <code>update</code>, <code>patch</code>, <code>remove</code>,
+and their <code>confirmed</code> variants, with the same payload and option types as <code>figbird.m</code>.
+These methods return <code>undefined</code>; await the outer promise for completion. Custom methods
+are not supported. In React, obtain the provider&rsquo;s instance with <code>useFigbird()</code>.</p>
+<p>Optimistic writes project, commit, and roll back as grouped cache updates. Confirmed
+writes update the cache at commit. The transaction waits for earlier writes to each
+affected record and holds those records until settlement. Creates require one payload
+per call with a stable id that the backend preserves, even for confirmed creates. Each
+service/id pair may appear only once.</p>
+<p>Figbird throws synchronously when the adapter has no transaction capability, the callback
+is async, or the collected writes violate the id requirements. The returned promise rejects
+on transport failure and resolves with no records after successful commit. See
+<a href="#adapter-backed-transactions">Adapter-backed transactions</a> for create dependencies and
+<a href="#featherstransactions">feathersTransactions</a> for the Feathers transport.</p>
 <h2 id="definemutationqueue-and-usemutationqueue">defineMutationQueue and useMutationQueue<a class="heading-anchor" href="#definemutationqueue-and-usemutationqueue" aria-label="Link to this section">#</a></h2>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">autosave</span> <span class="o">=</span> <span class="nx">defineMutationQueue</span><span class="p">({</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">schedule</span>: <span class="kt">operation</span> <span class="o">=&gt;</span> <span class="p">({</span> <span class="nx">wait</span>: <span class="kt">operation.method</span> <span class="o">===</span> <span class="s1">&#39;patch&#39;</span> <span class="o">?</span> <span class="nx">500</span> : <span class="kt">0</span> <span class="p">}),</span>
@@ -1428,7 +1598,9 @@ string-typed door.</p>
 </span></span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">reconnectable</span> <span class="o">=</span> <span class="nx">useMutationQueue</span><span class="p">(</span><span class="nx">autosave</span><span class="p">,</span> <span class="sb">`issue:</span><span class="si">${</span><span class="nx">issueId</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
 </span></span></code></pre></div><p><code>defineMutationQueue(config?)</code> creates an immutable policy value. Keep it at module scope.
 The optional <code>schedule</code> function controls debounce timing; <code>retry</code> and <code>retryDelay</code>
-control automatic retries.</p>
+control automatic retries. A numeric <code>retry</code> applies to updates, patches, removes, and
+creates with ids; id-less creates and custom methods retry only when a <code>retry</code> function
+returns <code>true</code> for them.</p>
 <p><code>useMutationQueue()</code> returns a serial queue with an <code>m</code> write proxy. Pass a definition to
 use its policy. Pass a definition and key to reconnect to unfinished work after a remount.
 The returned queue exposes <code>status</code>, <code>pending</code>, <code>error</code>, <code>flush()</code>, <code>retry()</code>, and
@@ -1591,6 +1763,10 @@ order.</p>
 					<td>The instance’s write proxy: <code>figbird.m.issues.patch(...)</code>, or <code>figbird.m(service)</code> for dynamic names. In React, access the provider instance through <code>useMutations()</code>. See <a href="#m">m</a>.</td>
 			</tr>
 			<tr>
+					<td><code>transaction(fn)</code></td>
+					<td>Adapter-backed atomic CRUD collector. Optimistic projection, commit, and rollback are grouped across services. See <a href="#figbirdtransaction">figbird.transaction</a>.</td>
+			</tr>
+			<tr>
 					<td><code>createMutationQueue(config?)</code></td>
 					<td>Explicitly owned serial writes across records or services. See <a href="#figbirdcreatemutationqueue">figbird.createMutationQueue</a>.</td>
 			</tr>
@@ -1637,16 +1813,43 @@ Figbird&rsquo;s query format and Feathers conventions.</p>
 <li><code>feathers</code> — feathers client</li>
 <li><code>options</code>
 <ul>
-<li><code>idField</code> — string or function, defaults to <code>item =&gt; item.id || item._id</code></li>
+<li><code>idField</code> — string or function, defaults to <code>item =&gt; item.id || item._id</code>. Use a string (e.g. <code>'_id'</code>) when the id isn&rsquo;t <code>id</code></li>
+<li><code>idFieldName</code> — the field a function <code>idField</code> reads; without it, writes don&rsquo;t wait for the creates they reference and <code>.all()</code> refetches can&rsquo;t look rows up by id</li>
 <li><code>updatedAtField</code> — string or function, defaults to <code>item =&gt; item.updatedAt || item.updated_at</code>; used to avoid overwriting newer cached data with older data when requests race</li>
 <li><code>defaultPageSize</code> — default <code>query.$limit</code> when fetching, unset by default so the server decides</li>
 <li><code>defaultPageSizeWhenFetchingAll</code> — default <code>query.$limit</code> when fetching with <code>allPages</code></li>
 <li><code>pagination</code> — cursor strategies keyed by service path; see <a href="#cursor-pagination">Cursor pagination</a></li>
 <li><code>operators</code> — custom query operators the client can evaluate (<code>{ $asOf: asOf =&gt; item =&gt; boolean }</code>); queries using them stay realtime-mergeable. See <a href="#teaching-the-client-custom-operators">Teaching the client custom operators</a></li>
+<li><code>isInvalidationEvent</code> — identifies application-specific realtime notifications that carry an entity ID but no complete entity value; see <a href="#invalidation-only-events">Invalidation-only events</a></li>
+<li><code>transactions</code> — optional atomic transaction transport; see <a href="#featherstransactions">feathersTransactions</a> for an application-provided <code>api/transactions</code> service, or set <code>serviceName</code> for an existing endpoint</li>
 </ul>
 </li>
 </ul>
 <p>Meta behavior: <code>find</code> returns <code>{ data, meta }</code> (<code>FindMeta</code>: <code>{ total, limit, skip }</code>); <code>get</code> returns only the item.</p>
+<h2 id="featherstransactions">feathersTransactions<a class="heading-anchor" href="#featherstransactions" aria-label="Link to this section">#</a></h2>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">import</span> <span class="p">{</span> <span class="nx">FeathersAdapter</span><span class="p">,</span> <span class="nx">feathersTransactions</span> <span class="p">}</span> <span class="kr">from</span> <span class="s1">&#39;figbird&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">adapter</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">FeathersAdapter</span><span class="p">(</span><span class="nx">feathersClient</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">transactions</span>: <span class="kt">feathersTransactions</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">serviceName</span><span class="o">:</span> <span class="s1">&#39;api/transactions&#39;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">params</span><span class="o">:</span> <span class="p">{</span> <span class="nx">headers</span><span class="o">:</span> <span class="p">{</span> <span class="s1">&#39;X-Request-ID&#39;</span><span class="o">:</span> <span class="nx">requestId</span> <span class="p">}</span> <span class="p">},</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}),</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><p>Returns a <code>FeathersTransaction</code> transport for <code>FeathersAdapter</code>&rsquo;s <code>transactions</code> option.
+Both helper options are optional. <code>serviceName</code> defaults to <code>api/transactions</code>; <code>params</code>
+passes Feathers params to that service&rsquo;s <code>create</code> call. Per-mutation params stay in each
+operation&rsquo;s arguments.</p>
+<p>The helper sends <code>{ serial: true, calls }</code>, with each call encoded as
+<code>[method, serviceName, ...args]</code>, and expects <code>{ data: [...] }</code> with one result per call in
+order. Successful entries use <code>{ status: 'fulfilled', value }</code>; rejected entries use
+<code>{ status: 'rejected', reason }</code>. The endpoint must execute the calls in order within one
+atomic transaction and roll back all writes if any call fails. The helper does not create
+this endpoint or provide server rollback itself.</p>
+<p>Any rejected entry causes a <code>FeathersTransactionError</code>, exported from <code>figbird</code>. Its
+<code>result.data</code> contains the ordered entries, including rejection reasons. Invalid response
+shapes or a mismatched result count cause an <code>Error</code>. Figbird rolls back the transaction&rsquo;s
+optimistic changes when the transport rejects. See <a href="#adapter-backed-transactions">Adapter-backed transactions</a>
+for usage and create dependencies.</p>
 <h2 id="createhooks">createHooks<a class="heading-anchor" href="#createhooks" aria-label="Link to this section">#</a></h2>
 <p>Binds a schema to import-safe, typed React hooks:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">export</span> <span class="kr">const</span> <span class="p">{</span> <span class="nx">useQuery</span><span class="p">,</span> <span class="nx">useFigbird</span><span class="p">,</span> <span class="nx">useMutations</span><span class="p">,</span> <span class="nx">q</span><span class="p">,</span> <span class="nx">defineQuery</span><span class="p">,</span> <span class="nx">useAction</span><span class="p">,</span> <span class="nx">useMutating</span> <span class="p">}</span> <span class="o">=</span>
@@ -1668,10 +1871,13 @@ one schema from being applied to another runtime.</p>
 <code>useMutating</code>. It supplies the instance to a tree and is the injection point for application
 roots, per-request SSR instances, stories, and tests. <code>useAction</code> can also run without a provider;
 when one exists, it uses that instance for observability events.</p>
+<p>Server rendering needs a streaming renderer such as <code>renderToPipeableStream</code>, so cold reads can
+suspend and render real data; <code>renderToString</code> cannot wait on Suspense and renders fallbacks.
+Create an instance per request and dispose it after the render. The server&rsquo;s cache is not handed
+to the client, so the client refetches during hydration.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-tsx" data-lang="tsx"><span class="line"><span class="cl"><span class="p">&lt;</span><span class="nt">FigbirdProvider</span> <span class="na">figbird</span><span class="o">=</span><span class="p">{</span><span class="nx">testFigbird</span><span class="p">}&gt;{</span><span class="nx">ui</span><span class="p">}&lt;/</span><span class="nt">FigbirdProvider</span><span class="p">&gt;</span>
 </span></span></code></pre></div><p>The standalone <code>useFigbird()</code> export reads only the context instance and throws without a
-provider; <code>useFigbirdMaybe()</code> returns <code>undefined</code> instead. The typed <code>useFigbird</code> returned by a
-<code>createHooks</code> kit reads the same provider.</p>
+provider. The typed <code>useFigbird</code> returned by a <code>createHooks</code> kit reads the same provider.</p>
 <h1 id="api-observability">API: Observability</h1>
 <h2 id="browser-devtools-extension">Browser devtools extension<a class="heading-anchor" href="#browser-devtools-extension" aria-label="Link to this section">#</a></h2>
 <p>Figbird devtools run as a Chrome or Firefox DevTools extension.</p>
@@ -1765,7 +1971,8 @@ hook-scoped results)</li>
 <li><code>retry</code> — failed fetches to retry before exposing the error; <code>false</code> disables retries</li>
 <li><code>retryDelay</code> — fixed delay in milliseconds between retries</li>
 <li><code>allPages</code> — fetch all pages (<code>parallel</code> + <code>parallelLimit</code> control concurrency)</li>
-<li><code>matcher</code> — custom <code>(query) =&gt; (item) =&gt; boolean</code> for realtime merging</li>
+<li><code>matcher</code> — custom <code>(query) =&gt; (item) =&gt; boolean | 'unknown'</code> for realtime merging;
+<code>'unknown'</code> keeps the result as is and refetches it</li>
 <li><code>matcherKey</code> — opt into sharing equivalent custom-matcher queries across hooks;
 without it, matcher queries remain hook-scoped</li>
 </ul>
@@ -1819,6 +2026,7 @@ Realtime removal enters the error state with <code>ItemRemovedError</code>, matc
         <li><a href="#usequeryresults">useQueryResults</a></li>
         <li><a href="#usewindowquery">useWindowQuery</a></li>
         <li><a href="#m-and-usemutations">m and useMutations</a></li>
+        <li><a href="#figbirdtransaction">figbird.transaction</a></li>
         <li><a href="#definemutationqueue-and-usemutationqueue">defineMutationQueue and useMutationQueue</a></li>
         <li><a href="#figbirdcreatemutationqueue">figbird.createMutationQueue</a></li>
         <li><a href="#useaction">useAction</a></li>
@@ -1840,6 +2048,7 @@ Realtime removal enters the error state with <code>ItemRemovedError</code>, matc
         <li><a href="#embed">embed</a></li>
         <li><a href="#figbird-1">Figbird</a></li>
         <li><a href="#feathersadapter">FeathersAdapter</a></li>
+        <li><a href="#featherstransactions">feathersTransactions</a></li>
         <li><a href="#createhooks">createHooks</a></li>
         <li><a href="#figbirdprovider">FigbirdProvider</a></li>
       </ul>
