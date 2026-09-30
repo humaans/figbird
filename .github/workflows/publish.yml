@@ -27,33 +27,33 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          package-manager-cache: false
       - name: Check for a version change
         id: version
         env:
           BEFORE: ${{ github.event.before }}
         run: |
-          previous=$(git show "$BEFORE:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
-          current=$(node -p "require('./package.json').version")
-          if [ "$previous" = "$current" ]; then
-            echo 'No package version change; skipping npm staging.'
-            exit 0
-          fi
-          node --input-type=module -e "
-            import assert from 'node:assert/strict';
-            import { readFileSync } from 'node:fs';
-            const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
-            const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-            assert.equal(lock.version, manifest.version, 'lockfile version must match');
-            assert.equal(lock.packages[''].version, manifest.version, 'lockfile root version must match');
-          "
-          echo "release=true" >> "$GITHUB_OUTPUT"
-          tag=$(node -p "require('./package.json').version.includes('-') ? 'next' : 'latest'")
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: steps.version.outputs.release == 'true'
-        with:
-          node-version: 26
-          package-manager-cache: false
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, readFileSync } from 'node:fs';
+
+          const previous = JSON.parse(execFileSync('git', ['show', `${process.env.BEFORE}:package.json`], { encoding: 'utf8' }));
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (previous.version === manifest.version) {
+            console.log('No package version change; skipping npm staging.');
+            process.exit(0);
+          }
+
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          assert.equal(lock.version, manifest.version, 'lockfile version must match');
+          assert.equal(lock.packages[''].version, manifest.version, 'lockfile root version must match');
+          const tag = manifest.version.includes('-') ? 'next' : 'latest';
+          appendFileSync(process.env.GITHUB_OUTPUT, `release=true\ntag=${tag}\n`);
+          NODE
       - name: Test and build package
         if: steps.version.outputs.release == 'true'
         run: |
