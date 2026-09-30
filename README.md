@@ -106,14 +106,6 @@ Run `npm run package:check` to build and verify the packed package's exports and
 
 ## Releasing
 
-Run [Prepare npm release](https://github.com/humaans/figbird/actions/workflows/prepare-release.yml) in GitHub Actions on `master`. Choose `patch`, `minor`, or `major` for a stable release, or `prerelease` to increment the current `pre` version. Use `prepatch`, `preminor`, or `premajor` to start a new prerelease series. For example, `prerelease` takes `0.24.0-pre.18` to `0.24.0-pre.19`, while `patch` takes it to `0.24.0`.
-
-The workflow opens a PR that updates `package.json` and `package-lock.json`. Review it and merge it. The merge runs the full test suite, builds and checks the package's exports and types, then stages the tarball on npm. Prereleases use the `next` tag; stable releases use `latest`. Dependency updates that leave the version unchanged do not stage a release.
-
-An npm maintainer reviews the tarball in the [Staged Packages tab on npmjs.com](https://www.npmjs.com/) and approves it with 2FA. Approval makes the staged version public. The maintainer can also use `npm stage list figbird`, `npm stage view <stage-id>`, and `npm stage approve <stage-id>`. Approve the current release before preparing another one. If staging fails, fix the cause and rerun the failed GitHub Actions jobs. If a staged package needs replacing, reject it on npm before rerunning.
-
-Before the first release through this workflow, configure `figbird` on npmjs.com:
-
-1. In package settings, add a [trusted publisher](https://docs.npmjs.com/trusted-publishers/) for GitHub Actions with organization `humaans`, repository `figbird`, and workflow filename `publish.yml`. Leave the environment name empty. Allow only `npm stage publish`.
-2. Set Publishing access to **Require two-factor authentication and disallow tokens**. Ensure the person approving staged releases has npm publish access and 2FA enabled.
-3. In the repository's **Settings > Actions > General > Workflow permissions**, enable **Allow GitHub Actions to create and approve pull requests** so the preparation workflow can open version PRs. For [PRs created with `GITHUB_TOKEN`](https://docs.github.com/en/actions/concepts/security/github_token), a maintainer must select **Approve workflows to run** on the PR before its checks run.
+1. Run [Prepare npm release](https://github.com/humaans/figbird/actions/workflows/prepare-release.yml) on `master`. Choose `patch`, `minor`, or `major` for a stable release; `prerelease` to increment the current prerelease; or `prepatch`, `preminor`, or `premajor` to start a new prerelease series.
+2. Review the version PR, select **Approve workflows to run**, and merge once checks pass. CI tests, builds, and stages the package on npm using `next` for prereleases or `latest` for stable releases.
+3. Review the tarball in npm's [Staged Packages tab](https://www.npmjs.com/) and approve it with 2FA to publish. Approve the current release before preparing another.
