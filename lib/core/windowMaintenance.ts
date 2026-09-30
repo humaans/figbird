@@ -438,8 +438,7 @@ export function updateQueriesFromEvents<TMeta>({
   for (const event of appliedItems) {
     for (const [queryId, query] of service.queries) {
       if (queryId === excludeQueryId || excludeQueryIds?.has(queryId)) continue
-      if (query.config.realtime !== 'merge') continue
-      if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') continue
+      if (!query.maintenance.mergeEvents) continue
       const visible = service.itemQueryIndex.get(event.itemId)?.has(queryId) ?? false
       if (membershipScope === 'visible-only' && !visible) continue
       if (
@@ -512,8 +511,7 @@ export function reapplyQueryFromEntities<TMeta>({
   itemRemoved: (meta: TMeta) => TMeta
 }): QueryReapplyResult {
   const query = service.queries.get(queryId)
-  if (!query || query.config.realtime !== 'merge') return 'ignored'
-  if (query.desc.method === 'find' && query.config.fetchPolicy === 'network-only') return 'ignored'
+  if (!query || !query.maintenance.mergeEvents) return 'ignored'
   if (isServerMaintained(query.maintenance.classification)) return 'reconcile'
   if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
   if (!Array.isArray(query.state.data)) return 'ignored'
@@ -607,16 +605,10 @@ export function replayFetchedQueryFromEvents<TMeta>({
     const query = service.queries.get(queryId)
     if (!query || query.config.realtime === 'disabled') return
 
-    const canMerge =
-      query.config.realtime === 'merge' &&
-      !(query.desc.method === 'find' && query.config.fetchPolicy === 'network-only')
-    const needsVisibleFallback =
-      query.config.realtime === 'refetch' ||
-      query.config.fetchPolicy === 'network-only' ||
-      isServerMaintained(query.maintenance.classification)
-    if (canMerge) {
+    const { mergeEvents, replayVisibleEvents } = query.maintenance
+    if (mergeEvents) {
       const result = applyMergeEventToQuery(context, queryId, event)
-      if (result === 'applied' || !needsVisibleFallback) continue
+      if (result === 'applied' || !replayVisibleEvents) continue
     }
     applyVisibleEventEffect(
       context,

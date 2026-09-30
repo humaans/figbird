@@ -1,5 +1,5 @@
 import type { Clock } from './clock.js'
-import { QueryLifetime } from './queryLifetime.js'
+import { RelationalQueryLifetime } from './relationalQueryLifetime.js'
 import { ChunkedRelationQuery, type ChunkedRelationSnapshot } from './relationChunks.js'
 import { compileRelations, type RelationPlan, type RelationQueryPlan } from './relationPlan.js'
 import { hashObject } from './hash.js'
@@ -49,7 +49,6 @@ import {
 import type { AnySchema, Schema } from './schema.js'
 import { resolveServicePath } from './schema.js'
 import type { ValueComparator } from './sort.js'
-import { validateStaleTime } from './staleTime.js'
 
 export type { RelationalPaginationState } from './queryRoots.js'
 
@@ -161,15 +160,6 @@ type GatherResult = {
   assembly: Map<string, AssembledRelationData>
 }
 
-type RelationalListener =
-  | { source: 'subscriber'; staleTime: number }
-  | { source: 'prefetch'; staleTime: number; adoptableUntil: number | null }
-  | { source: 'prepare'; staleTime: number; preparationGeneration: number }
-
-type PreparedAdoption =
-  | { kind: 'idle'; adoptedThrough: number }
-  | { kind: 'wave'; generation: number }
-
 export interface InspectedRelationalQuery {
   key: string
   name?: string
@@ -230,13 +220,7 @@ export class RelationalQueryRef<
   // "comments.reactions"). A relation is "synced" once its entry exists here — even a
   // kind:'empty' entry counts, so loading detection doesn't hang on empty relations.
   #relationSubs: Map<string, RelationSub<TMeta>> = new Map()
-  #lifetime = new QueryLifetime<
-    (state: RelationalQueryState<T>) => void,
-    RelationalListener,
-    null
-  >()
-  #nextPreparationGeneration = 0
-  #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
+  #lifetime: RelationalQueryLifetime<(state: RelationalQueryState<T>) => void>
   #processedEventUnsub: (() => void) | null = null
   #relationalFilterReconcileQueued = false
   // Strictest active subscriber freshness tolerance — applied to newly-created
@@ -267,11 +251,6 @@ export class RelationalQueryRef<
   #lastGatherWasPartial = false
   #assembleRelations: ReturnType<typeof createRelationAssembler> | null = null
 
-  // A Suspense read materializes and fetches the graph before React can commit its
-  // subscription. The first committed listener claims that fetch instead of treating
-  // the just-resolved data as stale and immediately repeating the whole graph.
-  #coldStartAwaitingSubscriber = false
-
   // Relation keys that already produced a fan-out warning — warn once per relation,
   // not on every sync pass.
   #fanOutWarnedKeys: Set<string> = new Set()
@@ -289,7 +268,6 @@ export class RelationalQueryRef<
 
   #onIdle: (() => void) | null
   #onEvict: (() => void) | null = null
-  #defaultStaleTime: number
   #name: string | undefined
   #rootOverride: RelationalRootOverride | null
   #relationPlans: RelationPlan[]
@@ -308,7 +286,7 @@ export class RelationalQueryRef<
     this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
     this.#onIdle = options?.onIdle ?? null
     this.#onEvict = onEvict ?? null
-    this.#defaultStaleTime = options?.defaultStaleTime ?? 0
+    this.#lifetime = new RelationalQueryLifetime(host.clock, options?.defaultStaleTime ?? 0)
     this.#rootOverride = options?.root ?? null
   }
 
@@ -401,46 +379,13 @@ export class RelationalQueryRef<
       source?: 'subscriber' | 'prepare' | 'prefetch'
     },
   ): () => void {
-    const source = options?.source ?? 'subscriber'
-    const staleTime =
-      options?.staleTime === undefined
-        ? this.#defaultStaleTime
-        : validateStaleTime(options.staleTime, 'query(): staleTime')
-    const listener: RelationalListener =
-      source === 'prepare'
-        ? {
-            source,
-            staleTime,
-            preparationGeneration: ++this.#nextPreparationGeneration,
-          }
-        : source === 'prefetch'
-          ? { source, staleTime, adoptableUntil: this.#host.clock.now() + staleTime }
-          : { source, staleTime }
-    // Preparation makes one freshness decision for the destination's initial React
-    // commit. Every subscriber in that synchronous wave adopts it; later mounts use
-    // their own staleTime even if the router keeps the preparation pinned.
-    const adoptsPreparation = source === 'subscriber' && this.#claimPreparedAdoption()
-    const adoptsPrefetch = source === 'prepare' && this.#claimPrefetch()
-    const claimsColdStart = this.#coldStartAwaitingSubscriber
-    this.#lifetime.acquire(fn, listener)
+    const freshness = this.#lifetime.retain(fn, options)
     this.#staleTime = this.#lifetime.staleTime()
-
     if (!this.#root) {
       this.#setupRoot()
     } else {
       this.#root.setStaleTime(this.#staleTime)
-      if (claimsColdStart) {
-        // React StrictMode may subscribe, unsubscribe, and resubscribe in one turn.
-        // Keep the claim window open through that commit so neither subscription
-        // mistakes the Suspense fetch for stale data.
-        queueMicrotask(() => {
-          this.#coldStartAwaitingSubscriber = false
-        })
-      } else if (!adoptsPreparation) {
-        // Adopt the speculative read once, but still retry errors and pending
-        // invalidations. An explicit preparation staleTime takes precedence.
-        this.#ensureFresh(adoptsPrefetch && options?.staleTime === undefined ? Infinity : staleTime)
-      }
+      if (freshness.kind === 'check') this.#ensureFresh(freshness.staleTime)
     }
 
     // Don't call fn synchronously - useSyncExternalStore will call getSnapshot() instead
@@ -461,39 +406,11 @@ export class RelationalQueryRef<
     }
   }
 
-  #claimPreparedAdoption(): boolean {
-    const adoption = this.#preparedAdoption
-    const adoptedThrough = adoption.kind === 'wave' ? adoption.generation : adoption.adoptedThrough
-    let newestActive = adoptedThrough
-    for (const listener of this.#lifetime.owners.values()) {
-      if (listener.source === 'prepare') {
-        newestActive = Math.max(newestActive, listener.preparationGeneration)
-      }
-    }
-
-    if (newestActive > adoptedThrough) {
-      this.#preparedAdoption = { kind: 'wave', generation: newestActive }
-      queueMicrotask(() => {
-        const current = this.#preparedAdoption
-        if (current.kind === 'wave' && current.generation === newestActive) {
-          this.#preparedAdoption = { kind: 'idle', adoptedThrough: newestActive }
-        }
-      })
-    }
-
-    return this.#preparedAdoption.kind === 'wave'
-  }
-
-  #claimPrefetch(): boolean {
-    const now = this.#host.clock.now()
-    let claimed = false
-    for (const listener of this.#lifetime.owners.values()) {
-      if (listener.source === 'prefetch' && listener.adoptableUntil !== null) {
-        claimed ||= now < listener.adoptableUntil
-        listener.adoptableUntil = null
-      }
-    }
-    return claimed
+  /** @internal Retain an idempotent speculative lease until its freshness window expires. */
+  prefetch(staleTime: number): void {
+    this.#lifetime.prefetch(staleTime, () =>
+      this.subscribe(() => {}, { source: 'prefetch', staleTime }),
+    )
   }
 
   #beginGraphRun(): string | null {
@@ -1399,8 +1316,9 @@ export class RelationalQueryRef<
    */
   #settleSuspense(snapshot: RelationalQueryState<T>): void {
     if (snapshot.status !== 'success' && snapshot.status !== 'error') return
-    const wasPending = this.#lifetime.reads.get('root')?.status === 'pending'
-    this.#lifetime.settle('root', null, snapshot.status === 'error' ? snapshot.error : null)
+    const wasPending = this.#lifetime.settleSuspense(
+      snapshot.status === 'error' ? snapshot.error : null,
+    )
     if (wasPending) this.#onIdle?.()
   }
 
@@ -1427,14 +1345,10 @@ export class RelationalQueryRef<
    * to the keep-previous-data path rather than throwing again.
    */
   suspensePromise(): Promise<void> {
-    if (this.#lifetime.reads.get('root')?.status === 'settled') return Promise.resolve()
-    return this.#lifetime.read('root', null, () => {
-      if (!this.#root) {
-        this.#coldStartAwaitingSubscriber = this.#lifetime.owners.size === 0
-        this.#setupRoot()
-      }
+    return this.#lifetime.suspensePromise(() => {
+      if (!this.#root) this.#setupRoot()
       this.#settleSuspense(this.getSnapshot())
-    })
+    }, this.#root === null)
   }
 
   /** @internal Release settled speculative work only when no owner adopted it. */
@@ -1476,14 +1390,7 @@ export class RelationalQueryRef<
     this.#lastGatherWasPartial = false
     this.#assembleRelations = null
     this.#staleTime = 0
-    if (this.#preparedAdoption.kind === 'wave') {
-      this.#preparedAdoption = {
-        kind: 'idle',
-        adoptedThrough: this.#preparedAdoption.generation,
-      }
-    }
     this.#lifetime.reset()
-    this.#coldStartAwaitingSubscriber = false
     this.#onEvict?.()
   }
 }

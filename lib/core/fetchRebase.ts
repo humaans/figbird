@@ -1,3 +1,4 @@
+import type { FetchResponseMode } from './queryMaintenance.js'
 import { CappedBuffer } from './cappedBuffer.js'
 import { entityKey, type EntityKey, type ItemId, type ProcessedCacheEvent } from './queryTypes.js'
 
@@ -154,8 +155,6 @@ export interface RebasedResponse {
   readonly items: readonly unknown[]
   readonly itemIds: ReadonlySet<EntityKey>
 }
-
-export type FetchResponseMode = 'entity' | 'projection' | 'snapshot' | 'fetch-owned'
 
 function overlayProjectionItem(
   responseItem: unknown,

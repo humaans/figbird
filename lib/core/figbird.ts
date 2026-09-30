@@ -79,7 +79,7 @@ import type {
 } from './schema.js'
 import { foreignKeys, resolveServicePath } from './schema.js'
 import type { ValueComparator } from './sort.js'
-import { isWithinStaleTime, validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
+import { validatePrefetchStaleTime, validateStaleTime } from './staleTime.js'
 import { createTransactionContext, type TransactionContext } from './transactions.js'
 
 type DescriptorWriteProjection<TItem> =
@@ -328,11 +328,6 @@ export class Figbird<
   dispose(): void {
     if (this.#disposed) return
     this.#disposed = true
-    for (const prefetch of this.#prefetches.values()) {
-      prefetch.timer.cancel()
-      prefetch.release()
-    }
-    this.#prefetches.clear()
     for (const ref of this.#windowQueryCache.values()) ref.dispose()
     for (const ref of this.#relationalQueryCache.values()) ref.dispose()
     this.#windowQueryCache.clear()
@@ -608,9 +603,6 @@ export class Figbird<
     }
   }
 
-  // Active speculative pins, keyed by query hash (see prefetch()).
-  #prefetches: Map<string, { at: number; release: () => void; timer: ClockTimer }> = new Map()
-
   /**
    * Speculatively warm a query — the idempotent, fire-and-forget sibling of `prepare()`.
    *
@@ -635,28 +627,7 @@ export class Figbird<
     options?: { staleTime?: number },
   ): void {
     const staleTime = validatePrefetchStaleTime(options?.staleTime ?? 30_000)
-    const ref = this.query(query)
-    const hash = ref.hash()
-
-    const now = this.clock.now()
-    const existing = this.#prefetches.get(hash)
-    if (existing && isWithinStaleTime(existing.at, staleTime, now)) return
-    if (existing) {
-      existing.timer.cancel()
-      existing.release()
-      this.#prefetches.delete(hash)
-    }
-
-    // The pin also carries the staleTime so a warm-in-store read within the window
-    // skips the SWR revalidation instead of re-fetching.
-    const release = ref.subscribe(() => {}, { staleTime, source: 'prefetch' })
-    const timer = this.clock.setTimeout(() => {
-      this.#prefetches.delete(hash)
-      release()
-    }, staleTime)
-    // Never keep a Node process alive for a speculative pin (browsers ignore this).
-    timer.unref()
-    this.#prefetches.set(hash, { at: now, release, timer })
+    this.query(query).prefetch(staleTime)
   }
 
   // Descriptor layer — the primitive the relational engine (and the deprecated

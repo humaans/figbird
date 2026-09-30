@@ -1,43 +1,32 @@
 import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import { compileQueryMaintenance } from './queryMaintenance.js'
+import { applyFetchCommit, buildFetchCommit, type StoreResponse } from './fetchCommit.js'
 import { queryPage, EMPTY_PAGE, type QueryPage } from '../adapters/queryPage.js'
 import { ReconcileScheduler, type ReconcilePreparation } from './reconcileScheduler.js'
 import { commitQuery, deleteQuery } from './queryResults.js'
 import { QueryRetention } from './queryRetention.js'
-import {
-  locallySupportedOperators,
-  type Adapter,
-  type PageResponse,
-  type QueryResponse,
-} from '../adapters/adapter.js'
+import { locallySupportedOperators, type Adapter, type QueryResponse } from '../adapters/adapter.js'
 import { isEphemeralQuery } from './queryIdentity.js'
 import { type FigbirdEventEmitter, type FetchReason, type TraceCause } from './events.js'
 import { QueryTelemetry } from './queryTelemetry.js'
 import type { MutationActivity } from './mutationTracker.js'
 import { MutationExecutor } from './mutationExecutor.js'
 import { type RegisteredMutation, type ScheduledMutationControl } from './mutationQueue.js'
-import {
-  FetchEventJournal,
-  planFetchRebase,
-  rebaseResponseData,
-  type FetchResponseMode,
-} from './fetchRebase.js'
+import { FetchEventJournal, planFetchRebase } from './fetchRebase.js'
 import { ABSENT, type ProjectionChange } from './mutationLanes.js'
 import type { ForeignKey } from './schema.js'
 import {
   applyEventsToService,
   applyVisibleEventToQuery,
   createServiceState,
-  diffCompleteSet,
   findInsertIndex,
-  groupEventsByService,
   isCompleteSetQuery,
+  groupEventsByService,
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
   updateQueriesFromEvents,
   type QueryMembershipScope,
 } from './windowMaintenance.js'
-import { isServerMaintained, usesFetchOwnedRows } from './queryClassification.js'
 import {
   entityKey,
   queryOfParams,
@@ -98,10 +87,6 @@ function isIdOnlyRealtimePayload(item: unknown, itemId: ItemId | undefined): boo
     Object.keys(item).length === 1
   )
 }
-
-type StoreResponse<TMeta> =
-  | QueryResponse<unknown, TMeta | undefined>
-  | PageResponse<unknown[], TMeta>
 
 type QueuedStoreEvent = QueuedEvent | RealtimeInvalidation
 
@@ -1401,15 +1386,7 @@ export class QueryStore<
       const getId = this.#getIdReader(query.desc.serviceName)
       const data = result.data
       const responseItems = Array.isArray(data) ? data : data == null ? [] : [data]
-      const isProjection = query.maintenance.isProjection
-      const responseMode: FetchResponseMode =
-        query.config.realtime === 'disabled'
-          ? 'snapshot'
-          : isProjection
-            ? 'projection'
-            : usesFetchOwnedRows(query.maintenance.classification, query.config.realtime)
-              ? 'fetch-owned'
-              : 'entity'
+      const responseMode = query.maintenance.responseMode
       const rebasePlan = planFetchRebase({
         responseItems,
         journalEvents,
@@ -1447,122 +1424,36 @@ export class QueryStore<
       }
 
       const activeOverlayEvents = this.#mutationExecutor.overlayEvents(query.desc.serviceName)
-      const overlayEvents = query.config.realtime === 'disabled' ? [] : activeOverlayEvents
-      const effectiveJournalEvents = [...rebasePlan.events, ...overlayEvents]
-      hadEffectiveJournalEvents = rebasePlan.events.length > 0
-      const latestEventById = new Map(rebasePlan.latestEventById)
-      const journaledItemIds = new Set(rebasePlan.itemIds)
-      for (const event of overlayEvents) {
-        latestEventById.set(event.itemId, event)
-        this.#mutationExecutor.deferQueryIds(event.mutationLaneKey, [queryId])
-      }
-      for (const event of activeOverlayEvents) journaledItemIds.add(event.itemId)
-
-      const isCompleteSet = isCompleteSetQuery(query)
-      const previousRootEntities: Map<EntityKey, unknown> | null = isCompleteSet ? new Map() : null
-      if (previousRootEntities) {
-        for (const itemId of query.rows.ids) {
-          const entity = service.entities.get(itemId)
-          if (entity !== undefined) previousRootEntities.set(itemId, entity)
+      for (const event of activeOverlayEvents) {
+        if (responseMode !== 'snapshot') {
+          this.#mutationExecutor.deferQueryIds(event.mutationLaneKey, [queryId])
         }
       }
-      const meta = (result as { meta?: TMeta }).meta
-      const pageInfo = 'pageInfo' in result ? result.pageInfo : undefined
-      const rebasedResponse = rebaseResponseData({
-        data,
-        mode: responseMode,
-        latestEventById,
-        entities: service.entities,
-        getId,
-        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
-        canKeepCurrentItem: item =>
-          !(
-            query.desc.method === 'find' &&
-            query.config.realtime === 'merge' &&
-            !isServerMaintained(query.maintenance.classification) &&
-            // An undecidable item keeps the server's word for it.
-            query.maintenance.matches(item) === false
-          ),
-      })
-      const nextItemIds = new Set(rebasedResponse.itemIds)
-
-      // Projected (`$select`) rows are correct for this query's own result but are
-      // not full entities — never write them to the entity cache, which must hold
-      // only complete rows for the materialized local-answer paths to be sound
-      // (isItemStale can't catch a projection: same updatedAt as the row it shadows).
-      const fetchedEvents: ProcessedCacheEvent[] = []
-      const fetchedRows: QueuedEvent[] = []
-      if (source === 'server' && !isProjection) {
-        for (const item of rebasedResponse.items) {
-          const id = getId(item)
-          if (id === undefined || journaledItemIds.has(entityKey(id))) continue
-          fetchedRows.push({
-            mode: 'server',
-            source: 'fetch',
-            serviceName: query.desc.serviceName,
-            type: service.entities.has(entityKey(id)) ? 'updated' : 'created',
-            item,
-            ...(cause === undefined ? {} : { cause }),
-          })
-        }
-      }
-      applyEventsToService({
+      const plan = buildFetchCommit({
         service,
-        serviceName: query.desc.serviceName,
-        events: fetchedRows,
+        query,
+        result,
+        source,
+        rebasePlan,
+        overlayEvents: activeOverlayEvents,
         getId,
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
-        processedEvents: fetchedEvents,
+        meta: ('meta' in result ? result.meta : undefined) || this.#adapter.emptyMeta(),
+        fetchedAt: this.#clock.now(),
+        ...(cause === undefined ? {} : { cause }),
       })
-
-      // `nextItemIds` is also the complete-set diff input. Rebase its membership
-      // to the last in-flight event so a stale root response cannot delete a
-      // created row or resurrect a removed one service-wide.
-      for (const [itemId, event] of latestEventById) {
-        if (event.type === 'removed') {
-          nextItemIds.delete(itemId)
-        } else if (isCompleteSet) {
-          nextItemIds.add(itemId)
-        }
-      }
-
+      hadEffectiveJournalEvents = rebasePlan.events.length > 0
       shouldRefetch = this.#executions.get(queryId)?.followup !== undefined
-
-      // A successful unfiltered allPages fetch (`.all()` with no filters) means the
-      // complete row set is now local: mark the service materialized so matcher-
-      // decidable finds are answered from the cache (see #selectMaterializedFind). A *filtered*
-      // allPages fetch is complete only for its own filter — it must not materialize
-      // the service.
-      if (isCompleteSet) {
+      if (plan.completeSet) {
         const previousRoot = service.materialized?.queryId
         if (previousRoot && previousRoot !== queryId && this.#listenerCount(previousRoot) === 0) {
           this.#retention.retain(previousRoot)
         }
-        service.materialized = { queryId, fetchedAt: this.#clock.now() }
       }
-
-      commitQuery(service, {
-        ...query,
-        fetchedAt: this.#clock.now(),
-        state: {
-          status: 'success' as const,
-          data: rebasedResponse.data,
-          meta: meta || this.#adapter.emptyMeta(),
-          ...(pageInfo ? { pageInfo } : {}),
-          isFetching: false,
-          error: null,
-        },
+      const changes = applyFetchCommit(service, plan, {
+        getId,
+        isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
-
-      const changes = previousRootEntities
-        ? diffCompleteSet({
-            service,
-            serviceName: query.desc.serviceName,
-            previousEntities: previousRootEntities,
-            nextItemIds,
-            ignoredItemIds: journaledItemIds,
-          })
-        : fetchedEvents
       eventEffects.push(
         ...this.#updateQueriesForEvents({
           service,
@@ -1570,27 +1461,16 @@ export class QueryStore<
           processedEvents: changes.map(event =>
             cause === undefined ? event : { ...event, cause },
           ),
-          // A normal fetch proves the returned entity value, but not that it belongs
-          // to another query. A complete-set diff does prove service membership.
-          membershipScope: previousRootEntities ? 'all-matching' : 'visible-only',
+          membershipScope: plan.completeSet ? 'all-matching' : 'visible-only',
           touch,
           excludeQueryId: queryId,
         }),
       )
-
-      if (
-        effectiveJournalEvents.length > 0 &&
-        (responseMode === 'entity' || responseMode === 'fetch-owned')
-      ) {
+      if (plan.replayEvents.length > 0) {
         replayFetchedQueryFromEvents({
           service,
           queryId,
-          events:
-            responseMode === 'fetch-owned'
-              ? effectiveJournalEvents.filter(
-                  event => event.mode !== 'server' || event.source !== 'realtime',
-                )
-              : effectiveJournalEvents,
+          events: plan.replayEvents,
           touch,
           getId,
           itemAdded: meta => this.#adapter.itemAdded(meta),
