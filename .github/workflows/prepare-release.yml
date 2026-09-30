@@ -1,0 +1,64 @@
+name: Prepare npm release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version change
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
+          - prepatch
+          - preminor
+          - premajor
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-npm-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+      - name: Check published version
+        run: |
+          current=$(node -p "require('./package.json').version")
+          tag=$(node -p "require('./package.json').version.includes('-') ? 'next' : 'latest'")
+          published=$(npm view "figbird@$tag" version)
+          if [ "$published" != "$current" ]; then
+            echo "The repository is at $current, but npm $tag is $published. Resolve the pending or missing release first."
+            exit 1
+          fi
+      - name: Open version pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          npm version "$BUMP" --preid=pre --no-git-tag-version --ignore-scripts
+          version=$(node -p "require('./package.json').version")
+          branch="release/v$version"
+          git switch -c "$branch"
+          git add package.json package-lock.json
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Release v$version"
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$branch"
+          gh pr create --base master --head "$branch" --title "Release v$version" --body "Bump Figbird to $version ($BUMP). After this merges, the publishing workflow tests and builds the package, then stages it on npm. Prereleases use the next tag; stable releases use latest. An npm maintainer must review and approve the staged package with 2FA before it goes live."
