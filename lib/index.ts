@@ -3,8 +3,6 @@ export {
   defineMutationQueue,
   Figbird,
   defineQuery,
-  QUERY_DEFINITION_BRAND,
-  QUERY_REQUEST_BRAND,
   QueryArgsError,
   isFetching,
   isIdle,
@@ -87,8 +85,7 @@ export type {
 } from './core/schema.js'
 
 // query builder
-export { QueryBuilder } from './core/queryBuilder.js'
-export type { QueryAST, QueryBuilderProxy } from './core/queryBuilder.js'
+export type { QueryAST, QueryBuilder, QueryBuilderProxy } from './core/queryBuilder.js'
 
 // query classification report types (returned by figbird.explain / figbird.inspect)
 export type { ClassificationReason, QueryNodeClass } from './core/queryClassification.js'
@@ -101,8 +98,7 @@ export type {
 } from './core/figbird.js'
 
 // relational query
-export { RelationalQueryRef } from './core/figbird.js'
-export type { RelationalQueryState } from './core/figbird.js'
+export type { RelationalQueryRef, RelationalQueryState } from './core/figbird.js'
 
 // adapters
 export {
@@ -147,7 +143,7 @@ export type {
 // react hooks
 export { createHooks } from './react/createHooks.js'
 export type { FigbirdHooks } from './react/createHooks.js'
-export { FigbirdProvider, useFigbird, useFigbirdMaybe } from './react/context.js'
+export { FigbirdProvider, useFigbird } from './react/context.js'
 // The write-side story: useMutations (from createHooks(schema), which types it) returns
 // the provider instance's stateless write proxy; useAction carries per-action
 // pending/error; useMutating answers entity/service-level "is anything in flight".
