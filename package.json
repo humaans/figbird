@@ -46,8 +46,6 @@
     "demo": "npm --prefix demo install && npm --prefix demo run dev",
     "demo:server": "npm --prefix demo run dev:server",
     "demo:client": "npm --prefix demo run dev:client",
-    "release": "np --no-publish && npm publish",
-    "release:next": "np --tag=next --any-branch --no-publish && npm publish --tag=next",
     "docs": "hugo server -s docs",
     "docs:build": "hugo -s docs",
     "docs:release": "hugo -s docs && gh-pages -d docs/public",
@@ -57,6 +55,10 @@
     "node": ">=20.0.0"
   },
   "author": "Humaans",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/humaans/figbird"
+  },
   "license": "ISC",
   "dependencies": {
     "sift": "^17.1.3"
@@ -92,8 +94,5 @@
     "multimatch": {
       "minimatch": "^3.1.2"
     }
-  },
-  "np": {
-    "releaseDraft": false
   }
 }

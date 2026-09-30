@@ -103,3 +103,9 @@ and `devtools/` paths are private. Package metadata and the TypeScript configura
 remain available as `figbird/package.json` and `figbird/tsconfig.json`.
 
 Run `npm run package:check` to build and verify the packed package's exports and types.
+
+## Releasing
+
+1. Run [Prepare npm release](https://github.com/humaans/figbird/actions/workflows/prepare-release.yml) on `master`. Choose `patch`, `minor`, or `major` for a stable release; `prerelease` to increment the current prerelease; or `prepatch`, `preminor`, or `premajor` to start a new prerelease series.
+2. Review the version PR, select **Approve workflows to run**, and merge once checks pass. CI tests, builds, and stages the package on npm using `next` for prereleases or `latest` for stable releases.
+3. Review the tarball in npm's [Staged Packages tab](https://www.npmjs.com/) and approve it with 2FA to publish. Approve the current release before preparing another.
