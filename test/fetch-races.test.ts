@@ -12,6 +12,7 @@ import {
 import { FetchEventJournal, MAX_FETCH_JOURNAL_EVENTS } from '../lib/core/fetchRebase'
 import type { ProcessedCacheEvent } from '../lib/core/queryTypes'
 import { mockFeathers, waitFor, type TestItem } from './helpers'
+import { deferred } from './mutation-test-helpers'
 
 interface Note extends TestItem {
   id: number
@@ -736,6 +737,37 @@ test('a mutation acknowledgement survives an in-flight complete-set fetch', asyn
   t.true(figbird.getState().get('notes')!.entities.has('2'))
   t.true(ids(ref.getSnapshot()!.data).includes(2))
   unsub()
+})
+
+test('snapshot fetches ignore pending mutations while protecting their canonical entities', async t => {
+  const original = { id: 1, content: 'original', rank: 1 }
+  const { figbird, notes } = createApp({ 1: original })
+  t.teardown(() => figbird.dispose())
+  const live = figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 1 })
+  t.teardown(live.subscribe(() => {}))
+  await waitFor(() => live.getSnapshot()?.status === 'success', 'the live entity')
+
+  const acknowledgement = deferred<Note>()
+  notes.patch = () => acknowledgement.promise
+  const pendingWrite = figbird.m.notes.patch(1, { content: 'optimistic' })
+  await flushTasks()
+
+  const snapshot = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find' },
+    { realtime: 'disabled' },
+  )
+  t.teardown(snapshot.subscribe(() => {}))
+  await waitFor(() => snapshot.getSnapshot()?.status === 'success', 'the snapshot fetch')
+  t.deepEqual(snapshot.getSnapshot()?.data, [original])
+  t.like(live.getSnapshot()?.data, { content: 'optimistic' })
+  t.like(figbird.getState().get('notes')?.entities.get('1'), { content: 'optimistic' })
+
+  acknowledgement.resolve({ ...original, content: 'confirmed' })
+  await pendingWrite
+  await flushTasks()
+  t.deepEqual(snapshot.getSnapshot()?.data, [original], 'settlement leaves the snapshot intact')
+  t.like(live.getSnapshot()?.data, { content: 'confirmed' })
+  t.is(notes.counts.find, 1, 'snapshot queries are not deferred for settlement refetches')
 })
 
 test('snapshot and fetch-owned queries retain their own fetched rows', async t => {

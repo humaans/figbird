@@ -1,6 +1,8 @@
 import {
   classifyStoredQuery,
   isProjectionQuery,
+  isServerMaintained,
+  usesFetchOwnedRows,
   type StoredQueryClass,
 } from './queryClassification.js'
 import { buildComparator, type ValueComparator } from './sort.js'
@@ -11,6 +13,8 @@ import {
   type QueryConfig,
 } from './queryTypes.js'
 
+export type FetchResponseMode = 'entity' | 'projection' | 'snapshot' | 'fetch-owned'
+
 export interface QueryMaintenance {
   classification: StoredQueryClass
   matches: (item: unknown) => MatchResult
@@ -19,6 +23,29 @@ export interface QueryMaintenance {
   limit: number | undefined
   skip: number
   isProjection: boolean
+}
+
+/** Immutable execution rules kept out of subscriber-visible query state. */
+interface QueryPolicy {
+  responseMode: FetchResponseMode
+  /** Preferred row ownership; missing IDs still force a query to retain its own values. */
+  rowSource: 'entities' | 'values'
+  /** Whether event replay may change membership through the local matcher. */
+  mergeEvents: boolean
+  /** Keep visible row values current when a membership merge cannot be proved. */
+  replayVisibleEvents: boolean
+  /** Whether a newer entity can be rejected by the fetched query's local predicate. */
+  rebaseMembership: boolean
+  refetchEvents: boolean
+  realtimeStrategy: 'manual' | 'refetch' | 'merge'
+}
+
+const policies = new WeakMap<QueryMaintenance, Readonly<QueryPolicy>>()
+
+export function queryPolicy(maintenance: QueryMaintenance): Readonly<QueryPolicy> {
+  const policy = policies.get(maintenance)
+  if (!policy) throw new Error('figbird: query maintenance has not been compiled')
+  return policy
 }
 
 /** Split window operators off a query so the rest can feed the local matcher. */
@@ -60,12 +87,21 @@ export function compileQueryMaintenance({
     allPages: 'allPages' in config && config.allPages === true,
     localOperators,
   })
+  const isProjection = isProjectionQuery(query)
+  const responseMode: FetchResponseMode =
+    config.realtime === 'disabled'
+      ? 'snapshot'
+      : isProjection
+        ? 'projection'
+        : usesFetchOwnedRows(classification, config.realtime)
+          ? 'fetch-owned'
+          : 'entity'
   const { filters, sort, limit, skip } = splitWindow(query)
   const effectiveSort = sort ?? defaultSort
   // Local reads also serve queries with realtime disabled. Find matchers receive
   // only predicates here, while realtime matchers retain the original query input.
   let localMatcher: ((item: unknown) => MatchResult) | undefined
-  return {
+  const maintenance: QueryMaintenance = {
     classification,
     matches:
       config.realtime === 'merge' && classification !== 'server-authoritative'
@@ -76,6 +112,27 @@ export function compileQueryMaintenance({
     compare: effectiveSort ? buildComparator(effectiveSort, compare) : undefined,
     limit,
     skip,
-    isProjection: isProjectionQuery(query),
+    isProjection,
   }
+  policies.set(maintenance, {
+    responseMode,
+    rowSource:
+      responseMode !== 'entity' || config.fetchPolicy === 'network-only' ? 'values' : 'entities',
+    mergeEvents:
+      config.realtime === 'merge' &&
+      !(desc.method === 'find' && config.fetchPolicy === 'network-only'),
+    replayVisibleEvents:
+      config.realtime === 'refetch' ||
+      config.fetchPolicy === 'network-only' ||
+      isServerMaintained(classification),
+    rebaseMembership: config.realtime === 'merge' && !isServerMaintained(classification),
+    refetchEvents: config.realtime === 'refetch',
+    realtimeStrategy:
+      config.realtime === 'disabled'
+        ? 'manual'
+        : config.realtime === 'refetch' || isServerMaintained(classification)
+          ? 'refetch'
+          : 'merge',
+  })
+  return maintenance
 }
