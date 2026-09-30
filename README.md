@@ -85,6 +85,7 @@ default, or pass it to an individual query reader.
 - **Live queries** — results update as records are created, modified, or removed
 - **Suspense-native** — loading states live in boundaries, not branches
 - **Optimistic mutations** — declared once per surface, rolled back on failure everywhere
+- **Atomic transactions** — commit CRUD writes together through an adapter with server transaction support
 - **Ordered autosave queues** — buffer and merge edits across related records without losing optimism
 - **Prepare & prefetch** — routers and hover handlers warm the exact queries screens will read
 - **Virtualized windows** — bounded relational pages follow any list virtualizer's visible range
