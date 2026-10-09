@@ -548,11 +548,16 @@ export function queryBuilderUsesSchema(builder: object, schema: Schema): boolean
  * the same key the relation expands into (e.g. `membersPreview: number[]` becomes
  * `membersPreview: Person[]` once `.related('membersPreview')` runs).
  *
- * Default `TRelated = {}` makes `keyof TRelated` resolve to `never`, so `Omit<TItem, never>`
- * preserves `TItem` verbatim. After one or more `.related()` calls, `keyof TRelated` is a
- * literal union and `Omit` strips only those keys from `TItem`.
+ * Distribute over each union member so `Omit` preserves discriminators and
+ * variant-specific fields. Without this conditional, even `Omit<TItem, never>`
+ * collapses a union into its shared properties.
+ *
+ * Default `TRelated = {}` makes `keyof TRelated` resolve to `never`, so no fields are
+ * removed. After `.related()` calls, only the declared relation keys are replaced.
  */
-type MergeRelated<TItem, TRelated extends object> = Omit<TItem, keyof TRelated> & TRelated
+type MergeRelated<TItem, TRelated extends object> = TItem extends unknown
+  ? Omit<TItem, keyof TRelated> & TRelated
+  : never
 
 /**
  * Type-level: extract the final assembled result type of a QueryBuilder, taking its
