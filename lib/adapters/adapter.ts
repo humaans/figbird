@@ -78,6 +78,8 @@ export type AdapterConnectionEvent =
     }
   | {
       type: 'reconnected'
+      /** Set false only when the adapter has established that no events were missed. */
+      reconcile?: boolean
       attempt?: number
       transport?: string
       connectionId?: string

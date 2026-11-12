@@ -484,3 +484,41 @@ test('inspection reuses frozen compiled classification reasons', t => {
   t.true(Object.isFrozen(reasons))
   for (const reason of reasons ?? []) t.true(Object.isFrozen(reason))
 })
+
+test('a proven continuous reconnect preserves data and telemetry without a fetch', async t => {
+  const feathers = mockFeathers({ notes: { data: { 1: { id: 1, content: 'hello' } } } })
+  const adapter = new FeathersAdapter(feathers)
+  let connection: Parameters<NonNullable<typeof adapter.subscribeToConnectionEvents>>[0] = () => {}
+  adapter.subscribeToConnectionEvents = handler => {
+    connection = handler
+    return () => {}
+  }
+  const figbird = new Figbird({ adapter, schema, reconnectJitter: 0 })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsubscribe = ref.subscribe(() => {})
+  t.teardown(unsubscribe)
+  t.teardown(() => figbird.dispose())
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const observed: string[] = []
+  t.teardown(figbird.events.subscribe(event => observed.push(event.kind)))
+  const before = ref.getSnapshot()
+  const notes = feathers.service('notes')
+  let reads = 0
+  const find = notes.find.bind(notes)
+  notes.find = (...args) => {
+    reads += 1
+    return find(...args)
+  }
+  connection({ type: 'reconnected', reconcile: false })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(reads, 0)
+  t.true(observed.includes('connection:reconnected'))
+  t.false(observed.includes('reconnect:sweep'))
+  t.is(ref.getSnapshot(), before)
+  connection({ type: 'reconnected' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(reads, 1)
+  connection({ type: 'reconnected', reconcile: true })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(observed.filter(kind => kind === 'reconnect:sweep').length, 2)
+})
