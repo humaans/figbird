@@ -4,6 +4,6 @@ export default {
   concurrency: availableParallelism(),
   files: ['test/*.test.{js,ts,tsx}'],
   extensions: ['js', 'ts', 'tsx'],
-  nodeArguments: ['--import=@swc-node/register/esm-register'],
+  nodeArguments: ['--import=tsx'],
   require: ['./test/setup.ts'],
 }

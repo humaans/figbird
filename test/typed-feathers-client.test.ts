@@ -1,79 +1,10 @@
 import test from 'ava'
 import { dirname, join } from 'path'
-import * as ts from 'typescript'
+import { getTypeAtPosition } from './type-helpers'
 import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const fixturePath = join(__dirname, 'fixtures', 'typed-feathers-client.ts')
-
-const programCache: Map<
-  string,
-  { program: ts.Program; checker: ts.TypeChecker; sourceFile: ts.SourceFile }
-> = new Map()
-
-function getProgramAndChecker(filePath: string, tsConfigOptions: ts.CompilerOptions = {}) {
-  const cacheKey = JSON.stringify({ filePath, tsConfigOptions })
-  if (programCache.has(cacheKey)) {
-    return programCache.get(cacheKey)!
-  }
-
-  const program = ts.createProgram([filePath], {
-    strict: true,
-    noEmit: true,
-    target: ts.ScriptTarget.ES2020,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeJs,
-    esModuleInterop: true,
-    skipLibCheck: true,
-    ...tsConfigOptions,
-  })
-
-  const sourceFile = program.getSourceFile(filePath)
-  if (!sourceFile) throw new Error(`Source file not found: ${filePath}`)
-
-  const checker = program.getTypeChecker()
-  const cacheEntry = { program, checker, sourceFile }
-  programCache.set(cacheKey, cacheEntry)
-  return cacheEntry
-}
-
-function getTypeAtPosition(
-  filePath: string,
-  exportName: string,
-  tsConfigOptions: ts.CompilerOptions = {},
-): string {
-  const { checker, sourceFile } = getProgramAndChecker(filePath, tsConfigOptions)
-
-  function findExport(node: ts.Node): ts.Node | undefined {
-    if (
-      ts.isExportDeclaration(node) ||
-      ts.isVariableStatement(node) ||
-      ts.isTypeAliasDeclaration(node)
-    ) {
-      const modifiers = ts.getModifiers(node)
-      const hasExportModifier = modifiers?.some(mod => mod.kind === ts.SyntaxKind.ExportKeyword)
-
-      if (hasExportModifier) {
-        if (ts.isVariableStatement(node)) {
-          const declaration = node.declarationList.declarations.find(
-            decl => ts.isIdentifier(decl.name) && decl.name.text === exportName,
-          )
-          if (declaration) return declaration
-        } else if (ts.isTypeAliasDeclaration(node)) {
-          if (ts.isIdentifier(node.name) && node.name.text === exportName) return node
-        }
-      }
-    }
-
-    return ts.forEachChild(node, findExport)
-  }
-
-  const exportNode = findExport(sourceFile)
-  if (!exportNode) throw new Error(`Export "${exportName}" not found`)
-
-  const type = checker.getTypeAtLocation(exportNode)
-  return checker.typeToString(type, exportNode, ts.TypeFormatFlags.NoTruncation)
-}
 
 // ========================================
 // CRUD method type tests
