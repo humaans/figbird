@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version change (stable promotes the current prerelease)
+        description: Version change
         required: true
         type: choice
         default: patch
