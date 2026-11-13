@@ -1248,6 +1248,11 @@ is no per-query throttle config) via two built-in guards on event-driven refetch
   are marked pending and refresh when they are next read. Reconnects during the wait
   coalesce into one sweep. Set `reconnectJitter: 0` for immediate sweeps.
 
+An adapter using `subscribeToConnectionEvents` can emit
+`{ type: 'reconnected', reconcile: false }` when it can prove no events were missed.
+Figbird still reports the reconnect but skips that sweep, preserving reconciliation
+already pending. Omit `reconcile` or set it to `true` whenever continuity is uncertain.
+
 Manual `refetch()`, first fetches, and SWR revalidation are user/loader intent and are
 never gated.
 
