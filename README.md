@@ -114,8 +114,8 @@ Run `npm run package:check` to build and verify the packed package's exports and
 
 | Release | npm tag | Install |
 | --- | --- | --- |
-| Stable (`0.24.0`) | `latest` | `npm install figbird` |
-| Prerelease (`0.25.0-pre.0`) | `next` | `npm install figbird@next` |
+| Stable | `latest` | `npm install figbird` |
+| Prerelease | `next` | `npm install figbird@next` |
 
 **Browser devtools** only checks extension archives; its separate version is in
 `extensions/version.json`.
