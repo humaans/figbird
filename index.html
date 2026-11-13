@@ -1126,6 +1126,10 @@ before sweeping active queries, defaulting to <code>[0, 3000]</code> ms. Inactiv
 are marked pending and refresh when they are next read. Reconnects during the wait
 coalesce into one sweep. Set <code>reconnectJitter: 0</code> for immediate sweeps.</li>
 </ul>
+<p>An adapter using <code>subscribeToConnectionEvents</code> can emit
+<code>{ type: 'reconnected', reconcile: false }</code> when it can prove no events were missed.
+Figbird still reports the reconnect but skips that sweep, preserving reconciliation
+already pending. Omit <code>reconcile</code> or set it to <code>true</code> whenever continuity is uncertain.</p>
 <p>Manual <code>refetch()</code>, first fetches, and SWR revalidation are user/loader intent and are
 never gated.</p>
 <p>One practical consequence: an <strong>unwindowed</strong> relation like <code>.related('comments')</code> is local-exact, so a teammate&rsquo;s new comment merges straight from the socket event with no refetch. If you don&rsquo;t need a window, don&rsquo;t add one.</p>
