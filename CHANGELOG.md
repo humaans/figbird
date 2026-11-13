@@ -1,5 +1,11 @@
 # Figbird Changelog
 
+## 0.24.1
+
+- Allow adapters to skip reconnect reconciliation with `reconcile: false` when they
+  can prove no realtime events were missed, while preserving reconnect diagnostics
+  and pending reconciliation.
+
 ## 0.24.0
 
 The relational rewrite.
