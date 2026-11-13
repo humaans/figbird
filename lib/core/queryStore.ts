@@ -374,7 +374,7 @@ export class QueryStore<
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
             })
-            this.#scheduleReconnectSweep(traceId)
+            if (event.reconcile !== false) this.#scheduleReconnectSweep(traceId)
             break
           case 'error':
             this.#telemetry.emit({
