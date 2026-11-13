@@ -107,6 +107,20 @@ Run `npm run package:check` to build and verify the packed package's exports and
 
 ## Releasing
 
-1. Run [Prepare npm release](https://github.com/humaans/figbird/actions/workflows/prepare-release.yml) on `master`. Choose `patch`, `minor`, or `major` for a stable release; `prerelease` to increment the current prerelease; or `prepatch`, `preminor`, or `premajor` to start a new prerelease series.
-2. Review the version PR, select **Approve workflows to run**, and merge once checks pass. CI tests, builds, and stages the package on npm using `next` for prereleases or `latest` for stable releases.
-3. Review the tarball in npm's [Staged Packages tab](https://www.npmjs.com/) and approve it with 2FA to publish. Approve the current release before preparing another.
+The version in `package.json` and `package-lock.json` is the version being prepared
+or most recently released from `master`. A suffix such as `-pre.23` marks a
+prerelease. npm's tags determine what users install:
+
+| Package version | npm tag | Install command |
+| --- | --- | --- |
+| Stable, such as `0.24.0` | `latest` | `npm install figbird` |
+| Prerelease, such as `0.25.0-pre.0` | `next` | `npm install figbird@next` |
+
+1. Run [Prepare npm release](https://github.com/humaans/figbird/actions/workflows/prepare-release.yml) on `master`. Choose `stable` to promote the current prerelease (`0.24.0-pre.23` becomes `0.24.0`); `patch`, `minor`, or `major` for the next stable version; `prerelease` to increment the current prerelease; or `prepatch`, `preminor`, or `premajor` to start a new prerelease series.
+2. Review the version PR, select **Approve workflows to run** for any checks awaiting approval, and merge once checks pass. Keep both package manifests and the changelog aligned with the version being released.
+3. The **Stage npm release** workflow tests, builds, and stages the package on npm using the tag above. Its summary names the version and tag awaiting approval. A successful staging run does not make the package public or change `latest` yet.
+4. Review the tarball in npm's [Staged Packages tab](https://www.npmjs.com/) and approve it with 2FA to publish. Then verify with `npm view figbird@latest version` (or `figbird@next` for a prerelease). Approve the current release before preparing another.
+
+The **Browser devtools** workflow validates and packages the Chrome and Firefox
+extensions. It does not publish the npm package; extension versions are tracked
+separately in `extensions/version.json`.

@@ -22,6 +22,7 @@ jobs:
     outputs:
       release: ${{ steps.version.outputs.release }}
       tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,7 +53,7 @@ jobs:
           assert.equal(lock.version, manifest.version, 'lockfile version must match');
           assert.equal(lock.packages[''].version, manifest.version, 'lockfile root version must match');
           const tag = manifest.version.includes('-') ? 'next' : 'latest';
-          appendFileSync(process.env.GITHUB_OUTPUT, `release=true\ntag=${tag}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release=true\ntag=${tag}\nversion=${manifest.version}\n`);
           NODE
       - name: Test and build package
         if: steps.version.outputs.release == 'true'
@@ -91,3 +92,15 @@ jobs:
         env:
           TAG: ${{ needs.verify.outputs.tag }}
         run: npm stage publish ./npm-release/figbird-*.tgz --tag="$TAG" --ignore-scripts
+      - name: Summarize pending publication
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          {
+            echo "## figbird@$VERSION staged for npm $TAG"
+            echo
+            echo 'The package is awaiting maintainer approval and is not public yet.'
+            echo 'Approve it with 2FA in the [npm Staged Packages tab](https://www.npmjs.com/).'
+            echo "After approval, verify with: npm view figbird@$TAG version"
+          } >> "$GITHUB_STEP_SUMMARY"

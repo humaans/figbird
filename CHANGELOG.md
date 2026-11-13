@@ -1,11 +1,5 @@
 # Figbird Changelog
 
-## 0.24.1
-
-- Allow adapters to skip reconnect reconciliation with `reconcile: false` when they
-  can prove no realtime events were missed, while preserving reconnect diagnostics
-  and pending reconciliation.
-
 ## 0.24.0
 
 The relational rewrite.
@@ -36,6 +30,9 @@ when it needs the server.
   reconnect refetches.
 - Transient query failures retry up to three times with exponential backoff.
   Configure or disable this with `retry` and `retryDelay`.
+- Allow adapters to skip reconnect reconciliation with `reconcile: false` when they
+  can prove no realtime events were missed, while preserving reconnect diagnostics
+  and pending reconciliation.
 - Safer realtime updates across both new and legacy APIs: fetch responses preserve
   newer events and optimistic writes, and disabled realtime queries stay fixed
   snapshots. Removed records produce `ItemRemovedError`, detectable with
