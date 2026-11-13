@@ -7,7 +7,9 @@ on:
         description: Version change
         required: true
         type: choice
+        default: patch
         options:
+          - stable
           - patch
           - minor
           - major
@@ -52,7 +54,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump }}
         run: |
-          npm version "$BUMP" --preid=pre --no-git-tag-version --ignore-scripts
+          target="$BUMP"
+          if [ "$BUMP" = stable ]; then
+            current=$(node -p "require('./package.json').version")
+            case "$current" in
+              *-*) target="${current%%-*}" ;;
+              *) echo 'Already stable; choose patch, minor, or major for the next release.'; exit 1 ;;
+            esac
+          fi
+          npm version "$target" --preid=pre --no-git-tag-version --ignore-scripts
           version=$(node -p "require('./package.json').version")
           branch="release/v$version"
           git switch -c "$branch"

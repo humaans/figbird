@@ -107,6 +107,15 @@ Run `npm run package:check` to build and verify the packed package's exports and
 
 ## Releasing
 
-1. Run [Prepare npm release](https://github.com/humaans/figbird/actions/workflows/prepare-release.yml) on `master`. Choose `patch`, `minor`, or `major` for a stable release; `prerelease` to increment the current prerelease; or `prepatch`, `preminor`, or `premajor` to start a new prerelease series.
-2. Review the version PR, select **Approve workflows to run**, and merge once checks pass. CI tests, builds, and stages the package on npm using `next` for prereleases or `latest` for stable releases.
-3. Review the tarball in npm's [Staged Packages tab](https://www.npmjs.com/) and approve it with 2FA to publish. Approve the current release before preparing another.
+1. Run [Prepare npm release](https://github.com/humaans/figbird/actions/workflows/prepare-release.yml) on `master`. Choose `stable` to remove the prerelease suffix, or `patch` / `minor` / `major` for the next stable version. For previews, use `prerelease` to increment or `prepatch` / `preminor` / `premajor` to start a series.
+2. Check the PR's package versions and changelog. **Approve workflows to run** if prompted, then merge when checks pass.
+3. Wait for **Stage npm release**, then review and approve the tarball in npm's [Staged Packages tab](https://www.npmjs.com/) with 2FA. This publishes it. Finish before preparing another release.
+4. Verify: `npm view figbird@latest version` (use `figbird@next` for prereleases).
+
+| Release | npm tag | Install |
+| --- | --- | --- |
+| Stable | `latest` | `npm install figbird` |
+| Prerelease | `next` | `npm install figbird@next` |
+
+**Browser devtools** only checks extension archives; its separate version is in
+`extensions/version.json`.
