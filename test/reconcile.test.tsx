@@ -471,3 +471,168 @@ it('a throwing processed-event listener reports its error', async t => {
   unsubProcessed()
   unsub()
 })
+
+function reconnectingApp({
+  reconcileOnReconnect,
+  visibility,
+}: {
+  reconcileOnReconnect?: () => boolean | Promise<boolean>
+  visibility?: VisibilitySource
+} = {}) {
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'hello' } } },
+  })
+  const io = new EventEmitter()
+  ;(feathers as unknown as { io: EventEmitter }).io = io
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers, { reconcileOnReconnect }),
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+    reconnectJitter: 0,
+    retry: false,
+    ...(visibility ? { visibility } : {}),
+  })
+  const notes = feathers.service('notes')
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const unsub = ref.subscribe(() => {})
+  return { figbird, notes, io, ref, unsub }
+}
+
+test('reconnect: an adapter decision that nothing was missed skips the sweep', async t => {
+  let missed = false
+  const { notes, io, unsub } = reconnectingApp({ reconcileOnReconnect: async () => missed })
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(notes.counts.find, baseline, 'a proven continuous reconnect reads nothing')
+
+  missed = true
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1, 'a reconnect that missed events sweeps')
+  unsub()
+})
+
+test('reconnect: a decision that throws or rejects reconciles', async t => {
+  const decisions = [
+    () => {
+      throw new Error('no checkpoint')
+    },
+    () => Promise.reject(new Error('timed out')),
+  ]
+  let next = 0
+  const { notes, io, unsub } = reconnectingApp({
+    reconcileOnReconnect: () => decisions[next++]!(),
+  })
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  await sleep(20)
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 2)
+  unsub()
+})
+
+test('reconnect: a disconnect supersedes a decision that is still pending', async t => {
+  const pending: Array<(reconcile: boolean) => void> = []
+  const { notes, io, unsub } = reconnectingApp({
+    reconcileOnReconnect: () => new Promise(resolve => pending.push(resolve)),
+  })
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  await sleep(0)
+  io.emit('disconnect', 'transport close')
+  pending[0]!(true)
+  await sleep(20)
+  t.is(notes.counts.find, baseline, 'the superseded reconnect does not sweep')
+
+  io.emit('reconnect')
+  await sleep(0)
+  pending[1]!(true)
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1)
+  unsub()
+})
+
+test('reconnect: a refetch that gave up is retried even when nothing was missed', async t => {
+  const { figbird, notes, io, ref, unsub } = reconnectingApp({
+    reconcileOnReconnect: () => false,
+  })
+  await sleep(20)
+  const find = notes.find.bind(notes)
+  let failures = 1
+  let attempts = 0
+  notes.find = (...args) => {
+    attempts += 1
+    if (failures-- > 0) {
+      return Promise.reject(Object.assign(new Error('Unavailable'), { code: 503 }))
+    }
+    return find(...args)
+  }
+
+  figbird.refetch('notes')
+  await sleep(20)
+  t.is(attempts, 1)
+  t.truthy(ref.getSnapshot()?.error, 'the refetch gave up and kept its error')
+
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(attempts, 2, 'the reconnect retried the query that owed a reconcile')
+  t.falsy(ref.getSnapshot()?.error)
+
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(attempts, 2, 'once reconciled, a continuous reconnect reads nothing again')
+  unsub()
+})
+
+test('reconnect: a refused refetch is not retried when nothing was missed', async t => {
+  const { figbird, notes, io, unsub } = reconnectingApp({ reconcileOnReconnect: () => false })
+  await sleep(20)
+  let attempts = 0
+  notes.find = () => {
+    attempts += 1
+    return Promise.reject(Object.assign(new Error('Forbidden'), { code: 403 }))
+  }
+
+  figbird.refetch('notes')
+  await sleep(20)
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(attempts, 1, 'a refusal is an answer a retry would repeat')
+  unsub()
+})
+
+test('reconcileMissedEvents sweeps like a reconnect and defers while hidden', async t => {
+  const visibility = fakeVisibility(false)
+  const { figbird, notes, unsub } = reconnectingApp({ visibility: visibility.source })
+  await sleep(20)
+  const baseline = notes.counts.find
+  const sweeps: string[] = []
+  const unsubscribeEvents = figbird.events.subscribe(event => {
+    if (event.kind === 'reconnect:sweep') sweeps.push(event.phase)
+  })
+
+  figbird.reconcileMissedEvents()
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1)
+  t.deepEqual(sweeps, ['started'])
+
+  visibility.set(true)
+  figbird.reconcileMissedEvents()
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1, 'a hidden tab defers the sweep')
+
+  visibility.set(false)
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 2)
+  unsub()
+  unsubscribeEvents()
+})

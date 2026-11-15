@@ -1250,8 +1250,23 @@ is no per-query throttle config) via two built-in guards on event-driven refetch
 
 An adapter using `subscribeToConnectionEvents` can emit
 `{ type: 'reconnected', reconcile: false }` when it can prove no events were missed.
-Figbird still reports the reconnect but skips that sweep, preserving reconciliation
-already pending. Omit `reconcile` or set it to `true` whenever continuity is uncertain.
+Figbird still reports the reconnect but skips that sweep. Reconciliation already owed
+still runs, including any query whose refetch gave up after its retries. Omit
+`reconcile` or set it to `true` whenever continuity is uncertain.
+
+With `FeathersAdapter`, pass `reconcileOnReconnect` instead of writing an adapter. Figbird
+holds each reconnect until it settles, and a newer disconnect or reconnect supersedes it:
+
+```ts
+new FeathersAdapter(feathers, {
+  // e.g. compare a server-issued event sequence returned by re-authentication
+  reconcileOnReconnect: () => continuity.missedEventsSinceLastLogin(),
+})
+```
+
+When the application finds events missing while still connected, such as a gap in a
+server-issued sequence, `figbird.reconcileMissedEvents()` runs the same jittered sweep a
+reconnect does, deferred while the tab is hidden.
 
 Manual `refetch()`, first fetches, and SWR revalidation are user/loader intent and are
 never gated.
@@ -2072,6 +2087,7 @@ const figbird = new Figbird({
 | `prepare(request, opts?)`                         | Awaitable query lease for routers. Argumentless definitions can be passed directly. See [figbird.prepare](#figbirdprepare).                                     |
 | `prefetch(request, opts?)`                        | Idempotent speculative warming. Argumentless definitions can be passed directly. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
+| `reconcileMissedEvents()`                         | Reconcile as after a reconnect, for realtime events the application knows it missed while connected. Jittered and deferred while hidden, unlike `refetch()`. |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
 | `transaction(fn)`                                 | Adapter-backed atomic CRUD collector. Optimistic projection, commit, and rollback are grouped across services. See [figbird.transaction](#figbirdtransaction). |
 | `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
@@ -2104,6 +2120,7 @@ const adapter = new FeathersAdapter(feathers, options)
   - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
   - `isInvalidationEvent` — identifies application-specific realtime notifications that carry an entity ID but no complete entity value; see [Invalidation-only events](#invalidation-only-events)
+  - `reconcileOnReconnect` — `() => boolean | Promise<boolean>`; resolve `false` only when the application has established no realtime events were missed while disconnected, and Figbird skips that reconnect sweep. Throwing or rejecting reconciles
   - `transactions` — optional atomic transaction transport; see [feathersTransactions](#featherstransactions) for an application-provided `api/transactions` service, or set `serviceName` for an existing endpoint
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.

@@ -983,6 +983,17 @@ export class Figbird<
   }
 
   /**
+   * Reconcile as after a reconnect, for realtime events the application knows it
+   * missed while still connected, such as a gap in a server-issued event sequence.
+   * Unlike `refetch()`, this is reconciliation, not intent: active queries that
+   * depend on realtime events refetch after the `reconnectJitter` delay, hidden tabs
+   * defer until visible, and inactive queries refetch when next subscribed.
+   */
+  reconcileMissedEvents(): void {
+    this.queryStore.reconcileMissedEvents()
+  }
+
+  /**
    * Static analysis of a query: one entry per executed node (root, relations, and
    * junction hops) with figbird's classification of how that node is maintained and
    * the structured reasons why. No fetching happens — callable anywhere.

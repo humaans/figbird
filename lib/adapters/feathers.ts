@@ -433,6 +433,14 @@ export interface FeathersAdapterOptions {
   transactions?: FeathersTransaction
   /** Classify application-specific notification payloads that must not enter the entity cache. */
   isInvalidationEvent?: (event: RealtimeEventContext) => boolean
+  /**
+   * Decide whether a reconnect must reconcile. Figbird holds the reconnect until
+   * this settles. Resolve `false` only when the application has established that
+   * no realtime events were missed while disconnected, for example by comparing a
+   * server-issued event sequence after re-authentication; figbird then skips its
+   * reconnect sweep. Resolving `true`, rejecting or throwing reconciles as usual.
+   */
+  reconcileOnReconnect?: () => boolean | Promise<boolean>
 }
 
 /**
@@ -462,6 +470,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   #defaultPagination: FeathersPagination | undefined
   #pagination: Record<string, FeathersPagination>
   #isInvalidationEvent: ((event: RealtimeEventContext) => boolean) | undefined
+  #reconcileOnReconnect: (() => boolean | Promise<boolean>) | undefined
   transaction?: Adapter['transaction']
   findByIds?: Adapter['findByIds']
 
@@ -511,6 +520,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
       pagination = {},
       transactions,
       isInvalidationEvent,
+      reconcileOnReconnect,
     }: FeathersAdapterOptions = {},
   ) {
     this.feathers = feathers
@@ -526,6 +536,7 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     this.#defaultPagination = defaultPagination
     this.#pagination = pagination
     this.#isInvalidationEvent = isInvalidationEvent
+    this.#reconcileOnReconnect = reconcileOnReconnect
     if (transactions) {
       this.transaction = operations => transactions(this.feathers, operations)
     }
@@ -801,6 +812,37 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   subscribeToConnectionEvents(handler: (event: AdapterConnectionEvent) => void): () => void {
+    const decide = this.#reconcileOnReconnect
+    if (!decide) return this.#subscribeToTransport(handler)
+
+    // A reconnect waits for the application's decision. A newer disconnect or
+    // reconnect supersedes a decision still pending, and unsubscribing drops it.
+    let cycle = 0
+    let subscribed = true
+    const unsubscribe = this.#subscribeToTransport(event => {
+      if (event.type !== 'reconnected') {
+        if (event.type === 'disconnected') cycle += 1
+        handler(event)
+        return
+      }
+      const current = ++cycle
+      void Promise.resolve()
+        .then(decide)
+        .then(
+          reconcile => reconcile !== false,
+          () => true,
+        )
+        .then(reconcile => {
+          if (subscribed && cycle === current) handler({ ...event, reconcile })
+        })
+    })
+    return () => {
+      subscribed = false
+      unsubscribe()
+    }
+  }
+
+  #subscribeToTransport(handler: (event: AdapterConnectionEvent) => void): () => void {
     const socket = this.#getSocketIoConnectionSource()
     if (!socket) {
       const source = this.#getReconnectEventSource()

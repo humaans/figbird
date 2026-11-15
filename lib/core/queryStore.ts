@@ -374,7 +374,7 @@ export class QueryStore<
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
             })
-            if (event.reconcile !== false) this.#scheduleReconnectSweep(traceId)
+            this.#scheduleReconnectSweep(traceId, event.reconcile !== false)
             break
           case 'error':
             this.#telemetry.emit({
@@ -1547,6 +1547,11 @@ export class QueryStore<
       })
     })
     this.#notify(touched)
+    // Giving up leaves stale or no data, so the query still owes a reconcile: the
+    // next reconnect or sweep retries it. A refusal is an answer a retry repeats.
+    if (this.#adapter.isRetryableError?.(error) ?? true) {
+      this.#reconciliation.markPending(queryId)
+    }
 
     const serviceName = this.#executions.get(queryId)?.serviceName
     const isMaterializedRoot =
@@ -2299,6 +2304,14 @@ export class QueryStore<
     }
   }
 
+  /**
+   * Reconcile as a reconnect does, for realtime events the application knows were
+   * missed while connected: the same jittered sweep, deferred while hidden.
+   */
+  reconcileMissedEvents(): void {
+    this.#scheduleReconnectSweep(this.#telemetry.nextTraceId())
+  }
+
   #markReconciliationPending(
     shouldMark: (query: Query<unknown, TMeta, unknown>) => boolean = () => true,
   ): void {
@@ -2359,8 +2372,11 @@ export class QueryStore<
     }
   }
 
-  #scheduleReconnectSweep(traceId: number | undefined): void {
-    this.#markReconciliationPending()
+  #scheduleReconnectSweep(traceId: number | undefined, missedEvents = true): void {
+    // Missed events leave every maintained query owing a reconcile. Without them,
+    // only reconciliations already owed run, such as a refetch that gave up.
+    if (missedEvents) this.#markReconciliationPending()
+    else if (this.#activePendingReconciliationQueries().length === 0) return
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))

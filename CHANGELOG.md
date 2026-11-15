@@ -1,5 +1,16 @@
 # Figbird Changelog
 
+## Unreleased
+
+- `FeathersAdapter` accepts `reconcileOnReconnect`, so an application that can tell
+  whether realtime events were missed (for example from a server-issued sequence) can skip
+  the reconnect sweep without subclassing the adapter.
+- `figbird.reconcileMissedEvents()` runs the reconnect sweep for events found missing while
+  still connected: jittered, and deferred while the tab is hidden.
+- A query whose refetch gives up after its retries now stays owed a reconciliation, so the
+  next reconnect or sweep retries it, including a reconnect that missed no events. Refused
+  requests (non-retryable errors) are not retried.
+
 ## 0.24.0
 
 The relational rewrite.
