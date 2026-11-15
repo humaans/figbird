@@ -1,16 +1,12 @@
 # Figbird Changelog
 
-## Unreleased
+## 0.24.1
 
-- A `continuity` option, modelled on `visibility`, lets an application that can tell whether
-  realtime events were missed (for example from a server-issued sequence) answer that after
-  each reconnect, and report events found missing while still connected. The reconnect is
-  reported at once and only the sweep waits; an error or no answer within 30 seconds sweeps.
-  Without it, every reconnect counts as missed, as before.
-- A query whose refetch gives up after its retries now stays owed a reconciliation, so the
-  next reconnect or sweep retries it, including a reconnect that missed no events. Refused
-  requests (non-retryable errors) are not retried. Marking a query that already owes a
-  reconcile no longer resets it, so a hidden-tab deferral and a cooldown keep their timing.
+- New `continuity` option. If your app can tell when realtime events were missed, for
+  example from a sequence number the server sends, Figbird can skip the refetch it does
+  after every reconnect, and refetch when you report a gap. Without it, every reconnect
+  refetches, as before.
+- A query whose refetch fails is now retried on the next reconnect, instead of staying stale.
 
 ## 0.24.0
 
