@@ -49,15 +49,16 @@ export class ReconcileScheduler {
     return request !== undefined && request.kind !== 'cooldown'
   }
 
+  /**
+   * Record that a query owes a reconcile. One already owed keeps its own timing:
+   * a hidden deferral still drains on visible, a cooldown still fires its trailing edge.
+   */
   markPending(queryId: string): void {
     const entry = this.#entries.get(queryId)
+    if (entry?.request) return
     this.#set(queryId, {
       lastAt: entry?.lastAt,
-      request: {
-        kind: 'pending',
-        force: entry?.request?.force ?? false,
-        causes: entry?.request?.causes,
-      },
+      request: { kind: 'pending', force: false, causes: undefined },
     })
   }
 

@@ -475,9 +475,11 @@ it('a throwing processed-event listener reports its error', async t => {
 function reconnectingApp({
   reconcileOnReconnect,
   visibility,
+  realtime,
 }: {
   reconcileOnReconnect?: () => boolean | Promise<boolean>
   visibility?: VisibilitySource
+  realtime?: 'refetch'
 } = {}) {
   const feathers = mockFeathers({
     notes: { data: { 1: { id: 1, content: 'hello' } } },
@@ -486,7 +488,7 @@ function reconnectingApp({
   ;(feathers as unknown as { io: EventEmitter }).io = io
   const figbird = new Figbird({
     schema,
-    adapter: new FeathersAdapter(feathers, { reconcileOnReconnect }),
+    adapter: new FeathersAdapter(feathers, reconcileOnReconnect ? { reconcileOnReconnect } : {}),
     eventBatchInterval: 0,
     reconcileCooldown: 0,
     reconnectJitter: 0,
@@ -494,7 +496,10 @@ function reconnectingApp({
     ...(visibility ? { visibility } : {}),
   })
   const notes = feathers.service('notes')
-  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find' },
+    realtime ? { realtime } : {},
+  )
   const unsub = ref.subscribe(() => {})
   return { figbird, notes, io, ref, unsub }
 }
@@ -635,4 +640,34 @@ test('reconcileMissedEvents sweeps like a reconnect and defers while hidden', as
   t.is(notes.counts.find, baseline + 2)
   unsub()
   unsubscribeEvents()
+})
+
+test('hidden tabs: a refetch that gives up keeps the reconcile deferred until visible', async t => {
+  const visibility = fakeVisibility(false)
+  const { notes, unsub } = reconnectingApp({ visibility: visibility.source, realtime: 'refetch' })
+  await sleep(20)
+  const find = notes.find.bind(notes)
+  let attempts = 0
+  let failInFlight: (error: Error) => void = () => {}
+  notes.find = (...args) => {
+    attempts += 1
+    if (attempts > 1) return find(...args)
+    return new Promise((_resolve, reject) => {
+      failInFlight = reject
+    })
+  }
+
+  notes.emit('created', { id: 2, content: 'starts a reconcile' })
+  await sleep(0)
+  visibility.set(true)
+  notes.emit('created', { id: 3, content: 'deferred while hidden' })
+  await sleep(0)
+  failInFlight(Object.assign(new Error('Unavailable'), { code: 503 }))
+  await sleep(20)
+  t.is(attempts, 1, 'nothing refetches while hidden')
+
+  visibility.set(false)
+  await sleep(20)
+  t.is(attempts, 2, 'returning to the tab runs the deferred reconcile')
+  unsub()
 })
