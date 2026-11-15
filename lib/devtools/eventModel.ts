@@ -485,6 +485,7 @@ export function eventDetails(item: DevtoolsEvent): string {
       return joinEventParts([event.serviceName, event.decision])
     case 'reconnect:sweep':
       return joinEventParts([
+        event.trigger === 'missed-events' ? 'missed events' : '',
         `sweep ${event.phase}`,
         event.queryCount === undefined ? '' : `${event.queryCount} queries`,
         event.delayMs > 0 ? `${formatMs(event.delayMs)} jitter` : '',

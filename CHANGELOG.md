@@ -1,5 +1,16 @@
 # Figbird Changelog
 
+## 0.24.1
+
+- New `continuity` option. If your app can tell when realtime events were missed, for
+  example from a sequence number the server sends, Figbird can skip the refetch it does
+  after every reconnect, and refetch when you report a gap. Without it, every reconnect
+  refetches, as before.
+- **Breaking:** adapters can no longer skip the reconnect refetch with `reconcile: false`,
+  added in 0.24.0. Use the `continuity` option instead.
+- A realtime query whose refetch fails is now retried on the next reconnect, instead of
+  staying stale.
+
 ## 0.24.0
 
 The relational rewrite.

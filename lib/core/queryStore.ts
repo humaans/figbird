@@ -65,6 +65,31 @@ export interface VisibilitySource {
   onChange(listener: () => void): () => void
 }
 
+/**
+ * Where the store learns whether realtime events were missed. Without one, every
+ * transport reconnect counts as missed. Implement it when the application can tell
+ * better than the transport, for example from a server-issued event sequence.
+ */
+export interface ContinuitySource {
+  /**
+   * Called after each transport reconnect, which is reported at once; only the
+   * reconnect sweep waits for the answer. Return `false` only when no realtime
+   * events were missed while disconnected. Anything else reconciles: `true`, an
+   * error, or no answer within 30 seconds. A newer disconnect or reconnect
+   * supersedes an answer still pending, and Figbird drops it, so each answer must
+   * cover every event since the last answer Figbird acted on, not just since the
+   * previous reconnect.
+   */
+  missedEventsOnReconnect(reconnect: {
+    connectionId?: string
+    attempt?: number
+  }): boolean | Promise<boolean>
+  /** Notify when events are found missing while still connected. Returns an unsubscribe function. */
+  onMissedEvents(listener: () => void): () => void
+}
+
+const continuityAnswerTimeoutMs = 30_000
+
 /** Random reconnect delay in ms. A number means `[0, number]`; `0` disables jitter. */
 export type ReconnectJitter = number | readonly [number, number]
 
@@ -184,6 +209,11 @@ export class QueryStore<
   #realtime = new Map<string, () => void>()
   #connectionUnsub: (() => void) | undefined
   #visibilityUnsub: () => void
+  #continuity: ContinuitySource | undefined
+  #continuityUnsub: (() => void) | undefined
+  // Each disconnect and reconnect starts a new cycle, superseding a pending answer.
+  #connectionCycle = 0
+  #continuityAnswerTimer: ClockTimer | null = null
   readonly #clock: Clock
   #retention: QueryRetention
   #disposed = false
@@ -236,6 +266,7 @@ export class QueryStore<
     retryDelay = defaultRetryDelay,
     reconnectJitter = [0, 3000],
     visibility,
+    continuity,
     defaultSort,
     compare = compareValues,
     foreignKeys,
@@ -261,6 +292,8 @@ export class QueryStore<
     reconnectJitter?: ReconnectJitter
     /** Visibility source for hidden-tab gating. Defaults to `document`. */
     visibility?: VisibilitySource
+    /** Tells the store whether realtime events were missed. Defaults to every reconnect. */
+    continuity?: ContinuitySource
     /**
      * The backend's implicit ordering for queries without `$sort` (e.g.
      * `{ createdAt: -1, id: -1 }`). Lets window maintenance place realtime items
@@ -346,6 +379,10 @@ export class QueryStore<
     this.#visibility = visibility ?? documentVisibility()
     this.#hiddenAt = this.#visibility.isHidden() ? this.#clock.now() : null
     this.#visibilityUnsub = this.#visibility.onChange(() => this.#visibilityChanged())
+    this.#continuity = continuity
+    this.#continuityUnsub = continuity?.onMissedEvents(() =>
+      this.#scheduleReconnectSweep(this.#telemetry.nextTraceId(), { trigger: 'missed-events' }),
+    )
     if (this.#adapter.subscribeToConnectionEvents) {
       this.#connectionUnsub = this.#adapter.subscribeToConnectionEvents(event => {
         const traceId = this.#telemetry.nextTraceId()
@@ -365,6 +402,7 @@ export class QueryStore<
               ...(event.reason ? { reason: event.reason } : {}),
               reconnecting: event.reconnecting,
             })
+            this.#nextConnectionCycle()
             break
           case 'reconnected':
             this.#telemetry.emit({
@@ -374,7 +412,7 @@ export class QueryStore<
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
             })
-            if (event.reconcile !== false) this.#scheduleReconnectSweep(traceId)
+            this.#reconcileAfterReconnect(event, traceId)
             break
           case 'error':
             this.#telemetry.emit({
@@ -395,7 +433,7 @@ export class QueryStore<
       })
     } else {
       this.#connectionUnsub = this.#adapter.subscribeToReconnect?.(() =>
-        this.#scheduleReconnectSweep(this.#telemetry.nextTraceId()),
+        this.#reconcileAfterReconnect({}, this.#telemetry.nextTraceId()),
       )
     }
   }
@@ -409,6 +447,8 @@ export class QueryStore<
     this.#disposed = true
     this.#retention.dispose()
     this.#visibilityUnsub()
+    this.#continuityUnsub?.()
+    this.#continuityAnswerTimer?.cancel()
     this.#connectionUnsub?.()
     for (const unsubscribe of this.#realtime.values()) unsubscribe()
     this.#realtime.clear()
@@ -1547,6 +1587,11 @@ export class QueryStore<
       })
     })
     this.#notify(touched)
+    // Giving up leaves stale or no data, so the query still owes a reconcile: the
+    // next reconnect or sweep retries it. A refusal is an answer a retry repeats.
+    if (this.#adapter.isRetryableError?.(error) ?? true) {
+      this.#reconciliation.markPending(queryId)
+    }
 
     const serviceName = this.#executions.get(queryId)?.serviceName
     const isMaterializedRoot =
@@ -2299,6 +2344,50 @@ export class QueryStore<
     }
   }
 
+  /**
+   * A reconnect owes a sweep when events may have been missed. The continuity
+   * source answers that; without one every reconnect counts as missed. Either way
+   * the reconciliations already owed still run.
+   */
+  #reconcileAfterReconnect(
+    event: { connectionId?: string; attempt?: number },
+    traceId: number | undefined,
+  ): void {
+    const cycle = this.#nextConnectionCycle()
+    const continuity = this.#continuity
+    if (!continuity) {
+      this.#scheduleReconnectSweep(traceId)
+      return
+    }
+
+    const answer = (missed: boolean): void => {
+      if (this.#disposed || cycle !== this.#connectionCycle) return
+      this.#nextConnectionCycle()
+      this.#scheduleReconnectSweep(traceId, { missedEvents: missed })
+    }
+    const timer = this.#clock.setTimeout(() => answer(true), continuityAnswerTimeoutMs)
+    timer.unref()
+    this.#continuityAnswerTimer = timer
+    const reconnect = {
+      ...(event.connectionId === undefined ? {} : { connectionId: event.connectionId }),
+      ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
+    }
+    void Promise.resolve()
+      .then(() => continuity.missedEventsOnReconnect(reconnect))
+      .then(
+        missed => missed !== false,
+        () => true,
+      )
+      .then(answer)
+  }
+
+  /** Supersede a pending continuity answer. */
+  #nextConnectionCycle(): number {
+    this.#continuityAnswerTimer?.cancel()
+    this.#continuityAnswerTimer = null
+    return ++this.#connectionCycle
+  }
+
   #markReconciliationPending(
     shouldMark: (query: Query<unknown, TMeta, unknown>) => boolean = () => true,
   ): void {
@@ -2329,9 +2418,11 @@ export class QueryStore<
     for (const service of this.getState().values()) {
       // Materialization roots reconcile even with no subscribers — every local read
       // depends on their completeness, and events may have been missed while offline.
+      // A root waiting out a cooldown is owed too: forcing it here lets the trailing
+      // edge fetch it, where an unforced one would park it as inactive.
       if (service.materialized) {
         const root = service.queries.get(service.materialized.queryId)
-        if (root && this.#reconciliation.isPending(root.queryId)) queryIds.set(root.queryId, true)
+        if (root && this.#reconciliation.isOwed(root.queryId)) queryIds.set(root.queryId, true)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue
@@ -2359,48 +2450,46 @@ export class QueryStore<
     }
   }
 
-  #scheduleReconnectSweep(traceId: number | undefined): void {
-    this.#markReconciliationPending()
+  #scheduleReconnectSweep(
+    traceId: number | undefined,
+    {
+      missedEvents = true,
+      trigger = 'reconnect',
+    }: { missedEvents?: boolean; trigger?: 'reconnect' | 'missed-events' } = {},
+  ): void {
+    // Missed events leave every maintained query owing a reconcile. Without them,
+    // only reconciliations already owed run, such as a refetch that gave up.
+    if (missedEvents) this.#markReconciliationPending()
+    else if (this.#activePendingReconciliationQueries().length === 0) return
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
-    if (delay === 0) {
-      const queries = this.#activePendingReconciliationQueries()
+    const sweep = (phase: 'scheduled' | 'started', queryCount?: number) =>
       this.#telemetry.emit({
         kind: 'reconnect:sweep',
         ...(traceId === undefined ? {} : { traceId }),
-        phase: 'started',
-        delayMs: 0,
-        queryCount: queries.length,
+        trigger,
+        phase,
+        delayMs: delay,
+        ...(queryCount === undefined ? {} : { queryCount }),
       })
+    const start = (): void => {
+      const queries = this.#activePendingReconciliationQueries()
+      sweep('started', queries.length)
       this.#refetchActiveQueries(
         queries,
-        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
+        traceId === undefined ? undefined : { kind: trigger, traceId },
       )
+    }
+    if (delay === 0) {
+      start()
       return
     }
 
-    this.#telemetry.emit({
-      kind: 'reconnect:sweep',
-      ...(traceId === undefined ? {} : { traceId }),
-      phase: 'scheduled',
-      delayMs: delay,
-    })
-
+    sweep('scheduled')
     const timer = this.#clock.setTimeout(() => {
       this.#reconnectSweepTimer = null
-      const queries = this.#activePendingReconciliationQueries()
-      this.#telemetry.emit({
-        kind: 'reconnect:sweep',
-        ...(traceId === undefined ? {} : { traceId }),
-        phase: 'started',
-        delayMs: delay,
-        queryCount: queries.length,
-      })
-      this.#refetchActiveQueries(
-        queries,
-        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
-      )
+      start()
     }, delay)
     timer.unref()
     this.#reconnectSweepTimer = timer

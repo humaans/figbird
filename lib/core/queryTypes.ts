@@ -27,6 +27,7 @@ export interface Event {
 export type TraceCause =
   | { kind: 'realtime'; traceId: number }
   | { kind: 'reconnect'; traceId: number }
+  | { kind: 'missed-events'; traceId: number }
   | { kind: 'visibility'; traceId: number }
   | { kind: 'mutation'; traceId: number; mutationId?: number }
   | { kind: 'fetch-rebase'; traceId: number }

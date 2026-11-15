@@ -14,6 +14,7 @@ export {
 
 export type {
   AnyQueryInput,
+  ContinuitySource,
   CreateMutationOptions,
   DefineQuery,
   EventType,

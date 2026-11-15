@@ -11,7 +11,7 @@ import { TestClock, flushTasks } from './clock.js'
 import EventEmitter from 'events'
 import test from 'ava'
 const it = test.serial
-import type { VisibilitySource } from '../lib'
+import type { ContinuitySource, VisibilitySource } from '../lib'
 import { createSchema, service, FeathersAdapter, Figbird } from '../lib'
 import { mockFeathers } from './helpers'
 
@@ -470,4 +470,330 @@ it('a throwing processed-event listener reports its error', async t => {
   t.deepEqual(reported, [['figbird: processed-event listener threw', failure]])
   unsubProcessed()
   unsub()
+})
+
+function continuitySource(missedEventsOnReconnect: ContinuitySource['missedEventsOnReconnect']) {
+  const listeners = new Set<() => void>()
+  const source: ContinuitySource = {
+    missedEventsOnReconnect,
+    onMissedEvents: listener => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+  return {
+    source,
+    listeners,
+    reportMissedEvents: () => {
+      for (const listener of listeners) listener()
+    },
+  }
+}
+
+function reconnectingApp({
+  continuity,
+  visibility,
+  realtime,
+  clock,
+}: {
+  continuity?: ContinuitySource
+  visibility?: VisibilitySource
+  realtime?: 'refetch'
+  clock?: TestClock
+} = {}) {
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'hello' } } },
+  })
+  const io = new EventEmitter()
+  ;(feathers as unknown as { io: EventEmitter }).io = io
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+    reconnectJitter: 0,
+    retry: false,
+    ...(continuity ? { continuity } : {}),
+    ...(visibility ? { visibility } : {}),
+    ...(clock ? { clock } : {}),
+  })
+  const notes = feathers.service('notes')
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find' },
+    realtime ? { realtime } : {},
+  )
+  const unsub = ref.subscribe(() => {})
+  return { figbird, notes, io, ref, unsub }
+}
+
+test('continuity: a reconnect the source proves continuous skips the sweep', async t => {
+  let missed = false
+  const { source } = continuitySource(async () => missed)
+  const { notes, io, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(notes.counts.find, baseline, 'a proven continuous reconnect reads nothing')
+
+  missed = true
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1, 'a reconnect that missed events sweeps')
+  unsub()
+})
+
+test('continuity: the reconnect is reported before the answer arrives', async t => {
+  let answer: (missed: boolean) => void = () => {}
+  const { source } = continuitySource(() => new Promise(resolve => (answer = resolve)))
+  const { figbird, notes, io, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  const baseline = notes.counts.find
+  const kinds: string[] = []
+  const unsubscribeEvents = figbird.events.subscribe(event => kinds.push(event.kind))
+
+  io.emit('reconnect')
+  await sleep(20)
+  t.true(kinds.includes('connection:reconnected'))
+  t.false(kinds.includes('reconnect:sweep'), 'only the sweep waits for the answer')
+  t.is(notes.counts.find, baseline)
+
+  answer(true)
+  await sleep(20)
+  t.true(kinds.includes('reconnect:sweep'))
+  t.is(notes.counts.find, baseline + 1)
+  unsub()
+  unsubscribeEvents()
+})
+
+test('continuity: an answer that throws or rejects reconciles', async t => {
+  const answers = [
+    () => {
+      throw new Error('no checkpoint')
+    },
+    () => Promise.reject(new Error('authentication failed')),
+  ]
+  let next = 0
+  const { source } = continuitySource(() => answers[next++]!())
+  const { notes, io, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  await sleep(20)
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 2)
+  unsub()
+})
+
+test('continuity: a hung answer reconciles after 30 seconds', async t => {
+  const clock = new TestClock()
+  const { source } = continuitySource(() => new Promise<boolean>(() => {}))
+  const { notes, io, unsub } = reconnectingApp({ continuity: source, clock })
+  await flushTasks()
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  await clock.advance(29_999)
+  t.is(notes.counts.find, baseline)
+  await clock.advance(1)
+  t.is(notes.counts.find, baseline + 1)
+  unsub()
+})
+
+test('continuity: a disconnect supersedes an answer still pending', async t => {
+  const pending: Array<(missed: boolean) => void> = []
+  const { source } = continuitySource(() => new Promise(resolve => pending.push(resolve)))
+  const { notes, io, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  io.emit('reconnect')
+  await sleep(0)
+  io.emit('disconnect', 'transport close')
+  pending[0]!(true)
+  await sleep(20)
+  t.is(notes.counts.find, baseline, 'the superseded answer does not sweep')
+
+  io.emit('reconnect')
+  await sleep(0)
+  pending[1]!(true)
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1)
+  unsub()
+})
+
+test('continuity: events missed while connected sweep like a reconnect, deferred while hidden', async t => {
+  const visibility = fakeVisibility(false)
+  const { source, reportMissedEvents } = continuitySource(() => false)
+  const { notes, unsub } = reconnectingApp({ continuity: source, visibility: visibility.source })
+  await sleep(20)
+  const baseline = notes.counts.find
+
+  reportMissedEvents()
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1)
+
+  visibility.set(true)
+  reportMissedEvents()
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 1, 'a hidden tab defers the sweep')
+
+  visibility.set(false)
+  await sleep(20)
+  t.is(notes.counts.find, baseline + 2)
+  unsub()
+})
+
+test('continuity: disposing stops listening for missed events', t => {
+  const { source, listeners } = continuitySource(() => false)
+  const { figbird, unsub } = reconnectingApp({ continuity: source })
+  t.is(listeners.size, 1)
+  unsub()
+  figbird.dispose()
+  t.is(listeners.size, 0)
+})
+
+test('reconnect: a refetch that gave up is retried even when nothing was missed', async t => {
+  const { source } = continuitySource(() => false)
+  const { figbird, notes, io, ref, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  const find = notes.find.bind(notes)
+  let failures = 1
+  let attempts = 0
+  notes.find = (...args) => {
+    attempts += 1
+    if (failures-- > 0) {
+      return Promise.reject(Object.assign(new Error('Unavailable'), { code: 503 }))
+    }
+    return find(...args)
+  }
+
+  figbird.refetch('notes')
+  await sleep(20)
+  t.is(attempts, 1)
+  t.truthy(ref.getSnapshot()?.error, 'the refetch gave up and kept its error')
+
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(attempts, 2, 'the reconnect retried the query that owed a reconcile')
+  t.falsy(ref.getSnapshot()?.error)
+
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(attempts, 2, 'once reconciled, a continuous reconnect reads nothing again')
+  unsub()
+})
+
+test('reconnect: a refused refetch is not retried when nothing was missed', async t => {
+  const { source } = continuitySource(() => false)
+  const { figbird, notes, io, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  let attempts = 0
+  notes.find = () => {
+    attempts += 1
+    return Promise.reject(Object.assign(new Error('Forbidden'), { code: 403 }))
+  }
+
+  figbird.refetch('notes')
+  await sleep(20)
+  io.emit('reconnect')
+  await sleep(20)
+  t.is(attempts, 1, 'a refusal is an answer a retry would repeat')
+  unsub()
+})
+
+test('hidden tabs: a refetch that gives up keeps the reconcile deferred until visible', async t => {
+  const visibility = fakeVisibility(false)
+  const { notes, unsub } = reconnectingApp({ visibility: visibility.source, realtime: 'refetch' })
+  await sleep(20)
+  const find = notes.find.bind(notes)
+  let attempts = 0
+  let failInFlight: (error: Error) => void = () => {}
+  notes.find = (...args) => {
+    attempts += 1
+    if (attempts > 1) return find(...args)
+    return new Promise((_resolve, reject) => {
+      failInFlight = reject
+    })
+  }
+
+  notes.emit('created', { id: 2, content: 'starts a reconcile' })
+  await sleep(0)
+  visibility.set(true)
+  notes.emit('created', { id: 3, content: 'deferred while hidden' })
+  await sleep(0)
+  failInFlight(Object.assign(new Error('Unavailable'), { code: 503 }))
+  await sleep(20)
+  t.is(attempts, 1, 'nothing refetches while hidden')
+
+  visibility.set(false)
+  await sleep(20)
+  t.is(attempts, 2, 'returning to the tab runs the deferred reconcile')
+  unsub()
+})
+
+test('reconnect: an unsubscribed materialized root waiting out a cooldown still refreshes', async t => {
+  const clock = new TestClock()
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'hello' } } },
+  })
+  const io = new EventEmitter()
+  ;(feathers as unknown as { io: EventEmitter }).io = io
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    clock,
+    eventBatchInterval: 0,
+    reconcileCooldown: 100,
+    reconnectJitter: 0,
+    retry: false,
+  })
+  const notes = feathers.service('notes')
+  const unsub = figbird.query(figbird.q.notes.orderBy('id').all()).subscribe(() => {})
+  await flushTasks()
+  const rootId = figbird.getState().get('notes')?.materialized?.queryId
+  if (rootId === undefined) throw new Error('Expected a materialized root')
+
+  // The entry relational queries use for event-driven refetches, which is
+  // unforced: the first runs at once, the second waits out the cooldown.
+  figbird.queryStore.reconcile(rootId)
+  await flushTasks()
+  const afterLeading = notes.counts.find
+  figbird.queryStore.reconcile(rootId)
+  await flushTasks()
+  t.is(notes.counts.find, afterLeading, 'the second reconcile waits out the cooldown')
+
+  unsub()
+  io.emit('reconnect')
+  await flushTasks()
+  await clock.advance(100)
+  await flushTasks()
+  t.is(notes.counts.find, afterLeading + 1, 'the root refreshes with no subscribers')
+  figbird.dispose()
+})
+
+test('continuity: traces tell a missed-events sweep from a reconnect sweep', async t => {
+  const { source, reportMissedEvents } = continuitySource(() => true)
+  const { figbird, io, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  const sweeps: string[] = []
+  const causes: string[] = []
+  const unsubscribeEvents = figbird.events.subscribe(event => {
+    if (event.kind === 'reconnect:sweep') sweeps.push(event.trigger)
+    if (event.kind === 'fetch:start' && event.reason === 'reconcile') {
+      causes.push(...(event.causes ?? []).map(cause => cause.kind))
+    }
+  })
+
+  reportMissedEvents()
+  await sleep(20)
+  io.emit('reconnect')
+  await sleep(20)
+  t.deepEqual(sweeps, ['missed-events', 'reconnect'])
+  t.deepEqual(causes, ['missed-events', 'reconnect'])
+  unsub()
+  unsubscribeEvents()
 })

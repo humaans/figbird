@@ -1248,15 +1248,48 @@ is no per-query throttle config) via two built-in guards on event-driven refetch
   are marked pending and refresh when they are next read. Reconnects during the wait
   coalesce into one sweep. Set `reconnectJitter: 0` for immediate sweeps.
 
-An adapter using `subscribeToConnectionEvents` can emit
-`{ type: 'reconnected', reconcile: false }` when it can prove no events were missed.
-Figbird still reports the reconnect but skips that sweep, preserving reconciliation
-already pending. Omit `reconcile` or set it to `true` whenever continuity is uncertain.
-
 Manual `refetch()`, first fetches, and SWR revalidation are user/loader intent and are
 never gated.
 
 One practical consequence: an **unwindowed** relation like `.related('comments')` is local-exact, so a teammate's new comment merges straight from the socket event with no refetch. If you don't need a window, don't add one.
+
+#### Continuity: when events were missed
+
+The cache is correct only while it has applied every event since each query was last
+fetched. Two things break that, and the scheduler above drains both:
+
+- **The stream broke.** Events may have been missed, so every realtime-maintained query
+  owes a reconcile. Without help, Figbird assumes this after every reconnect.
+- **One query's fetch failed.** When a realtime-maintained query's refetch gives up after
+  its retries, the query stays owed, so the next reconnect or sweep retries it. Refused
+  requests (non-retryable errors) are an answer a retry would repeat, so they are not
+  retried. Queries with `realtime: 'disabled'` are fixed snapshots and are not swept.
+
+When the application can tell whether events were missed better than the transport, for
+example from a server-issued event sequence, pass a `continuity` source, modelled on
+`visibility`:
+
+```ts
+const figbird = new Figbird({
+  adapter,
+  schema,
+  continuity: {
+    // After a reconnect: return false only when no events were missed.
+    missedEventsOnReconnect: ({ connectionId }) => sequence.missedSinceLastLogin(connectionId),
+    // Events found missing while still connected.
+    onMissedEvents: listener => sequence.onGap(listener),
+  },
+})
+```
+
+Figbird reports the reconnect at once and only holds the sweep for the answer. Returning
+`false` skips it; `true`, an error, or no answer within 30 seconds sweeps. A newer
+disconnect or reconnect supersedes an answer still pending, and Figbird drops it, so each
+answer must cover every event since the last answer Figbird acted on, not just since the
+previous reconnect. `onMissedEvents` runs the same jittered sweep a reconnect does,
+deferred while the tab is hidden. Its fetches carry a `missed-events` trace cause, and its
+`reconnect:sweep` event has `trigger: 'missed-events'`, so traces tell a gap from a
+reconnect. Either way, reconciles already owed, such as a failed refetch, still run.
 
 ### Freshness tolerance: staleTime
 
@@ -2063,6 +2096,8 @@ const figbird = new Figbird({
   retry?,
   retryDelay?,
   reconnectJitter?,
+  visibility?,
+  continuity?,
 })
 ```
 

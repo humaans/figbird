@@ -44,6 +44,7 @@ import {
   DEFAULT_GC_TIME,
   DEFAULT_STALE_TIME,
   QueryStore,
+  type ContinuitySource,
   type DevtoolsCacheEditResult,
   type QueryFetchHistoryEntry,
   type ReconnectJitter,
@@ -52,6 +53,7 @@ import {
 } from './queryStore.js'
 
 export type {
+  ContinuitySource,
   QueryFetchHistoryEntry,
   ReconnectJitter,
   RetryDelay,
@@ -255,6 +257,9 @@ export class Figbird<
    *   clients after a server restart. Defaults to [0, 3000]; 0 restores immediate sweeps.
    * @param visibility Visibility source for hidden-tab gating (defaults to `document`).
    *   Hidden tabs defer event-driven reconciliation until they become visible.
+   * @param continuity Tells Figbird whether realtime events were missed, when the
+   *   application can tell better than the transport. Without it, every reconnect
+   *   counts as missed and sweeps active queries.
    * @param defaultSort The backend's implicit ordering for queries without `$sort`
    *   (e.g. `{ createdAt: -1, id: -1 }`). Window maintenance uses it to place
    *   realtime items into unsorted windows locally instead of refetching. This is a
@@ -277,6 +282,7 @@ export class Figbird<
     retryDelay,
     reconnectJitter,
     visibility,
+    continuity,
     defaultSort,
     compare,
     clock = systemClock,
@@ -292,6 +298,7 @@ export class Figbird<
     retryDelay?: RetryDelay
     reconnectJitter?: ReconnectJitter
     visibility?: VisibilitySource
+    continuity?: ContinuitySource
     defaultSort?: Record<string, 1 | -1>
     compare?: ValueComparator
     /** @internal Deterministic policy time for tests. */
@@ -317,6 +324,7 @@ export class Figbird<
       ...(retryDelay !== undefined ? { retryDelay } : {}),
       ...(reconnectJitter !== undefined ? { reconnectJitter } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
+      ...(continuity !== undefined ? { continuity } : {}),
       ...(defaultSort !== undefined ? { defaultSort } : {}),
       ...(compare !== undefined ? { compare } : {}),
     })
