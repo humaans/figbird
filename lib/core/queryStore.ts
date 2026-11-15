@@ -76,7 +76,9 @@ export interface ContinuitySource {
    * reconnect sweep waits for the answer. Return `false` only when no realtime
    * events were missed while disconnected. Anything else reconciles: `true`, an
    * error, or no answer within 30 seconds. A newer disconnect or reconnect
-   * supersedes an answer still pending.
+   * supersedes an answer still pending, and Figbird drops it, so each answer must
+   * cover every event since the last answer Figbird acted on, not just since the
+   * previous reconnect.
    */
   missedEventsOnReconnect(reconnect: {
     connectionId?: string
@@ -2343,19 +2345,18 @@ export class QueryStore<
   }
 
   /**
-   * A reconnect owes a sweep when events may have been missed. An adapter that
-   * proved continuity itself sends `reconcile: false`; otherwise the continuity
-   * source answers, and without one every reconnect counts as missed. Either way
+   * A reconnect owes a sweep when events may have been missed. The continuity
+   * source answers that; without one every reconnect counts as missed. Either way
    * the reconciliations already owed still run.
    */
   #reconcileAfterReconnect(
-    event: { reconcile?: boolean; connectionId?: string; attempt?: number },
+    event: { connectionId?: string; attempt?: number },
     traceId: number | undefined,
   ): void {
     const cycle = this.#nextConnectionCycle()
     const continuity = this.#continuity
-    if (event.reconcile === false || !continuity) {
-      this.#scheduleReconnectSweep(traceId, event.reconcile !== false)
+    if (!continuity) {
+      this.#scheduleReconnectSweep(traceId)
       return
     }
 
@@ -2417,9 +2418,11 @@ export class QueryStore<
     for (const service of this.getState().values()) {
       // Materialization roots reconcile even with no subscribers — every local read
       // depends on their completeness, and events may have been missed while offline.
+      // A root waiting out a cooldown is owed too: forcing it here lets the trailing
+      // edge fetch it, where an unforced one would park it as inactive.
       if (service.materialized) {
         const root = service.queries.get(service.materialized.queryId)
-        if (root && this.#reconciliation.isPending(root.queryId)) queryIds.set(root.queryId, true)
+        if (root && this.#reconciliation.isOwed(root.queryId)) queryIds.set(root.queryId, true)
       }
       for (const query of service.queries.values()) {
         if (query.queryId === service.materialized?.queryId) continue

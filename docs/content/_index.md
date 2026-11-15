@@ -1260,9 +1260,10 @@ fetched. Two things break that, and the scheduler above drains both:
 
 - **The stream broke.** Events may have been missed, so every realtime-maintained query
   owes a reconcile. Without help, Figbird assumes this after every reconnect.
-- **One query's fetch failed.** A refetch that gives up after its retries keeps the query
-  owed, so the next reconnect or sweep retries it. Refused requests (non-retryable errors)
-  are an answer a retry would repeat, so they are not retried.
+- **One query's fetch failed.** When a realtime-maintained query's refetch gives up after
+  its retries, the query stays owed, so the next reconnect or sweep retries it. Refused
+  requests (non-retryable errors) are an answer a retry would repeat, so they are not
+  retried. Queries with `realtime: 'disabled'` are fixed snapshots and are not swept.
 
 When the application can tell whether events were missed better than the transport, for
 example from a server-issued event sequence, pass a `continuity` source, modelled on
@@ -1283,13 +1284,11 @@ const figbird = new Figbird({
 
 Figbird reports the reconnect at once and only holds the sweep for the answer. Returning
 `false` skips it; `true`, an error, or no answer within 30 seconds sweeps. A newer
-disconnect or reconnect supersedes an answer still pending. `onMissedEvents` runs the same
-jittered sweep a reconnect does, deferred while the tab is hidden. Either way, reconciles
-already owed, such as a failed refetch, still run.
-
-An adapter of your own can instead emit `{ type: 'reconnected', reconcile: false }` from
-`subscribeToConnectionEvents` when it can prove continuity itself. Omit `reconcile` or set
-it to `true` whenever continuity is uncertain.
+disconnect or reconnect supersedes an answer still pending, and Figbird drops it, so each
+answer must cover every event since the last answer Figbird acted on, not just since the
+previous reconnect. `onMissedEvents` runs the same jittered sweep a reconnect does,
+deferred while the tab is hidden. Either way, reconciles already owed, such as a failed
+refetch, still run.
 
 ### Freshness tolerance: staleTime
 

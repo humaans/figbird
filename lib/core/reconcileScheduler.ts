@@ -49,6 +49,11 @@ export class ReconcileScheduler {
     return request !== undefined && request.kind !== 'cooldown'
   }
 
+  /** Whether the query owes a reconcile, including one waiting out its cooldown. */
+  isOwed(queryId: string): boolean {
+    return this.#entries.get(queryId)?.request !== undefined
+  }
+
   /**
    * Record that a query owes a reconcile. One already owed keeps its own timing:
    * a hidden deferral still drains on visible, a cooldown still fires its trailing edge.

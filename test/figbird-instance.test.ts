@@ -493,7 +493,13 @@ test('a proven continuous reconnect preserves data and telemetry without a fetch
     connection = handler
     return () => {}
   }
-  const figbird = new Figbird({ adapter, schema, reconnectJitter: 0 })
+  let missed = false
+  const figbird = new Figbird({
+    adapter,
+    schema,
+    reconnectJitter: 0,
+    continuity: { missedEventsOnReconnect: () => missed, onMissedEvents: () => () => {} },
+  })
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
   const unsubscribe = ref.subscribe(() => {})
   t.teardown(unsubscribe)
@@ -509,16 +515,15 @@ test('a proven continuous reconnect preserves data and telemetry without a fetch
     reads += 1
     return find(...args)
   }
-  connection({ type: 'reconnected', reconcile: false })
+  connection({ type: 'reconnected' })
   await new Promise(resolve => setTimeout(resolve, 0))
   t.is(reads, 0)
   t.true(observed.includes('connection:reconnected'))
   t.false(observed.includes('reconnect:sweep'))
   t.is(ref.getSnapshot(), before)
+  missed = true
   connection({ type: 'reconnected' })
   await new Promise(resolve => setTimeout(resolve, 0))
   t.is(reads, 1)
-  connection({ type: 'reconnected', reconcile: true })
-  await new Promise(resolve => setTimeout(resolve, 0))
-  t.is(observed.filter(kind => kind === 'reconnect:sweep').length, 2)
+  t.is(observed.filter(kind => kind === 'reconnect:sweep').length, 1)
 })
