@@ -83,6 +83,8 @@ export type FigbirdEvent = (
   | {
       kind: 'reconnect:sweep'
       traceId?: number
+      /** A transport reconnect, or events the continuity source reported missing while connected. */
+      trigger: 'reconnect' | 'missed-events'
       phase: 'scheduled' | 'started'
       delayMs: number
       queryCount?: number

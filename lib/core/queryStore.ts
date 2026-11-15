@@ -381,7 +381,7 @@ export class QueryStore<
     this.#visibilityUnsub = this.#visibility.onChange(() => this.#visibilityChanged())
     this.#continuity = continuity
     this.#continuityUnsub = continuity?.onMissedEvents(() =>
-      this.#scheduleReconnectSweep(this.#telemetry.nextTraceId()),
+      this.#scheduleReconnectSweep(this.#telemetry.nextTraceId(), { trigger: 'missed-events' }),
     )
     if (this.#adapter.subscribeToConnectionEvents) {
       this.#connectionUnsub = this.#adapter.subscribeToConnectionEvents(event => {
@@ -2363,7 +2363,7 @@ export class QueryStore<
     const answer = (missed: boolean): void => {
       if (this.#disposed || cycle !== this.#connectionCycle) return
       this.#nextConnectionCycle()
-      this.#scheduleReconnectSweep(traceId, missed)
+      this.#scheduleReconnectSweep(traceId, { missedEvents: missed })
     }
     const timer = this.#clock.setTimeout(() => answer(true), continuityAnswerTimeoutMs)
     timer.unref()
@@ -2450,7 +2450,13 @@ export class QueryStore<
     }
   }
 
-  #scheduleReconnectSweep(traceId: number | undefined, missedEvents = true): void {
+  #scheduleReconnectSweep(
+    traceId: number | undefined,
+    {
+      missedEvents = true,
+      trigger = 'reconnect',
+    }: { missedEvents?: boolean; trigger?: 'reconnect' | 'missed-events' } = {},
+  ): void {
     // Missed events leave every maintained query owing a reconcile. Without them,
     // only reconciliations already owed run, such as a refetch that gave up.
     if (missedEvents) this.#markReconciliationPending()
@@ -2458,43 +2464,32 @@ export class QueryStore<
     if (this.#reconnectSweepTimer) return
     const [min, max] = this.#reconnectJitter
     const delay = min === max ? min : min + Math.floor(Math.random() * (max - min + 1))
-    if (delay === 0) {
-      const queries = this.#activePendingReconciliationQueries()
+    const sweep = (phase: 'scheduled' | 'started', queryCount?: number) =>
       this.#telemetry.emit({
         kind: 'reconnect:sweep',
         ...(traceId === undefined ? {} : { traceId }),
-        phase: 'started',
-        delayMs: 0,
-        queryCount: queries.length,
+        trigger,
+        phase,
+        delayMs: delay,
+        ...(queryCount === undefined ? {} : { queryCount }),
       })
+    const start = (): void => {
+      const queries = this.#activePendingReconciliationQueries()
+      sweep('started', queries.length)
       this.#refetchActiveQueries(
         queries,
-        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
+        traceId === undefined ? undefined : { kind: trigger, traceId },
       )
+    }
+    if (delay === 0) {
+      start()
       return
     }
 
-    this.#telemetry.emit({
-      kind: 'reconnect:sweep',
-      ...(traceId === undefined ? {} : { traceId }),
-      phase: 'scheduled',
-      delayMs: delay,
-    })
-
+    sweep('scheduled')
     const timer = this.#clock.setTimeout(() => {
       this.#reconnectSweepTimer = null
-      const queries = this.#activePendingReconciliationQueries()
-      this.#telemetry.emit({
-        kind: 'reconnect:sweep',
-        ...(traceId === undefined ? {} : { traceId }),
-        phase: 'started',
-        delayMs: delay,
-        queryCount: queries.length,
-      })
-      this.#refetchActiveQueries(
-        queries,
-        traceId === undefined ? undefined : { kind: 'reconnect', traceId },
-      )
+      start()
     }, delay)
     timer.unref()
     this.#reconnectSweepTimer = timer

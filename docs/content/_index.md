@@ -1287,8 +1287,9 @@ Figbird reports the reconnect at once and only holds the sweep for the answer. R
 disconnect or reconnect supersedes an answer still pending, and Figbird drops it, so each
 answer must cover every event since the last answer Figbird acted on, not just since the
 previous reconnect. `onMissedEvents` runs the same jittered sweep a reconnect does,
-deferred while the tab is hidden. Either way, reconciles already owed, such as a failed
-refetch, still run.
+deferred while the tab is hidden. Its fetches carry a `missed-events` trace cause, and its
+`reconnect:sweep` event has `trigger: 'missed-events'`, so traces tell a gap from a
+reconnect. Either way, reconciles already owed, such as a failed refetch, still run.
 
 ### Freshness tolerance: staleTime
 

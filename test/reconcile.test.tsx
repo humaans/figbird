@@ -734,3 +734,66 @@ test('hidden tabs: a refetch that gives up keeps the reconcile deferred until vi
   t.is(attempts, 2, 'returning to the tab runs the deferred reconcile')
   unsub()
 })
+
+test('reconnect: an unsubscribed materialized root waiting out a cooldown still refreshes', async t => {
+  const clock = new TestClock()
+  const feathers = mockFeathers({
+    notes: { data: { 1: { id: 1, content: 'hello' } } },
+  })
+  const io = new EventEmitter()
+  ;(feathers as unknown as { io: EventEmitter }).io = io
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    clock,
+    eventBatchInterval: 0,
+    reconcileCooldown: 100,
+    reconnectJitter: 0,
+    retry: false,
+  })
+  const notes = feathers.service('notes')
+  const unsub = figbird.query(figbird.q.notes.orderBy('id').all()).subscribe(() => {})
+  await flushTasks()
+  const rootId = figbird.getState().get('notes')?.materialized?.queryId
+  if (rootId === undefined) throw new Error('Expected a materialized root')
+
+  // The entry relational queries use for event-driven refetches, which is
+  // unforced: the first runs at once, the second waits out the cooldown.
+  figbird.queryStore.reconcile(rootId)
+  await flushTasks()
+  const afterLeading = notes.counts.find
+  figbird.queryStore.reconcile(rootId)
+  await flushTasks()
+  t.is(notes.counts.find, afterLeading, 'the second reconcile waits out the cooldown')
+
+  unsub()
+  io.emit('reconnect')
+  await flushTasks()
+  await clock.advance(100)
+  await flushTasks()
+  t.is(notes.counts.find, afterLeading + 1, 'the root refreshes with no subscribers')
+  figbird.dispose()
+})
+
+test('continuity: traces tell a missed-events sweep from a reconnect sweep', async t => {
+  const { source, reportMissedEvents } = continuitySource(() => true)
+  const { figbird, io, unsub } = reconnectingApp({ continuity: source })
+  await sleep(20)
+  const sweeps: string[] = []
+  const causes: string[] = []
+  const unsubscribeEvents = figbird.events.subscribe(event => {
+    if (event.kind === 'reconnect:sweep') sweeps.push(event.trigger)
+    if (event.kind === 'fetch:start' && event.reason === 'reconcile') {
+      causes.push(...(event.causes ?? []).map(cause => cause.kind))
+    }
+  })
+
+  reportMissedEvents()
+  await sleep(20)
+  io.emit('reconnect')
+  await sleep(20)
+  t.deepEqual(sweeps, ['missed-events', 'reconnect'])
+  t.deepEqual(causes, ['missed-events', 'reconnect'])
+  unsub()
+  unsubscribeEvents()
+})

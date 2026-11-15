@@ -72,6 +72,8 @@ export class QueryTelemetry {
         return { kind, traceId }
       case 'reconnect':
         return { kind, traceId }
+      case 'missed-events':
+        return { kind, traceId }
       case 'visibility':
         return { kind, traceId }
       case 'mutation':
