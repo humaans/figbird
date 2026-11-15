@@ -1248,30 +1248,48 @@ is no per-query throttle config) via two built-in guards on event-driven refetch
   are marked pending and refresh when they are next read. Reconnects during the wait
   coalesce into one sweep. Set `reconnectJitter: 0` for immediate sweeps.
 
-An adapter using `subscribeToConnectionEvents` can emit
-`{ type: 'reconnected', reconcile: false }` when it can prove no events were missed.
-Figbird still reports the reconnect but skips that sweep. Reconciliation already owed
-still runs, including any query whose refetch gave up after its retries. Omit
-`reconcile` or set it to `true` whenever continuity is uncertain.
-
-With `FeathersAdapter`, pass `reconcileOnReconnect` instead of writing an adapter. Figbird
-holds each reconnect until it settles, and a newer disconnect or reconnect supersedes it:
-
-```ts
-new FeathersAdapter(feathers, {
-  // e.g. compare a server-issued event sequence returned by re-authentication
-  reconcileOnReconnect: () => continuity.missedEventsSinceLastLogin(),
-})
-```
-
-When the application finds events missing while still connected, such as a gap in a
-server-issued sequence, `figbird.reconcileMissedEvents()` runs the same jittered sweep a
-reconnect does, deferred while the tab is hidden.
-
 Manual `refetch()`, first fetches, and SWR revalidation are user/loader intent and are
 never gated.
 
 One practical consequence: an **unwindowed** relation like `.related('comments')` is local-exact, so a teammate's new comment merges straight from the socket event with no refetch. If you don't need a window, don't add one.
+
+#### Continuity: when events were missed
+
+The cache is correct only while it has applied every event since each query was last
+fetched. Two things break that, and the scheduler above drains both:
+
+- **The stream broke.** Events may have been missed, so every realtime-maintained query
+  owes a reconcile. Without help, Figbird assumes this after every reconnect.
+- **One query's fetch failed.** A refetch that gives up after its retries keeps the query
+  owed, so the next reconnect or sweep retries it. Refused requests (non-retryable errors)
+  are an answer a retry would repeat, so they are not retried.
+
+When the application can tell whether events were missed better than the transport, for
+example from a server-issued event sequence, pass a `continuity` source, modelled on
+`visibility`:
+
+```ts
+const figbird = new Figbird({
+  adapter,
+  schema,
+  continuity: {
+    // After a reconnect: return false only when no events were missed.
+    missedEventsOnReconnect: ({ connectionId }) => sequence.missedSinceLastLogin(connectionId),
+    // Events found missing while still connected.
+    onMissedEvents: listener => sequence.onGap(listener),
+  },
+})
+```
+
+Figbird reports the reconnect at once and only holds the sweep for the answer. Returning
+`false` skips it; `true`, an error, or no answer within 30 seconds sweeps. A newer
+disconnect or reconnect supersedes an answer still pending. `onMissedEvents` runs the same
+jittered sweep a reconnect does, deferred while the tab is hidden. Either way, reconciles
+already owed, such as a failed refetch, still run.
+
+An adapter of your own can instead emit `{ type: 'reconnected', reconcile: false }` from
+`subscribeToConnectionEvents` when it can prove continuity itself. Omit `reconcile` or set
+it to `true` whenever continuity is uncertain.
 
 ### Freshness tolerance: staleTime
 
@@ -2078,6 +2096,8 @@ const figbird = new Figbird({
   retry?,
   retryDelay?,
   reconnectJitter?,
+  visibility?,
+  continuity?,
 })
 ```
 
@@ -2087,7 +2107,6 @@ const figbird = new Figbird({
 | `prepare(request, opts?)`                         | Awaitable query lease for routers. Argumentless definitions can be passed directly. See [figbird.prepare](#figbirdprepare).                                     |
 | `prefetch(request, opts?)`                        | Idempotent speculative warming. Argumentless definitions can be passed directly. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
-| `reconcileMissedEvents()`                         | Reconcile as after a reconnect, for realtime events the application knows it missed while connected. Jittered and deferred while hidden, unlike `refetch()`. |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
 | `transaction(fn)`                                 | Adapter-backed atomic CRUD collector. Optimistic projection, commit, and rollback are grouped across services. See [figbird.transaction](#figbirdtransaction). |
 | `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
@@ -2120,7 +2139,6 @@ const adapter = new FeathersAdapter(feathers, options)
   - `pagination` — cursor strategies keyed by service path; see [Cursor pagination](#cursor-pagination)
   - `operators` — custom query operators the client can evaluate (`{ $asOf: asOf => item => boolean }`); queries using them stay realtime-mergeable. See [Teaching the client custom operators](#teaching-the-client-custom-operators)
   - `isInvalidationEvent` — identifies application-specific realtime notifications that carry an entity ID but no complete entity value; see [Invalidation-only events](#invalidation-only-events)
-  - `reconcileOnReconnect` — `() => boolean | Promise<boolean>`; resolve `false` only when the application has established no realtime events were missed while disconnected, and Figbird skips that reconnect sweep. Throwing or rejecting reconciles
   - `transactions` — optional atomic transaction transport; see [feathersTransactions](#featherstransactions) for an application-provided `api/transactions` service, or set `serviceName` for an existing endpoint
 
 Meta behavior: `find` returns `{ data, meta }` (`FindMeta`: `{ total, limit, skip }`); `get` returns only the item.

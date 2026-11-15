@@ -65,6 +65,29 @@ export interface VisibilitySource {
   onChange(listener: () => void): () => void
 }
 
+/**
+ * Where the store learns whether realtime events were missed. Without one, every
+ * transport reconnect counts as missed. Implement it when the application can tell
+ * better than the transport, for example from a server-issued event sequence.
+ */
+export interface ContinuitySource {
+  /**
+   * Called after each transport reconnect, which is reported at once; only the
+   * reconnect sweep waits for the answer. Return `false` only when no realtime
+   * events were missed while disconnected. Anything else reconciles: `true`, an
+   * error, or no answer within 30 seconds. A newer disconnect or reconnect
+   * supersedes an answer still pending.
+   */
+  missedEventsOnReconnect(reconnect: {
+    connectionId?: string
+    attempt?: number
+  }): boolean | Promise<boolean>
+  /** Notify when events are found missing while still connected. Returns an unsubscribe function. */
+  onMissedEvents(listener: () => void): () => void
+}
+
+const continuityAnswerTimeoutMs = 30_000
+
 /** Random reconnect delay in ms. A number means `[0, number]`; `0` disables jitter. */
 export type ReconnectJitter = number | readonly [number, number]
 
@@ -184,6 +207,11 @@ export class QueryStore<
   #realtime = new Map<string, () => void>()
   #connectionUnsub: (() => void) | undefined
   #visibilityUnsub: () => void
+  #continuity: ContinuitySource | undefined
+  #continuityUnsub: (() => void) | undefined
+  // Each disconnect and reconnect starts a new cycle, superseding a pending answer.
+  #connectionCycle = 0
+  #continuityAnswerTimer: ClockTimer | null = null
   readonly #clock: Clock
   #retention: QueryRetention
   #disposed = false
@@ -236,6 +264,7 @@ export class QueryStore<
     retryDelay = defaultRetryDelay,
     reconnectJitter = [0, 3000],
     visibility,
+    continuity,
     defaultSort,
     compare = compareValues,
     foreignKeys,
@@ -261,6 +290,8 @@ export class QueryStore<
     reconnectJitter?: ReconnectJitter
     /** Visibility source for hidden-tab gating. Defaults to `document`. */
     visibility?: VisibilitySource
+    /** Tells the store whether realtime events were missed. Defaults to every reconnect. */
+    continuity?: ContinuitySource
     /**
      * The backend's implicit ordering for queries without `$sort` (e.g.
      * `{ createdAt: -1, id: -1 }`). Lets window maintenance place realtime items
@@ -346,6 +377,10 @@ export class QueryStore<
     this.#visibility = visibility ?? documentVisibility()
     this.#hiddenAt = this.#visibility.isHidden() ? this.#clock.now() : null
     this.#visibilityUnsub = this.#visibility.onChange(() => this.#visibilityChanged())
+    this.#continuity = continuity
+    this.#continuityUnsub = continuity?.onMissedEvents(() =>
+      this.#scheduleReconnectSweep(this.#telemetry.nextTraceId()),
+    )
     if (this.#adapter.subscribeToConnectionEvents) {
       this.#connectionUnsub = this.#adapter.subscribeToConnectionEvents(event => {
         const traceId = this.#telemetry.nextTraceId()
@@ -365,6 +400,7 @@ export class QueryStore<
               ...(event.reason ? { reason: event.reason } : {}),
               reconnecting: event.reconnecting,
             })
+            this.#nextConnectionCycle()
             break
           case 'reconnected':
             this.#telemetry.emit({
@@ -374,7 +410,7 @@ export class QueryStore<
               ...(event.transport ? { transport: event.transport } : {}),
               ...(event.connectionId ? { connectionId: event.connectionId } : {}),
             })
-            this.#scheduleReconnectSweep(traceId, event.reconcile !== false)
+            this.#reconcileAfterReconnect(event, traceId)
             break
           case 'error':
             this.#telemetry.emit({
@@ -395,7 +431,7 @@ export class QueryStore<
       })
     } else {
       this.#connectionUnsub = this.#adapter.subscribeToReconnect?.(() =>
-        this.#scheduleReconnectSweep(this.#telemetry.nextTraceId()),
+        this.#reconcileAfterReconnect({}, this.#telemetry.nextTraceId()),
       )
     }
   }
@@ -409,6 +445,8 @@ export class QueryStore<
     this.#disposed = true
     this.#retention.dispose()
     this.#visibilityUnsub()
+    this.#continuityUnsub?.()
+    this.#continuityAnswerTimer?.cancel()
     this.#connectionUnsub?.()
     for (const unsubscribe of this.#realtime.values()) unsubscribe()
     this.#realtime.clear()
@@ -2305,11 +2343,48 @@ export class QueryStore<
   }
 
   /**
-   * Reconcile as a reconnect does, for realtime events the application knows were
-   * missed while connected: the same jittered sweep, deferred while hidden.
+   * A reconnect owes a sweep when events may have been missed. An adapter that
+   * proved continuity itself sends `reconcile: false`; otherwise the continuity
+   * source answers, and without one every reconnect counts as missed. Either way
+   * the reconciliations already owed still run.
    */
-  reconcileMissedEvents(): void {
-    this.#scheduleReconnectSweep(this.#telemetry.nextTraceId())
+  #reconcileAfterReconnect(
+    event: { reconcile?: boolean; connectionId?: string; attempt?: number },
+    traceId: number | undefined,
+  ): void {
+    const cycle = this.#nextConnectionCycle()
+    const continuity = this.#continuity
+    if (event.reconcile === false || !continuity) {
+      this.#scheduleReconnectSweep(traceId, event.reconcile !== false)
+      return
+    }
+
+    const answer = (missed: boolean): void => {
+      if (this.#disposed || cycle !== this.#connectionCycle) return
+      this.#nextConnectionCycle()
+      this.#scheduleReconnectSweep(traceId, missed)
+    }
+    const timer = this.#clock.setTimeout(() => answer(true), continuityAnswerTimeoutMs)
+    timer.unref()
+    this.#continuityAnswerTimer = timer
+    const reconnect = {
+      ...(event.connectionId === undefined ? {} : { connectionId: event.connectionId }),
+      ...(event.attempt === undefined ? {} : { attempt: event.attempt }),
+    }
+    void Promise.resolve()
+      .then(() => continuity.missedEventsOnReconnect(reconnect))
+      .then(
+        missed => missed !== false,
+        () => true,
+      )
+      .then(answer)
+  }
+
+  /** Supersede a pending continuity answer. */
+  #nextConnectionCycle(): number {
+    this.#continuityAnswerTimer?.cancel()
+    this.#continuityAnswerTimer = null
+    return ++this.#connectionCycle
   }
 
   #markReconciliationPending(
