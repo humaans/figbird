@@ -244,3 +244,60 @@ test('r: extension decodes structured custom read failures', t => {
   t.true(event.kind === 'read:error' && event.error instanceof Error)
   if (event.kind === 'read:error') t.like(event.error, { message: 'invalid job', code: 422 })
 })
+
+test('r: disposed instances reject new reads without dispatching through the adapter', async t => {
+  const { figbird, adapter } = app()
+  const handle = figbird.r.jobs
+  let calls = 0
+  adapter.mutate = async () => {
+    calls++
+    return { id: 1, status: 'done' }
+  }
+  figbird.dispose()
+  await t.throwsAsync(handle.getCheck({ id: 1 }), { message: /disposed/ })
+  await t.throwsAsync(figbird.r.jobs.getCheck({ id: 1 }), { message: /disposed/ })
+  t.is(calls, 0)
+})
+
+test('r: clearing the timeline keeps pending reads visible through success and failure', t => {
+  for (const fail of [false, true]) {
+    const collector = createRemoteCollector()
+    // Reproduce a read that began before the new recording watermark.
+    const timestamp = Date.now() - 100
+    collector.ingest({
+      events: [
+        {
+          kind: 'read:start',
+          readId: 1,
+          serviceName: 'jobs',
+          method: 'getCheck',
+          timestamp,
+        },
+      ],
+    })
+    const activities = () => {
+      const snapshot = collector.getSnapshot()
+      return buildTimelineActivities(snapshot, buildDevtoolsModel(snapshot), performance.now())
+    }
+    collector.clearTimeline()
+    t.is(activities().length, 1, 'pending read survives clearing the timeline')
+    t.is(activities()[0]?.status, 'pending')
+    const terminal = {
+      readId: 1,
+      serviceName: 'jobs',
+      method: 'getCheck',
+      durationMs: 120,
+      timestamp: Date.now() + 20,
+    }
+    collector.ingest({
+      events: [
+        fail
+          ? { ...terminal, kind: 'read:error', error: new Error('offline') }
+          : { ...terminal, kind: 'read:end' },
+      ],
+    })
+    t.is(activities().length, 1)
+    t.is(activities()[0]?.status, fail ? 'error' : 'success')
+    t.is(activities()[0]?.durationMs, 120)
+  }
+})

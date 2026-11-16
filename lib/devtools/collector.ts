@@ -671,10 +671,11 @@ class FigbirdCollector implements Collector {
     this.#timelineConnection.clear()
     this.#timelineTraces.clear()
     this.#clearSettledWrites()
+    this.#timelineStartedAt = Date.now() + this.#wallClockOffset
     for (const [id, read] of this.#reads) {
       if (read.endAt !== undefined) this.#reads.delete(id)
+      else this.#reads.set(id, { ...read, startAt: this.#timelineStartedAt })
     }
-    this.#timelineStartedAt = Date.now() + this.#wallClockOffset
     this.#timelineEvictedCount = 0
     this.#timelinePayloadsEvicted = 0
     for (const record of this.#queries.values()) {

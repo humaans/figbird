@@ -903,6 +903,7 @@ export class QueryStore<
 
   /** Custom reads share adapter dispatch with custom writes, never their lifecycle. */
   async read(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+    this.assertActive()
     const readId = this.#nextReadId++
     const startedAt = this.#clock.now()
     this.#telemetry.emit({ kind: 'read:start', readId, serviceName, method, args })
