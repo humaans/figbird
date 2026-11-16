@@ -239,6 +239,7 @@ export class MutationExecutor {
     }
     const promises: Promise<unknown>[] = []
 
+    this.#applyReceivedEvents()
     for (const operation of planned) {
       const lane = this.#mutationLanes.ensure(
         operation.desc.serviceName,
@@ -493,6 +494,16 @@ export class MutationExecutor {
     })
   }
 
+  /**
+   * Run before a lane takes its base from the cache. A realtime event received
+   * before the lane existed waits in the batch window as a plain cache write, so
+   * the lane never hears of it: the write would project over the older record and
+   * a rollback would restore that record, losing the remote change.
+   */
+  #applyReceivedEvents(): void {
+    this.#cache.flush()
+  }
+
   /** Queue one keyed CRUD call behind earlier calls for the same service entity. */
   #enqueueMutation(
     desc: MutationDescriptor,
@@ -501,6 +512,7 @@ export class MutationExecutor {
     args: unknown[],
     control?: ScheduledMutationControl,
   ): RegisteredMutation {
+    this.#applyReceivedEvents()
     const lane = this.#mutationLanes.ensure(
       desc.serviceName,
       id,
