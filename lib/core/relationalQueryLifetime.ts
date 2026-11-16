@@ -131,14 +131,27 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
    * A subscriber keeps it alive, so the retry is armed to refetch in place instead.
    */
   failedReadObserved(stillFailed: () => boolean, abandon: () => void): void {
+    this.#releaseFailedRead(stillFailed, abandon, () => this.#armFailedReadRetry())
+  }
+
+  /**
+   * Let go of a failed query without a reader having thrown its failure, as a failed
+   * parallel read does for its members. A held failure is left alone: arming a retry
+   * here would let the reader's first render of the failure refetch on its own.
+   */
+  releaseFailedRead(stillFailed: () => boolean, abandon: () => void): void {
+    this.#releaseFailedRead(stillFailed, abandon, () => {})
+  }
+
+  #releaseFailedRead(stillFailed: () => boolean, abandon: () => void, held: () => void): void {
     if (this.#hasSubscriber()) {
-      this.#armFailedReadRetry()
+      held()
       return
     }
     // A reader in the same commit subscribes after this render, so look again after it.
     queueMicrotask(() => {
       if (!stillFailed()) return
-      if (this.#hasSubscriber()) this.#armFailedReadRetry()
+      if (this.#hasSubscriber()) held()
       else abandon()
     })
   }

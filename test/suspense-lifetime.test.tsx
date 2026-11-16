@@ -301,3 +301,48 @@ it('releasing a pin while a Suspense read is pending does not strand the read', 
     t.is(figbird.query(builder).getSnapshot().data?.status, 'done', pin)
   }
 })
+
+it('a parallel read does not retry a held failure before a reader has thrown it', async t => {
+  const { App, figbird, adapter } = createTestApp(schema, { jobs: { data: {} } })
+  t.teardown(() => figbird.dispose())
+  let calls = 0
+  let fail!: (error: Error) => void
+  adapter.get = () => {
+    calls++
+    return new Promise((_resolve, reject) => {
+      fail = reject
+    })
+  }
+  const builder = q.jobs.get(1)
+  function Holder() {
+    return <div className='holder'>{useQueryResult(builder, { suspense: false }).status}</div>
+  }
+  function Probe() {
+    return <div className='ready'>{useQueries([builder])[0]?.status}</div>
+  }
+  const d = dom({ onCaughtError: () => {} })
+  d.render(
+    <App>
+      <Holder />
+      <Boundary>
+        <Suspense fallback={<div>Loading</div>}>
+          <Probe />
+        </Suspense>
+      </Boundary>
+    </App>,
+  )
+  await d.flush()
+  t.is(calls, 1)
+
+  // The failed group lets go of its reads on a timer. Let that timer run before React
+  // renders the failure, as it can on a busy main thread.
+  await d.flush(async () => {
+    fail(new Error('offline'))
+    await new Promise(resolve => setTimeout(resolve, 10))
+  })
+  await d.flush()
+  t.truthy(d.$('.failed'))
+  t.is(d.$('.holder')?.textContent, 'error')
+  t.is(calls, 1, 'only a boundary reset may retry')
+  d.unmount()
+})
