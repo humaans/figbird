@@ -94,3 +94,16 @@ query<string>()
 
 // @ts-expect-error - zero-argument reads are not mutation methods either
 figbird.m.jobs.count()
+
+const replaced = createHooks(
+  createSchema({
+    services: {
+      jobs: service<{ item: { id: number } }>()
+        .queries({ first: query<() => Promise<string>>() })
+        .queries({ second: query<() => Promise<number>>() }),
+    },
+  }),
+)
+export const replacementData: number = replaced.useQuery(replaced.q.jobs.second())
+// @ts-expect-error - queries() replaces earlier declarations in the types too
+replaced.q.jobs.first()

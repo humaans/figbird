@@ -58,3 +58,12 @@ test('createSchema rejects malformed JavaScript query declarations', t => {
   const bad = declaration().queries({ broken: {} as ReturnType<typeof query> })
   t.throws(() => createSchema({ services: { jobs: bad } }), { message: /query<F>/ })
 })
+
+test('queries() replaces the prior set without mutating the earlier declaration', t => {
+  const first = declaration().queries({ first: query<() => Promise<string>>() })
+  const replaced = first.queries({ second: query<() => Promise<number>>() })
+  const { q } = createHooks(createSchema({ services: { original: first, replaced } }))
+  t.is(q.original.first().method, 'first')
+  t.is(q.replaced.second().method, 'second')
+  t.is(Reflect.get(q.replaced, 'first'), undefined)
+})

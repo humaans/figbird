@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Declare custom reads with `service<T>().queries({ name: query<F>() })` and use them
+  through the existing query hooks. Their results are cached separately from entities.
+- **Typing change:** services without declared custom methods no longer expose unknown
+  method properties on `m`; those are missing properties rather than entries in an
+  empty `Record<string, never>` method map. The untyped `m.service.call(...)` escape
+  hatch remains available.
+
 - Keep cold Suspense reads temporarily retained while sibling reads settle, and evict
   unused references under cache pressure after their render leases expire.
 - Error-boundary retries can restart failed queries held by preparation or

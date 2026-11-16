@@ -1918,7 +1918,9 @@ Undeclared method names are unavailable at runtime, so calling a misspelling thr
 a `TypeError` without making a request. `createSchema` rejects declared names that
 conflict with builder members such as `get`, `where`, and `snapshot`, inherited Object
 members, or protocol names `then` and `toJSON`. The declaration can be chained before
-or after `.at(path)`. Query policy options and polling intervals are not part of this version.
+or after `.at(path)`. Calling `.queries()` again replaces the previous set; include every
+read you want to keep in the new object. Query policy options and polling intervals
+are not part of this version.
 
 Devtools lists these results as custom queries and shows `read:start`, `read:end`, and
 `read:error` events with service, method, duration, and failure. Events include the real

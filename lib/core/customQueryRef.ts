@@ -144,7 +144,18 @@ export class CustomQueryRef<T> {
     })
   }
 
+  /** @internal Restart a cold failure only when its Suspense consumer retries. */
+  retryColdStart(): boolean {
+    if (this.#state.status !== 'error' || !this.#lifetime.consumeFailedReadRetry()) return false
+    this.refetch()
+    return true
+  }
+
   releaseColdStart(): void {
+    if (this.#state.status === 'error' && !this.#lifetime.canReleaseFailedRead()) {
+      this.#lifetime.armFailedReadRetry()
+      return
+    }
     if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead()) {
       queueMicrotask(() => {
         if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead())
@@ -231,6 +242,7 @@ export class CustomQueryRef<T> {
   #start(): void {
     if (this.#pending) return
     this.#host.onActive()
+    this.#lifetime.clearFailedReadRetry()
     if (this.#state.status === 'error') this.#lifetime.releaseRead('root')
     this.#pending = true
     this.#invalidated = false

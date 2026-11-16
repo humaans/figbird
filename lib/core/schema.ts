@@ -99,6 +99,7 @@ export interface ServiceDeclaration<
   readonly path: TPath
   readonly [$phantom]?: TDef
   readonly queryMethods: QueryDeclarations
+  /** Replace this service's complete set of custom read declarations. */
   queries<const Q extends QueryDeclarations>(
     definitions: Q,
   ): ServiceDeclaration<WithQueries<TDef, Q>, TPath>
@@ -112,6 +113,7 @@ type WithQueries<TDef extends ResolvedServiceDef, Q extends QueryDeclarations> =
 /** A service definition whose transport path will default to its schema name. */
 export interface DefaultServiceDeclaration<TDef extends ResolvedServiceDef> {
   readonly queryMethods: QueryDeclarations
+  /** Replace this service's complete set of custom read declarations. */
   queries<const Q extends QueryDeclarations>(
     definitions: Q,
   ): DefaultServiceDeclaration<WithQueries<TDef, Q>>
