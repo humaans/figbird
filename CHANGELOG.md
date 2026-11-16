@@ -48,6 +48,11 @@ Query fixes.
   used to read it as "is null" and drop rows from the list. An empty `$or` or `$and`
   no longer throws, and a condition left empty, such as `{ rank: {} }`, is left to the
   server, with the new classification reason `empty-condition`.
+Relational filter fixes.
+
+- A query filtered by two related fields that share a relation, such as
+  `where({ 'assignee.team.name': 'Core', 'assignee.status': 'active' })`, no longer
+  drops a matching row when a realtime event for that row arrives.
 
 Type changes that can affect consumers.
 

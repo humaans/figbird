@@ -354,48 +354,62 @@ function materializeRelationalFilterItem<TMeta extends Record<string, unknown>>(
   item: unknown,
   paths: RelationalFilterPath[],
 ): { item: unknown; unresolved: Set<string>; missing: Set<string> } {
-  let materialized = cloneRecord(item)
   const unresolved = new Set<string>()
   const missing = new Set<string>()
-  for (const path of paths) {
-    const result = materializeRelationPath(context, serviceName, materialized, path.path)
-    if (result.kind === 'unresolved') {
-      unresolved.add(path.path.join('.'))
-      continue
-    }
-    if (result.kind === 'missing') missing.add(path.path.join('.'))
-    materialized = result.item
-  }
+  const materialized = attachRelations(
+    context,
+    serviceName,
+    item,
+    paths.map(path => path.path),
+    0,
+    { unresolved, missing },
+  )
   return { item: materialized, unresolved, missing }
 }
 
-type MaterializedPath =
-  | { kind: 'resolved' | 'missing'; item: Record<string, unknown> }
-  | { kind: 'unresolved' }
-
-function materializeRelationPath<TMeta extends Record<string, unknown>>(
+/**
+ * A copy of the item with the relation at `depth` of each path attached. Paths that
+ * share a relation are followed together, so the relation is attached once with all
+ * of their deeper hops: following `assignee.team` and `assignee` one after the other
+ * would attach the assignee twice, the second time without its team.
+ */
+function attachRelations<TMeta extends Record<string, unknown>>(
   context: CacheContext<TMeta>,
   serviceName: string,
-  item: Record<string, unknown>,
-  path: string[],
-): MaterializedPath {
-  if (path.length === 0) return { kind: 'resolved', item }
+  item: unknown,
+  paths: string[][],
+  depth: number,
+  outcome: { unresolved: Set<string>; missing: Set<string> },
+): Record<string, unknown> {
+  const materialized = cloneRecord(item)
+  const pathsByRelation = new Map<string, string[][]>()
+  for (const path of paths) {
+    const relName = path[depth]!
+    const group = pathsByRelation.get(relName)
+    if (group) group.push(path)
+    else pathsByRelation.set(relName, [path])
+  }
 
-  const [relName, ...rest] = path
-  const relDef = relName ? context.schema.relationships?.[serviceName]?.[relName] : undefined
-  if (!relName || !relDef) return { kind: 'unresolved' }
-
-  const related = resolveRelatedItem(context, relDef, item)
-  if (related === undefined) return { kind: 'unresolved' }
-  // A null FK is a known absence: the path's predicates see a null relation.
-  if (related === null) return { kind: 'missing', item: { ...item, [relName]: null } }
-
-  const nextRelated =
-    rest.length > 0
-      ? materializeRelationPath(context, relDef.destService, cloneRecord(related), rest)
-      : { kind: 'resolved' as const, item: related as Record<string, unknown> }
-  if (nextRelated.kind === 'unresolved') return nextRelated
-  return { kind: nextRelated.kind, item: { ...item, [relName]: nextRelated.item } }
+  for (const [relName, group] of pathsByRelation) {
+    const relDef = context.schema.relationships?.[serviceName]?.[relName]
+    const related = relDef ? resolveRelatedItem(context, relDef, materialized) : undefined
+    if (!relDef || related === undefined) {
+      for (const path of group) outcome.unresolved.add(path.join('.'))
+      continue
+    }
+    // A null FK is a known absence: the paths' predicates see a null relation.
+    if (related === null) {
+      for (const path of group) outcome.missing.add(path.join('.'))
+      materialized[relName] = null
+      continue
+    }
+    const deeper = group.filter(path => path.length > depth + 1)
+    materialized[relName] =
+      deeper.length > 0
+        ? attachRelations(context, relDef.destService, related, deeper, depth + 1, outcome)
+        : related
+  }
+  return materialized
 }
 
 /**
