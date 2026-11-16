@@ -28,6 +28,8 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #coldStartAwaitingSubscriber = false
   #prefetch: PrefetchLease | null = null
+  #failedReadRetryArmed = false
+  #failedReadRetryGeneration = 0
   readonly #renderRead: RenderReadLease
 
   constructor(clock: Clock, defaultStaleTime: number) {
@@ -94,12 +96,31 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     return this.#renderRead.active
   }
 
+  armFailedReadRetry(): void {
+    const generation = this.#failedReadRetryGeneration
+    queueMicrotask(() => {
+      if (generation === this.#failedReadRetryGeneration) this.#failedReadRetryArmed = true
+    })
+  }
+
+  consumeFailedReadRetry(): boolean {
+    if (!this.#failedReadRetryArmed) return false
+    this.clearFailedReadRetry()
+    this.releaseRead('root')
+    return true
+  }
+
+  clearFailedReadRetry(): void {
+    this.#failedReadRetryArmed = false
+    this.#failedReadRetryGeneration++
+  }
+
   canReleaseFailedRead(): boolean {
     return [...this.owners.values()].every(owner => owner.source !== 'subscriber')
   }
 
   canReleaseColdStart(): boolean {
-    return this.owners.size === 0 && this.reads.get('root')?.status === 'settled'
+    return this.owners.size === 0 && this.reads.get('root')?.status !== 'pending'
   }
 
   canEvictAbandonedRead(): boolean {
@@ -119,6 +140,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   }
 
   override reset(): void {
+    this.clearFailedReadRetry()
     this.#renderRead.release()
     if (this.#preparedAdoption.kind === 'wave') {
       this.#preparedAdoption = { kind: 'idle', adoptedThrough: this.#preparedAdoption.generation }
