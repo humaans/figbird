@@ -107,3 +107,16 @@ const replaced = createHooks(
 export const replacementData: number = replaced.useQuery(replaced.q.jobs.second())
 // @ts-expect-error - queries() replaces earlier declarations in the types too
 replaced.q.jobs.first()
+
+service<{ item: { id: number } }>().queries({
+  // @ts-expect-error - a query cannot take a builder member's name
+  where: query<() => Promise<number>>(),
+})
+service<{ item: { id: number } }>().queries({
+  // @ts-expect-error - nor a name every object inherits
+  toString: query<() => Promise<number>>(),
+})
+service<{ item: { id: number } }>()
+  .at('api/items')
+  // An ordinary name is accepted after at() as well.
+  .queries({ summary: query<() => Promise<number>>() })
