@@ -227,6 +227,7 @@ export class RelationalQueryRef<
   // internal subscriptions. Existing subscriptions are prodded through ensureFresh()
   // when each subscriber joins, so late strict readers are honored too.
   #staleTime = 0
+  readonly #defaultStaleTime: number
   // Snapshot mode: the whole tree is fetched once and frozen — every internal query
   // subscribes with realtime disabled, and relational-filter invalidation is skipped.
   get #realtimeMode(): 'merge' | 'disabled' {
@@ -288,7 +289,8 @@ export class RelationalQueryRef<
     this.#queryId = `rq/${hashObject(options?.root ? { ast, root: options.root } : ast)}`
     this.#onIdle = options?.onIdle ?? null
     this.#onEvict = onEvict ?? null
-    this.#lifetime = new RelationalQueryLifetime(host.clock, options?.defaultStaleTime ?? 0)
+    this.#defaultStaleTime = options?.defaultStaleTime ?? 0
+    this.#lifetime = new RelationalQueryLifetime(host.clock, this.#defaultStaleTime)
     this.#rootOverride = options?.root ?? null
   }
 
@@ -476,6 +478,13 @@ export class RelationalQueryRef<
       () => this.#root !== null,
       () => this.#cleanup(),
     )
+  }
+
+  /** @internal Seed a Suspense render from store data using that reader's freshness policy. */
+  prepareRead(staleTime?: number): void {
+    if (this.#root) return
+    this.#staleTime = staleTime ?? this.#defaultStaleTime
+    this.#setupRoot()
   }
 
   /** Returns the latest snapshot of the relational query state. */
@@ -1384,6 +1393,13 @@ export class RelationalQueryRef<
    * to the keep-previous-data path rather than throwing again.
    */
   suspensePromise(): Promise<void> {
+    // A cold refetch needs a pending promise rather than the earlier failure's settled read.
+    if (
+      this.getSnapshot().status === 'loading' &&
+      this.#lifetime.reads.get('root')?.status === 'settled'
+    ) {
+      this.#lifetime.releaseRead('root')
+    }
     return this.#lifetime.suspensePromise(() => {
       if (!this.#root) this.#setupRoot()
       this.#settleSuspense(this.getSnapshot())

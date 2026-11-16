@@ -1544,6 +1544,10 @@ await figbird.m.tasks.confirmed.patch(id, { done: true }) // waits for the ack
 await figbird.m.tasks.archive([id]) // custom schema methods, typed
 ```
 
+Holding an unsubscribed ref object does not pin its cache entry. After eviction,
+`figbird.query(builder)` returns a different ref, so reacquire it before starting later
+work or keep a subscription or preparation handle active to retain shared identity.
+
 Below that sits the **descriptor layer**: plain `{ serviceName, method }` objects using
 transport service paths, with no schema required. It's the primitive the relational engine
 itself is built on, and the only surface a schema-less instance can use.
@@ -1733,9 +1737,6 @@ inline in render needs no dependency arrays. Also available as `figbird.q`.
 
 ## useQuery and useQueryResult
 
-Uncommitted reads have a five-minute render lease; a boundary pending longer than that
-may refetch already-settled reads once if cache pressure evicts them.
-
 ```ts
 // Suspense data (default)
 const data = useQuery(builder)
@@ -1765,6 +1766,16 @@ const data = useQuery(builder, { skip: id == null }) // T | undefined
 Result fields (suspense form): `data` (guaranteed for the exact query passed), `error`
 (non-null when a refetch failed while data is showing; cold errors throw instead),
 `isFetching` (background fetch in flight on the current query), `refetch()`.
+
+When the full result is cached, remounts render it without a Suspense fallback;
+`staleTime` controls background revalidation.
+
+After a Suspense reader observes a cold error, a later Suspense render can restart the
+shared query, including from another boundary. Tagged readers (`suspense: false`) keep
+their subscription and do not consume that retry on unrelated renders.
+
+Uncommitted reads have a five-minute render lease; a boundary pending longer than that
+may refetch already-settled reads once if cache pressure evicts them.
 
 ## useQueries
 
