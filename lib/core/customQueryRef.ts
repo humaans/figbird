@@ -30,7 +30,7 @@ export class CustomQueryRef<T> {
   readonly #key: string
   readonly #serviceName: string
   readonly #method: string
-  readonly #args: unknown[]
+  readonly #args: readonly unknown[]
   readonly #lifetime: RelationalQueryLifetime<Listener<T>>
   #state: RelationalQueryState<T> = { status: 'idle', data: null, error: null, isFetching: false }
   #pending = false
@@ -51,7 +51,7 @@ export class CustomQueryRef<T> {
     key: string,
     serviceName: string,
     method: string,
-    args: unknown[],
+    args: readonly unknown[],
     staleTime: number,
     host: CustomQueryHost<T>,
   ) {

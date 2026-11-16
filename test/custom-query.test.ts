@@ -29,7 +29,6 @@ test('custom q: descriptors are inert and query refs share structurally equal ar
   const ready = first.suspensePromise()
   t.is(first.suspensePromise(), ready)
   t.deepEqual(calls, [['api/jobs', 'getCheck', [input, undefined]]])
-  t.is(calls[0]?.[2][0], input)
   const result = { id: 1, status: 'done' }
   gate.resolve(result)
   await ready
@@ -524,4 +523,34 @@ test('a refetch queued behind a failing cold read still settles the Suspense rea
     t.is(calls, 2, kind)
     t.like(ref.getSnapshot(), { status: 'success', data: { id: 1, status: 'ok' } }, kind)
   }
+})
+
+test('custom q: arguments are copied, so later changes cannot alter the query', async t => {
+  const { figbird, adapter } = app()
+  t.teardown(() => figbird.dispose())
+  const sent: unknown[][] = []
+  adapter.call = async (_service, _method, args) => {
+    sent.push(structuredClone(args))
+    // A transport hook that adds to the arguments it was handed.
+    Object.assign(args[0] as object, { addedByHook: true })
+    return { id: 1, status: 'ok' }
+  }
+  const input = { id: 1 }
+  const extra = { query: { since: new Date('2026-01-01T00:00:00Z'), tag: undefined } }
+  const builder = figbird.q.jobs.getCheck(input, extra)
+  const key = builder.hash()
+  // The app reuses and changes its own object after building the query.
+  input.id = 2
+
+  const ref = figbird.query(builder)
+  const release = ref.subscribe(() => {})
+  await waitFor(() => ref.getSnapshot().status === 'success', 'first read')
+  ref.refetch()
+  await waitFor(() => sent.length === 2 && !ref.getSnapshot().isFetching, 'second read')
+
+  t.deepEqual(sent[0], [{ id: 1 }, extra])
+  t.deepEqual(sent[1], sent[0], 'a refetch sends what the key was built from')
+  t.is(builder.hash(), key)
+  t.is(figbird.query(figbird.q.jobs.getCheck({ id: 1 }, extra)), ref)
+  release()
 })

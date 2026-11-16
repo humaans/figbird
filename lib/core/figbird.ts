@@ -572,7 +572,7 @@ export class Figbird<
       ref = new CustomQueryRef(key, serviceName, builder.method, builder.args, this.#staleTime, {
         clock: this.clock,
         assertActive: () => this.queryStore.assertActive(),
-        fetch: () => this.queryStore.read(serviceName, builder.method, builder.args, key),
+        fetch: () => this.queryStore.read(serviceName, builder.method, builder.dispatchArgs(), key),
         isRetryable: error => this.adapter.isRetryableError?.(error) ?? true,
         retry: this.#retry,
         retryDelay: this.#retryDelay,
