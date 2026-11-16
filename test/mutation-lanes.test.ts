@@ -340,3 +340,98 @@ test('mutation lanes: raw confirmed creates with client ids serialize dependent 
   patchGate.resolve({ id: 10, content: 'dependent patch' })
   await patched
 })
+
+// A realtime event still waiting in the batch window when a write starts was received
+// before the write, so the write's lane has to start from it.
+
+async function batchedNotesApp() {
+  const { figbird, feathers, adapter } = createTestApp(schema, services(), {
+    eventBatchInterval: 50,
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  const view: { latest?: QueryState<Note[], Record<string, unknown>> } = {}
+  ref.subscribe(state => {
+    view.latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 80))
+  const notes = feathers.service('notes')
+  const note = (id: number) => view.latest?.data?.find(item => item.id === id)
+  return { figbird, adapter, notes, note }
+}
+
+test('mutation lanes: a failed optimistic patch keeps a realtime patch that was still batched', async t => {
+  const { figbird, notes, note } = await batchedNotesApp()
+  const gate = deferred<MockItem>()
+  notes.patch = (() => gate.promise) as never
+
+  notes.data[1] = { id: 1, content: 'remote edit' }
+  notes.emit('patched', notes.data[1])
+  const mine = figbird.m.notes.patch(1, { parentId: 7 })
+  t.like(
+    note(1),
+    { content: 'remote edit', parentId: 7 },
+    'the optimistic patch projects over the remote edit while in flight',
+  )
+
+  gate.reject(new Error('mine failed'))
+  await t.throwsAsync(() => mine, { message: 'mine failed' })
+  await new Promise(resolve => setTimeout(resolve, 120))
+  t.deepEqual(note(1), { id: 1, content: 'remote edit' })
+})
+
+test('mutation lanes: a failed optimistic patch does not resurrect a row whose removal was still batched', async t => {
+  const { figbird, notes, note } = await batchedNotesApp()
+  const gate = deferred<MockItem>()
+  notes.patch = (() => gate.promise) as never
+
+  const removed = notes.data[1]
+  delete notes.data[1]
+  notes.emit('removed', removed)
+  const mine = figbird.m.notes.patch(1, { parentId: 7 })
+  t.is(note(1), undefined, 'the removed row is not shown while the patch is in flight')
+
+  gate.reject(new Error('mine failed'))
+  await t.throwsAsync(() => mine, { message: 'mine failed' })
+  await new Promise(resolve => setTimeout(resolve, 120))
+  t.is(note(1), undefined)
+})
+
+test('mutation lanes: an acknowledged optimistic patch lands over a realtime patch that was still batched', async t => {
+  const { figbird, notes, note } = await batchedNotesApp()
+  const gate = deferred<MockItem>()
+  notes.patch = (() => gate.promise) as never
+
+  notes.data[1] = { id: 1, content: 'remote edit' }
+  notes.emit('patched', notes.data[1])
+  const mine = figbird.m.notes.patch(1, { parentId: 7 })
+  t.like(note(1), { content: 'remote edit', parentId: 7 })
+
+  gate.resolve({ id: 1, content: 'remote edit', parentId: 7, updatedAt: 2 })
+  await mine
+  await new Promise(resolve => setTimeout(resolve, 120))
+  t.deepEqual(note(1), { id: 1, content: 'remote edit', parentId: 7, updatedAt: 2 })
+})
+
+test('mutation lanes: a failed optimistic transaction keeps realtime events that were still batched', async t => {
+  const { figbird, adapter, notes, note } = await batchedNotesApp()
+  const gate = deferred<readonly unknown[]>()
+  adapter.transaction = () => gate.promise
+
+  notes.data[1] = { id: 1, content: 'remote edit' }
+  notes.emit('patched', notes.data[1])
+  const removed = notes.data[2]
+  delete notes.data[2]
+  notes.emit('removed', removed)
+  const mine = figbird.transaction(tx => {
+    tx.m.notes.patch(1, { parentId: 7 })
+    tx.m.notes.patch(2, { parentId: 7 })
+  })
+  t.like(note(1), { content: 'remote edit', parentId: 7 })
+  t.is(note(2), undefined)
+
+  gate.reject(new Error('transaction failed'))
+  await t.throwsAsync(() => mine, { message: 'transaction failed' })
+  await new Promise(resolve => setTimeout(resolve, 120))
+  t.deepEqual(note(1), { id: 1, content: 'remote edit' })
+  t.is(note(2), undefined)
+})

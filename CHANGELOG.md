@@ -32,6 +32,11 @@ Suspense fixes.
   their five-minute render lease ends. A reference you hold without subscribing may
   be replaced, so call `figbird.query()` again before using it later.
 
+Mutation fixes.
+
+- A realtime change that arrives just before a write to the same record is no longer
+  hidden while the write is pending, or undone when an optimistic write fails.
+
 Type changes that can affect consumers.
 
 - `FigbirdEvent` gains `read:start`, `read:end` and `read:error`. A `switch` over
