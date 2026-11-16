@@ -79,6 +79,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   clock: Clock
   queryStore: {
     isObservabilityActive(): boolean
+    readonly fetchRevision: number
     subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void
     subscribeToRealtimeInvalidations(fn: (event: RealtimeInvalidation) => void): () => void
     subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
@@ -389,7 +390,9 @@ export class RelationalQueryRef<
       this.#setupRoot()
     } else {
       this.#root.setStaleTime(this.#staleTime)
-      if (freshness.kind === 'check') this.#ensureFresh(freshness.staleTime)
+      if (freshness.kind === 'check') {
+        this.#ensureFresh(freshness.staleTime, freshness.fetchedAfter)
+      }
     }
 
     // Don't call fn synchronously - useSyncExternalStore will call getSnapshot() instead
@@ -437,11 +440,11 @@ export class RelationalQueryRef<
     }
   }
 
-  #ensureFresh(staleTime: number): void {
+  #ensureFresh(staleTime: number, fetchedAfter?: number): void {
     if (!this.#graphRunId) this.#beginGraphRun()
-    this.#root?.ensureFresh(staleTime, this.#graph('(root)'))
+    this.#root?.ensureFresh(staleTime, this.#graph('(root)'), fetchedAfter)
     for (const { queryRef, path, role } of this.#queryLeaves()) {
-      queryRef.ensureFresh({ staleTime, graph: this.#graph(path, role) })
+      queryRef.ensureFresh({ staleTime, graph: this.#graph(path, role), fetchedAfter })
     }
     this.#scheduleGraphRunCompletion(this.getSnapshot())
   }
@@ -475,7 +478,14 @@ export class RelationalQueryRef<
 
   #scheduleCleanup(): void {
     this.#lifetime.scheduleCleanup(
-      () => this.#root !== null,
+      () => {
+        if (this.#root === null) return false
+        if (!this.#lifetime.hasPendingRead()) return true
+        // A render is suspended on this read. Tearing the graph down would leave its
+        // promise unsettled, so the read stays and is treated as that render's own.
+        this.#lifetime.retainRenderRead(() => {})
+        return false
+      },
       () => this.#cleanup(),
     )
   }
@@ -816,7 +826,7 @@ export class RelationalQueryRef<
   }
 
   #setupRoot(): void {
-    this.#lifetime.graphStarted()
+    this.#lifetime.graphStarted(this.#staleTime, this.#host.queryStore.fetchRevision)
     this.#beginGraphRun()
     this.#subscribeToRelationalFilterInvalidations()
 
@@ -1322,6 +1332,9 @@ export class RelationalQueryRef<
   #notifyListeners(): void {
     // Compute snapshot once and cache it
     const snapshot = this.getSnapshot()
+    // An armed retry belongs to the failure a reader saw. Once the query has moved on,
+    // for example through a service-wide refetch, a later failure is a new one.
+    if (snapshot.status !== 'error') this.#lifetime.clearFailedReadRetry()
     this.#settleSuspense(snapshot)
     // Notify all listeners with the cached snapshot
     for (const listener of this.#lifetime.owners.keys()) {
@@ -1376,8 +1389,10 @@ export class RelationalQueryRef<
     }
     if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead()) {
       queueMicrotask(() => {
-        if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead())
-          this.#cleanup()
+        if (this.getSnapshot().status !== 'error') return
+        if (this.#lifetime.canReleaseFailedRead()) this.#cleanup()
+        // A reader that subscribed in the same commit now holds the failure.
+        else this.#lifetime.armFailedReadRetry()
       })
       return
     }

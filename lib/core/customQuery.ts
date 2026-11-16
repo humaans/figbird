@@ -4,19 +4,30 @@ import type { Schema, ServiceQueries, ServiceNames } from './schema.js'
 
 declare const customQueryResult: unique symbol
 
-/** An inert custom query. Arguments are forwarded unchanged when the query executes. */
+/**
+ * An inert custom query. Its arguments are copied when it is built, so the values its
+ * cache key describes are the values every fetch sends.
+ */
 export class CustomQuery<S extends Schema, TResult> {
   // Carries the result type without adding a runtime field.
   declare readonly [customQueryResult]: TResult
   readonly #key: string
+  readonly args: readonly unknown[]
 
   constructor(
     readonly schema: S,
     readonly serviceName: string,
     readonly method: string,
-    readonly args: unknown[],
+    args: unknown[],
   ) {
+    // Validates the arguments as plain data before they are copied.
     this.#key = `cq/${hashObject({ serviceName, method, args: argumentKey(args) })}`
+    this.args = structuredClone(args)
+  }
+
+  /** A fresh copy for one dispatch, since transports and hooks may modify what they are given. */
+  dispatchArgs(): unknown[] {
+    return structuredClone(this.args) as unknown[]
   }
 
   hash(): string {

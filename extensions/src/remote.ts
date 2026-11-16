@@ -1,4 +1,9 @@
-import type { DevtoolsBridgeConnection, DevtoolsWireRead } from '../../lib/core/devtoolsBridge.js'
+import type {
+  DevtoolsBridgeConnection,
+  DevtoolsCapability,
+  DevtoolsConnectOptions,
+  DevtoolsWireRead,
+} from '../../lib/core/devtoolsBridge.js'
 import type { RemoteCollectorFrame } from '../../lib/devtools/collector.js'
 import { ExtensionInspectionSession } from './inspection.js'
 import { decodeEvent, parseConnection, parseWireRead } from './protocol.js'
@@ -6,6 +11,10 @@ import { decodeEvent, parseConnection, parseWireRead } from './protocol.js'
 const ACTIVE_POLL_INTERVAL_MS = 250
 const IDLE_POLL_INTERVAL_MS = 1_000
 const BRIDGE_EXPRESSION = 'globalThis["__FIGBIRD_DEVTOOLS__"]'
+// What this panel can display. A page sends custom reads only to clients that name them.
+const CAPABILITIES: readonly DevtoolsCapability[] = ['custom-queries']
+const CONNECT_OPTIONS: DevtoolsConnectOptions = { capabilities: CAPABILITIES }
+const CONNECT_EXPRESSION = `${BRIDGE_EXPRESSION}?.connect(undefined,${JSON.stringify(CONNECT_OPTIONS)})`
 
 type Evaluate = (expression: string) => Promise<unknown>
 
@@ -116,7 +125,7 @@ export class ExtensionSession {
     let nextDelay = IDLE_POLL_INTERVAL_MS
     try {
       if (!this.#connection) {
-        const connection = parseConnection(await this.#evaluate(`${BRIDGE_EXPRESSION}?.connect()`))
+        const connection = parseConnection(await this.#evaluate(CONNECT_EXPRESSION))
         if (generation !== this.#generation) {
           if (connection) await this.#disconnect(connection.sessionId)
           return

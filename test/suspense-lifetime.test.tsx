@@ -1,5 +1,5 @@
 import { TestClock } from './clock'
-import { RENDER_READ_LEASE_MS } from '../lib/core/renderReadLease'
+import { COLD_START_ADOPTION_MS, RENDER_READ_LEASE_MS } from '../lib/core/renderReadLease'
 import { Component, Suspense, type ReactNode } from 'react'
 import {
   createHooks,
@@ -225,5 +225,79 @@ it('entity queries: lease expiry during a long boundary refetches expired reads 
       t.true((calls.get(id) ?? 0) <= 2, 'no sibling enters a refetch loop')
     t.is(calls.get(20), waitingOn === 'fetch' ? 1 : 2)
     d.unmount()
+  }
+})
+
+it("entity queries: a read is adopted as the render's own only shortly after it settles", async t => {
+  const cases = [
+    // A boundary held briefly by a sibling: the read is still this render's own.
+    { elapsed: 10_000, staleTime: 0, calls: 1 },
+    // Later, it is cached data like any other and the reader's staleTime decides.
+    { elapsed: COLD_START_ADOPTION_MS + 1000, staleTime: 0, calls: 2 },
+    { elapsed: 290_000, staleTime: 60_000, calls: 2 },
+    { elapsed: 290_000, staleTime: 300_000, calls: 1 },
+    { elapsed: RENDER_READ_LEASE_MS + 1000, staleTime: 1000, calls: 2 },
+  ]
+  for (const { elapsed, staleTime, calls: expected } of cases) {
+    const { figbird: original, adapter } = createTestApp(schema, { jobs: { data: {} } })
+    original.dispose()
+    const clock = new TestClock()
+    const figbird = new Figbird({ schema, adapter, clock, retry: false })
+    t.teardown(() => figbird.dispose())
+    let calls = 0
+    adapter.get = async (_service, id) => {
+      calls++
+      return { data: { id, status: `fetch ${calls}` } }
+    }
+    // A snapshot has no realtime maintenance, so only a fetch can refresh it.
+    const builder = q.jobs.get(1).snapshot()
+    // A suspended render that has not committed starts the read and leaves it unowned.
+    await figbird.query(builder).suspensePromise()
+    t.is(calls, 1)
+    await clock.advance(elapsed)
+
+    const ref = figbird.query(builder)
+    const release = ref.subscribe(() => {}, { staleTime })
+    await clock.advance(0)
+    t.is(calls, expected, `after ${elapsed}ms with staleTime ${staleTime}`)
+    t.is(ref.getSnapshot().data?.status, `fetch ${expected}`)
+    release()
+  }
+})
+
+it('releasing a pin while a Suspense read is pending does not strand the read', async t => {
+  for (const pin of ['prepare', 'prefetch']) {
+    const { figbird: original, adapter } = createTestApp(schema, { jobs: { data: {} } })
+    original.dispose()
+    const clock = new TestClock()
+    const figbird = new Figbird({ schema, adapter, clock, retry: false })
+    t.teardown(() => figbird.dispose())
+    let land!: () => void
+    const landed = new Promise<void>(resolve => {
+      land = resolve
+    })
+    let calls = 0
+    adapter.get = async (_service, id) => {
+      calls++
+      await landed
+      return { data: { id, status: 'done' } }
+    }
+    const builder = q.jobs.get(1)
+    const prepared = pin === 'prepare' ? figbird.prepare(builder) : null
+    if (pin === 'prefetch') figbird.prefetch(builder, { staleTime: 50 })
+    // What a suspended render holds: the promise React waits on before rendering again.
+    const read = figbird.query(builder).suspensePromise()
+
+    // The pin goes away before the slow fetch lands.
+    prepared?.release()
+    await clock.advance(60)
+    land()
+    const outcome = await Promise.race([
+      read.then(() => 'settled'),
+      new Promise(resolve => setTimeout(() => resolve('still pending'), 100)),
+    ])
+    t.is(outcome, 'settled', pin)
+    t.is(calls, 1, pin)
+    t.is(figbird.query(builder).getSnapshot().data?.status, 'done', pin)
   }
 })

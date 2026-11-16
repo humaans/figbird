@@ -1,10 +1,21 @@
 import { Component, StrictMode, Suspense, type ReactNode } from 'react'
 import { createHooks, Figbird, FigbirdProvider } from '../lib'
+import { flushTasks, TestClock } from './clock'
 import { dom, it } from './dom'
 import { deferred } from './mutation-test-helpers'
 import { app, schema } from './custom-query-helpers'
 
 const { q, useQuery, useQueryResult, useQueries, useMutating, defineQuery } = createHooks(schema)
+
+class FailureBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  override render() {
+    return this.state.failed ? <div className='failed'>Failed</div> : this.props.children
+  }
+}
 
 it('custom q: useQuery suspends, deduplicates readers, and commits under StrictMode', async t => {
   const { figbird: original, adapter } = app()
@@ -210,3 +221,102 @@ it('custom q: boundary retries recover with prepare or non-Suspense holders', as
     prepared?.release()
   }
 })
+
+it('custom q: releasing a failed preparation does not expire the query that replaced it', async t => {
+  const { figbird: original, adapter } = app()
+  original.dispose()
+  const clock = new TestClock()
+  const figbird = new Figbird({ schema, adapter, clock, retry: false, gcTime: 1000 })
+  t.teardown(() => figbird.dispose())
+  let calls = 0
+  adapter.call = async () => {
+    calls++
+    throw new Error('offline')
+  }
+  const builder = q.jobs.getCheck({ id: 1 })
+  const preparation = figbird.prepare(builder)
+  await t.throwsAsync(preparation.promise, { message: 'offline' })
+  function Probe() {
+    return <span className='status'>{useQuery(builder).status}</span>
+  }
+  const d = dom({ onCaughtError: () => {} })
+  const tree = (key: string) => (
+    <FigbirdProvider figbird={figbird}>
+      <FailureBoundary key={key}>
+        <Suspense fallback={<div className='loading'>Loading</div>}>
+          <Probe />
+        </Suspense>
+      </FailureBoundary>
+    </FigbirdProvider>
+  )
+  d.render(tree('first'))
+  await d.flush()
+  t.truthy(d.$('.failed'))
+  adapter.call = async () => {
+    calls++
+    return { id: 1, status: 'recovered' }
+  }
+  d.render(tree('retry'))
+  await d.flush()
+  t.is(d.$('.status')?.textContent, 'recovered')
+  const mounted = figbird.query(builder)
+
+  // The router lets go of the failed navigation's handle after its replacement mounted.
+  preparation.release()
+  await d.flush(() => clock.advance(5000))
+  t.is(figbird.query(builder), mounted)
+  t.is(mounted.getSnapshot().status, 'success')
+  t.is(calls, 2)
+  d.unmount()
+})
+
+for (const gcTime of [1000, 0]) {
+  it(`custom q: idle retention (gcTime ${gcTime}) does not expire a result a pending boundary has rendered`, async t => {
+    const { figbird: original, adapter } = app()
+    original.dispose()
+    const clock = new TestClock()
+    const figbird = new Figbird({ schema, adapter, clock, retry: false, gcTime })
+    t.teardown(() => figbird.dispose())
+    const slow = deferred<unknown>()
+    const calls: unknown[] = []
+    adapter.call = async (_service, method, args) => {
+      calls.push(method)
+      if (method === 'count') return slow.promise
+      return args[0]
+    }
+    const warm = q.jobs.getCheck({ id: 1 })
+    const release = figbird.query(warm).subscribe(() => {})
+    await flushTasks()
+    release()
+    await flushTasks()
+
+    function Warm() {
+      return <span className='warm'>{useQuery(warm).id}</span>
+    }
+    function Slow() {
+      return <span className='slow'>{useQuery(q.jobs.count())}</span>
+    }
+    const d = dom({ onCaughtError: () => {} })
+    d.render(
+      <FigbirdProvider figbird={figbird}>
+        <FailureBoundary>
+          <Suspense fallback={<div className='loading'>Loading</div>}>
+            <Warm />
+            <Slow />
+          </Suspense>
+        </FailureBoundary>
+      </FigbirdProvider>,
+    )
+    await d.flush()
+    t.truthy(d.$('.loading'))
+    // The warm result was rendered but cannot subscribe until its sibling settles.
+    await d.flush(() => clock.advance(2000))
+    await d.flush(() => slow.resolve(7))
+    await d.flush()
+    t.falsy(d.$('.failed'))
+    t.is(d.$('.warm')?.textContent, '1')
+    t.is(d.$('.slow')?.textContent, '7')
+    t.deepEqual(calls, ['getCheck', 'count'])
+    d.unmount()
+  })
+}

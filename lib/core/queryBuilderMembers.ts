@@ -17,6 +17,14 @@ const members = {
   related: true,
 } satisfies Record<keyof QueryBuilder<Schema> & string, true>
 
+/** Names a custom query cannot take, because the builder proxy resolves them first. */
+export type ReservedQueryName =
+  | keyof typeof members
+  // oxlint-disable-next-line @typescript-eslint/no-wrapper-object-types -- the members every object inherits
+  | (keyof Object & string)
+  | 'then'
+  | 'toJSON'
+
 export function isQueryBuilderMember(name: string): boolean {
   return (
     Object.hasOwn(members, name) || name in Object.prototype || name === 'then' || name === 'toJSON'

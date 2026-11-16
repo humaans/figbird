@@ -17,7 +17,13 @@ import { ExtensionInspectionSession } from '../extensions/src/inspection.js'
 import { inspectQueryArea } from '../extensions/src/inspectionPage.js'
 import { ExtensionSession } from '../extensions/src/remote.js'
 import { buildDevtoolsModel } from '../lib/devtools/model.js'
-import { buildActivities, buildTraceIndex, eventPayload } from '../lib/devtools/eventModel.js'
+import {
+  buildActivities,
+  buildTraceIndex,
+  eventDetails,
+  eventPayload,
+  rawEventRow,
+} from '../lib/devtools/eventModel.js'
 import { buildTimelineActivities } from '../lib/devtools/timelineModel.js'
 import { dom, it } from './dom.js'
 import { createTestApp } from './helpers.js'
@@ -1105,7 +1111,7 @@ test('extension session disconnects after stop and preserves state across transi
   const expressions: string[] = []
   const session = new ExtensionSession(async expression => {
     expressions.push(expression)
-    if (expression.endsWith('?.connect()')) return connect
+    if (expression.includes('?.connect(')) return connect
     if (expression.includes('?.disconnect(')) {
       resolveDisconnect()
       return undefined
@@ -1126,7 +1132,7 @@ test('extension session disconnects after stop and preserves state across transi
   let resets = 0
   let publishedFrames = 0
   const transientSession = new ExtensionSession(async expression => {
-    if (expression.endsWith('?.connect()')) {
+    if (expression.includes('?.connect(')) {
       connects++
       return { instanceCount: 1, instanceId: 1, protocol: 3, sessionId: 'stable' }
     }
@@ -1694,4 +1700,71 @@ it('panel inspects opaque custom query results without creating entity-cache ent
   t.deepEqual(figbird.inspectCache(), [])
   d.unmount()
   release()
+})
+
+it('extension bridge sends custom reads only to sessions that ask for them', async t => {
+  dom()
+  const customSchema = createSchema({
+    services: {
+      jobs: service<{ item: { id: number } }>().queries({
+        getCheck: query<(id: number) => Promise<{ progress: number }>>(),
+      }),
+    },
+  })
+  const { figbird, adapter } = createTestApp(customSchema, { jobs: { data: {} } })
+  t.teardown(() => figbird.dispose())
+  adapter.call = async () => ({ progress: 75 })
+  const bridge = (
+    globalThis as typeof globalThis & {
+      __FIGBIRD_DEVTOOLS__: {
+        connect(
+          instanceId?: number,
+          options?: { capabilities?: readonly string[] },
+        ): { sessionId: string; instanceId: number } | null
+        disconnect(sessionId: string): void
+        readJson(sessionId: string, version: number | null): string | null
+      }
+    }
+  ).__FIGBIRD_DEVTOOLS__
+  // Extensions already published connect without options and predate custom reads.
+  const published = bridge.connect()!
+  const current = bridge.connect(published.instanceId, { capabilities: ['custom-queries'] })!
+  t.teardown(() => {
+    bridge.disconnect(published.sessionId)
+    bridge.disconnect(current.sessionId)
+  })
+  const read = (sessionId: string, version: number | null) =>
+    JSON.parse(bridge.readJson(sessionId, version)!) as {
+      version: number
+      read: { events: { kind: string }[]; queries?: { custom?: boolean; method: string }[] } | null
+    }
+  const publishedStart = read(published.sessionId, null)
+  const currentStart = read(current.sessionId, null)
+
+  const release = figbird.query(figbird.q.jobs.getCheck(1)).subscribe(() => {})
+  await sleep(10)
+
+  const currentFrame = read(current.sessionId, currentStart.version).read!
+  t.deepEqual(
+    currentFrame.events.map(event => event.kind).filter(kind => kind.startsWith('read:')),
+    ['read:start', 'read:end'],
+  )
+  // A custom query changes no entity state, so only the inspection channel reports it.
+  t.true(currentFrame.queries?.some(row => row.custom && row.method === 'getCheck'))
+
+  const publishedFrame = read(published.sessionId, publishedStart.version).read
+  t.deepEqual(
+    (publishedFrame?.events ?? []).filter(event => event.kind.startsWith('read:')),
+    [],
+  )
+  t.false((publishedFrame?.queries ?? []).some(row => row.custom))
+  release()
+})
+
+test('panel event rows tolerate an event kind this build does not know', t => {
+  const unknown = { kind: 'future:thing', timestamp: 1 } as unknown as FigbirdEvent
+  const item = { id: 1, at: 0, wallAt: 0, event: unknown }
+  const row = rawEventRow(item, buildTraceIndex([item]))
+  t.is(typeof row.status, 'string')
+  t.is(typeof eventDetails(item), 'string')
 })

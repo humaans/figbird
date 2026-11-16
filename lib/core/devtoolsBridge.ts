@@ -74,8 +74,22 @@ export interface DevtoolsWireEnvelope {
   read: DevtoolsWireRead | null
 }
 
+/**
+ * What a devtools client can display beyond the original protocol. A client names these
+ * when it connects; one that names none receives only what the first protocol 3 clients
+ * understood, so extensions already installed keep working against newer pages.
+ */
+export const DEVTOOLS_CAPABILITIES = ['custom-queries'] as const
+export type DevtoolsCapability = (typeof DEVTOOLS_CAPABILITIES)[number]
+
+export interface DevtoolsConnectOptions {
+  capabilities?: readonly string[]
+}
+
 interface DevtoolsBridgeSession {
   cacheDirty: boolean
+  /** The client asked for custom query rows and `read:*` events. */
+  customQueries: boolean
   events: CappedBuffer<FigbirdEvent>
   expires: ReturnType<typeof setTimeout> | null
   queriesDirty: boolean
@@ -93,7 +107,7 @@ interface StartupCapture {
 
 interface DevtoolsPageBridge {
   protocol: 2 | 3
-  connect(instanceId?: number): DevtoolsBridgeConnection | null
+  connect(instanceId?: number, options?: DevtoolsConnectOptions): DevtoolsBridgeConnection | null
   disconnect(sessionId: string): void
   editCacheEntityJson(
     sessionId: string,
@@ -203,15 +217,17 @@ function createPageBridge(): DevtoolsPageBridge {
       }
     },
 
-    connect(instanceId) {
+    connect(instanceId, options) {
       refreshStartupCaptureMarker()
       removeCollectedInstances(instances, closeStartupCapture)
       const instance = resolveInstance(instances, instanceId)
       if (!instance) return null
       const [resolvedId, source] = instance
       const sessionId = `${Date.now().toString(36)}-${nextSessionId++}`
+      const capability: DevtoolsCapability = 'custom-queries'
       const session: DevtoolsBridgeSession = {
         cacheDirty: true,
+        customQueries: options?.capabilities?.includes(capability) ?? false,
         events: new CappedBuffer(EVENT_LIMIT),
         expires: null,
         queriesDirty: true,
@@ -222,6 +238,7 @@ function createPageBridge(): DevtoolsPageBridge {
       }
       const unsubscribers = [
         source.events.subscribe(event => {
+          if (!sessionReceives(session, event)) return
           session.events.push(event)
           if (event.kind === 'cache:updated') session.cacheDirty = true
           session.version++
@@ -240,7 +257,9 @@ function createPageBridge(): DevtoolsPageBridge {
       }
       const startupCapture = startupCaptures.get(resolvedId)
       if (startupCapture) {
-        for (const event of startupCapture.events.toArray()) session.events.push(event)
+        for (const event of startupCapture.events.toArray()) {
+          if (sessionReceives(session, event)) session.events.push(event)
+        }
         closeStartupCapture(resolvedId)
       }
       sessions.set(sessionId, session)
@@ -306,7 +325,14 @@ function createPageBridge(): DevtoolsPageBridge {
             ? { cache: sanitizeCache(session.source.inspectCache(), frameBudget) }
             : {}),
           ...(session.queriesDirty
-            ? { queries: sanitizeQueries(session.source.inspect(), frameBudget) }
+            ? {
+                queries: sanitizeQueries(
+                  session.customQueries
+                    ? session.source.inspect()
+                    : session.source.inspect().filter(query => !query.custom),
+                  frameBudget,
+                ),
+              }
             : {}),
           ...(session.relationalDirty
             ? { relational: sanitizeRelational(session.source.inspectRelational(), frameBudget) }
@@ -320,6 +346,10 @@ function createPageBridge(): DevtoolsPageBridge {
       return serialized
     },
   }
+}
+
+function sessionReceives(session: DevtoolsBridgeSession, event: FigbirdEvent): boolean {
+  return session.customQueries || !event.kind.startsWith('read:')
 }
 
 function resolveInstance(

@@ -1,6 +1,7 @@
 import { CustomQuery } from './customQuery.js'
 import { CustomQueryRef } from './customQueryRef.js'
 import { QueryRetention } from './queryRetention.js'
+import { RENDER_READ_LEASE_MS } from './renderReadLease.js'
 import { trimAbandonedReads } from './abandonedReads.js'
 import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import { explainQuery } from './relationPlan.js'
@@ -325,9 +326,17 @@ export class Figbird<
     this.#customRetention = new QueryRetention(
       gcTime,
       key => {
-        this.#customQueryCache.get(key)?.dispose()
+        const ref = this.#customQueryCache.get(key)
+        if (!ref) return undefined
+        // A result rendered by a boundary that has not committed yet has no subscriber.
+        // Keep it, and look again once its render lease has had time to end.
+        if (ref.renderReadRetained) return RENDER_READ_LEASE_MS
+        // A held or fetching reference retains itself again when it next goes idle.
+        if (!ref.canExpire()) return undefined
+        ref.dispose()
         this.#customQueryCache.delete(key)
         this.#notifyCustomState()
+        return undefined
       },
       clock,
     )
@@ -563,13 +572,18 @@ export class Figbird<
       ref = new CustomQueryRef(key, serviceName, builder.method, builder.args, this.#staleTime, {
         clock: this.clock,
         assertActive: () => this.queryStore.assertActive(),
-        fetch: () => this.queryStore.read(serviceName, builder.method, builder.args, key),
+        fetch: () => this.queryStore.read(serviceName, builder.method, builder.dispatchArgs(), key),
         isRetryable: error => this.adapter.isRetryableError?.(error) ?? true,
         retry: this.#retry,
         retryDelay: this.#retryDelay,
         onChange: () => this.#notifyCustomState(),
-        onActive: () => this.#customRetention.cancel(key),
-        onIdle: () => this.#customRetention.retain(key),
+        // Retention is keyed by query, so only the interned reference may drive it.
+        onActive: () => {
+          if (this.#customQueryCache.get(key) === ref) this.#customRetention.cancel(key)
+        },
+        onIdle: () => {
+          if (this.#customQueryCache.get(key) === ref) this.#customRetention.retain(key)
+        },
         onSettled: () => trimAbandonedReads(this.#customQueryCache, ref),
         onAbandoned: () => {
           if (this.#customQueryCache.get(key) !== ref) return

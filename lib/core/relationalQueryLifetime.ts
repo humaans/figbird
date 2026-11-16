@@ -1,4 +1,4 @@
-import { RenderReadLease } from './renderReadLease.js'
+import { COLD_START_ADOPTION_MS, RenderReadLease } from './renderReadLease.js'
 import type { Clock, ClockTimer } from './clock.js'
 import { QueryLifetime } from './queryLifetime.js'
 import { isWithinStaleTime, validateStaleTime } from './staleTime.js'
@@ -12,7 +12,20 @@ type PreparedAdoption =
   | { kind: 'idle'; adoptedThrough: number }
   | { kind: 'wave'; generation: number }
 
-type FreshnessDecision = { kind: 'adopt' } | { kind: 'check'; staleTime: number }
+type FreshnessDecision =
+  | { kind: 'adopt' }
+  | { kind: 'check'; staleTime: number; fetchedAfter?: number | undefined }
+
+/**
+ * A read started during render, before any subscriber exists. `staleTime` is the
+ * tolerance it accepted cached results with, so everything it used is either that
+ * fresh or was fetched after the `fetchedAfter` revision.
+ */
+interface ColdStart {
+  fetchedAfter: number | undefined
+  settledAt: number
+  staleTime: number
+}
 
 interface PrefetchLease {
   at: number
@@ -27,6 +40,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   #nextPreparationGeneration = 0
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #coldStartAwaitingSubscriber = false
+  #coldStart: ColdStart = { fetchedAfter: undefined, settledAt: 0, staleTime: 0 }
   #prefetch: PrefetchLease | null = null
   #failedReadRetryArmed = false
   #failedReadRetryGeneration = 0
@@ -64,7 +78,15 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
       queueMicrotask(() => {
         this.#coldStartAwaitingSubscriber = false
       })
-      return { kind: 'adopt' }
+      // A render that never committed leaves its read unowned. Past the adoption window
+      // it is no longer this subscriber's read, so its freshness is checked like any other.
+      const coldStart = this.#coldStart
+      if (this.#clock.now() - coldStart.settledAt <= COLD_START_ADOPTION_MS) {
+        if (staleTime >= coldStart.staleTime) return { kind: 'adopt' }
+        // A stricter reader than the one whose render started the read. What that
+        // render fetched is fresh for everyone; what it took from cache is not.
+        return { kind: 'check', staleTime, fetchedAfter: coldStart.fetchedAfter }
+      }
     }
     return adoptsPreparation
       ? { kind: 'adopt' }
@@ -84,12 +106,20 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     this.#prefetch = { at: now, release, timer }
   }
 
-  graphStarted(): void {
+  /** `staleTime` is the tolerance the graph accepts cached results with. */
+  graphStarted(staleTime = 0, fetchedAfter?: number): void {
     this.#coldStartAwaitingSubscriber = this.owners.size === 0
+    const now = this.#clock.now()
+    this.#coldStart = { fetchedAfter, settledAt: now, staleTime }
   }
 
   retainRenderRead(onExpire: () => void): void {
     if (this.owners.size === 0) this.#renderRead.retain(onExpire)
+  }
+
+  /** A render is suspended on the root read's promise. */
+  hasPendingRead(): boolean {
+    return this.reads.get('root')?.status === 'pending'
   }
 
   get renderReadRetained(): boolean {
@@ -135,7 +165,10 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   settleSuspense(error: Error | null): boolean {
     const wasPending = this.reads.get('root')?.status === 'pending'
     this.settle('root', null, error)
-    if (wasPending && this.owners.size === 0) this.#renderRead.renew()
+    if (wasPending && this.owners.size === 0) {
+      this.#renderRead.renew()
+      this.#coldStart.settledAt = this.#clock.now()
+    }
     return wasPending
   }
 

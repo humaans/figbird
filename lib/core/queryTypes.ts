@@ -47,6 +47,8 @@ export interface QueryGraphRef {
 
 export interface QueryExecutionOptions {
   staleTime?: number | undefined
+  /** @internal A result committed after this fetch revision is fresh whatever its staleTime. */
+  fetchedAfter?: number | undefined
   graph?: QueryGraphRef | undefined
 }
 

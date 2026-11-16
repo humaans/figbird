@@ -8,7 +8,7 @@ import {
   type QueryDeclarations,
   type DeclaredQueries,
 } from './queryDeclaration.js'
-import { isQueryBuilderMember } from './queryBuilderMembers.js'
+import { isQueryBuilderMember, type ReservedQueryName } from './queryBuilderMembers.js'
 
 // Unique symbol for phantom types - keeps internal typing machinery hidden
 declare const $phantom: unique symbol
@@ -101,9 +101,15 @@ export interface ServiceDeclaration<
   readonly queryMethods: QueryDeclarations
   /** Replace this service's complete set of custom read declarations. */
   queries<const Q extends QueryDeclarations>(
-    definitions: Q,
+    definitions: Q & NoReservedQueryNames<Q>,
   ): ServiceDeclaration<WithQueries<TDef, Q>, TPath>
 }
+
+/**
+ * Rejects a declaration named like a builder member; `createSchema` rejects it at runtime
+ * too. Only the names written in the declaration are examined, not inherited ones.
+ */
+type NoReservedQueryNames<Q> = { readonly [K in Extract<keyof Q, ReservedQueryName>]: never }
 
 type WithQueries<TDef extends ResolvedServiceDef, Q extends QueryDeclarations> = Omit<
   TDef,
@@ -115,7 +121,7 @@ export interface DefaultServiceDeclaration<TDef extends ResolvedServiceDef> {
   readonly queryMethods: QueryDeclarations
   /** Replace this service's complete set of custom read declarations. */
   queries<const Q extends QueryDeclarations>(
-    definitions: Q,
+    definitions: Q & NoReservedQueryNames<Q>,
   ): DefaultServiceDeclaration<WithQueries<TDef, Q>>
   readonly [$phantom]?: TDef
   at<const TPath extends string>(path: ExplicitServicePath<TPath>): ServiceDeclaration<TDef, TPath>

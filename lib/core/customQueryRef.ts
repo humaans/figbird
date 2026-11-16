@@ -30,7 +30,7 @@ export class CustomQueryRef<T> {
   readonly #key: string
   readonly #serviceName: string
   readonly #method: string
-  readonly #args: unknown[]
+  readonly #args: readonly unknown[]
   readonly #lifetime: RelationalQueryLifetime<Listener<T>>
   #state: RelationalQueryState<T> = { status: 'idle', data: null, error: null, isFetching: false }
   #pending = false
@@ -51,7 +51,7 @@ export class CustomQueryRef<T> {
     key: string,
     serviceName: string,
     method: string,
-    args: unknown[],
+    args: readonly unknown[],
     staleTime: number,
     host: CustomQueryHost<T>,
   ) {
@@ -101,6 +101,9 @@ export class CustomQueryRef<T> {
     }
     this.#host.onChange()
     return () => {
+      // A handle can outlive its reference, for example a failed preparation that a
+      // boundary retry already replaced. Releasing it must not touch the replacement.
+      if (this.#disposed) return
       this.#lifetime.release(fn)
       this.#lifetime.scheduleCleanup(
         () => !this.#pending,
@@ -132,10 +135,6 @@ export class CustomQueryRef<T> {
     if (this.#lifetime.owners.size > 0 || this.#pending) this.refetch()
   }
 
-  loadMore(): void {
-    throw new Error('Custom queries do not support pagination')
-  }
-
   suspensePromise(): Promise<void> {
     this.#assertActive()
     return this.#lifetime.suspensePromise(() => {
@@ -158,8 +157,10 @@ export class CustomQueryRef<T> {
     }
     if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead()) {
       queueMicrotask(() => {
-        if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead())
-          this.#host.onAbandoned()
+        if (this.#state.status !== 'error') return
+        if (this.#lifetime.canReleaseFailedRead()) this.#host.onAbandoned()
+        // A reader that subscribed in the same commit now holds the failure.
+        else this.#lifetime.armFailedReadRetry()
       })
       return
     }
@@ -181,6 +182,16 @@ export class CustomQueryRef<T> {
       this.#lifetime.owners.size === 0 &&
       !this.#pending
     )
+  }
+
+  /** @internal A render that has not committed yet still expects this result. */
+  get renderReadRetained(): boolean {
+    return this.#lifetime.renderReadRetained
+  }
+
+  /** @internal Idle retention may expire only results nothing holds or is fetching. */
+  canExpire(): boolean {
+    return this.#lifetime.owners.size === 0 && !this.#pending
   }
 
   evictAbandonedRead(): boolean {
@@ -243,7 +254,11 @@ export class CustomQueryRef<T> {
     if (this.#pending) return
     this.#host.onActive()
     this.#lifetime.clearFailedReadRetry()
-    if (this.#state.status === 'error') this.#lifetime.releaseRead('root')
+    // Drop only a read the earlier failure already settled. A render may still be
+    // suspended on a pending one, and the fetch started here is what settles it.
+    if (this.#state.status === 'error' && this.#lifetime.reads.get('root')?.status === 'settled') {
+      this.#lifetime.releaseRead('root')
+    }
     this.#pending = true
     this.#invalidated = false
     this.#lifetime.graphStarted()

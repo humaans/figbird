@@ -581,10 +581,10 @@ export function eventDetails(item: DevtoolsEvent): string {
         'durationMs' in event ? formatMs(event.durationMs) : '',
         'error' in event ? errorMessage(event.error) : '',
       ])
-    default: {
-      const exhaustive: never = event
-      return exhaustive
-    }
+    default:
+      // The page may run a newer Figbird that emits kinds this panel predates.
+      event satisfies never
+      return ''
   }
 }
 
@@ -709,6 +709,10 @@ function eventStatus(event: DevtoolsEvent['event']): {
       return { status: event.phase, tone: 'blue' }
     case 'reconcile:decision':
       return { status: event.decision, tone: 'neutral' }
+    default:
+      // The page may run a newer Figbird that emits kinds this panel predates.
+      event satisfies never
+      return { status: 'unknown', tone: 'neutral' }
   }
 }
 
