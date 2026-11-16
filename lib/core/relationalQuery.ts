@@ -1382,12 +1382,13 @@ export class RelationalQueryRef<
     return true
   }
 
-  releaseColdStart(): void {
+  releaseColdStart(observed = true): void {
     if (this.getSnapshot().status === 'error') {
-      this.#lifetime.failedReadObserved(
-        () => this.getSnapshot().status === 'error',
-        () => this.#cleanup(),
-      )
+      const stillFailed = () => this.getSnapshot().status === 'error'
+      const abandon = () => this.#cleanup()
+      // Only a reader that threw the failure to its boundary may arm a retry.
+      if (observed) this.#lifetime.failedReadObserved(stillFailed, abandon)
+      else this.#lifetime.releaseFailedRead(stillFailed, abandon)
       return
     }
     if (this.#lifetime.canAbandon()) this.#scheduleCleanup()
@@ -1473,7 +1474,7 @@ export class RelationalQueryRef<
 export function suspensePromiseAll(
   refs: readonly {
     suspensePromise(): Promise<void>
-    releaseColdStart(): void
+    releaseColdStart(observed?: boolean): void
     setColdReadGroup(group: object): void
   }[],
 ): Promise<unknown> {
@@ -1484,7 +1485,8 @@ export function suspensePromiseAll(
   void aggregate.catch(() => {
     void Promise.allSettled(promises).then(() => {
       setTimeout(() => {
-        for (const ref of refs) ref.releaseColdStart()
+        // No reader has thrown these failures yet; the hook reports the one it throws.
+        for (const ref of refs) ref.releaseColdStart(false)
       }, 0)
     })
   })

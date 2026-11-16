@@ -150,12 +150,13 @@ export class CustomQueryRef<T> {
     return true
   }
 
-  releaseColdStart(): void {
+  releaseColdStart(observed = true): void {
     if (this.#state.status === 'error') {
-      this.#lifetime.failedReadObserved(
-        () => this.#state.status === 'error',
-        () => this.#host.onAbandoned(),
-      )
+      const stillFailed = () => this.#state.status === 'error'
+      const abandon = () => this.#host.onAbandoned()
+      // Only a reader that threw the failure to its boundary may arm a retry.
+      if (observed) this.#lifetime.failedReadObserved(stillFailed, abandon)
+      else this.#lifetime.releaseFailedRead(stillFailed, abandon)
       return
     }
     if (!this.#lifetime.owned && !this.#pending)
