@@ -325,7 +325,15 @@ export class Figbird<
     this.#customRetention = new QueryRetention(
       gcTime,
       key => {
-        this.#customQueryCache.get(key)?.dispose()
+        const ref = this.#customQueryCache.get(key)
+        if (!ref) return
+        // A result rendered by a boundary that has not committed yet has no subscriber.
+        // Keep it, and look again after another retention window.
+        if (!ref.canExpire()) {
+          this.#customRetention.retain(key)
+          return
+        }
+        ref.dispose()
         this.#customQueryCache.delete(key)
         this.#notifyCustomState()
       },
@@ -568,8 +576,13 @@ export class Figbird<
         retry: this.#retry,
         retryDelay: this.#retryDelay,
         onChange: () => this.#notifyCustomState(),
-        onActive: () => this.#customRetention.cancel(key),
-        onIdle: () => this.#customRetention.retain(key),
+        // Retention is keyed by query, so only the interned reference may drive it.
+        onActive: () => {
+          if (this.#customQueryCache.get(key) === ref) this.#customRetention.cancel(key)
+        },
+        onIdle: () => {
+          if (this.#customQueryCache.get(key) === ref) this.#customRetention.retain(key)
+        },
         onSettled: () => trimAbandonedReads(this.#customQueryCache, ref),
         onAbandoned: () => {
           if (this.#customQueryCache.get(key) !== ref) return

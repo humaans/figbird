@@ -101,6 +101,9 @@ export class CustomQueryRef<T> {
     }
     this.#host.onChange()
     return () => {
+      // A handle can outlive its reference, for example a failed preparation that a
+      // boundary retry already replaced. Releasing it must not touch the replacement.
+      if (this.#disposed) return
       this.#lifetime.release(fn)
       this.#lifetime.scheduleCleanup(
         () => !this.#pending,
@@ -181,6 +184,11 @@ export class CustomQueryRef<T> {
       this.#lifetime.owners.size === 0 &&
       !this.#pending
     )
+  }
+
+  /** @internal Idle retention may expire only results nothing holds or has just rendered. */
+  canExpire(): boolean {
+    return !this.#lifetime.renderReadRetained && this.#lifetime.owners.size === 0 && !this.#pending
   }
 
   evictAbandonedRead(): boolean {
