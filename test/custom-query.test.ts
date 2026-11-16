@@ -495,3 +495,33 @@ test('custom q: a refresh during retry backoff is retained until a fresh trailin
   t.is(calls, 3)
   t.like(ref.getSnapshot(), { data: { status: 'after mutation' }, isFetching: false })
 })
+
+test('a refetch queued behind a failing cold read still settles the Suspense read', async t => {
+  for (const kind of ['custom', 'entity']) {
+    const { figbird, adapter } = app()
+    t.teardown(() => figbird.dispose())
+    const first = deferred<{ id: number; status: string }>()
+    let calls = 0
+    const run = () => (++calls === 1 ? first.promise : Promise.resolve({ id: 1, status: 'ok' }))
+    adapter.call = run
+    adapter.get = async () => ({ data: await run() })
+    const ref = figbird.query(
+      kind === 'custom' ? figbird.q.jobs.getCheck({ id: 1 }) : figbird.q.jobs.get(1),
+    )
+    // What a suspended render holds: the promise React waits on before rendering again.
+    const read = ref.suspensePromise()
+    figbird.refetch('jobs')
+    first.reject(new Error('offline'))
+
+    const outcome = await Promise.race([
+      read.then(
+        () => 'settled',
+        () => 'settled',
+      ),
+      new Promise(resolve => setTimeout(() => resolve('still pending'), 100)),
+    ])
+    t.is(outcome, 'settled', kind)
+    t.is(calls, 2, kind)
+    t.like(ref.getSnapshot(), { status: 'success', data: { id: 1, status: 'ok' } }, kind)
+  }
+})

@@ -258,7 +258,11 @@ export class CustomQueryRef<T> {
     if (this.#pending) return
     this.#host.onActive()
     this.#lifetime.clearFailedReadRetry()
-    if (this.#state.status === 'error') this.#lifetime.releaseRead('root')
+    // Drop only a read the earlier failure already settled. A render may still be
+    // suspended on a pending one, and the fetch started here is what settles it.
+    if (this.#state.status === 'error' && this.#lifetime.reads.get('root')?.status === 'settled') {
+      this.#lifetime.releaseRead('root')
+    }
     this.#pending = true
     this.#invalidated = false
     this.#lifetime.graphStarted()
