@@ -260,6 +260,23 @@ export function relationalFilterServerReasons(
   return reasons
 }
 
+/**
+ * Every relational filter path of a relation refinement, as classification reasons.
+ * Only the root query gets the relational matcher; a relation's own query runs the
+ * plain one, which reads a dotted key off the bare row and never matches. So any
+ * relational path there leaves the relation's membership to the server.
+ */
+export function relationRefinementServerReasons(
+  schema: Schema,
+  serviceName: string,
+  query: unknown,
+): ClassificationReason[] {
+  return collectRelationalFilterPaths(schema, serviceName, query).map(({ path, field }) => ({
+    code: 'relational-filter',
+    detail: [...path, field].join('.'),
+  }))
+}
+
 function dedupeRelationalPaths(paths: RelationalFilterPath[]): RelationalFilterPath[] {
   const seen = new Set<string>()
   const deduped: RelationalFilterPath[] = []

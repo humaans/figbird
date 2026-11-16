@@ -53,6 +53,10 @@ Relational filter fixes.
 - A query filtered by two related fields that share a relation, such as
   `where({ 'assignee.team.name': 'Core', 'assignee.status': 'active' })`, no longer
   drops a matching row when a realtime event for that row arrives.
+- A relation refined by a related field, such as
+  `related('comments', c => c.where({ 'author.name': 'Alice' }))`, is now kept up to
+  date by refetching. Realtime events used to empty it, and `explain()` reported it as
+  merged locally.
 
 Type changes that can affect consumers.
 

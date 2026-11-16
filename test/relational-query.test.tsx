@@ -2776,6 +2776,48 @@ for (const [name, where] of [
   })
 }
 
+it('realtime: a relation refined by a related field is maintained by the server', async t => {
+  const { figbird, feathers } = createNestedFilterApp({
+    comments: { 10: { id: 10, issueId: 1, authorId: 1, body: 'x' } },
+  })
+  const query = figbird.q.issues.related('comments', c => c.where({ 'author.name': 'Alice' }))
+  const comments = () =>
+    (ref.getSnapshot().data as Array<{ comments: Array<{ id: number; body: string }> }>)[0]!
+      .comments
+  const ref = figbird.query(query)
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  t.deepEqual(
+    comments().map(comment => comment.id),
+    [10],
+  )
+  const findCount = feathers.service('comments').counts.find
+
+  await feathers.service('comments').patch(10, { body: 'edited' })
+  await flushTasks()
+  t.deepEqual(
+    comments().map(comment => comment.body),
+    ['edited'],
+    'the patched comment stays',
+  )
+  t.is(feathers.service('comments').counts.find, findCount + 1, 'the server decides membership')
+
+  await feathers.service('comments').create({ id: 11, issueId: 1, authorId: 1, body: 'new' })
+  await flushTasks()
+  t.deepEqual(
+    comments().map(comment => comment.id),
+    [10, 11],
+    'a new matching comment arrives with the refetch',
+  )
+
+  const node = figbird.explain(query).nodes.find(n => n.path === 'comments')!
+  t.is(node.class, 'server-authoritative')
+  t.is(node.realtime, 'refetch')
+  t.deepEqual(node.reasons, [{ code: 'relational-filter', detail: 'author.name' }])
+
+  unsub()
+})
+
 it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
   interface FilterDocument {
     id: number
