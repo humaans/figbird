@@ -1,5 +1,5 @@
 import { TestClock } from './clock'
-import { RENDER_READ_LEASE_MS } from '../lib/core/renderReadLease'
+import { COLD_START_ADOPTION_MS, RENDER_READ_LEASE_MS } from '../lib/core/renderReadLease'
 import { Component, Suspense, type ReactNode } from 'react'
 import {
   createHooks,
@@ -228,8 +228,17 @@ it('entity queries: lease expiry during a long boundary refetches expired reads 
   }
 })
 
-it('entity queries: an abandoned read is adopted only within its render lease', async t => {
-  for (const elapsed of [RENDER_READ_LEASE_MS - 1000, RENDER_READ_LEASE_MS + 1000]) {
+it("entity queries: a read is adopted as the render's own only shortly after it settles", async t => {
+  const cases = [
+    // A boundary held briefly by a sibling: the read is still this render's own.
+    { elapsed: 10_000, staleTime: 0, calls: 1 },
+    // Later, it is cached data like any other and the reader's staleTime decides.
+    { elapsed: COLD_START_ADOPTION_MS + 1000, staleTime: 0, calls: 2 },
+    { elapsed: 290_000, staleTime: 60_000, calls: 2 },
+    { elapsed: 290_000, staleTime: 300_000, calls: 1 },
+    { elapsed: RENDER_READ_LEASE_MS + 1000, staleTime: 1000, calls: 2 },
+  ]
+  for (const { elapsed, staleTime, calls: expected } of cases) {
     const { figbird: original, adapter } = createTestApp(schema, { jobs: { data: {} } })
     original.dispose()
     const clock = new TestClock()
@@ -242,16 +251,15 @@ it('entity queries: an abandoned read is adopted only within its render lease', 
     }
     // A snapshot has no realtime maintenance, so only a fetch can refresh it.
     const builder = q.jobs.get(1).snapshot()
-    // A suspended render that never commits starts the read and leaves it unowned.
+    // A suspended render that has not committed starts the read and leaves it unowned.
     await figbird.query(builder).suspensePromise()
     t.is(calls, 1)
     await clock.advance(elapsed)
 
     const ref = figbird.query(builder)
-    const release = ref.subscribe(() => {}, { staleTime: 1000 })
+    const release = ref.subscribe(() => {}, { staleTime })
     await clock.advance(0)
-    const expected = elapsed > RENDER_READ_LEASE_MS ? 2 : 1
-    t.is(calls, expected, `after ${elapsed}ms`)
+    t.is(calls, expected, `after ${elapsed}ms with staleTime ${staleTime}`)
     t.is(ref.getSnapshot().data?.status, `fetch ${expected}`)
     release()
   }

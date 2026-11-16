@@ -1,4 +1,4 @@
-import { RENDER_READ_LEASE_MS, RenderReadLease } from './renderReadLease.js'
+import { COLD_START_ADOPTION_MS, RenderReadLease } from './renderReadLease.js'
 import type { Clock, ClockTimer } from './clock.js'
 import { QueryLifetime } from './queryLifetime.js'
 import { isWithinStaleTime, validateStaleTime } from './staleTime.js'
@@ -78,10 +78,10 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
       queueMicrotask(() => {
         this.#coldStartAwaitingSubscriber = false
       })
-      // A render that never committed leaves its read unowned. Past the render lease it
-      // is no longer this subscriber's read, so its freshness is checked like any other.
+      // A render that never committed leaves its read unowned. Past the adoption window
+      // it is no longer this subscriber's read, so its freshness is checked like any other.
       const coldStart = this.#coldStart
-      if (this.#clock.now() - coldStart.settledAt <= RENDER_READ_LEASE_MS) {
+      if (this.#clock.now() - coldStart.settledAt <= COLD_START_ADOPTION_MS) {
         if (staleTime >= coldStart.staleTime) return { kind: 'adopt' }
         // A stricter reader than the one whose render started the read. What that
         // render fetched is fresh for everyone; what it took from cache is not.
