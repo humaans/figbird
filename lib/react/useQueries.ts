@@ -131,6 +131,7 @@ export function useQueryResultsImpl(
   // ref changes, and an evicted-then-re-interned ref is a new instance that
   // correctly busts the pin.
   const refs = useStableArray(queries.map(query => figbird.query(query)))
+  for (const ref of refs) ref.prepareRead?.(staleTime)
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {

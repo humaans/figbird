@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Manual refetches of cold failures suspend on the new request instead of repeatedly
+  throwing an already-settled promise.
+- Suspense remounts use complete cached results without a fallback flash and honor
+  the reader's `staleTime` when deciding whether to revalidate.
+
 - Declare custom reads with `service<T>().queries({ name: query<F>() })` and use them
   through the existing query hooks. Their results are cached separately from entities.
 - **Typing change:** services without declared custom methods no longer expose unknown

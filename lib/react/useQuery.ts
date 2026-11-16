@@ -67,6 +67,7 @@ export interface QueryRefLike<T> {
     options?: { staleTime?: number | undefined },
   ): () => void
   getSnapshot(): RelationalQueryState<T>
+  prepareRead?(staleTime?: number): void
   refetch(): void
   loadMore(): void
   setColdReadGroup(group: object): void
@@ -306,6 +307,8 @@ function useQueryResultForRef<T>(
     options.staleTime === undefined
       ? undefined
       : validateStaleTime(options.staleTime, 'useQuery(): staleTime')
+
+  if (suspense) qRef?.prepareRead?.(staleTime)
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
