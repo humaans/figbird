@@ -59,6 +59,7 @@ export function parseWireRead(value: unknown): ParsedWireRead | null {
 
 export function decodeEvent(event: DevtoolsWireEvent): FigbirdEvent {
   switch (event.kind) {
+    case 'read:error':
     case 'fetch:error':
     case 'mutate:error':
     case 'action:error':

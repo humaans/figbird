@@ -33,7 +33,14 @@ import {
 
 const FOLLOW_THRESHOLD = 24
 
-export type TimelineVisibility = 'all' | 'fetch' | 'realtime' | 'write' | 'connection' | 'errors'
+export type TimelineVisibility =
+  | 'all'
+  | 'fetch'
+  | 'read'
+  | 'realtime'
+  | 'write'
+  | 'connection'
+  | 'errors'
 
 const COLUMNS = [
   { label: 'time', width: 96, minWidth: 78 },
@@ -482,7 +489,7 @@ function ActivityIcon({ activity }: { activity: TimelineActivity }) {
   const { colors } = useDevtoolsTheme()
   const color = toneColor(colors, activity.tone)
   const symbol =
-    activity.kind === 'fetch'
+    activity.kind === 'fetch' || activity.kind === 'read'
       ? '↗'
       : activity.kind === 'realtime'
         ? '◆'
@@ -587,7 +594,7 @@ function ActivityDetails({
       title={
         activity.operation === 'action' ? activity.label : `${activity.label}.${activity.operation}`
       }
-      subtitle={activity.write?.type ?? activity.kind}
+      subtitle={activity.kind === 'read' ? 'custom read' : (activity.write?.type ?? activity.kind)}
       width={width}
       onResizeStart={onResizeStart}
       onClose={onClose}

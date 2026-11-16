@@ -109,6 +109,17 @@ export interface TimelineConnectionEvent {
 
 export type { TimelineTraceSummary } from './timelineTraceStore.js'
 
+/** Custom read spans have no query-cache or mutation identity. */
+export interface ReadSpan {
+  readId: number
+  serviceName: string
+  method: string
+  startAt: number
+  endAt?: number
+  durationMs?: number
+  error?: string
+}
+
 export interface DevtoolsTimeline {
   startedAt: number
   /** Kept for protocol compatibility; the current table no longer needs lane state. */
@@ -116,6 +127,7 @@ export interface DevtoolsTimeline {
   realtime: TimelineRealtimeEvent[]
   connection: TimelineConnectionEvent[]
   traces: TimelineTraceSummary[]
+  reads?: ReadSpan[]
   evictedCount?: number
   payloadsEvicted?: number
 }
@@ -247,10 +259,12 @@ function payloadForRetention(event: FigbirdEvent): unknown {
       return { item: event.item, previousItem: event.previousItem }
     case 'mutate:start':
     case 'mutate:update':
+    case 'read:start':
     case 'action:start':
       return event.args
     case 'fetch:error':
     case 'mutate:error':
+    case 'read:error':
     case 'action:error':
     case 'connection:error':
       return errorDetails(event.error)
@@ -276,6 +290,7 @@ function eventWithoutPayload(event: FigbirdEvent): FigbirdEvent {
     case 'cache:updated':
       return { ...event, item: undefined, previousItem: null }
     case 'mutate:start':
+    case 'read:start':
     case 'action:start': {
       const { args: _args, ...metadata } = event
       void _args
@@ -285,6 +300,7 @@ function eventWithoutPayload(event: FigbirdEvent): FigbirdEvent {
       return { ...event, args: [] }
     case 'fetch:error':
     case 'mutate:error':
+    case 'read:error':
     case 'action:error':
     case 'connection:error':
       return {
@@ -482,6 +498,7 @@ type TimelineEvictionCandidate =
   | { at: number; kind: 'realtime' }
   | { at: number; kind: 'connection' }
   | { at: number; kind: 'write'; id: string }
+  | { at: number; kind: 'read'; id: number }
 
 class FigbirdCollector implements Collector {
   #figbird: FigbirdLikeForDevtools | null
@@ -510,6 +527,7 @@ class FigbirdCollector implements Collector {
   #events: CappedBuffer<DevtoolsEvent>
   #timelineRealtime: CappedBuffer<TimelineRealtimeEvent>
   #timelineConnection: CappedBuffer<TimelineConnectionEvent>
+  #reads = new Map<number, ReadSpan>()
   #timelineTraces = new TimelineTraceStore()
   #wallClockOffset = now() - Date.now()
   #timelineStartedAt = Date.now() + this.#wallClockOffset
@@ -627,6 +645,7 @@ class FigbirdCollector implements Collector {
         realtime: this.#timelineRealtime.toArray().map(item => ({ ...item })),
         connection: this.#timelineConnection.toArray(),
         traces: this.#timelineTraces.snapshot(),
+        reads: [...this.#reads.values()].map(read => ({ ...read })),
         evictedCount: this.#timelineEvictedCount,
         payloadsEvicted: this.#timelinePayloadsEvicted,
       },
@@ -652,6 +671,9 @@ class FigbirdCollector implements Collector {
     this.#timelineConnection.clear()
     this.#timelineTraces.clear()
     this.#clearSettledWrites()
+    for (const [id, read] of this.#reads) {
+      if (read.endAt !== undefined) this.#reads.delete(id)
+    }
     this.#timelineStartedAt = Date.now() + this.#wallClockOffset
     this.#timelineEvictedCount = 0
     this.#timelinePayloadsEvicted = 0
@@ -681,6 +703,7 @@ class FigbirdCollector implements Collector {
     this.#nextEventId = 1
     this.#realtimeByService.clear()
     this.#writes.clear()
+    this.#reads.clear()
     this.#cacheProvenance.clear()
     this.#fetchTraces.clear()
     this.#remoteQueries = []
@@ -734,6 +757,31 @@ class FigbirdCollector implements Collector {
     }
 
     switch (capturedEvent.kind) {
+      case 'read:start':
+      case 'read:end':
+      case 'read:error': {
+        const previous = this.#reads.get(capturedEvent.readId)
+        const base = previous ?? {
+          readId: capturedEvent.readId,
+          serviceName: capturedEvent.serviceName,
+          method: capturedEvent.method,
+          startAt: capturedEvent.kind === 'read:start' ? at : at - capturedEvent.durationMs,
+        }
+        this.#reads.set(
+          capturedEvent.readId,
+          capturedEvent.kind === 'read:start'
+            ? base
+            : {
+                ...base,
+                endAt: at,
+                durationMs: capturedEvent.durationMs,
+                ...(capturedEvent.kind === 'read:error'
+                  ? { error: capturedEvent.error.message }
+                  : {}),
+              },
+        )
+        break
+      }
       case 'fetch:start':
         this.#recordFetchStart(capturedEvent, at)
         this.#timelineTraces.recordFetch(capturedEvent.causes)
@@ -1257,6 +1305,7 @@ class FigbirdCollector implements Collector {
         }
       case 'fetch:error':
       case 'mutate:error':
+      case 'read:error':
       case 'action:error':
       case 'connection:error':
         return {
@@ -1281,6 +1330,11 @@ class FigbirdCollector implements Collector {
         return {
           ...event,
           args: this.#captureArgs(event.args),
+        }
+      case 'read:start':
+        return {
+          ...event,
+          ...(event.args === undefined ? {} : { args: this.#captureArgs(event.args) }),
         }
       case 'action:start':
         return {
@@ -1409,6 +1463,10 @@ class FigbirdCollector implements Collector {
           result.push({ at: write.startedAt, kind: 'write', id: write.id })
         }
       }
+      for (const read of this.#reads.values()) {
+        if (read.endAt !== undefined)
+          result.push({ at: read.startAt, kind: 'read', id: read.readId })
+      }
       return result
     }
 
@@ -1419,6 +1477,7 @@ class FigbirdCollector implements Collector {
       ) +
       this.#timelineRealtime.length +
       this.#timelineConnection.length +
+      [...this.#reads.values()].filter(read => read.endAt !== undefined).length +
       [...this.#writes.values()].filter(
         write => write.status !== 'in-flight' && write.startedAt >= this.#timelineStartedAt,
       ).length
@@ -1434,6 +1493,8 @@ class FigbirdCollector implements Collector {
         if (item) this.#payloads.release(this.#realtimePayloadHandles.get(item))
       } else if (oldest.kind === 'connection') {
         this.#timelineConnection.shift()
+      } else if (oldest.kind === 'read') {
+        this.#reads.delete(oldest.id)
       } else {
         this.#releaseWritePayloads(oldest.id)
         this.#writes.delete(oldest.id)
@@ -1443,6 +1504,12 @@ class FigbirdCollector implements Collector {
     }
 
     const cutoff = now() - MAX_ACTIVE_FETCH_MS
+    for (const [id, read] of this.#reads) {
+      if (read.endAt === undefined && read.startAt < cutoff) {
+        this.#reads.delete(id)
+        this.#timelineEvictedCount++
+      }
+    }
     for (const record of this.#queries.values()) {
       for (const [fetchId, span] of record.metrics.activeSpans) {
         if (span.startAt >= cutoff) continue

@@ -1,3 +1,4 @@
+import { createReadsProxy, type ReadsProxy } from './reads.js'
 import { trimAbandonedReads } from './abandonedReads.js'
 import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import { explainQuery } from './relationPlan.js'
@@ -103,6 +104,7 @@ export type {
   QueryState,
   QueryStatus,
 } from './queryTypes.js'
+export type { ReadsHandle, ReadsProxy } from './reads.js'
 export type { FigbirdEvent, FigbirdEvents, MutationEventMethod, MutationMethod } from './events.js'
 export type {
   CreateMutationOptions,
@@ -767,6 +769,20 @@ export class Figbird<
    */
   call(servicePath: string, method: string, ...args: unknown[]): Promise<unknown> {
     return this.queryStore.call(servicePath, method, args)
+  }
+
+  #readsProxy: ReadsProxy<S> | null = null
+
+  /**
+   * Imperative custom reads, typed from the schema. Read intent is declared by
+   * the caller; this does not enforce server-side purity or authorization.
+   * Calls bypass mutation tracking and the query cache, emitting `read:*` events.
+   * In React, obtain the provider instance through `useFigbird()`.
+   */
+  get r(): ReadsProxy<S> {
+    return (this.#readsProxy ??= createReadsProxy((service, method, args) =>
+      this.queryStore.read(resolveServicePath(this.schema, service), method, args),
+    ) as ReadsProxy<S>)
   }
 
   #mutationsProxy: MutationsProxy<S> | null = null

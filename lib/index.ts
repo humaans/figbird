@@ -36,6 +36,8 @@ export type {
   MutationSchedule,
   MutationsHandle,
   MutationsProxy,
+  ReadsHandle,
+  ReadsProxy,
   PreparedQuery,
   QueryDefinition,
   QueryInput,

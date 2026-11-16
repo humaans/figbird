@@ -273,6 +273,7 @@ export function FigbirdDevtoolsPanel({
               >
                 <option value='all'>All activity</option>
                 <option value='fetch'>Fetches</option>
+                <option value='read'>Custom reads</option>
                 <option value='realtime'>Realtime</option>
                 <option value='write'>Writes</option>
                 <option value='connection'>Connection</option>

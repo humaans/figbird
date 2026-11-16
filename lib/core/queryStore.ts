@@ -899,6 +899,36 @@ export class QueryStore<
     return this.#mutationExecutor.registerMutation(desc, control)
   }
 
+  #nextReadId = 1
+
+  /** Custom reads share adapter dispatch with custom writes, never their lifecycle. */
+  async read(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+    const readId = this.#nextReadId++
+    const startedAt = this.#clock.now()
+    this.#telemetry.emit({ kind: 'read:start', readId, serviceName, method, args })
+    try {
+      const result = await this.#adapter.mutate(serviceName, method, args)
+      this.#telemetry.emit({
+        kind: 'read:end',
+        readId,
+        serviceName,
+        method,
+        durationMs: this.#clock.now() - startedAt,
+      })
+      return result
+    } catch (error) {
+      this.#telemetry.emit({
+        kind: 'read:error',
+        readId,
+        serviceName,
+        method,
+        durationMs: this.#clock.now() - startedAt,
+        error: normalizeError(error),
+      })
+      throw error
+    }
+  }
+
   call(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
     return this.#mutationExecutor.call(serviceName, method, args)
   }

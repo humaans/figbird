@@ -16,7 +16,7 @@ import { displayEvent } from './eventModel.js'
 import { compactJson, formatMs } from './format.js'
 import type { DevtoolsModel } from './model.js'
 
-export type TimelineActivityKind = 'fetch' | 'realtime' | 'connection' | 'write'
+export type TimelineActivityKind = 'fetch' | 'read' | 'realtime' | 'connection' | 'write'
 export type TimelineActivityTone = 'green' | 'amber' | 'red' | 'blue' | 'neutral'
 
 export interface TimelineGraphRef extends QueryGraphRef {
@@ -79,6 +79,7 @@ export function buildTimelineActivities(
 ): TimelineActivity[] {
   const traces = new Map(snapshot.timeline.traces.map(trace => [trace.traceId, trace]))
   const activities = [
+    ...buildReadActivities(snapshot, nowPoint),
     ...buildFetchActivities(snapshot.queries, model, nowPoint),
     ...buildRealtimeActivities(snapshot, traces),
     ...snapshot.timeline.connection.map((item, index) =>
@@ -90,6 +91,39 @@ export function buildTimelineActivities(
     ),
   ]
   return activities.sort(compareTimelineActivities)
+}
+
+function buildReadActivities(snapshot: DevtoolsSnapshot, nowPoint: number): TimelineActivity[] {
+  return (snapshot.timeline.reads ?? [])
+    .filter(read => read.startAt >= snapshot.timeline.startedAt)
+    .map(read => {
+      const pending = read.endAt === undefined
+      const failed = read.error !== undefined
+      const status = pending ? 'pending' : failed ? 'error' : 'success'
+      const label = `${read.serviceName}.${read.method}`
+      return {
+        id: `read:${read.readId}`,
+        kind: 'read',
+        startAt: read.startAt,
+        ...(read.endAt === undefined ? {} : { endAt: read.endAt }),
+        durationMs: read.durationMs ?? Math.max(0, nowPoint - read.startAt),
+        label: read.serviceName,
+        operation: read.method,
+        detail:
+          read.error ?? (read.durationMs === undefined ? 'pending' : formatMs(read.durationMs)),
+        status,
+        tone: pending ? 'blue' : failed ? 'red' : 'green',
+        trigger: 'imperative',
+        effect: 'none',
+        result: status,
+        serviceName: read.serviceName,
+        error: failed,
+        ...(read.error === undefined
+          ? {}
+          : { errorDetails: retainedValue({ message: read.error }) }),
+        searchText: `${label} custom read ${status} ${read.error ?? ''}`.toLowerCase(),
+      }
+    })
 }
 
 function compareTimelineActivities(first: TimelineActivity, second: TimelineActivity): number {
@@ -116,6 +150,7 @@ function compareTimelineActivities(first: TimelineActivity, second: TimelineActi
 
 function timelineKindPriority(kind: TimelineActivityKind): number {
   switch (kind) {
+    case 'read':
     case 'fetch':
       return 0
     case 'realtime':

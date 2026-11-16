@@ -400,12 +400,14 @@ function toWireEvent(event: FigbirdEvent, frameBudget?: PayloadBudget): Devtools
       }
     case 'mutate:start':
     case 'mutate:update':
+    case 'read:start':
     case 'action:start':
       return event.args === undefined
         ? event
         : { ...event, args: sanitizeDevtoolsArgs(event.args, frameBudget) }
     case 'fetch:error':
     case 'mutate:error':
+    case 'read:error':
     case 'action:error':
     case 'connection:error':
       return {

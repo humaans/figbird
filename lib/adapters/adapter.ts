@@ -132,6 +132,9 @@ export interface Adapter<
     | ((serviceName: string, ids: readonly (string | number)[]) => Promise<unknown[]>)
     | undefined
 
+  /** Dispatch CRUD writes and arbitrary custom methods, including imperative reads.
+   * Forward the argument tuple unchanged; Figbird owns read/write lifecycle semantics.
+   */
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 
   /**

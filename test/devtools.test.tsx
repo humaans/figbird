@@ -7,6 +7,7 @@ import {
 } from '../lib/devtools/Devtools.js'
 import {
   createCollector,
+  createRemoteCollector,
   type Collector,
   type DevtoolsSnapshot,
   type FigbirdLikeForDevtools,
@@ -1626,4 +1627,36 @@ it('panel shows root queries and nests relation fetches in details', async t => 
   unmount()
   inspectedElement.remove()
   largeElement.remove()
+})
+
+it('panel renders custom reads with service, method, duration and failure details', t => {
+  const d = dom()
+  const collector = createRemoteCollector()
+  const timestamp = Date.now() + 10
+  collector.ingest({
+    events: [
+      { kind: 'read:start', readId: 1, serviceName: 'jobs', method: 'getCheck', timestamp },
+      {
+        kind: 'read:error',
+        readId: 1,
+        serviceName: 'jobs',
+        method: 'getCheck',
+        durationMs: 12,
+        error: new Error('status unavailable'),
+        timestamp: timestamp + 12,
+      },
+    ],
+  })
+  d.render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
+  const timelineButton = d.$all('button').find(button => button.textContent === 'timeline')
+  if (timelineButton) d.click(timelineButton)
+  t.is(d.$('option[value="read"]')?.textContent, 'Custom reads')
+  const row = d.$('[data-timeline-activity="read"]')
+  t.truthy(row)
+  t.true(row!.textContent!.includes('getCheck'))
+  t.true(row!.textContent!.includes('status unavailable'))
+  d.click(row!)
+  t.true(document.body.textContent!.includes('jobs.getCheck'))
+  t.false(document.body.textContent!.includes('jobs.getCheck.getCheck'))
+  d.unmount()
 })

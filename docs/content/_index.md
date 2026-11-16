@@ -1816,6 +1816,59 @@ Offset adapters jump directly; cursor adapters advance sequentially and reuse cu
 checkpoints. Relations, filtering, and sorting are part of each fetched block. See
 [Virtualized windows](#virtualized-windows) for lifecycle and restoration semantics.
 
+## r: imperative custom reads
+
+`r` calls a schema-declared custom service method directly and returns its result as a
+promise. Service names, method names, argument tuples, and resolved results are inferred
+from the service's `methods` declaration, just as they are on `m`.
+
+```ts
+const { useFigbird } = createHooks(schema)
+
+// Inside a component, use the nearest provider's instance.
+const { r, m } = useFigbird()
+
+const { jobId } = await m.senderSignatures.checkVerification({ id })
+const status = await r.senderSignatures.getCheck({ id, jobId })
+
+// Outside React, use the instance directly.
+await figbird.r.senderSignatures.getCheck({ id, jobId })
+// Callable access also accepts schema service names.
+await figbird.r('senderSignatures').getCheck({ id, jobId })
+```
+
+Declare `checkVerification` and `getCheck` in the service's `methods` type, with their
+server argument and result types. `r` uses the configured adapter and transport, including
+existing authentication, and forwards arguments unchanged. Each invocation makes exactly
+one adapter call. Calls are independent, including concurrent calls with identical arguments;
+transport failures reject the returned promise.
+
+Choose the surface by the operation's purpose:
+
+| Surface | Purpose |
+| --- | --- |
+| `q` with query hooks | Cached, reactive entity reads, maintained by realtime events. |
+| `r.service.customMethod(...)` | Imperative custom reads with arbitrary result shapes. |
+| `m.service.method(...)` | Writes and side-effecting custom methods. |
+| Raw transport access | Operations outside Figbird's supported APIs and observability. |
+
+`r` never registers a mutation, changes `useMutating()`, or emits `mutate:*` events.
+Results do not enter the entity cache, merge into queries, or invalidate queries.
+The devtools event log and timeline show custom reads through `read:start`, `read:end`,
+and `read:error`, correlated by `readId`, with service, method, duration, and failures.
+These reads have no query-cache identity.
+
+Calling through `r` declares read intent; it does not prove server-side purity or add an
+authorization boundary. The same declared custom method remains callable through `m`
+when it represents a mutation. CRUD methods belong on `q` or `m`; `r` exposes custom
+methods only. The protocol names `then` and `toJSON` are reserved.
+
+Custom reads have no caching, deduplication, automatic retries, polling scheduler,
+subscriptions, or cancellation semantics. Applications own these lifecycles using the
+returned promises and, for per-action pending/error/data state, `useAction`.
+Realtime events continue to maintain ordinary entity queries; they do not update or
+refetch an `r` result.
+
 ## m and useMutations
 
 ```ts
@@ -2038,7 +2091,7 @@ schema key to a non-empty literal transport path. `service.from<TCatalog>()` is 
 generated-schema form: its path argument selects the matching service definition from a
 path-keyed catalog. `methods` types custom Feathers methods.
 
-The namespaces are deliberately separate. Builder APIs (`q`, `m`, relationships, and
+The namespaces are deliberately separate. Builder APIs (`q`, `r`, `m`, relationships, and
 `useMutating`) use schema names. Raw and compatibility APIs (`queryDesc`, `mutateDesc`,
 `call`, `useFeathers`, `useFind`, `useGet`, and `useMutation`) use transport paths. A schema
 name may equal another service's transport path without becoming ambiguous.
@@ -2107,6 +2160,7 @@ const figbird = new Figbird({
 | `prepare(request, opts?)`                         | Awaitable query lease for routers. Argumentless definitions can be passed directly. See [figbird.prepare](#figbirdprepare).                                     |
 | `prefetch(request, opts?)`                        | Idempotent speculative warming. Argumentless definitions can be passed directly. See [figbird.prefetch](#figbirdprefetch).                                      |
 | `refetch(service?)`                               | Manual refetch escape hatch for changes Figbird can’t observe, such as custom methods without events or out-of-band writes. Call `figbird.refetch(...)`.                  |
+| `r`                                               | Imperative custom reads: `figbird.r.service.customMethod(...)`. In React, obtain it through `useFigbird()`. See [r](#r-imperative-custom-reads). |
 | `m`                                               | The instance’s write proxy: `figbird.m.issues.patch(...)`, or `figbird.m(service)` for dynamic names. In React, access the provider instance through `useMutations()`. See [m](#m). |
 | `transaction(fn)`                                 | Adapter-backed atomic CRUD collector. Optimistic projection, commit, and rollback are grouped across services. See [figbird.transaction](#figbirdtransaction). |
 | `createMutationQueue(config?)`                    | Explicitly owned serial writes across records or services. See [figbird.createMutationQueue](#figbirdcreatemutationqueue).                                |
@@ -2274,7 +2328,7 @@ devtools on (internal store shapes stay free to change).
 
 ## figbird.events
 
-Emits lifecycle facts: fetches, realtime events, mutations (including optimistic rollbacks).
+Emits lifecycle facts: fetches, imperative custom reads, realtime events, mutations (including optimistic rollbacks).
 Delivery is batched on a microtask and never happens mid-render, so subscribing from React
 components is safe:
 
@@ -2283,6 +2337,7 @@ const unsub = figbird.events.subscribe(event => {
   // event.kind: 'fetch:start' | 'fetch:end' | 'fetch:error' | 'realtime'
   //           | 'reconcile:started'
   //           | 'mutate:start' | 'mutate:end' | 'mutate:error' | 'mutate:rollback'
+  //           | 'read:start' | 'read:end' | 'read:error'
   //           | 'action:start' | 'action:end' | 'action:error'
 })
 ```
@@ -2290,7 +2345,9 @@ const unsub = figbird.events.subscribe(event => {
 Events carry ids, durations, and item counts, lightweight enough to subscribe in
 production. `mutate:*` events carry a `mutationId` correlating one mutation's
 start/end/error/rollback, and their `method` is a CRUD name or a custom method name
-(custom-method calls flow through the same lifecycle events). `action:*` events come from
+(custom-method calls through `m` flow through the same lifecycle events).
+`read:*` events correlate custom reads with a `readId`; they carry service and method,
+start arguments, and completion duration or failure, without a query id. `action:*` events come from
 named `useAction` hooks and speak the app's vocabulary ("reassign · 340ms"), with the
 `mutate:*` rows they wrap alongside.
 

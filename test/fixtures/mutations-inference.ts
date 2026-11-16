@@ -138,3 +138,29 @@ export const nestedConfirmed = m['api/esign-instances'].confirmed.confirmed
 
 // @ts-expect-error - unknown service names are rejected on the proxy
 export const unknownService = m.notAService
+
+// Imperative reads infer the same custom method tuples and results.
+const { r } = figbird
+const readPromise = r['api/esign-instances'].requestSendDocument('esign_1')
+export type ReadResult = Awaited<typeof readPromise>
+export type ReadArgs = Parameters<(typeof r)['api/esign-instances']['requestSendDocument']>
+export const typedRead: Promise<SendDocumentResult> = readPromise
+r('api/esign-instances').requestSendDocument('esign_1', { notifySigner: true })
+// @ts-expect-error - unknown schema services are rejected
+export const unknownReadService = r.notAService
+// @ts-expect-error - dynamic access also requires a schema service name
+r('notAService')
+// @ts-expect-error - only declared custom methods are exposed
+r['api/esign-instances'].notARealMethod()
+// @ts-expect-error - custom reads do not expose CRUD mutations
+r['api/esign-instances'].patch('esign_1', {})
+// @ts-expect-error - preserve required argument types
+r['api/esign-instances'].requestSendDocument(123)
+// @ts-expect-error - preserve optional argument types
+r['api/esign-instances'].requestSendDocument('esign_1', { notifySigner: 'yes' })
+// @ts-expect-error - preserve required argument count
+r['api/esign-instances'].voidDocument('esign_1')
+// @ts-expect-error - do not accept appended Figbird options
+r['api/esign-instances'].voidDocument('esign_1', 'reason', { retry: true })
+// @ts-expect-error - custom return shapes remain precise
+export const invalidRead: Promise<{ id: number }> = readPromise

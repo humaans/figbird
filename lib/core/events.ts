@@ -32,6 +32,28 @@ export interface CacheQueryEffect {
  */
 export type FigbirdEvent = (
   | {
+      kind: 'read:start'
+      readId: number
+      serviceName: string
+      method: string
+      args?: readonly unknown[]
+    }
+  | {
+      kind: 'read:end'
+      readId: number
+      serviceName: string
+      method: string
+      durationMs: number
+    }
+  | {
+      kind: 'read:error'
+      readId: number
+      serviceName: string
+      method: string
+      durationMs: number
+      error: Error
+    }
+  | {
       kind: 'fetch:start'
       serviceName: string
       method: 'find' | 'get'

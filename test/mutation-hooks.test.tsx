@@ -513,3 +513,31 @@ it('useMutating: service filter resolves schema aliases to transport paths', asy
   })
   t.is(probe.read(), 'false')
 })
+
+it('r: useFigbird selects the provider and useMutating stays false during a custom read', async t => {
+  const { App, figbird, feathers } = createTestApp(schema, services())
+  const { useFigbird, useMutating } = createHooks(schema)
+  const gate = deferred<unknown>()
+  feathers.service('notes').archive = () => gate.promise
+  const d = dom()
+  let read!: () => Promise<unknown>
+  function Probe() {
+    const { r } = useFigbird()
+    read = () => r.notes.archive(1, 'read only')
+    return <div className='busy'>{String(useMutating())}</div>
+  }
+  d.render(
+    <App>
+      <Probe />
+    </App>,
+  )
+  await d.flush()
+  const pending = read()
+  await d.flush()
+  t.is(d.$('.busy')!.textContent, 'false')
+  gate.resolve({ id: 1, archived: true, reason: 'read only' })
+  await pending
+  await d.flush()
+  t.is(d.$('.busy')!.textContent, 'false')
+  t.is(figbird.mutating.getSnapshot().length, 0)
+})
