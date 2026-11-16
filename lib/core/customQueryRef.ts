@@ -188,9 +188,14 @@ export class CustomQueryRef<T> {
     )
   }
 
-  /** @internal Idle retention may expire only results nothing holds or has just rendered. */
+  /** @internal A render that has not committed yet still expects this result. */
+  get renderReadRetained(): boolean {
+    return this.#lifetime.renderReadRetained
+  }
+
+  /** @internal Idle retention may expire only results nothing holds or is fetching. */
   canExpire(): boolean {
-    return !this.#lifetime.renderReadRetained && this.#lifetime.owners.size === 0 && !this.#pending
+    return this.#lifetime.owners.size === 0 && !this.#pending
   }
 
   evictAbandonedRead(): boolean {

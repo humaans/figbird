@@ -270,51 +270,53 @@ it('custom q: releasing a failed preparation does not expire the query that repl
   d.unmount()
 })
 
-it('custom q: idle retention does not expire a result a pending boundary has rendered', async t => {
-  const { figbird: original, adapter } = app()
-  original.dispose()
-  const clock = new TestClock()
-  const figbird = new Figbird({ schema, adapter, clock, retry: false, gcTime: 1000 })
-  t.teardown(() => figbird.dispose())
-  const slow = deferred<unknown>()
-  const calls: unknown[] = []
-  adapter.call = async (_service, method, args) => {
-    calls.push(method)
-    if (method === 'count') return slow.promise
-    return args[0]
-  }
-  const warm = q.jobs.getCheck({ id: 1 })
-  const release = figbird.query(warm).subscribe(() => {})
-  await flushTasks()
-  release()
-  await flushTasks()
+for (const gcTime of [1000, 0]) {
+  it(`custom q: idle retention (gcTime ${gcTime}) does not expire a result a pending boundary has rendered`, async t => {
+    const { figbird: original, adapter } = app()
+    original.dispose()
+    const clock = new TestClock()
+    const figbird = new Figbird({ schema, adapter, clock, retry: false, gcTime })
+    t.teardown(() => figbird.dispose())
+    const slow = deferred<unknown>()
+    const calls: unknown[] = []
+    adapter.call = async (_service, method, args) => {
+      calls.push(method)
+      if (method === 'count') return slow.promise
+      return args[0]
+    }
+    const warm = q.jobs.getCheck({ id: 1 })
+    const release = figbird.query(warm).subscribe(() => {})
+    await flushTasks()
+    release()
+    await flushTasks()
 
-  function Warm() {
-    return <span className='warm'>{useQuery(warm).id}</span>
-  }
-  function Slow() {
-    return <span className='slow'>{useQuery(q.jobs.count())}</span>
-  }
-  const d = dom({ onCaughtError: () => {} })
-  d.render(
-    <FigbirdProvider figbird={figbird}>
-      <FailureBoundary>
-        <Suspense fallback={<div className='loading'>Loading</div>}>
-          <Warm />
-          <Slow />
-        </Suspense>
-      </FailureBoundary>
-    </FigbirdProvider>,
-  )
-  await d.flush()
-  t.truthy(d.$('.loading'))
-  // The warm result was rendered but cannot subscribe until its sibling settles.
-  await d.flush(() => clock.advance(2000))
-  await d.flush(() => slow.resolve(7))
-  await d.flush()
-  t.falsy(d.$('.failed'))
-  t.is(d.$('.warm')?.textContent, '1')
-  t.is(d.$('.slow')?.textContent, '7')
-  t.deepEqual(calls, ['getCheck', 'count'])
-  d.unmount()
-})
+    function Warm() {
+      return <span className='warm'>{useQuery(warm).id}</span>
+    }
+    function Slow() {
+      return <span className='slow'>{useQuery(q.jobs.count())}</span>
+    }
+    const d = dom({ onCaughtError: () => {} })
+    d.render(
+      <FigbirdProvider figbird={figbird}>
+        <FailureBoundary>
+          <Suspense fallback={<div className='loading'>Loading</div>}>
+            <Warm />
+            <Slow />
+          </Suspense>
+        </FailureBoundary>
+      </FigbirdProvider>,
+    )
+    await d.flush()
+    t.truthy(d.$('.loading'))
+    // The warm result was rendered but cannot subscribe until its sibling settles.
+    await d.flush(() => clock.advance(2000))
+    await d.flush(() => slow.resolve(7))
+    await d.flush()
+    t.falsy(d.$('.failed'))
+    t.is(d.$('.warm')?.textContent, '1')
+    t.is(d.$('.slow')?.textContent, '7')
+    t.deepEqual(calls, ['getCheck', 'count'])
+    d.unmount()
+  })
+}

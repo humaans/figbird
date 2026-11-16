@@ -1,6 +1,7 @@
 import { CustomQuery } from './customQuery.js'
 import { CustomQueryRef } from './customQueryRef.js'
 import { QueryRetention } from './queryRetention.js'
+import { RENDER_READ_LEASE_MS } from './renderReadLease.js'
 import { trimAbandonedReads } from './abandonedReads.js'
 import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import { explainQuery } from './relationPlan.js'
@@ -326,16 +327,16 @@ export class Figbird<
       gcTime,
       key => {
         const ref = this.#customQueryCache.get(key)
-        if (!ref) return
+        if (!ref) return undefined
         // A result rendered by a boundary that has not committed yet has no subscriber.
-        // Keep it, and look again after another retention window.
-        if (!ref.canExpire()) {
-          this.#customRetention.retain(key)
-          return
-        }
+        // Keep it, and look again once its render lease has had time to end.
+        if (ref.renderReadRetained) return RENDER_READ_LEASE_MS
+        // A held or fetching reference retains itself again when it next goes idle.
+        if (!ref.canExpire()) return undefined
         ref.dispose()
         this.#customQueryCache.delete(key)
         this.#notifyCustomState()
+        return undefined
       },
       clock,
     )
