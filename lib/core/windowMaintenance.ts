@@ -1,11 +1,11 @@
-import { servedLimit } from '../adapters/queryPage.js'
+import { servedLimit, servedPageCap } from '../adapters/queryPage.js'
 import { maintainWindow } from './windowDecision.js'
 import { sameValue } from './valueEquality.js'
 import { commitQuery } from './queryResults.js'
 /** Apply entity changes and window decisions to queries before publishing effects. */
 
 import { queryPolicy } from './queryMaintenance.js'
-import { isServerMaintained } from './queryClassification.js'
+import { isServerMaintained, type StoredQueryClass } from './queryClassification.js'
 import { ItemRemovedError } from './errors.js'
 import {
   entityKey,
@@ -53,6 +53,34 @@ export function isCompleteSetQuery<TMeta>(query: Query<unknown, TMeta, unknown>)
     query.config.allPages === true &&
     (!q || Object.keys(q).every(key => key === '$sort'))
   )
+}
+
+/**
+ * The page size the query's committed rows were served under, or undefined when
+ * nothing bounds them. A requested `$limit` is known up front; the server's default
+ * page size only shows in the response, so it is read from the committed page.
+ */
+function windowLimit<TMeta>(query: Query<unknown, TMeta, unknown>): number | undefined {
+  if (query.desc.method !== 'find') return undefined
+  // `.all()` drains every page, so no page size bounds its rows.
+  if ('allPages' in query.config && query.config.allPages === true) return undefined
+  const { limit, skip } = query.maintenance
+  if (query.state.status !== 'success') return limit
+  return limit === undefined
+    ? servedPageCap(query.state.meta, query.rows.data.length, skip)
+    : servedLimit(query.state.meta, limit)
+}
+
+/**
+ * How realtime events maintain the query's committed rows. A query with no window
+ * filters is classified local-exact, but when the server capped its page the rows
+ * are a window like any other: removals must refill it and creates must not grow it.
+ */
+function maintenanceClass<TMeta>(query: Query<unknown, TMeta, unknown>): StoredQueryClass {
+  const { classification } = query.maintenance
+  return classification === 'local-exact' && windowLimit(query) !== undefined
+    ? 'server-window'
+    : classification
 }
 
 export function groupEventsByService<TEvent extends { serviceName: string }>(
@@ -238,7 +266,7 @@ function applyVisibleEventEffect<TMeta>(
 
   if (!hasItem || query.state.status !== 'success') return false
   const data = query.rows.data.map(current => (itemHasKey(current, itemId, getId) ? item : current))
-  if (query.maintenance.classification === 'local-exact') {
+  if (maintenanceClass(query) === 'local-exact') {
     sortQueryRows(data, query)
   }
   commitQuery(service, {
@@ -297,10 +325,11 @@ function applyMergeEventToQuery<TMeta>(
   if (!query) return 'ignored'
 
   const { type, item, previousItem, itemId } = event
-  if (isServerMaintained(query.maintenance.classification)) {
+  const classification = maintenanceClass(query)
+  if (isServerMaintained(classification)) {
     // Server windows merge every provable effect locally. An unprovable effect,
     // and every server-authoritative query, reconciles from the server.
-    if (query.maintenance.classification !== 'server-window' || query.desc.method !== 'find') {
+    if (classification !== 'server-window' || query.desc.method !== 'find') {
       return 'reconcile'
     }
     if (query.state.status !== 'success' || !Array.isArray(query.state.data)) return 'ignored'
@@ -308,10 +337,7 @@ function applyMergeEventToQuery<TMeta>(
       {
         rows: query.rows.data,
         skip: query.maintenance.skip,
-        limit:
-          query.maintenance.limit === undefined
-            ? undefined
-            : servedLimit(query.state.meta, query.maintenance.limit),
+        limit: windowLimit(query),
       },
       {
         type,
@@ -431,13 +457,14 @@ export function updateQueriesFromEvents<TMeta>({
       if (!queryPolicy(query.maintenance).mergeEvents) continue
       const visible = service.itemQueryIndex.get(event.itemId)?.has(queryId) ?? false
       if (membershipScope === 'visible-only' && !visible) continue
+      const classification = maintenanceClass(query)
       if (
-        isServerMaintained(query.maintenance.classification) &&
+        isServerMaintained(classification) &&
         event.mode === 'server' &&
         event.source === 'fetch'
       ) {
         if (
-          query.maintenance.classification === 'server-window' &&
+          classification === 'server-window' &&
           service.materialized &&
           service.materialized?.queryId === excludeQueryId
         ) {
@@ -451,7 +478,7 @@ export function updateQueriesFromEvents<TMeta>({
         // A sibling fetch may update the canonical entity, but it cannot replace
         // values owned by this query. Root-owned removals still apply.
         if (query.rows.kind === 'values' && event.type !== 'removed') continue
-        if (query.maintenance.classification === 'server-window' && event.type !== 'created') {
+        if (classification === 'server-window' && event.type !== 'created') {
           const result = applyMergeEventToQuery(context, queryId, event)
           if (result === 'reconcile') {
             serverMaintainedQueriesToRefetch.add(queryId)
@@ -502,7 +529,7 @@ export function reapplyQueryFromEntities<TMeta>({
 }): QueryReapplyResult {
   const query = service.queries.get(queryId)
   if (!query || !queryPolicy(query.maintenance).mergeEvents) return 'ignored'
-  if (isServerMaintained(query.maintenance.classification)) return 'reconcile'
+  if (isServerMaintained(maintenanceClass(query))) return 'reconcile'
   if (query.desc.method !== 'find' || query.state.status !== 'success') return 'ignored'
   if (!Array.isArray(query.state.data)) return 'ignored'
 

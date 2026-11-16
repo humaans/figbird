@@ -36,6 +36,11 @@ Mutation fixes.
 
 - A realtime change that arrives just before a write to the same record is no longer
   hidden while the write is pending, or undone when an optimistic write fails.
+Realtime fixes.
+
+- A find without `$limit` that the server cut to its default page size is now kept as
+  a page of that size. Removing a row refills the page from the server, and a new row
+  no longer grows it past the page size. It used to be treated as the complete result.
 
 Type changes that can affect consumers.
 

@@ -38,10 +38,20 @@ const seed = (): Record<number, Note> => ({
 function createApp({
   defaultSort,
   compare,
-}: { defaultSort?: Record<string, 1 | -1>; compare?: ValueComparator } = {}) {
+  defaultLimit,
+}: {
+  defaultSort?: Record<string, 1 | -1>
+  compare?: ValueComparator
+  /** The server's page size for finds without a `$limit` (`paginate.default`). */
+  defaultLimit?: number
+} = {}) {
   const feathers = mockFeathers(
     { notes: { data: seed() } },
-    { queryAwareFind: true, ...(compare ? { compare } : {}) },
+    {
+      queryAwareFind: true,
+      ...(compare ? { compare } : {}),
+      ...(defaultLimit === undefined ? {} : { defaultLimit }),
+    },
   )
   const adapter = new FeathersAdapter(feathers)
   const figbird = new Figbird({
@@ -475,5 +485,210 @@ test('a create tied with the boundary row of a full window refetches', async t =
 
   t.is(notes.counts.find, finds + 1)
   t.is(texts().length, 3)
+  unsub()
+})
+
+// A find without `$limit` against a paginated service gets the server's default page
+// size. A page the server truncated is a window, not the complete result.
+
+test('server page cap: a $sort-only page refills after a removal and ignores creates past it', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, total, unsub } = await watch(figbird, { $sort: { rank: 1 } })
+  t.deepEqual(texts(), ['a', 'b'])
+  t.is(total(), 4)
+  const finds = notes.counts.find
+
+  // Sorts strictly past the full page: only the total changes.
+  serverCreate(notes, { id: 9, text: 'z', rank: 9, tag: 'x', updatedAt: 1 })
+  await settle()
+  t.is(notes.counts.find, finds)
+  t.deepEqual(texts(), ['a', 'b'])
+  t.is(total(), 5)
+
+  // The row that slides into the page is unseen, so the removal refetches.
+  serverRemove(notes, 1)
+  await settle()
+  t.is(notes.counts.find, finds + 1)
+  t.deepEqual(texts(), ['b', 'c'])
+  t.is(total(), 4)
+  unsub()
+})
+
+test('server page cap: a create sorting inside the page evicts the overflow row', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, total, unsub } = await watch(figbird, { $sort: { rank: 1 } })
+  const finds = notes.counts.find
+
+  serverCreate(notes, { id: 5, text: 'n', rank: 1.5, tag: 'x', updatedAt: 1 })
+  await settle()
+
+  t.is(notes.counts.find, finds)
+  t.deepEqual(texts(), ['a', 'n'])
+  t.is(total(), 5)
+  unsub()
+})
+
+test('server page cap: a plain filter page refills after a removal', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, total, unsub } = await watch(figbird, { tag: 'x' })
+  t.deepEqual(texts(), ['a', 'b'])
+  const finds = notes.counts.find
+
+  serverRemove(notes, 1)
+  await settle()
+
+  t.is(notes.counts.find, finds + 1)
+  t.deepEqual(texts(), ['b', 'c'])
+  t.is(total(), 3)
+  unsub()
+})
+
+test('server page cap: a plain filter page does not grow past the cap', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, unsub } = await watch(figbird, { tag: 'x' })
+
+  // Without order knowledge the create's place in a full page is unprovable.
+  serverCreate(notes, { id: 9, text: 'z', rank: 9, tag: 'x', updatedAt: 1 })
+  await settle()
+
+  t.deepEqual(texts(), ['a', 'b'])
+  unsub()
+})
+
+test('server page cap: an in-place patch still merges without a refetch', async t => {
+  for (const query of [{ $sort: { rank: 1 } }, { tag: 'x' }]) {
+    const { figbird, notes } = createApp({ defaultLimit: 2 })
+    const { texts, total, unsub } = await watch(figbird, query)
+    const finds = notes.counts.find
+
+    serverPatch(notes, { id: 2, text: 'b2', rank: 2, tag: 'x', updatedAt: 2 })
+    await settle()
+
+    t.is(notes.counts.find, finds)
+    t.deepEqual(texts(), ['a', 'b2'])
+    t.is(total(), 4)
+    unsub()
+  }
+})
+
+test('server page cap: a $skip page without $limit is capped past its offset', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, unsub } = await watch(figbird, { $sort: { rank: 1 }, $skip: 1 })
+  t.deepEqual(texts(), ['b', 'c'])
+  const finds = notes.counts.find
+
+  serverRemove(notes, 2)
+  await settle()
+
+  t.is(notes.counts.find, finds + 1)
+  t.deepEqual(texts(), ['c', 'd'])
+  unsub()
+})
+
+test('server page cap: a $skip page reaching the end of the result is complete', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, unsub } = await watch(figbird, { $sort: { rank: 1 }, $skip: 2 })
+  t.deepEqual(texts(), ['c', 'd'])
+  const finds = notes.counts.find
+
+  // total (4) = $skip (2) + rows (2): nothing lies past the page.
+  serverRemove(notes, 4)
+  await settle()
+
+  t.is(notes.counts.find, finds)
+  t.deepEqual(texts(), ['c'])
+  unsub()
+})
+
+test('an unpaginated array response is the complete result', async t => {
+  for (const query of [{ $sort: { rank: 1 } }, { tag: 'x' }]) {
+    const { figbird, notes } = createApp()
+    const find = notes.find.bind(notes)
+    // A service without pagination answers with a bare array.
+    notes.find = (async (params?: Parameters<typeof find>[0]) =>
+      (await find(params)).data) as unknown as typeof notes.find
+    const { texts, unsub } = await watch(figbird, query)
+    t.deepEqual(texts(), ['a', 'b', 'c', 'd'])
+    const finds = notes.counts.find
+
+    serverRemove(notes, 1)
+    await settle()
+    serverCreate(notes, { id: 9, text: 'z', rank: 9, tag: 'x', updatedAt: 1 })
+    await settle()
+
+    t.is(notes.counts.find, finds)
+    t.deepEqual(texts(), ['b', 'c', 'd', 'z'])
+    unsub()
+  }
+})
+
+test('a page holding the whole result is complete, even at the page size', async t => {
+  for (const query of [{ $sort: { rank: 1 } }, { tag: 'x' }]) {
+    // total === rows.length === limit: the server truncated nothing.
+    const { figbird, notes } = createApp({ defaultLimit: 4 })
+    const { texts, total, unsub } = await watch(figbird, query)
+    t.deepEqual(texts(), ['a', 'b', 'c', 'd'])
+    t.is(total(), 4)
+    const finds = notes.counts.find
+
+    serverRemove(notes, 1)
+    await settle()
+    t.is(notes.counts.find, finds)
+    t.deepEqual(texts(), ['b', 'c', 'd'])
+    t.is(total(), 3)
+
+    serverCreate(notes, { id: 9, text: 'z', rank: 9, tag: 'x', updatedAt: 1 })
+    await settle()
+    t.is(notes.counts.find, finds)
+    t.deepEqual(texts(), ['b', 'c', 'd', 'z'])
+    t.is(total(), 4)
+    unsub()
+  }
+})
+
+test('server page cap: .all() drains every page and stays complete', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { tag: 'x' } } },
+    { realtime: 'merge', allPages: true },
+  )
+  const unsub = ref.subscribe(() => {})
+  await settle()
+  const texts = () => ((ref.getSnapshot()?.data ?? []) as Note[]).map(note => note.text)
+  t.deepEqual(texts(), ['a', 'b', 'c', 'd'])
+  const finds = notes.counts.find
+
+  serverRemove(notes, 1)
+  await settle()
+  serverCreate(notes, { id: 9, text: 'z', rank: 9, tag: 'x', updatedAt: 1 })
+  await settle()
+
+  t.is(notes.counts.find, finds)
+  t.deepEqual(texts(), ['b', 'c', 'd', 'z'])
+  unsub()
+})
+
+test('server page cap: query reapply reconciles instead of rebuilding from the entity cache', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { tag: 'x' } } },
+    { realtime: 'merge' },
+  )
+  const unsub = ref.subscribe(() => {})
+  await settle()
+  const finds = notes.counts.find
+  // A matching entity another query cached must not join the capped page locally.
+  figbird
+    .getState()
+    .get('notes')!
+    .entities.set('4', { id: 4, text: 'd', rank: 4, tag: 'x', updatedAt: 1 })
+
+  figbird.queryStore.reapplyQuery(ref.details().queryId, new Set())
+  t.deepEqual(
+    ((ref.getSnapshot()?.data ?? []) as Note[]).map(note => note.text),
+    ['a', 'b'],
+  )
+  await settle()
+  t.is(notes.counts.find, finds + 1)
   unsub()
 })

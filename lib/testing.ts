@@ -19,7 +19,7 @@
  * Services support CRUD (create/update/patch/remove emit the corresponding realtime
  * events), `get`/`find` with `$limit`/`$skip`, per-method call counters, and an
  * optional artificial `delay`. Options: `skipTotal` for servers that don't count
- * totals, and `queryAwareFind: true` to make `find` honor equality, `$in`, and
+ * totals, `defaultLimit` for the page size served without a `$limit`, and `queryAwareFind: true` to make `find` honor equality, `$in`, and
  * `$sort` filters — the default `find` ignores filters entirely, which keeps most
  * tests independent of matching semantics.
  *
@@ -68,6 +68,8 @@ export interface FindResult {
 interface ServiceOptions {
   /** Omit `total` from find envelopes, like servers that don't count. */
   skipTotal?: boolean
+  /** Page size served when a find sends no `$limit`, like `paginate.default`. Defaults to 100. */
+  defaultLimit?: number
   /**
    * Make `find` honor equality, `$in`, and `$sort` filters. The default `find`
    * ignores filters entirely, which keeps most tests independent of matching
@@ -155,7 +157,7 @@ export class MockService {
   async find(params: FindParams = {}): Promise<FindResult> {
     this.counts.find++
     const query = params.query ?? {}
-    const limit = (query.$limit as number | undefined) || 100
+    const limit = (query.$limit as number | undefined) || this.options.defaultLimit || 100
     const skip = (query.$skip as number | undefined) || 0
 
     let rows = Object.values(this.data).filter((item): item is TestItem => item !== undefined)
@@ -264,6 +266,8 @@ export interface MockFeathersOptions {
   queryAwareFind?: boolean
   /** Make every service omit `total` from find envelopes. */
   skipTotal?: boolean
+  /** Page size every service serves when a find sends no `$limit` (see ServiceOptions). */
+  defaultLimit?: number
   /** Value ordering for `$sort` (see ServiceOptions). */
   compare?: ValueComparator
   /** Deferred-emission scheduler threaded to every service (see ServiceOptions). */
@@ -279,13 +283,20 @@ export interface MockFeathers extends FeathersClient {
  */
 export function mockFeathers(
   services: MockFeathersServices,
-  { queryAwareFind = false, skipTotal = false, compare, schedule }: MockFeathersOptions = {},
+  {
+    queryAwareFind = false,
+    skipTotal = false,
+    defaultLimit,
+    compare,
+    schedule,
+  }: MockFeathersOptions = {},
 ): MockFeathers {
   const processedServices: Record<string, MockService> = {}
   for (const [name, details] of Object.entries(services)) {
     processedServices[name] = service(name, details, {
       skipTotal,
       queryAware: queryAwareFind,
+      ...(defaultLimit === undefined ? {} : { defaultLimit }),
       ...(compare ? { compare } : {}),
       ...(schedule ? { schedule } : {}),
     })
