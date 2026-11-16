@@ -2,42 +2,50 @@
 
 ## Unreleased
 
-- Manual refetches of cold failures suspend on the new request instead of repeatedly
-  throwing an already-settled promise.
-- Suspense remounts use complete cached results without a fallback flash and honor
-  the reader's `staleTime` when deciding whether to revalidate.
-- A result left behind by a render that never committed is checked against the
-  reader's `staleTime` once it is older than the render lease, instead of being
-  adopted as fresh.
-- Releasing a stale preparation handle no longer expires the custom query that
-  replaced it, and idle retention keeps results a pending boundary has rendered.
-- When readers with different `staleTime` values remount a cached query in the same
-  commit, the strictest one decides whether it revalidates.
-- A boundary retry recovers on the first attempt when a non-Suspense reader mounted
-  beside a query that had already failed.
-- `gcTime: 0` no longer hangs when idle retention meets a custom query that a pending
-  boundary has rendered, and retention keeps a single timer.
-- A custom query whose first read fails with a refetch queued behind it leaves its
-  Suspense fallback once the refetch lands.
+Custom queries.
+
+- Declare a service's read-only custom methods with
+  `service<T>().queries({ name: query<F>() })` and read them through the existing
+  hooks: `useQuery(q.jobs.getCheck({ id }))`. Results are cached separately from
+  entities and are not tracked as mutations. They have no realtime updates: they
+  revalidate on mount according to `staleTime`, and through `refetch()`. Arguments are
+  copied when the query is built.
+- Devtools show custom queries and their `read:*` events. Install the updated
+  extension to see them; older extensions keep working and show everything else.
+
+Suspense fixes.
+
+- More than 20 cold `useQuery` readers under one Suspense boundary now commit. They
+  used to evict each other and re-render without end.
+- A remount of a query whose result is still cached renders it at once, without a
+  fallback, and uses the reader's `staleTime` to decide whether to revalidate. When
+  several readers remount together, the strictest decides.
+- An error-boundary retry refetches a failed query that a `prepare()` handle or a
+  `suspense: false` reader still holds, instead of throwing the same error again.
+- Refetching a failed query while a Suspense reader renders suspends on the new
+  request. It used to re-render in a loop.
 - Releasing a `prepare()` handle, or a prefetch timing out, while a Suspense read is
-  still loading no longer leaves that boundary on its fallback.
-- A stricter reader revalidates cached parts of a relational query even when a looser
-  reader's render fetched other parts of it.
-- Devtools extensions receive custom query rows and `read:*` events only when they ask
-  for them, so extensions released before custom queries keep working. The panel no
-  longer fails on event kinds it does not know.
+  still loading no longer leaves the boundary on its fallback.
+- A result left by a render that never committed is checked against the next reader's
+  `staleTime`, unless that reader subscribes within 30 seconds of the read settling.
+- Query references that are never subscribed are released under cache pressure once
+  their five-minute render lease ends. A reference you hold without subscribing may
+  be replaced, so call `figbird.query()` again before using it later.
 
-- Declare custom reads with `service<T>().queries({ name: query<F>() })` and use them
-  through the existing query hooks. Their results are cached separately from entities.
-- **Typing change:** services without declared custom methods no longer expose unknown
-  method properties on `m`; those are missing properties rather than entries in an
-  empty `Record<string, never>` method map. The untyped `m.service.call(...)` escape
-  hatch remains available.
+Type changes that can affect consumers.
 
-- Keep cold Suspense reads temporarily retained while sibling reads settle, and evict
-  unused references under cache pressure after their render leases expire.
-- Error-boundary retries can restart failed queries held by preparation or
-  non-Suspense readers without dropping those readers.
+- `FigbirdEvent` gains `read:start`, `read:end` and `read:error`. A `switch` over
+  event kinds that ends in a `never` check needs these cases.
+- `InspectedQuery.method` is now `string`, and `classification` gains `'custom'`.
+- `Service` and service declarations gain `queryMethods`, and declarations gain
+  `queries()`. Schema objects built by hand, without `createSchema`, need them.
+- Services without declared custom methods no longer expose unknown method properties
+  on `m`. The untyped `m.service.call(...)` remains available.
+- Adapters may implement `call(service, method, args)`. Custom queries use it and fall
+  back to `mutate`. `FeathersAdapter.mutate` now delegates to `call`, so a subclass
+  that overrides only `mutate` should override `call` as well.
+- Declaring a custom query named like a query builder method, such as `where`, is a
+  type error as well as a `createSchema` error.
 
 ## 0.24.1
 
