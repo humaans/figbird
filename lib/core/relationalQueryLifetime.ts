@@ -1,4 +1,4 @@
-import { COLD_START_ADOPTION_MS, RenderReadLease } from './renderReadLease.js'
+import { RenderRead } from './renderReadLease.js'
 import type { Clock, ClockTimer } from './clock.js'
 import { QueryLifetime } from './queryLifetime.js'
 import { isWithinStaleTime, validateStaleTime } from './staleTime.js'
@@ -16,40 +16,40 @@ type FreshnessDecision =
   | { kind: 'adopt' }
   | { kind: 'check'; staleTime: number; fetchedAfter?: number | undefined }
 
-/**
- * A read started during render, before any subscriber exists. `staleTime` is the
- * tolerance it accepted cached results with, so everything it used is either that
- * fresh or was fetched after the `fetchedAfter` revision.
- */
-interface ColdStart {
-  fetchedAfter: number | undefined
-  settledAt: number
-  staleTime: number
-}
-
 interface PrefetchLease {
   at: number
   release: () => void
   timer: ClockTimer
 }
 
-/** Owns graph leases, freshness adoption, and the prefetch deadline for one query identity. */
+/**
+ * Who holds one query identity, and what a new holder should do about freshness.
+ *
+ * A query is held by its owners (subscribers, `prepare()` handles, a prefetch pin) and,
+ * before any of those exist, by the render that read it: a Suspense render has no
+ * subscription until it commits. Three facts answer every lifetime question:
+ *
+ * - `owned`: an owner exists.
+ * - `awaited`: a render is suspended on the root read, so the graph must stay to settle it.
+ * - `leased`: a render read the query recently and may still commit.
+ *
+ * Nothing may tear the query down while it is owned or awaited. The lease additionally
+ * protects it from cache-pressure eviction, but not from an explicit release.
+ */
 export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener, QueryLease, null> {
   readonly #clock: Clock
   readonly #defaultStaleTime: number
   #nextPreparationGeneration = 0
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
-  #coldStartAwaitingSubscriber = false
-  #coldStart: ColdStart = { fetchedAfter: undefined, settledAt: 0, staleTime: 0 }
   #prefetch: PrefetchLease | null = null
   #failedReadRetryArmed = false
   #failedReadRetryGeneration = 0
-  readonly #renderRead: RenderReadLease
+  readonly #renderRead: RenderRead
 
   constructor(clock: Clock, defaultStaleTime: number) {
     super()
     this.#clock = clock
-    this.#renderRead = new RenderReadLease(clock)
+    this.#renderRead = new RenderRead(clock)
     this.#defaultStaleTime = defaultStaleTime
   }
 
@@ -71,23 +71,8 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     const adoptsPreparation = source === 'subscriber' && this.#claimPreparedAdoption()
     const adoptsPrefetch = source === 'prepare' && this.#claimPrefetch()
     this.acquire(listener, lease)
-    this.#renderRead.release()
-
-    if (this.#coldStartAwaitingSubscriber) {
-      // Keep adoption open through the commit's immediate StrictMode resubscription.
-      queueMicrotask(() => {
-        this.#coldStartAwaitingSubscriber = false
-      })
-      // A render that never committed leaves its read unowned. Past the adoption window
-      // it is no longer this subscriber's read, so its freshness is checked like any other.
-      const coldStart = this.#coldStart
-      if (this.#clock.now() - coldStart.settledAt <= COLD_START_ADOPTION_MS) {
-        if (staleTime >= coldStart.staleTime) return { kind: 'adopt' }
-        // A stricter reader than the one whose render started the read. What that
-        // render fetched is fresh for everyone; what it took from cache is not.
-        return { kind: 'check', staleTime, fetchedAfter: coldStart.fetchedAfter }
-      }
-    }
+    const claim = this.#renderRead.claim(staleTime)
+    if (claim) return claim
     return adoptsPreparation
       ? { kind: 'adopt' }
       : {
@@ -108,25 +93,58 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
 
   /** `staleTime` is the tolerance the graph accepts cached results with. */
   graphStarted(staleTime = 0, fetchedAfter?: number): void {
-    this.#coldStartAwaitingSubscriber = this.owners.size === 0
-    const now = this.#clock.now()
-    this.#coldStart = { fetchedAfter, settledAt: now, staleTime }
+    this.#renderRead.started(!this.owned, staleTime, fetchedAfter)
   }
 
+  /** A render used the query. Without an owner, the render's lease holds it. */
   retainRenderRead(onExpire: () => void): void {
-    if (this.owners.size === 0) this.#renderRead.retain(onExpire)
+    if (!this.owned) this.#renderRead.retain(onExpire)
+  }
+
+  get owned(): boolean {
+    return this.owners.size > 0
   }
 
   /** A render is suspended on the root read's promise. */
-  hasPendingRead(): boolean {
+  get awaited(): boolean {
     return this.reads.get('root')?.status === 'pending'
   }
 
-  get renderReadRetained(): boolean {
+  /** A render read the query recently and may still commit. */
+  get leased(): boolean {
     return this.#renderRead.active
   }
 
-  armFailedReadRetry(): void {
+  /** Nothing holds the query, so cache pressure may evict it. */
+  canEvict(): boolean {
+    return !this.owned && !this.awaited && !this.leased
+  }
+
+  /** An explicit release may drop the query: a lease alone does not keep it. */
+  canAbandon(): boolean {
+    return !this.owned && !this.awaited
+  }
+
+  /**
+   * A Suspense reader threw this query's failure to its error boundary. With no
+   * subscriber the failed query is dropped, so a boundary retry starts a fresh one.
+   * A subscriber keeps it alive, so the retry is armed to refetch in place instead.
+   */
+  failedReadObserved(stillFailed: () => boolean, abandon: () => void): void {
+    if (this.#hasSubscriber()) {
+      this.#armFailedReadRetry()
+      return
+    }
+    // A reader in the same commit subscribes after this render, so look again after it.
+    queueMicrotask(() => {
+      if (!stillFailed()) return
+      if (this.#hasSubscriber()) this.#armFailedReadRetry()
+      else abandon()
+    })
+  }
+
+  /** Armed after this pass, so the render that just threw does not consume its own retry. */
+  #armFailedReadRetry(): void {
     const generation = this.#failedReadRetryGeneration
     queueMicrotask(() => {
       if (generation === this.#failedReadRetryGeneration) this.#failedReadRetryArmed = true
@@ -145,16 +163,8 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     this.#failedReadRetryGeneration++
   }
 
-  canReleaseFailedRead(): boolean {
-    return [...this.owners.values()].every(owner => owner.source !== 'subscriber')
-  }
-
-  canReleaseColdStart(): boolean {
-    return this.owners.size === 0 && this.reads.get('root')?.status !== 'pending'
-  }
-
-  canEvictAbandonedRead(): boolean {
-    return !this.#renderRead.active && this.canReleaseColdStart()
+  #hasSubscriber(): boolean {
+    return [...this.owners.values()].some(owner => owner.source === 'subscriber')
   }
 
   suspensePromise(start: () => void): Promise<void> {
@@ -165,20 +175,16 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   settleSuspense(error: Error | null): boolean {
     const wasPending = this.reads.get('root')?.status === 'pending'
     this.settle('root', null, error)
-    if (wasPending && this.owners.size === 0) {
-      this.#renderRead.renew()
-      this.#coldStart.settledAt = this.#clock.now()
-    }
+    if (wasPending && !this.owned) this.#renderRead.settled()
     return wasPending
   }
 
   override reset(): void {
     this.clearFailedReadRetry()
-    this.#renderRead.release()
+    this.#renderRead.reset()
     if (this.#preparedAdoption.kind === 'wave') {
       this.#preparedAdoption = { kind: 'idle', adoptedThrough: this.#preparedAdoption.generation }
     }
-    this.#coldStartAwaitingSubscriber = false
     super.reset()
   }
 
