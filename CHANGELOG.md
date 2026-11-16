@@ -57,6 +57,9 @@ Relational filter fixes.
   `related('comments', c => c.where({ 'author.name': 'Alice' }))`, is now kept up to
   date by refetching. Realtime events used to empty it, and `explain()` reported it as
   merged locally.
+- A query filtered through a relation back to its own service, such as
+  `q.users.where({ 'manager.status': 'active' })`, now refetches when a related row
+  changes a field the filter reads.
 
 Type changes that can affect consumers.
 

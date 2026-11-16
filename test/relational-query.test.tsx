@@ -2818,6 +2818,39 @@ it('realtime: a relation refined by a related field is maintained by the server'
   unsub()
 })
 
+it('realtime: a self-referential relation filter reconciles when the related row changes', async t => {
+  const { figbird, feathers } = createNestedFilterApp()
+  const ref = figbird.query(figbird.q.users.where({ 'manager.status': 'active' }))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('users').counts.find
+
+  // The store re-evaluates only the patched row; user 1 points at it.
+  await feathers.service('users').patch(2, { status: 'inactive' })
+  await flushTasks()
+
+  t.is(feathers.service('users').counts.find, findCount + 1, 'the root reconciles')
+
+  unsub()
+})
+
+it('realtime: a self-referential relation filter ignores fields it does not read', async t => {
+  const { figbird, feathers } = createNestedFilterApp()
+  const ref = figbird.query(figbird.q.users.where({ 'manager.status': 'active' }))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('users').counts.find
+
+  await feathers.service('users').patch(2, { name: 'Renamed' })
+  // A row's own FK is its own membership, which the store's matcher decides.
+  await feathers.service('users').patch(1, { name: 'Also renamed' })
+  await flushTasks()
+
+  t.is(feathers.service('users').counts.find, findCount, 'no reconcile')
+
+  unsub()
+})
+
 it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
   interface FilterDocument {
     id: number

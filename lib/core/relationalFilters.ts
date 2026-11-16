@@ -29,7 +29,14 @@ export interface RelationalFilterPath {
 
 export interface RelationalFilterDependency {
   serviceName: string
+  /** Every field of the service that the filter paths read. */
   fields: Set<string>
+  /**
+   * The fields read off the service's rows when they are reached through a relation,
+   * rather than as the root row: the key a hop lands on, the filtered field, and the
+   * FK of a further hop.
+   */
+  relatedFields: Set<string>
 }
 
 export function hasRelationalFilter(schema: Schema, ast: QueryAST): boolean {
@@ -296,16 +303,17 @@ export function collectRelationalFilterDependencies(
   // event-matching input), so they're passed in rather than re-derived here.
   paths: RelationalFilterPath[],
 ): RelationalFilterDependency[] {
-  const byService = new Map<string, Set<string>>()
-  const add = (serviceName: string, fields: string[]) => {
-    const path = resolveServicePath(schema, serviceName)
-    let set = byService.get(path)
-    if (!set) {
-      set = new Set()
-      byService.set(path, set)
+  const byService = new Map<string, RelationalFilterDependency>()
+  const add = (service: string, fields: string[], related: boolean) => {
+    const serviceName = resolveServicePath(schema, service)
+    let dependency = byService.get(serviceName)
+    if (!dependency) {
+      dependency = { serviceName, fields: new Set(), relatedFields: new Set() }
+      byService.set(serviceName, dependency)
     }
     for (const field of fields) {
-      set.add(field)
+      dependency.fields.add(field)
+      if (related) dependency.relatedFields.add(field)
     }
   }
 
@@ -316,22 +324,28 @@ export function collectRelationalFilterDependencies(
       const relDef = schema.relationships?.[currentService]?.[relName]
       if (!relDef) break
 
+      // Past the first hop, the row holding the FK is itself a related row.
+      const related = i > 0
       if (relDef.via) {
         // Two hops: parent → intermediate (junction) → destination.
-        add(currentService, [relDef.via.sourceField])
-        add(relDef.via.destService, [relDef.via.destField, relDef.sourceField])
+        add(currentService, [relDef.via.sourceField], related)
+        add(relDef.via.destService, [relDef.via.destField, relDef.sourceField], true)
       } else {
-        add(currentService, [relDef.sourceField])
+        add(currentService, [relDef.sourceField], related)
       }
 
       const isLeaf = i === filterPath.path.length - 1
-      add(relDef.destService, isLeaf ? [relDef.destField, filterPath.field] : [relDef.destField])
+      add(
+        relDef.destService,
+        isLeaf ? [relDef.destField, filterPath.field] : [relDef.destField],
+        true,
+      )
 
       currentService = relDef.destService
     }
   }
 
-  return Array.from(byService, ([serviceName, fields]) => ({ serviceName, fields }))
+  return Array.from(byService.values())
 }
 
 export function shouldRefetchRelationalFilterQuery(
@@ -345,13 +359,18 @@ export function shouldRefetchRelationalFilterQuery(
   const dep = dependencies.find(item => item.serviceName === event.serviceName)
   if (!dep) return false
 
-  // The store decides root rows itself: the relational matcher answers 'unknown'
-  // for a row it can't evaluate, which reconciles the root there.
-  if (event.serviceName === resolveServicePath(schema, ast.service)) return false
+  // The store decides a root row itself: the relational matcher answers 'unknown'
+  // for a row it can't evaluate, which reconciles the root there. But it re-evaluates
+  // only the event's own row. When a path leads back to the root service, as in
+  // `manager.status` on users, the row is also a related row of other root rows, and
+  // only the fields read off related rows can move those.
+  const isRootEvent = event.serviceName === resolveServicePath(schema, ast.service)
+  const fields = isRootEvent ? dep.relatedFields : dep.fields
+  if (fields.size === 0) return false
 
   if (event.type === 'created' || event.type === 'removed') return true
 
-  return itemChangedFields(event.previousItem, event.item, dep.fields)
+  return itemChangedFields(event.previousItem, event.item, fields)
 }
 
 /** What relation hops are followed through: the schema, the entity cache, and its keys. */
