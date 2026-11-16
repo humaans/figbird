@@ -350,6 +350,11 @@ window after a removal, anything that shifts the page start of a skipped window,
 reconciles by refetch. Sort position is judged by `$sort`, falling back to the configured
 `defaultSort` (the backend's implicit order — a correctness contract like custom operators).
 
+A find without `$limit` is a window too when the server cut it to its default page size: the
+response reports a `total` reaching past the rows it served. The served limit then bounds the
+window, even for a query whose filters alone would make it local-exact. A response whose total
+equals its rows, and a plain array response, is the complete result.
+
 Values within a sort field compare through the instance's `compare` option, the same kind of
 correctness contract: a comparator that disagrees with the backend can insert or evict the wrong
 rows in a window until the next fetch.

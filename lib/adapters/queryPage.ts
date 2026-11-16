@@ -25,6 +25,20 @@ export function servedLimit(meta: unknown, requested: unknown): number | undefin
   return typeof requested === 'number' ? requested : undefined
 }
 
+/**
+ * The page size of a find that sent no `$limit`, when the server cut the result
+ * short: a paginated service applies its default page size (`paginate.default`) and
+ * reports a `total` reaching past the rows it served. Such a page is a window of
+ * that size, not the complete result. Only a known total proves the cut: the
+ * reported limit alone can't, since adapters fill it in for unpaginated array
+ * responses, which are complete. Without a reported limit the row count stands in.
+ */
+export function servedPageCap(meta: unknown, rowCount: number, skip: number): number | undefined {
+  const total = meta && typeof meta === 'object' && 'total' in meta ? meta.total : undefined
+  if (typeof total !== 'number' || total <= skip + rowCount) return undefined
+  return servedLimit(meta, rowCount)
+}
+
 /** Normalize current rows as well as fetched rows, so realtime totals stay current. */
 export function queryPage({
   rows,
