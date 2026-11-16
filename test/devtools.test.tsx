@@ -1,5 +1,5 @@
 import test from 'ava'
-import { createSchema, service, type FigbirdEvent } from '../lib/index.js'
+import { createSchema, service, query, type FigbirdEvent } from '../lib/index.js'
 import { FigbirdEventEmitter } from '../lib/core/events.js'
 import {
   FigbirdDevtoolsPanel,
@@ -7,6 +7,7 @@ import {
 } from '../lib/devtools/Devtools.js'
 import {
   createCollector,
+  createRemoteCollector,
   type Collector,
   type DevtoolsSnapshot,
   type FigbirdLikeForDevtools,
@@ -1626,4 +1627,71 @@ it('panel shows root queries and nests relation fetches in details', async t => 
   unmount()
   inspectedElement.remove()
   largeElement.remove()
+})
+
+it('panel renders custom reads with service, method, duration and failure details', t => {
+  const d = dom()
+  const collector = createRemoteCollector()
+  const timestamp = Date.now() + 10
+  collector.ingest({
+    events: [
+      { kind: 'read:start', readId: 1, serviceName: 'jobs', method: 'getCheck', timestamp },
+      {
+        kind: 'read:error',
+        readId: 1,
+        serviceName: 'jobs',
+        method: 'getCheck',
+        durationMs: 12,
+        error: new Error('status unavailable'),
+        timestamp: timestamp + 12,
+      },
+    ],
+  })
+  d.render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
+  const timelineButton = d.$all('button').find(button => button.textContent === 'timeline')
+  if (timelineButton) d.click(timelineButton)
+  t.is(d.$('option[value="read"]')?.textContent, 'Custom reads')
+  const row = d.$('[data-timeline-activity="read"]')
+  t.truthy(row)
+  t.true(row!.textContent!.includes('getCheck'))
+  t.true(row!.textContent!.includes('status unavailable'))
+  d.click(row!)
+  t.true(document.body.textContent!.includes('jobs.getCheck'))
+  t.false(document.body.textContent!.includes('jobs.getCheck.getCheck'))
+  d.unmount()
+})
+
+it('panel inspects opaque custom query results without creating entity-cache entries', async t => {
+  const customSchema = createSchema({
+    services: {
+      jobs: service<{ item: { id: number } }>().queries({
+        getCheck: query<(id: number) => Promise<{ progress: number }>>(),
+      }),
+    },
+  })
+  const { figbird, adapter } = createTestApp(customSchema, { jobs: { data: {} } })
+  t.teardown(() => figbird.dispose())
+  adapter.call = async () => ({ progress: 75 })
+  const collector = createCollector(figbird)
+  collector.start()
+  t.teardown(() => collector.stop())
+  const d = dom()
+  d.render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
+  const ref = figbird.query(figbird.q.jobs.getCheck(1))
+  let release = () => {}
+  await d.flush(async () => {
+    release = ref.subscribe(() => {})
+    await ref.suspensePromise()
+  })
+  d.click(d.$all('button').find(button => button.textContent === 'queries')!)
+  const row = d.$('tbody tr')
+  t.truthy(row)
+  t.true(row!.textContent!.includes('getCheck'))
+  t.true(row!.textContent!.includes('custom'))
+  d.click(row!)
+  t.true(document.body.textContent!.includes('progress'))
+  t.true(document.body.textContent!.includes('75'))
+  t.deepEqual(figbird.inspectCache(), [])
+  d.unmount()
+  release()
 })

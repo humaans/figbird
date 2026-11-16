@@ -35,10 +35,12 @@ export function eventPayload(event: DevtoolsEvent['event']): unknown {
       return event.params
     case 'mutate:start':
     case 'mutate:update':
+    case 'read:start':
     case 'action:start':
       return event.args
     case 'fetch:error':
     case 'mutate:error':
+    case 'read:error':
     case 'action:error':
     case 'connection:error':
       return errorDetails(event.error)
@@ -59,10 +61,13 @@ export function eventPayloadLabel(event: DevtoolsEvent['event']): string {
   switch (event.kind) {
     case 'fetch:start':
       return 'Parameters'
+    case 'read:end':
+      return 'Read result'
     case 'fetch:end':
       return 'Fetch result'
     case 'mutate:start':
     case 'mutate:update':
+    case 'read:start':
     case 'action:start':
       return 'Arguments'
     case 'mutate:end':
@@ -74,6 +79,7 @@ export function eventPayloadLabel(event: DevtoolsEvent['event']): string {
       return 'Realtime payload'
     case 'fetch:error':
     case 'mutate:error':
+    case 'read:error':
     case 'action:error':
     case 'connection:error':
     case 'connection:reconnect-failed':
@@ -189,6 +195,10 @@ function activityGroupKey(item: DevtoolsEvent): string {
   const event = item.event
   if (isMutationEvent(event)) return `mutation:${event.mutationId}`
   switch (event.kind) {
+    case 'read:start':
+    case 'read:end':
+    case 'read:error':
+      return `read:${event.readId}`
     case 'action:start':
     case 'action:end':
     case 'action:error':
@@ -200,7 +210,10 @@ function activityGroupKey(item: DevtoolsEvent): string {
 
 function activityRepresentative(events: readonly DevtoolsEvent[]): DevtoolsEvent {
   const start = events.find(
-    item => item.event.kind === 'mutate:start' || item.event.kind === 'action:start',
+    item =>
+      item.event.kind === 'mutate:start' ||
+      item.event.kind === 'action:start' ||
+      item.event.kind === 'read:start',
   )
   if (start) return start
 
@@ -227,6 +240,7 @@ function activityKind(key: string, representative: DevtoolsEvent): string {
   if (isMutationEvent(representative.event) || key.startsWith('mutation:')) return 'mutation'
   if (key.startsWith('action:') || representative.event.kind === 'action:start') return 'action'
   const event = representative.event
+  if (event.kind.startsWith('read:')) return 'custom read'
   if (event.kind.startsWith('connection:')) return 'connection'
   if (event.kind.startsWith('fetch:')) return 'fetch'
   if (event.kind.startsWith('reconcile:')) return 'reconcile'
@@ -252,6 +266,11 @@ function activityDetails(
   }
 
   const event = representative.event
+  if (key.startsWith('read:')) {
+    return eventDetails(
+      [...events].reverse().find(item => item.event.kind !== 'read:start') ?? representative,
+    )
+  }
   if (event.kind.startsWith('connection:')) {
     const sweep = events.find(item => item.event.kind === 'reconnect:sweep')?.event
     const fetches = events.filter(
@@ -445,6 +464,10 @@ export function eventSearchText(
 
 export function eventQueryId(event: DevtoolsEvent['event']): string | undefined {
   switch (event.kind) {
+    case 'read:start':
+    case 'read:end':
+    case 'read:error':
+      return event.queryId
     case 'fetch:start':
     case 'fetch:end':
     case 'fetch:error':
@@ -540,6 +563,15 @@ export function eventDetails(item: DevtoolsEvent): string {
         'durationMs' in event ? formatMs(event.durationMs) : '',
         'error' in event ? errorMessage(event.error) : '',
       ])
+    case 'read:start':
+    case 'read:end':
+    case 'read:error':
+      return joinEventParts([
+        `${event.serviceName}.${event.method}`,
+        `read ${event.readId}`,
+        'durationMs' in event ? formatMs(event.durationMs) : '',
+        'error' in event ? errorMessage(event.error) : '',
+      ])
     case 'action:start':
     case 'action:end':
     case 'action:error':
@@ -580,6 +612,12 @@ function activityStatus(
       .find(item => ['mutate:end', 'mutate:error', 'mutate:rollback'].includes(item.event.kind))
     if (!terminal) return { status: 'pending', tone: 'blue' }
     return eventStatus(terminal.event)
+  }
+  if (key.startsWith('read:')) {
+    const terminal = [...events]
+      .reverse()
+      .find(item => item.event.kind === 'read:end' || item.event.kind === 'read:error')
+    return terminal ? eventStatus(terminal.event) : { status: 'pending', tone: 'blue' }
   }
   if (key.startsWith('action:') || representative.kind === 'action:start') {
     const terminal = [...events]
@@ -636,15 +674,18 @@ function eventStatus(event: DevtoolsEvent['event']): {
     case 'fetch:start':
     case 'mutate:start':
     case 'mutate:update':
+    case 'read:start':
     case 'action:start':
     case 'reconcile:started':
       return { status: 'pending', tone: 'blue' }
+    case 'read:end':
     case 'fetch:end':
     case 'mutate:end':
     case 'action:end':
       return { status: 'success', tone: 'green' }
     case 'fetch:error':
     case 'mutate:error':
+    case 'read:error':
     case 'action:error':
     case 'connection:error':
     case 'connection:reconnect-failed':

@@ -142,3 +142,11 @@ test('optional query definitions are inferred', t => {
 
   t.is(taskQueryType, 'TaskQuery')
 })
+
+test('custom queries infer opaque result shapes and service method tuples', t => {
+  const fixture = join(__dirname, 'fixtures', 'custom-query-inference.ts')
+  t.is(getTypeAtPosition(fixture, 'CustomData'), 'Status')
+  t.is(getTypeAtPosition(fixture, 'RequestData'), 'Status')
+  t.is(getTypeAtPosition(fixture, 'CountData'), 'number')
+  t.is(getTypeAtPosition(fixture, 'NullData'), 'null')
+})

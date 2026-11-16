@@ -1,7 +1,7 @@
 /** Query hooks for relational builders and definitions. */
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
-import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
+import type { AnyQuery, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import {
   type QueryInput,
   type QueryRequest,
@@ -34,7 +34,10 @@ export interface PaginationControls {
  * For paginated builders the success arm widens with the `loadMore` family, exactly
  * like the Suspense result. The two modes carry the same query contract.
  */
-export type RelationalQueryResult<T, TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find'> =
+export type RelationalQueryResult<
+  T,
+  TKind extends 'find' | 'get' | 'paginate' | 'all' | 'custom' = 'find',
+> =
   | {
       status: 'idle' | 'loading'
       data: null
@@ -71,12 +74,12 @@ export interface QueryRefLike<T> {
   releaseColdStart(): void
   retryColdStart?(): boolean
   hash(): string
-  kind(): 'find' | 'get' | 'paginate' | 'all'
+  kind(): 'find' | 'get' | 'paginate' | 'all' | 'custom'
 }
 
 /** The slice of a Figbird instance the query hooks need. @internal */
 export interface FigbirdLike {
-  query<Args, B extends AnyQueryBuilder>(
+  query<Args, B extends AnyQuery>(
     queryOrBuilder: QueryInput<B, Args>,
   ): QueryRefLike<QueryBuilderResult<B>>
 }
@@ -116,7 +119,10 @@ const idleState: RelationalQueryState<null> = {
  * was set) `total`. The pagination shape is selected by the second type
  * parameter, which the hook infers from the builder's `TKind`.
  */
-export type SuspenseQueryResult<T, TKind extends 'find' | 'get' | 'paginate' | 'all' = 'find'> = {
+export type SuspenseQueryResult<
+  T,
+  TKind extends 'find' | 'get' | 'paginate' | 'all' | 'custom' = 'find',
+> = {
   data: T
   error: Error | null
   isFetching: boolean
@@ -169,12 +175,12 @@ export type SkipAware<T, O extends UseQueryOptions> = [O] extends [{ skip: false
 // because QueryBuilder is intentionally invariant in its schema parameter.
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueryHook<S extends Schema = any> {
-  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+  <Args, B extends AnyQuery<S>, O extends UseQueryOptions = Record<string, never>>(
     query: QueryInput<B, Args>,
     options?: O,
   ): SkipAware<QueryBuilderResult<B>, O>
   // A nullable bound request is the conditional-query form: `useQuery(id ? detail({ id }) : null)`.
-  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryOptions = Record<string, never>>(
+  <Args, B extends AnyQuery<S>, O extends UseQueryOptions = Record<string, never>>(
     request: QueryRequest<Args, B> | null,
     options?: O,
   ): QueryBuilderResult<B> | undefined
@@ -183,19 +189,19 @@ export interface UseQueryHook<S extends Schema = any> {
 /** The metadata-bearing query hook, including its explicit non-Suspense mode. */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export interface UseQueryResultHook<S extends Schema = any> {
-  <Args, B extends AnyQueryBuilder<S>>(
+  <Args, B extends AnyQuery<S>>(
     query: QueryInput<B, Args>,
     options: UseQueryResultOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
-  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryResultOptions = Record<string, never>>(
+  <Args, B extends AnyQuery<S>, O extends UseQueryResultOptions = Record<string, never>>(
     query: QueryInput<B, Args>,
     options?: O,
   ): SuspenseQueryResult<SkipAware<QueryBuilderResult<B>, O>, QueryBuilderKind<B>>
-  <Args, B extends AnyQueryBuilder<S>>(
+  <Args, B extends AnyQuery<S>>(
     request: QueryRequest<Args, B> | null,
     options: UseQueryResultOptions & { suspense: false },
   ): RelationalQueryResult<QueryBuilderResult<B>, QueryBuilderKind<B>>
-  <Args, B extends AnyQueryBuilder<S>, O extends UseQueryResultOptions = Record<string, never>>(
+  <Args, B extends AnyQuery<S>, O extends UseQueryResultOptions = Record<string, never>>(
     request: QueryRequest<Args, B> | null,
     options?: O,
   ): SuspenseQueryResult<QueryBuilderResult<B> | undefined, QueryBuilderKind<B>>
@@ -249,7 +255,7 @@ export function useQueryResultImpl(
 ): RelationalQueryResult<unknown> | SuspenseQueryResult<unknown> {
   let qRef: QueryRefLike<unknown> | null = null
   if (!options.skip && query !== null) {
-    qRef = figbird.query(query as QueryInput<AnyQueryBuilder>)
+    qRef = figbird.query(query as QueryInput<AnyQuery>)
   }
   // Every input shape ends at the same single hook call, so the hook sequence is stable
   // when a request flips null <-> real or `skip` toggles.

@@ -3,6 +3,13 @@
  * These types enable type-safe service definitions and query inference
  */
 
+import {
+  isQueryDeclaration,
+  type QueryDeclarations,
+  type DeclaredQueries,
+} from './queryDeclaration.js'
+import { isQueryBuilderMember } from './queryBuilderMembers.js'
+
 // Unique symbol for phantom types - keeps internal typing machinery hidden
 declare const $phantom: unique symbol
 
@@ -32,6 +39,7 @@ export interface ResolvedServiceDef {
   update: unknown
   patch: unknown
   methods: AnyMethodsType
+  queries: AnyMethodsType
 }
 
 // Internal service representation — the resolved definition lives in one phantom slot
@@ -40,6 +48,7 @@ export interface Service<
   TName extends string = string,
   TPath extends string = string,
 > {
+  readonly queryMethods: QueryDeclarations
   readonly name: TName
   readonly path: TPath
   readonly [$phantom]?: TDef
@@ -58,7 +67,7 @@ type DerivePatch<TServiceDef extends ServiceTypeDefinition> = TServiceDef['patch
 
 type DeriveMethods<TServiceDef extends ServiceTypeDefinition> =
   TServiceDef['methods'] extends undefined
-    ? Record<string, never>
+    ? Record<never, never>
     : NonNullable<TServiceDef['methods']>
 
 type DeriveQuery<TServiceDef extends ServiceTypeDefinition> = 'query' extends keyof TServiceDef
@@ -73,6 +82,7 @@ type ResolveDef<TServiceDef extends ServiceTypeDefinition> = {
   update: DeriveUpdate<TServiceDef>
   patch: DerivePatch<TServiceDef>
   methods: DeriveMethods<TServiceDef>
+  queries: Record<never, never>
 }
 
 type ExplicitServicePath<TPath extends string> = string extends TPath
@@ -88,15 +98,31 @@ export interface ServiceDeclaration<
 > {
   readonly path: TPath
   readonly [$phantom]?: TDef
+  readonly queryMethods: QueryDeclarations
+  /** Replace this service's complete set of custom read declarations. */
+  queries<const Q extends QueryDeclarations>(
+    definitions: Q,
+  ): ServiceDeclaration<WithQueries<TDef, Q>, TPath>
 }
+
+type WithQueries<TDef extends ResolvedServiceDef, Q extends QueryDeclarations> = Omit<
+  TDef,
+  'queries'
+> & { queries: DeclaredQueries<Q> }
 
 /** A service definition whose transport path will default to its schema name. */
 export interface DefaultServiceDeclaration<TDef extends ResolvedServiceDef> {
+  readonly queryMethods: QueryDeclarations
+  /** Replace this service's complete set of custom read declarations. */
+  queries<const Q extends QueryDeclarations>(
+    definitions: Q,
+  ): DefaultServiceDeclaration<WithQueries<TDef, Q>>
   readonly [$phantom]?: TDef
   at<const TPath extends string>(path: ExplicitServicePath<TPath>): ServiceDeclaration<TDef, TPath>
 }
 
 type AnyServiceDeclaration =
+  | Service
   | ServiceDeclaration<ResolvedServiceDef, string>
   | DefaultServiceDeclaration<ResolvedServiceDef>
 
@@ -118,18 +144,33 @@ interface ServiceFactory {
   ) => ServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath>
 }
 
+function defaultDeclaration<TDef extends ResolvedServiceDef>(
+  queryMethods: QueryDeclarations = {},
+): DefaultServiceDeclaration<TDef> {
+  return {
+    queryMethods,
+    at: path => pathDeclaration(path, queryMethods),
+    queries: definitions => defaultDeclaration(definitions),
+  }
+}
+
+function pathDeclaration<TDef extends ResolvedServiceDef, TPath extends string>(
+  path: TPath,
+  queryMethods: QueryDeclarations = {},
+): ServiceDeclaration<TDef, TPath> {
+  return { path, queryMethods, queries: definitions => pathDeclaration(path, definitions) }
+}
+
 function declareService<TServiceDef extends ServiceTypeDefinition>(): DefaultServiceDeclaration<
   ResolveDef<TServiceDef>
 > {
-  return {
-    at: path => ({ path }),
-  }
+  return defaultDeclaration()
 }
 
 function serviceFromCatalog<TDefinitions extends ServiceDefinitionCatalog<TDefinitions>>() {
   return <const TPath extends keyof TDefinitions & string>(
     path: ExplicitServicePath<TPath>,
-  ): ServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath> => ({ path })
+  ): ServiceDeclaration<ResolveDef<TDefinitions[TPath]>, TPath> => pathDeclaration(path)
 }
 
 export const service: ServiceFactory = Object.assign(declareService, {
@@ -461,11 +502,13 @@ export type RelationshipsConfig<TServiceMap> = {
 
 // Materialize a declaration with its literal schema name and transport path.
 type MaterializeService<TDeclaration, TName extends string> =
-  TDeclaration extends ServiceDeclaration<infer TDef, infer TPath>
+  TDeclaration extends Service<infer TDef, string, infer TPath>
     ? Service<TDef, TName, TPath>
-    : TDeclaration extends DefaultServiceDeclaration<infer TDef>
-      ? Service<TDef, TName, TName>
-      : never
+    : TDeclaration extends ServiceDeclaration<infer TDef, infer TPath>
+      ? Service<TDef, TName, TPath>
+      : TDeclaration extends DefaultServiceDeclaration<infer TDef>
+        ? Service<TDef, TName, TName>
+        : never
 
 // Phase 2: Create a schema with services object map (preserves literal keys + typed
 // relationships so downstream hooks can infer related item types at call sites).
@@ -511,7 +554,21 @@ export function createSchema<
       }
       paths.set(path, name)
 
-      return [name, { name, path }]
+      const queryMethods = declaration.queryMethods ?? {}
+      for (const [method, marker] of Object.entries(queryMethods)) {
+        if (isQueryBuilderMember(method))
+          throw new TypeError(
+            `Query "${name}.${method}" conflicts with a reserved query builder member`,
+          )
+        if (!isQueryDeclaration(marker))
+          throw new TypeError(`Query "${name}.${method}" must be declared with query<F>()`)
+      }
+      return [
+        name,
+        Object.defineProperty({ name, path }, 'queryMethods', {
+          value: Object.freeze({ ...queryMethods }),
+        }),
+      ]
     }),
   ) as {
     readonly [K in keyof TServiceMap]: MaterializeService<TServiceMap[K], K & string>
@@ -582,6 +639,10 @@ export type ServiceQuery<S extends Schema, N extends ServiceNames<S>> = ServiceD
 export type ServiceMethods<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
   ServiceByName<S, N>
 >['methods']
+
+export type ServiceQueries<S extends Schema, N extends ServiceNames<S>> = ServiceDefinitionOf<
+  ServiceByName<S, N>
+>['queries']
 
 // Helper to find service by name string (for runtime lookup)
 export function findServiceByName<S extends Schema>(

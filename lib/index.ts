@@ -1,4 +1,8 @@
+export { query } from './core/queryDeclaration.js'
+export type { QueryDeclaration } from './core/queryDeclaration.js'
 // core
+export type { CustomQuery } from './core/customQuery.js'
+export type { CustomQueryRef } from './core/customQueryRef.js'
 export {
   defineMutationQueue,
   Figbird,
@@ -77,6 +81,7 @@ export type {
   ServiceDefinitionByPath,
   ServiceItem,
   ServiceMethods,
+  ServiceQueries,
   ServiceNames,
   ServicePaths,
   ServicePatch,
@@ -86,7 +91,7 @@ export type {
 } from './core/schema.js'
 
 // query builder
-export type { QueryAST, QueryBuilder, QueryBuilderProxy } from './core/queryBuilder.js'
+export type { AnyQuery, QueryAST, QueryBuilder, QueryBuilderProxy } from './core/queryBuilder.js'
 
 // query classification report types (returned by figbird.explain / figbird.inspect)
 export type { ClassificationReason, QueryNodeClass } from './core/queryClassification.js'

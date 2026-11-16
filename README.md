@@ -79,6 +79,29 @@ Successful results stay fresh for five minutes by default, so short remounts reu
 cache without another request. Set `staleTime` on `new Figbird(...)` to change the app-wide
 default, or pass it to an individual query reader.
 
+Declare custom reads on the service with runtime names and server method types:
+
+```ts
+jobs: service<{ item: Job }>().at('api/jobs').queries({
+  getCheck: query<JobsService['getCheck']>(),
+})
+```
+
+Import `query` from `figbird`. Read them through the existing hooks:
+
+```tsx
+const { q, useQuery } = createHooks(schema)
+
+function VerificationStatus({ id, jobId }) {
+  const status = useQuery(q.jobs.getCheck({ id, jobId }))
+  return <span>{status.stage}</span>
+}
+```
+
+Custom queries share cached results and the ordinary query loading, error, refetch,
+and retry behavior. Their results stay separate from the entity cache and are not
+updated by realtime events. Use `m` for writes and side-effecting custom methods.
+
 ## Features
 
 - **Relational queries** — declare relations once, `.related()` assembles live entity graphs

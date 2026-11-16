@@ -132,6 +132,12 @@ export interface Adapter<
     | ((serviceName: string, ids: readonly (string | number)[]) => Promise<unknown[]>)
     | undefined
 
+  /** Dispatch CRUD writes and arbitrary custom methods, including custom query reads.
+   * Forward arguments unchanged; custom reads prefer call() and use mutate() only on older adapters.
+   */
+  /** Dispatch an arbitrary service method with unchanged arguments. Older adapters may omit this alias. */
+  call?(serviceName: string, method: string, args: unknown[]): Promise<unknown>
+
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown>
 
   /**

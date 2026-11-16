@@ -9,7 +9,7 @@ import {
 } from '../core/figbird.js'
 import {
   createQueryBuilderProxy,
-  type AnyQueryBuilder,
+  type AnyQuery,
   type QueryBuilderProxy,
 } from '../core/queryBuilder.js'
 import type { Schema, ServiceDefinitionByPath, ServiceNames, ServicePaths } from '../core/schema.js'
@@ -76,7 +76,7 @@ type UseMutatingForSchema<S extends Schema> = (
 type UseFeathersForSchema<S extends Schema> = () => TypedFeathersClient<S>
 
 /** Schema-typed defineQuery: builders must come from this schema. Name optional. */
-type DefineQueryForSchema<S extends Schema> = DefineQuery<AnyQueryBuilder<S>>
+type DefineQueryForSchema<S extends Schema> = DefineQuery<AnyQuery<S>>
 
 export interface FigbirdHooks<S extends Schema, A extends Adapter = Adapter> {
   useGet: UseGetForSchema<S, AdapterParams<A>>
