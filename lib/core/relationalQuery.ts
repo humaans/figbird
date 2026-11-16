@@ -787,6 +787,7 @@ export class RelationalQueryRef<
    * server changes invisible (especially for snapshot queries).
    */
   refetch(): void {
+    this.#lifetime.clearFailedReadRetry()
     this.#beginGraphRun()
     this.#root?.refetch(this.#graph('(root)'))
     const seen = new Set<QueryRef<unknown[], unknown, TMeta>>()
@@ -1352,7 +1353,18 @@ export class RelationalQueryRef<
    * component that *did* commit cancel the eviction by holding a subscription; after
    * eviction, a retry interns a fresh ref and cold-starts.
    */
+  retryColdStart(): boolean {
+    if (this.getSnapshot().status !== 'error' || !this.#lifetime.consumeFailedReadRetry())
+      return false
+    this.refetch()
+    return true
+  }
+
   releaseColdStart(): void {
+    if (this.getSnapshot().status === 'error' && !this.#lifetime.canReleaseFailedRead()) {
+      this.#lifetime.armFailedReadRetry()
+      return
+    }
     if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead()) {
       queueMicrotask(() => {
         if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead())

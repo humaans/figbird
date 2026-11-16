@@ -72,6 +72,7 @@ export interface QueryRefLike<T> {
   setColdReadGroup(group: object): void
   suspensePromise(): Promise<void>
   releaseColdStart(): void
+  retryColdStart?(): boolean
   hash(): string
   kind(): 'find' | 'get' | 'paginate' | 'all' | 'custom'
 }
@@ -378,6 +379,7 @@ function useQueryResultForRef<T>(
   // `status: 'error'` only occurs for cold failures (no data was ever produced) —
   // a refetch failure with data present stays on the success arm with `error` set.
   if (state.status === 'error') {
+    if (qRef.retryColdStart?.()) throw qRef.suspensePromise()
     // Deferred self-eviction: nothing committed, so nothing will ever unsubscribe
     // this ref — releasing it here is what makes an error-boundary retry cold-start
     // a fresh query instead of instantly re-throwing the same settled error.

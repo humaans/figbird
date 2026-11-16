@@ -1733,6 +1733,9 @@ inline in render needs no dependency arrays. Also available as `figbird.q`.
 
 ## useQuery and useQueryResult
 
+Uncommitted reads have a five-minute render lease; a boundary pending longer than that
+may refetch already-settled reads once if cache pressure evicts them.
+
 ```ts
 // Suspense data (default)
 const data = useQuery(builder)

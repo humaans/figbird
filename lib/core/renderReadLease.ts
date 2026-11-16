@@ -1,7 +1,7 @@
 import type { Clock, ClockTimer } from './clock.js'
 
 /** Suspense retries have no committed subscription yet. Keep their results through a render window. */
-export const RENDER_READ_LEASE_MS = 30_000
+export const RENDER_READ_LEASE_MS = 5 * 60_000
 
 export class RenderReadLease {
   readonly #clock: Clock
