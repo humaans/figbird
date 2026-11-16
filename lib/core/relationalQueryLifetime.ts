@@ -1,4 +1,4 @@
-import { RenderReadLease } from './renderReadLease.js'
+import { RENDER_READ_LEASE_MS, RenderReadLease } from './renderReadLease.js'
 import type { Clock, ClockTimer } from './clock.js'
 import { QueryLifetime } from './queryLifetime.js'
 import { isWithinStaleTime, validateStaleTime } from './staleTime.js'
@@ -27,6 +27,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   #nextPreparationGeneration = 0
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #coldStartAwaitingSubscriber = false
+  #coldStartSettledAt = 0
   #prefetch: PrefetchLease | null = null
   #failedReadRetryArmed = false
   #failedReadRetryGeneration = 0
@@ -64,7 +65,11 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
       queueMicrotask(() => {
         this.#coldStartAwaitingSubscriber = false
       })
-      return { kind: 'adopt' }
+      // A render that never committed leaves its read unowned. Past the render lease it
+      // is no longer this subscriber's read, so its freshness is checked like any other.
+      if (this.#clock.now() - this.#coldStartSettledAt <= RENDER_READ_LEASE_MS) {
+        return { kind: 'adopt' }
+      }
     }
     return adoptsPreparation
       ? { kind: 'adopt' }
@@ -86,6 +91,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
 
   graphStarted(): void {
     this.#coldStartAwaitingSubscriber = this.owners.size === 0
+    this.#coldStartSettledAt = this.#clock.now()
   }
 
   retainRenderRead(onExpire: () => void): void {
@@ -135,7 +141,10 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   settleSuspense(error: Error | null): boolean {
     const wasPending = this.reads.get('root')?.status === 'pending'
     this.settle('root', null, error)
-    if (wasPending && this.owners.size === 0) this.#renderRead.renew()
+    if (wasPending && this.owners.size === 0) {
+      this.#renderRead.renew()
+      this.#coldStartSettledAt = this.#clock.now()
+    }
     return wasPending
   }
 

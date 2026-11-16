@@ -227,3 +227,32 @@ it('entity queries: lease expiry during a long boundary refetches expired reads 
     d.unmount()
   }
 })
+
+it('entity queries: an abandoned read is adopted only within its render lease', async t => {
+  for (const elapsed of [RENDER_READ_LEASE_MS - 1000, RENDER_READ_LEASE_MS + 1000]) {
+    const { figbird: original, adapter } = createTestApp(schema, { jobs: { data: {} } })
+    original.dispose()
+    const clock = new TestClock()
+    const figbird = new Figbird({ schema, adapter, clock, retry: false })
+    t.teardown(() => figbird.dispose())
+    let calls = 0
+    adapter.get = async (_service, id) => {
+      calls++
+      return { data: { id, status: `fetch ${calls}` } }
+    }
+    // A snapshot has no realtime maintenance, so only a fetch can refresh it.
+    const builder = q.jobs.get(1).snapshot()
+    // A suspended render that never commits starts the read and leaves it unowned.
+    await figbird.query(builder).suspensePromise()
+    t.is(calls, 1)
+    await clock.advance(elapsed)
+
+    const ref = figbird.query(builder)
+    const release = ref.subscribe(() => {}, { staleTime: 1000 })
+    await clock.advance(0)
+    const expected = elapsed > RENDER_READ_LEASE_MS ? 2 : 1
+    t.is(calls, expected, `after ${elapsed}ms`)
+    t.is(ref.getSnapshot().data?.status, `fetch ${expected}`)
+    release()
+  }
+})

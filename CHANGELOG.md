@@ -6,6 +6,11 @@
   throwing an already-settled promise.
 - Suspense remounts use complete cached results without a fallback flash and honor
   the reader's `staleTime` when deciding whether to revalidate.
+- A result left behind by a render that never committed is checked against the
+  reader's `staleTime` once it is older than the render lease, instead of being
+  adopted as fresh.
+- Releasing a stale preparation handle no longer expires the custom query that
+  replaced it, and idle retention keeps results a pending boundary has rendered.
 
 - Declare custom reads with `service<T>().queries({ name: query<F>() })` and use them
   through the existing query hooks. Their results are cached separately from entities.
