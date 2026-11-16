@@ -770,6 +770,10 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
   }
 
   mutate(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+    return this.call(serviceName, method, args)
+  }
+
+  call(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
     const service = this.#service(serviceName)
     const serviceMethod = service[method]
     if (typeof serviceMethod === 'function') {

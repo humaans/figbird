@@ -1084,16 +1084,12 @@ export class Figbird<
    */
   refetch(serviceName?: ServiceNames<S> | (string & {})): void {
     this.queryStore.assertActive()
+    const path =
+      serviceName === undefined ? undefined : resolveServicePath(this.schema, serviceName)
     for (const ref of this.#customQueryCache.values()) {
-      if (
-        serviceName === undefined ||
-        ref.inspect().serviceName === resolveServicePath(this.schema, serviceName)
-      )
-        ref.invalidate()
+      if (path === undefined || ref.serviceName === path) ref.invalidate()
     }
-    this.queryStore.refetchQueries(
-      serviceName === undefined ? undefined : resolveServicePath(this.schema, serviceName),
-    )
+    this.queryStore.refetchQueries(path)
   }
 
   /**
@@ -1218,11 +1214,15 @@ export class Figbird<
   subscribeToStateChanges(
     fn: (state: Map<string, ServiceState<AdapterFindMeta<A>>>) => void,
   ): () => void {
-    const notify = () => fn(this.queryStore.getState())
-    this.#customStateListeners.add(notify)
+    return this.queryStore.subscribeToStateChanges(fn)
+  }
+
+  /** @internal Inspection invalidations include opaque queries without changing the entity-state channel. */
+  subscribeToInspectionChanges(fn: () => void): () => void {
+    this.#customStateListeners.add(fn)
     const unsubscribe = this.queryStore.subscribeToStateChanges(fn)
     return () => {
-      this.#customStateListeners.delete(notify)
+      this.#customStateListeners.delete(fn)
       unsubscribe()
     }
   }

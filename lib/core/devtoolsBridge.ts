@@ -29,6 +29,7 @@ interface DevtoolsSource {
     itemId: string | number,
     item: unknown,
   ): { ok: boolean; error?: string; traceId?: number }
+  subscribeToInspectionChanges?(fn: () => void): () => void
   subscribeToStateChanges(fn: (state: unknown) => void): () => void
 }
 
@@ -225,7 +226,10 @@ function createPageBridge(): DevtoolsPageBridge {
           if (event.kind === 'cache:updated') session.cacheDirty = true
           session.version++
         }),
-        source.subscribeToStateChanges(() => {
+        (
+          source.subscribeToInspectionChanges?.bind(source) ??
+          source.subscribeToStateChanges.bind(source)
+        )(() => {
           session.queriesDirty = true
           session.relationalDirty = true
           session.version++

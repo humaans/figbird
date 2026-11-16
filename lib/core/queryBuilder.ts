@@ -515,12 +515,10 @@ export class QueryBuilder<
 export type QueryBuilderProxy<S extends Schema> = {
   <K extends ServiceNames<S>>(
     serviceName: K,
-  ): QueryBuilder<S, K & string, ServiceItem<S, K>> &
-    CustomQueryMethods<S, K, keyof QueryBuilder<S>>
+  ): QueryBuilder<S, K & string, ServiceItem<S, K>> & CustomQueryMethods<S, K>
   (serviceName: string): QueryBuilder<S, string, unknown>
 } & {
-  [K in ServiceNames<S>]: QueryBuilder<S, K & string, ServiceItem<S, K>> &
-    CustomQueryMethods<S, K, keyof QueryBuilder<S>>
+  [K in ServiceNames<S>]: QueryBuilder<S, K & string, ServiceItem<S, K>> & CustomQueryMethods<S, K>
 }
 
 /**
@@ -537,6 +535,7 @@ export function createQueryBuilderProxy<S extends Schema>(schema: S): QueryBuild
           return typeof member === 'function' ? member.bind(target) : member
         }
         if (prop === 'then' || prop === 'toJSON') return undefined
+        if (!Object.hasOwn(schema.services[serviceName]?.queryMethods ?? {}, prop)) return undefined
         return (...args: unknown[]) => new CustomQuery(schema, serviceName, prop, args)
       },
     })

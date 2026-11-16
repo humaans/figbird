@@ -1,3 +1,4 @@
+import { RENDER_READ_LEASE_MS } from '../lib/core/renderReadLease'
 import test from 'ava'
 import { createSchema, Figbird } from '../lib'
 import { waitFor } from './helpers'
@@ -15,7 +16,7 @@ test('custom q: descriptors are inert and query refs share structurally equal ar
   t.teardown(() => figbird.dispose())
   const gate = deferred<unknown>()
   const calls: Array<[string, string, unknown[]]> = []
-  adapter.mutate = (...args) => {
+  adapter.call = (...args) => {
     calls.push(args)
     return gate.promise
   }
@@ -109,7 +110,7 @@ test('custom q: different keys resolve independently out of order', async t => {
   const first = deferred<unknown>()
   const second = deferred<unknown>()
   let calls = 0
-  adapter.mutate = () => (++calls === 1 ? first.promise : second.promise)
+  adapter.call = () => (++calls === 1 ? first.promise : second.promise)
   const a = figbird.query(figbird.q.jobs.getCheck({ id: 1 }))
   const b = figbird.query(figbird.q.jobs.getCheck({ id: 2 }))
   const pa = a.suspensePromise()
@@ -130,7 +131,7 @@ test('custom q: errors use query state and the configured retry policy', async t
   const figbird = new Figbird({ schema, adapter, clock, retry: 1, retryDelay: 10 })
   t.teardown(() => figbird.dispose())
   let calls = 0
-  adapter.mutate = async () => {
+  adapter.call = async () => {
     if (++calls === 1) throw new Error('temporary')
     return { id: 1, status: 'retried' }
   }
@@ -150,7 +151,7 @@ test('custom q: synchronous failures reject Suspense and retry=false sends once'
   const { figbird, adapter } = app()
   t.teardown(() => figbird.dispose())
   let calls = 0
-  adapter.mutate = () => {
+  adapter.call = () => {
     calls++
     throw new Error('bad request')
   }
@@ -168,7 +169,7 @@ test('custom q: primitives, null, undefined, and arrays remain opaque results', 
   t.teardown(() => figbird.dispose())
   const values = [null, undefined, 0, false, '', [{ id: 1, status: 'opaque' }]]
   for (const [index, value] of values.entries()) {
-    adapter.mutate = async () => value
+    adapter.call = async () => value
     const ref = figbird.query(figbird.q.jobs.getCheck({ id: index }))
     await ref.suspensePromise()
     t.is(ref.getSnapshot().status, 'success')
@@ -210,7 +211,7 @@ test('custom q: preparation, staleness and idle retention share the ordinary que
   const figbird = new Figbird({ schema, adapter, clock, staleTime: 100, gcTime: 200, retry: false })
   t.teardown(() => figbird.dispose())
   let calls = 0
-  adapter.mutate = async () => ({ id: 1, status: String(++calls) })
+  adapter.call = async () => ({ id: 1, status: String(++calls) })
   const builder = figbird.q.jobs.getCheck({ id: 1 })
   const preparation = figbird.prepare(builder)
   await preparation.promise
@@ -239,7 +240,7 @@ test('custom q: disposal blocks new work and late responses cannot resurrect cac
   const { figbird, adapter } = app()
   const gate = deferred<unknown>()
   let calls = 0
-  adapter.mutate = () => {
+  adapter.call = () => {
     calls++
     return gate.promise
   }
@@ -268,7 +269,7 @@ test('custom q: schema mismatch is rejected before transport', t => {
 test('custom q: devtools identifies real custom queries and keeps their results out of entity cache', async t => {
   const { figbird, adapter } = app()
   t.teardown(() => figbird.dispose())
-  adapter.mutate = async () => ({ id: 1, status: 'done' })
+  adapter.call = async () => ({ id: 1, status: 'done' })
   const collector = createCollector(figbird)
   collector.start()
   t.teardown(() => collector.stop())
@@ -343,7 +344,7 @@ test('custom q: results are snapshots with no realtime subscriptions or automati
     subscriptions++
     return () => {}
   }
-  adapter.mutate = async () => {
+  adapter.call = async () => {
     calls++
     return { id: 1, status: 'opaque' }
   }
@@ -364,7 +365,7 @@ test('custom q: prefetch is idempotent and preparation adopts the warmed result'
   const figbird = new Figbird({ schema, adapter, clock, staleTime: 0, retry: false })
   t.teardown(() => figbird.dispose())
   let calls = 0
-  adapter.mutate = async () => ({ id: 1, status: String(++calls) })
+  adapter.call = async () => ({ id: 1, status: String(++calls) })
   const builder = figbird.q.jobs.getCheck({ id: 1 })
   figbird.prefetch(builder, { staleTime: 100 })
   figbird.prefetch(builder, { staleTime: 100 })
@@ -379,11 +380,16 @@ test('custom q: prefetch is idempotent and preparation adopts the warmed result'
 })
 
 test('custom q: abandoned Suspense results are bounded while parallel groups are retained together', async t => {
-  const { figbird, adapter } = app()
+  const { figbird: original, adapter } = app()
+  original.dispose()
+  const clock = new TestClock()
+  const figbird = new Figbird({ schema, adapter, clock, retry: false })
   t.teardown(() => figbird.dispose())
-  adapter.mutate = async () => ({ id: 1, status: 'done' })
+  adapter.call = async () => ({ id: 1, status: 'done' })
   for (let id = 0; id < 25; id++)
     await figbird.query(figbird.q.jobs.getCheck({ id })).suspensePromise()
+  t.is(figbird.inspect().length, 25)
+  await clock.advance(RENDER_READ_LEASE_MS)
   t.is(figbird.inspect().length, 20)
   const group = {}
   const refs = Array.from({ length: 25 }, (_, id) => {
@@ -395,4 +401,97 @@ test('custom q: abandoned Suspense results are bounded while parallel groups are
   t.true(refs.every(ref => ref.getSnapshot().status === 'success'))
   for (let id = 100; id < 125; id++)
     t.is(figbird.query(figbird.q.jobs.getCheck({ id })), refs[id - 100]!)
+})
+
+test('custom q: an invalidation during a pending read runs one trailing fetch', async t => {
+  const { figbird, adapter } = app()
+  t.teardown(() => figbird.dispose())
+  const first = deferred<unknown>()
+  const second = deferred<unknown>()
+  let calls = 0
+  adapter.call = () => (++calls === 1 ? first.promise : second.promise)
+  const ref = figbird.query(figbird.q.jobs.getCheck({ id: 1 }))
+  const ready = ref.suspensePromise()
+  figbird.refetch('jobs')
+  ref.refetch()
+  first.resolve({ id: 1, status: 'before mutation' })
+  await waitFor(() => calls === 2, 'trailing custom read')
+  second.resolve({ id: 1, status: 'after mutation' })
+  await ready
+  await waitFor(() => !ref.getSnapshot().isFetching, 'trailing completion')
+  t.like(ref.getSnapshot(), { data: { status: 'after mutation' } })
+  t.is(calls, 2)
+})
+
+test('custom q: equal refetch results retain their data reference', async t => {
+  const { figbird, adapter } = app()
+  t.teardown(() => figbird.dispose())
+  adapter.call = async () => ({ id: 1, status: 'same' })
+  const ref = figbird.query(figbird.q.jobs.getCheck({ id: 1 }))
+  await ref.suspensePromise()
+  const before = ref.getSnapshot().data
+  ref.refetch()
+  await waitFor(() => !ref.getSnapshot().isFetching, 'refetch')
+  t.is(ref.getSnapshot().data, before)
+})
+
+test('custom q: reads notify inspection subscribers without notifying entity-state subscribers', async t => {
+  const { figbird, adapter } = app()
+  t.teardown(() => figbird.dispose())
+  adapter.call = async () => ({ id: 1, status: 'done' })
+  let inspected = 0
+  t.teardown(figbird.subscribeToInspectionChanges(() => inspected++))
+  let changes = 0
+  t.teardown(figbird.subscribeToStateChanges(() => changes++))
+  const before = figbird.getState()
+  await figbird.query(figbird.q.jobs.getCheck({ id: 1 })).suspensePromise()
+  await Promise.resolve()
+  t.is(changes, 0)
+  t.true(inspected > 0)
+  t.is(figbird.getState(), before)
+})
+
+test('custom q: adapter.call is preferred and legacy adapter.mutate remains supported', async t => {
+  const { figbird, adapter } = app()
+  t.teardown(() => figbird.dispose())
+  let calls = 0
+  let legacy = 0
+  adapter.call = async () => {
+    calls++
+    return { id: 1, status: 'call' }
+  }
+  adapter.mutate = async () => {
+    legacy++
+    return { id: 2, status: 'legacy' }
+  }
+  await figbird.query(figbird.q.jobs.getCheck({ id: 1 })).suspensePromise()
+  t.is(calls, 1)
+  t.is(legacy, 0)
+  Reflect.set(adapter, 'call', undefined)
+  const ref = figbird.query(figbird.q.jobs.getCheck({ id: 2 }))
+  await ref.suspensePromise()
+  t.like(ref.getSnapshot(), { data: { status: 'legacy' } })
+  t.is(legacy, 1)
+})
+
+test('custom q: a refresh during retry backoff is retained until a fresh trailing read', async t => {
+  const { figbird: original, adapter } = app()
+  original.dispose()
+  const clock = new TestClock()
+  const figbird = new Figbird({ schema, adapter, clock, retry: 1, retryDelay: 10 })
+  t.teardown(() => figbird.dispose())
+  let calls = 0
+  adapter.call = async () => {
+    calls++
+    if (calls === 1) throw new Error('temporary')
+    return { id: 1, status: calls === 2 ? 'before mutation' : 'after mutation' }
+  }
+  const ref = figbird.query(figbird.q.jobs.getCheck({ id: 1 }))
+  const ready = ref.suspensePromise()
+  await clock.advance(0)
+  figbird.refetch('jobs')
+  await clock.advance(10)
+  await ready
+  t.is(calls, 3)
+  t.like(ref.getSnapshot(), { data: { status: 'after mutation' }, isFetching: false })
 })

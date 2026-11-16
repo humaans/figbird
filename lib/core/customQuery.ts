@@ -1,6 +1,6 @@
 import { hashObject } from './hash.js'
 import type { MethodArgs, MethodData } from './mutations.js'
-import type { Schema, ServiceMethods, ServiceNames } from './schema.js'
+import type { Schema, ServiceQueries, ServiceNames } from './schema.js'
 
 declare const customQueryResult: unique symbol
 
@@ -24,16 +24,10 @@ export class CustomQuery<S extends Schema, TResult> {
   }
 }
 
-// oxlint-disable-next-line @typescript-eslint/no-wrapper-object-types -- reserve the inherited prototype members resolved by the builder proxy
-type ObjectMember = keyof Object
-
-/** Builder/protocol members keep their existing meanings. */
-export type CustomQueryMethods<S extends Schema, N extends ServiceNames<S>, Reserved> = {
-  readonly [
-    M in Exclude<keyof ServiceMethods<S, N> & string, Reserved | ObjectMember | 'then' | 'toJSON'>
-  ]: (
-    ...args: MethodArgs<ServiceMethods<S, N>[M]>
-  ) => CustomQuery<S, MethodData<ServiceMethods<S, N>[M]>>
+export type CustomQueryMethods<S extends Schema, N extends ServiceNames<S>> = {
+  readonly [M in keyof ServiceQueries<S, N> & string]: (
+    ...args: MethodArgs<ServiceQueries<S, N>[M]>
+  ) => CustomQuery<S, MethodData<ServiceQueries<S, N>[M]>>
 }
 
 /** Tagged values distinguish omitted/undefined arguments from null without changing transport arguments. */

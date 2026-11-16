@@ -17,6 +17,7 @@ export interface FigbirdLikeForDevtools {
   inspect(): InspectedQuery[]
   inspectCache?(): InspectedCacheService[]
   inspectRelational?(): InspectedRelationalQuery[]
+  subscribeToInspectionChanges?(fn: () => void): () => void
   subscribeToStateChanges?(fn: (state: unknown) => void): () => void
 }
 
@@ -576,7 +577,10 @@ class FigbirdCollector implements Collector {
         this.#scheduleNotify()
       }) ?? null
     this.#stateUnsub =
-      this.#figbird?.subscribeToStateChanges?.(() => {
+      (
+        this.#figbird?.subscribeToInspectionChanges?.bind(this.#figbird) ??
+        this.#figbird?.subscribeToStateChanges?.bind(this.#figbird)
+      )?.(() => {
         this.#sourceStateDirty = true
         this.#scheduleNotify()
       }) ?? null

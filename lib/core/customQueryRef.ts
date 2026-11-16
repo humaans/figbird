@@ -1,3 +1,4 @@
+import { sameValue } from './valueEquality.js'
 import type { Clock, ClockTimer } from './clock.js'
 import { normalizeError } from './errors.js'
 import type { InspectedQuery } from './figbird.js'
@@ -35,6 +36,7 @@ export class CustomQueryRef<T> {
   #pending = false
   #disposed = false
   #adopted = false
+  #refetchRequested = false
   #invalidated = false
   #retryTimer: ClockTimer | null = null
   #fetchedAt: number | undefined
@@ -59,6 +61,10 @@ export class CustomQueryRef<T> {
     this.#args = args
     this.#host = host
     this.#lifetime = new RelationalQueryLifetime(host.clock, staleTime)
+  }
+
+  get serviceName(): string {
+    return this.#serviceName
   }
 
   hash(): string {
@@ -113,13 +119,17 @@ export class CustomQueryRef<T> {
 
   refetch(): void {
     this.#assertActive()
+    if (this.#pending) {
+      this.#refetchRequested = true
+      return
+    }
     this.#start()
   }
 
   /** Service-wide invalidation starts active queries and marks retained results stale. */
   invalidate(): void {
     this.#invalidated = true
-    if (this.#lifetime.owners.size > 0) this.refetch()
+    if (this.#lifetime.owners.size > 0 || this.#pending) this.refetch()
   }
 
   loadMore(): void {
@@ -135,15 +145,27 @@ export class CustomQueryRef<T> {
   }
 
   releaseColdStart(): void {
-    if (this.canEvictAbandonedRead())
+    if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead()) {
+      queueMicrotask(() => {
+        if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead())
+          this.#host.onAbandoned()
+      })
+      return
+    }
+    if (this.#lifetime.owners.size === 0 && !this.#pending)
       this.#lifetime.scheduleCleanup(
         () => !this.#pending,
         () => this.#host.onAbandoned(),
       )
   }
 
+  retainRenderRead(onExpire: () => void): void {
+    this.#lifetime.retainRenderRead(onExpire)
+  }
+
   canEvictAbandonedRead(): boolean {
     return (
+      !this.#lifetime.renderReadRetained &&
       (!this.#adopted || this.#state.status === 'error') &&
       this.#lifetime.owners.size === 0 &&
       !this.#pending
@@ -229,7 +251,11 @@ export class CustomQueryRef<T> {
       if (this.#disposed) return
       this.#recordDuration(startedAt)
       this.#fetchedAt = this.#host.clock.now()
-      this.#state = { status: 'success', data, error: null, isFetching: false }
+      const stableData =
+        this.#state.status === 'success' && sameValue(this.#state.data, data)
+          ? this.#state.data
+          : data
+      this.#state = { status: 'success', data: stableData, error: null, isFetching: false }
     } catch (value) {
       if (this.#disposed) return
       this.#recordDuration(startedAt)
@@ -263,6 +289,11 @@ export class CustomQueryRef<T> {
           : { status: 'error', data: null, error, isFetching: false }
     }
     this.#pending = false
+    if (this.#refetchRequested) {
+      this.#refetchRequested = false
+      this.#start()
+      return
+    }
     this.#settle()
     this.#notify()
     if (this.#lifetime.owners.size === 0) {

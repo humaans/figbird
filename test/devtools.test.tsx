@@ -1,5 +1,5 @@
 import test from 'ava'
-import { createSchema, service, type FigbirdEvent } from '../lib/index.js'
+import { createSchema, service, query, type FigbirdEvent } from '../lib/index.js'
 import { FigbirdEventEmitter } from '../lib/core/events.js'
 import {
   FigbirdDevtoolsPanel,
@@ -1664,15 +1664,14 @@ it('panel renders custom reads with service, method, duration and failure detail
 it('panel inspects opaque custom query results without creating entity-cache entries', async t => {
   const customSchema = createSchema({
     services: {
-      jobs: service<{
-        item: { id: number }
-        methods: { getCheck: (id: number) => Promise<{ progress: number }> }
-      }>(),
+      jobs: service<{ item: { id: number } }>().queries({
+        getCheck: query<(id: number) => Promise<{ progress: number }>>(),
+      }),
     },
   })
   const { figbird, adapter } = createTestApp(customSchema, { jobs: { data: {} } })
   t.teardown(() => figbird.dispose())
-  adapter.mutate = async () => ({ progress: 75 })
+  adapter.call = async () => ({ progress: 75 })
   const collector = createCollector(figbird)
   collector.start()
   t.teardown(() => collector.stop())

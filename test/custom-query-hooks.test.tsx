@@ -1,4 +1,4 @@
-import { StrictMode, Suspense } from 'react'
+import { Component, StrictMode, Suspense, type ReactNode } from 'react'
 import { createHooks, Figbird, FigbirdProvider } from '../lib'
 import { dom, it } from './dom'
 import { deferred } from './mutation-test-helpers'
@@ -13,7 +13,7 @@ it('custom q: useQuery suspends, deduplicates readers, and commits under StrictM
   t.teardown(() => figbird.dispose())
   const gate = deferred<unknown>()
   let calls = 0
-  adapter.mutate = () => {
+  adapter.call = () => {
     calls++
     return gate.promise
   }
@@ -50,7 +50,7 @@ it('custom q: useQueryResult exposes pending, errors, and refetch without mutati
   const { App, figbird, adapter } = app()
   t.teardown(() => figbird.dispose())
   const gate = deferred<unknown>()
-  adapter.mutate = () => gate.promise
+  adapter.call = () => gate.promise
   const d = dom()
   let refetch!: () => void
   function Probe() {
@@ -73,7 +73,7 @@ it('custom q: useQueryResult exposes pending, errors, and refetch without mutati
     await gate.promise.catch(() => {})
   })
   t.is(d.$('.status')?.textContent, 'error:false:offline')
-  adapter.mutate = async () => ({ id: 1, status: 'recovered' })
+  adapter.call = async () => ({ id: 1, status: 'recovered' })
   await d.flush(() => refetch())
   t.is(d.$('.status')?.textContent, 'success:false:recovered')
   d.unmount()
@@ -108,4 +108,97 @@ it('custom q: definition requests, skip/null, and mixed parallel queries use exi
   t.is(d.$('.status')?.textContent, 'cached:checked:undefined:absent')
   t.is(calls, 1)
   d.unmount()
+})
+
+it('parallel cold sibling reads commit beyond the abandoned-read budget', async t => {
+  for (const count of [21, 40]) {
+    const { App, figbird, adapter } = app()
+    adapter.call = async () => ({ id: 1, status: 'done' })
+    adapter.get = async (_service, id) => ({ data: { id, status: 'done' } })
+    const d = dom()
+    let renders = 0
+    class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+      override state = { failed: false }
+      static getDerivedStateFromError() {
+        return { failed: true }
+      }
+      override render() {
+        return this.state.failed ? (
+          <div className='loop'>Render budget exceeded</div>
+        ) : (
+          this.props.children
+        )
+      }
+    }
+    function Sibling({ id }: { id: number }) {
+      if (++renders > 400) throw new Error('Suspense retry loop')
+      const value = useQuery(q.jobs.getCheck({ id }))
+      return <span className='sibling'>{value?.status}</span>
+    }
+    d.render(
+      <App>
+        <Boundary>
+          <Suspense fallback={<div>Loading</div>}>
+            {Array.from({ length: count }, (_, id) => (
+              <Sibling key={id} id={id} />
+            ))}
+          </Suspense>
+        </Boundary>
+      </App>,
+    )
+    await d.flush()
+    t.is(d.$all('.sibling').length, count)
+    t.falsy(d.$('.loop'))
+    d.unmount()
+    figbird.dispose()
+  }
+})
+
+it('an error-boundary retry recovers a custom query held by a prepare handle', async t => {
+  const { App, figbird, adapter } = app()
+  t.teardown(() => figbird.dispose())
+  adapter.call = async () => {
+    throw new Error('offline')
+  }
+  const builder = q.jobs.getCheck({ id: 1 })
+  const prepared = figbird.prepare(builder)
+  await t.throwsAsync(prepared.promise, { message: 'offline' })
+  class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+    override state = { failed: false }
+    static getDerivedStateFromError() {
+      return { failed: true }
+    }
+    override render() {
+      return this.state.failed ? <div className='failed'>Failed</div> : this.props.children
+    }
+  }
+  function Probe() {
+    return <div className='ready'>{useQuery(builder)?.status}</div>
+  }
+  const d = dom()
+  d.render(
+    <App>
+      <Boundary key='first'>
+        <Suspense fallback={<div>Loading</div>}>
+          <Probe />
+        </Suspense>
+      </Boundary>
+    </App>,
+  )
+  await d.flush()
+  t.truthy(d.$('.failed'))
+  adapter.call = async () => ({ id: 1, status: 'recovered' })
+  d.render(
+    <App>
+      <Boundary key='retry'>
+        <Suspense fallback={<div>Loading</div>}>
+          <Probe />
+        </Suspense>
+      </Boundary>
+    </App>,
+  )
+  await d.flush()
+  t.is(d.$('.ready')?.textContent, 'recovered')
+  d.unmount()
+  prepared.release()
 })

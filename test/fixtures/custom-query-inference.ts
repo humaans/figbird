@@ -4,6 +4,7 @@ import {
   Figbird,
   FeathersAdapter,
   service,
+  query,
   type FeathersClient,
 } from '../../lib'
 
@@ -15,15 +16,15 @@ const schema = createSchema({
   services: {
     jobs: service<{
       item: { id: number; name: string }
-      methods: {
-        getCheck: (
-          input: { id: number; jobId: string },
-          options?: { verbose: boolean },
-        ) => Promise<Status>
-        count: () => Promise<number>
-        empty: () => Promise<null>
-      }
-    }>(),
+      methods: { retry: (id: number) => Promise<Status> }
+    }>().queries({
+      getCheck:
+        query<
+          (input: { id: number; jobId: string }, options?: { verbose: boolean }) => Promise<Status>
+        >(),
+      count: query<() => Promise<number>>(),
+      empty: query<() => Promise<null>>(),
+    }),
   },
 })
 const figbird = new Figbird({ schema, adapter: new FeathersAdapter({} as FeathersClient) })
@@ -82,3 +83,14 @@ custom.where({ stage: 'done' })
 export const wrong: { id: number }[] = data
 // @ts-expect-error - r is not part of the public API
 export const removedReadProxy = figbird.r
+
+// @ts-expect-error - writes are not reads
+q.jobs.retry(1)
+// @ts-expect-error - declared reads are not mutation methods
+figbird.m.jobs.getCheck({ id: 1, jobId: 'job' })
+figbird.m.jobs.retry(1)
+// @ts-expect-error - query markers carry callable method types
+query<string>()
+
+// @ts-expect-error - zero-argument reads are not mutation methods either
+figbird.m.jobs.count()

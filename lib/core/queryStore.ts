@@ -920,7 +920,9 @@ export class QueryStore<
       ...(queryId === undefined ? {} : { queryId }),
     })
     try {
-      const result = await this.#adapter.mutate(serviceName, method, args)
+      const result = await (this.#adapter.call
+        ? this.#adapter.call(serviceName, method, args)
+        : this.#adapter.mutate(serviceName, method, args))
       this.#telemetry.emit({
         kind: 'read:end',
         ...(queryId === undefined ? {} : { queryId }),

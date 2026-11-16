@@ -1,3 +1,5 @@
+export { query } from './core/queryDeclaration.js'
+export type { QueryDeclaration } from './core/queryDeclaration.js'
 // core
 export type { CustomQuery } from './core/customQuery.js'
 export type { CustomQueryRef } from './core/customQueryRef.js'
@@ -79,6 +81,7 @@ export type {
   ServiceDefinitionByPath,
   ServiceItem,
   ServiceMethods,
+  ServiceQueries,
   ServiceNames,
   ServicePaths,
   ServicePatch,

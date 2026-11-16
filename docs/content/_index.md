@@ -1823,19 +1823,22 @@ shape. Building it performs no transport work. `useQuery` executes it and return
 inferred result, using the same Suspense and error behavior as entity queries.
 
 ```ts
-interface SenderSignatureService {
-  item: { id: string }
-  methods: {
-    checkVerification: (input: { id: string }) => Promise<{ jobId: string }>
-    getCheck: (input: { id: string; jobId: string }) => Promise<{
-      stage: 'queued' | 'running' | 'done'
-      progress: number
-    }>
-  }
+interface JobCheck {
+  stage: 'queued' | 'running' | 'done'
+  progress: number
 }
 
 const schema = createSchema({
-  services: { senderSignatures: service<SenderSignatureService>() },
+  services: {
+    senderSignatures: service<{
+      item: { id: string }
+      methods: {
+        checkVerification: (input: { id: string }) => Promise<{ jobId: string }>
+      }
+    }>().at('api/sender-signatures').queries({
+      getCheck: query<(input: { id: string; jobId: string }) => Promise<JobCheck>>(),
+    }),
+  },
 })
 const { q, useQuery, useQueryResult, useMutations, useAction } = createHooks(schema)
 ```
@@ -1876,8 +1879,12 @@ Custom queries also work with `defineQuery`, `useQueries`, `useQueryResults`, an
 instance's `query`, `prepare`, and `prefetch` APIs.
 
 Service names, method names, argument tuples, and resolved result types are inferred
-from the existing schema. Schema names resolve to their configured transport paths.
-The configured adapter and transport retain their existing authentication. Arguments
+from `.queries({ method: query<F>() })`. The object keys are the runtime allowlist;
+`F` carries the method signature without duplicating the name. Generated schemas can
+use `query<ServerService['getCheck']>()`. Writes remain in the type-only `methods` map
+and are exposed through `m`. Schema names resolve to their configured transport paths.
+The configured adapter and transport retain their existing authentication. Custom reads
+use `adapter.call` when supplied, with `adapter.mutate` as the compatibility fallback. Arguments
 are forwarded unchanged, without appending Figbird options.
 
 Custom queries use service, method, and arguments as their cache identity. Structurally
@@ -1888,7 +1895,9 @@ class instances cannot form query keys. Do not mutate arguments after building a
 
 They use the instance's `staleTime`, idle `gcTime`, and retry policy, with the ordinary
 per-reader stale-time override. A refetch keeps previous successful data visible; a
-background failure attaches `error` without removing that data. Refresh through the
+background failure attaches `error` without removing that data. Equal results keep the
+previous data reference. A refetch requested during an in-flight read coalesces into one
+trailing request. Refresh through the
 result's `refetch()`, the query reference's `refetch()`, or `figbird.refetch(service?)`.
 
 Custom results are opaque query values: objects, arrays, primitives, `null`, and
@@ -1902,8 +1911,11 @@ There is no realtime maintenance for custom queries in this version: they do not
 subscribe to service events, merge event payloads, or refetch automatically on realtime
 notifications or reconnect. Applications can request refreshes explicitly or own a polling
 lifecycle. Custom queries do not support entity filters, relations, or pagination.
-Builder member names such as `get`, `find`, `where`, and `snapshot`, inherited Object
-members, and protocol names `then` and `toJSON` are reserved.
+Undeclared method names are unavailable at runtime, so calling a misspelling throws
+a `TypeError` without making a request. `createSchema` rejects declared names that
+conflict with builder members such as `get`, `where`, and `snapshot`, inherited Object
+members, or protocol names `then` and `toJSON`. The declaration can be chained before
+or after `.at(path)`. Query policy options and polling intervals are not part of this version.
 
 Devtools lists these results as custom queries and shows `read:start`, `read:end`, and
 `read:error` events with service, method, duration, and failure. Events include the real
@@ -2130,7 +2142,9 @@ Declares one service's types. Only `item` is required; omitted payloads default 
 `Partial<item>` for create/patch and `item` for update. `.at(path)` maps an ergonomic
 schema key to a non-empty literal transport path. `service.from<TCatalog>()` is the
 generated-schema form: its path argument selects the matching service definition from a
-path-keyed catalog. `methods` types custom Feathers methods.
+path-keyed catalog. `methods` types custom write methods. Chain
+`.queries({ getCheck: query<ServerService['getCheck']>() })` to declare custom reads
+with both runtime names and inferred signatures. See [Custom method queries](#custom-method-queries).
 
 The namespaces are deliberately separate. Builder APIs (`q`, `m`, relationships, and
 `useMutating`) use schema names. Raw and compatibility APIs (`queryDesc`, `mutateDesc`,
@@ -2211,7 +2225,7 @@ const figbird = new Figbird({
 | `query(builder)`                                  | Live query ref for non-React use — the `useQuery` mirror; also accepts a bound request or argumentless definition. See [Using outside React](#using-outside-react).               |
 | `queryDesc(desc, config?)`                        | Transport-path descriptor query — no schema required.                                                                                                       |
 | `mutateDesc(desc)` / `call(service, method, ...)` | Transport-path descriptor mutation / custom-method call.                                                                                                    |
-| `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions.                   |
+| `getState()` / `subscribeToStateChanges(fn)`      | Raw internal state, including the cached entities themselves (`inspect()` omits items). Debug-grade — shapes may change between versions. Custom-query activity does not notify this entity-state channel.                   |
 
 ## FeathersAdapter
 

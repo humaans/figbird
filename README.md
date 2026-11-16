@@ -79,13 +79,21 @@ Successful results stay fresh for five minutes by default, so short remounts reu
 cache without another request. Set `staleTime` on `new Figbird(...)` to change the app-wide
 default, or pass it to an individual query reader.
 
-Custom service methods declared in the schema can also be queried:
+Declare custom reads on the service with runtime names and server method types:
+
+```ts
+jobs: service<{ item: Job }>().at('api/jobs').queries({
+  getCheck: query<JobsService['getCheck']>(),
+})
+```
+
+Import `query` from `figbird`. Read them through the existing hooks:
 
 ```tsx
 const { q, useQuery } = createHooks(schema)
 
 function VerificationStatus({ id, jobId }) {
-  const status = useQuery(q.senderSignatures.getCheck({ id, jobId }))
+  const status = useQuery(q.jobs.getCheck({ id, jobId }))
   return <span>{status.stage}</span>
 }
 ```
