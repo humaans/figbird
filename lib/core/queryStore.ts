@@ -794,7 +794,11 @@ export class QueryStore<
     }
 
     const staleTime = options.staleTime ?? this.#staleTime
-    const isFresh = isWithinStaleTime(q.fetchedAt, staleTime, this.#clock.now())
+    const isFresh =
+      isWithinStaleTime(q.fetchedAt, staleTime, this.#clock.now()) ||
+      (options.fetchedSince !== undefined &&
+        q.fetchedAt !== undefined &&
+        q.fetchedAt >= options.fetchedSince)
     if (
       this.#reconciliation.isPending(queryId) ||
       (q.state.status === 'success' &&

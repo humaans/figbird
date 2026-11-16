@@ -1,5 +1,13 @@
 import { Component, Suspense, useLayoutEffect, useState, type ReactNode } from 'react'
-import { createHooks, Figbird, FigbirdProvider, type FeathersAdapter } from '../lib'
+import {
+  createHooks,
+  createSchema,
+  Figbird,
+  FigbirdProvider,
+  service,
+  type FeathersAdapter,
+} from '../lib'
+import { createTestApp } from './helpers'
 import { dom, it } from './dom'
 import { app, schema } from './custom-query-helpers'
 import { deferred } from './mutation-test-helpers'
@@ -363,4 +371,60 @@ it('a reader that mounts beside an already failed query does not waste the first
     t.is(calls, 2, kind)
     d.unmount()
   }
+})
+
+it('warm remount: a stricter reader revalidates what the cold start served from cache', async t => {
+  const relational = createSchema({
+    services: {
+      issues: service<{ item: { id: number; assigneeId: number } }>(),
+      users: service<{ item: { id: number; name: string } }>(),
+    },
+    relationships: {
+      issues: ({ one }) => ({ assignee: one({ sourceField: 'assigneeId', destService: 'users' }) }),
+    },
+  })
+  const hooks = createHooks(relational)
+  const {
+    figbird: original,
+    adapter,
+    feathers,
+  } = createTestApp(relational, {
+    issues: { data: { 1: { id: 1, assigneeId: 7 } } },
+    users: { data: { 7: { id: 7, name: 'Ada' } } },
+  })
+  original.dispose()
+  const clock = new TestClock()
+  const figbird = new Figbird({ schema: relational, adapter, clock, retry: false })
+  t.teardown(() => figbird.dispose())
+  const finds = () => ({
+    issues: feathers.service('issues').counts.find,
+    users: feathers.service('users').counts.find,
+  })
+
+  // Cache the root list only, then let it age well past any finite tolerance.
+  const warm = figbird.query(hooks.q.issues).subscribe(() => {})
+  await clock.advance(0)
+  warm()
+  await clock.advance(10 * 60_000)
+  t.deepEqual(finds(), { issues: 1, users: 0 })
+
+  function Reader({ staleTime }: { staleTime: number }) {
+    const issues = hooks.useQuery(hooks.q.issues.related('assignee'), { staleTime })
+    return <span className='ready'>{issues[0]?.assignee?.name}</span>
+  }
+  const d = dom()
+  d.render(
+    <FigbirdProvider figbird={figbird}>
+      <Suspense fallback={<div className='waiting'>Waiting</div>}>
+        <Reader staleTime={Infinity} />
+        <Reader staleTime={0} />
+      </Suspense>
+    </FigbirdProvider>,
+  )
+  await d.flush()
+  await d.flush(() => clock.advance(0))
+  t.is(d.$('.ready')?.textContent, 'Ada')
+  // The strict reader refreshes the stale root; the relation this render just fetched is left alone.
+  t.deepEqual(finds(), { issues: 2, users: 1 })
+  d.unmount()
 })

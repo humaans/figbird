@@ -389,7 +389,9 @@ export class RelationalQueryRef<
       this.#setupRoot()
     } else {
       this.#root.setStaleTime(this.#staleTime)
-      if (freshness.kind === 'check') this.#ensureFresh(freshness.staleTime)
+      if (freshness.kind === 'check') {
+        this.#ensureFresh(freshness.staleTime, freshness.fetchedSince)
+      }
     }
 
     // Don't call fn synchronously - useSyncExternalStore will call getSnapshot() instead
@@ -437,11 +439,11 @@ export class RelationalQueryRef<
     }
   }
 
-  #ensureFresh(staleTime: number): void {
+  #ensureFresh(staleTime: number, fetchedSince?: number): void {
     if (!this.#graphRunId) this.#beginGraphRun()
-    this.#root?.ensureFresh(staleTime, this.#graph('(root)'))
+    this.#root?.ensureFresh(staleTime, this.#graph('(root)'), fetchedSince)
     for (const { queryRef, path, role } of this.#queryLeaves()) {
-      queryRef.ensureFresh({ staleTime, graph: this.#graph(path, role) })
+      queryRef.ensureFresh({ staleTime, graph: this.#graph(path, role), fetchedSince })
     }
     this.#scheduleGraphRunCompletion(this.getSnapshot())
   }
@@ -492,11 +494,6 @@ export class RelationalQueryRef<
     if (this.#root) return
     this.#staleTime = staleTime ?? this.#defaultStaleTime
     this.#setupRoot()
-    // No request was needed, so readers stricter than this one still owe a check.
-    const snapshot = this.getSnapshot()
-    if (snapshot.status === 'success' && !snapshot.isFetching) {
-      this.#lifetime.servedFromCache(this.#staleTime)
-    }
   }
 
   /** Returns the latest snapshot of the relational query state. */
@@ -828,7 +825,7 @@ export class RelationalQueryRef<
   }
 
   #setupRoot(): void {
-    this.#lifetime.graphStarted()
+    this.#lifetime.graphStarted(this.#staleTime)
     this.#beginGraphRun()
     this.#subscribeToRelationalFilterInvalidations()
 

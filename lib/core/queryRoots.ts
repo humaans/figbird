@@ -25,7 +25,7 @@ export interface RootSource {
   snapshot(): RootSnapshot
   metadata(): RootMetadata
   setStaleTime(staleTime: number): void
-  ensureFresh(staleTime?: number, graph?: QueryGraphRef): void
+  ensureFresh(staleTime?: number, graph?: QueryGraphRef, fetchedSince?: number): void
   refetch(graph?: QueryGraphRef): void
   /** Refetch the loaded rows through the store's reconcile gate (cooldown, hidden tab). */
   reconcile(): void
@@ -146,8 +146,8 @@ export class SingleQueryRoot<TMeta extends Record<string, unknown>> implements R
     return { continuation, total }
   }
 
-  ensureFresh(staleTime?: number, graph?: QueryGraphRef): void {
-    this.#queryRef.ensureFresh({ staleTime, graph })
+  ensureFresh(staleTime?: number, graph?: QueryGraphRef, fetchedSince?: number): void {
+    this.#queryRef.ensureFresh({ staleTime, graph, fetchedSince })
   }
 
   setStaleTime(_staleTime: number): void {}
@@ -422,12 +422,12 @@ export class PagedQueryRoot<
     }
   }
 
-  ensureFresh(staleTime?: number, graph?: QueryGraphRef): void {
+  ensureFresh(staleTime?: number, graph?: QueryGraphRef, fetchedSince?: number): void {
     if (this.#sequential) {
-      this.#pageRefs[0]?.ensureFresh({ staleTime, graph })
+      this.#pageRefs[0]?.ensureFresh({ staleTime, graph, fetchedSince })
       return
     }
-    for (const ref of this.#pageRefs) ref.ensureFresh({ staleTime, graph })
+    for (const ref of this.#pageRefs) ref.ensureFresh({ staleTime, graph, fetchedSince })
   }
 
   setStaleTime(staleTime: number): void {
