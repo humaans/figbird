@@ -170,7 +170,7 @@ export function useQueryResultsImpl(
           state,
           ref.kind() === 'paginate',
           () => ref.refetch(),
-          () => ref.loadMore(),
+          () => ref.loadMore?.(),
         )
       }),
     [states, refs],

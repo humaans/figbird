@@ -135,10 +135,6 @@ export class CustomQueryRef<T> {
     if (this.#lifetime.owners.size > 0 || this.#pending) this.refetch()
   }
 
-  loadMore(): void {
-    throw new Error('Custom queries do not support pagination')
-  }
-
   suspensePromise(): Promise<void> {
     this.#assertActive()
     return this.#lifetime.suspensePromise(() => {

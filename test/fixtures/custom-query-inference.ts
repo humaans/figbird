@@ -55,6 +55,8 @@ if (tagged.status === 'success') {
   void status
 }
 const ref = figbird.query(custom)
+// @ts-expect-error - custom results do not support pagination
+ref.loadMore()
 const snapshot = ref.getSnapshot()
 if (snapshot.status === 'success') {
   const status: Status = snapshot.data

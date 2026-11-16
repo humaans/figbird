@@ -69,7 +69,7 @@ export interface QueryRefLike<T> {
   getSnapshot(): RelationalQueryState<T>
   prepareRead?(staleTime?: number): void
   refetch(): void
-  loadMore(): void
+  loadMore?(): void
   setColdReadGroup(group: object): void
   suspensePromise(): Promise<void>
   releaseColdStart(): void
@@ -324,7 +324,7 @@ function useQueryResultForRef<T>(
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   const refetch = useCallback(() => qRef?.refetch(), [qRef])
-  const loadMore = useCallback(() => qRef?.loadMore(), [qRef])
+  const loadMore = useCallback(() => qRef?.loadMore?.(), [qRef])
   const isPaginated = qRef !== null && qRef.kind() === 'paginate'
 
   // The tagged-union projection is memoized unconditionally so the hook order is
