@@ -475,7 +475,14 @@ export class RelationalQueryRef<
 
   #scheduleCleanup(): void {
     this.#lifetime.scheduleCleanup(
-      () => this.#root !== null,
+      () => {
+        if (this.#root === null) return false
+        if (!this.#lifetime.hasPendingRead()) return true
+        // A render is suspended on this read. Tearing the graph down would leave its
+        // promise unsettled, so the read stays and is treated as that render's own.
+        this.#lifetime.retainRenderRead(() => {})
+        return false
+      },
       () => this.#cleanup(),
     )
   }

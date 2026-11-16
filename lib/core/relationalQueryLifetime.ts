@@ -110,6 +110,11 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     if (this.owners.size === 0) this.#renderRead.retain(onExpire)
   }
 
+  /** A render is suspended on the root read's promise. */
+  hasPendingRead(): boolean {
+    return this.reads.get('root')?.status === 'pending'
+  }
+
   get renderReadRetained(): boolean {
     return this.#renderRead.active
   }
