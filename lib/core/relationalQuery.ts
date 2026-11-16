@@ -485,6 +485,11 @@ export class RelationalQueryRef<
     if (this.#root) return
     this.#staleTime = staleTime ?? this.#defaultStaleTime
     this.#setupRoot()
+    // No request was needed, so readers stricter than this one still owe a check.
+    const snapshot = this.getSnapshot()
+    if (snapshot.status === 'success' && !snapshot.isFetching) {
+      this.#lifetime.servedFromCache(this.#staleTime)
+    }
   }
 
   /** Returns the latest snapshot of the relational query state. */
@@ -1376,8 +1381,10 @@ export class RelationalQueryRef<
     }
     if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead()) {
       queueMicrotask(() => {
-        if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead())
-          this.#cleanup()
+        if (this.getSnapshot().status !== 'error') return
+        if (this.#lifetime.canReleaseFailedRead()) this.#cleanup()
+        // A reader that subscribed in the same commit now holds the failure.
+        else this.#lifetime.armFailedReadRetry()
       })
       return
     }

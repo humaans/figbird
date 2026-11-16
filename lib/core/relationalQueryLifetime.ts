@@ -28,6 +28,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #coldStartAwaitingSubscriber = false
   #coldStartSettledAt = 0
+  #coldStartStaleTime = 0
   #prefetch: PrefetchLease | null = null
   #failedReadRetryArmed = false
   #failedReadRetryGeneration = 0
@@ -67,7 +68,12 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
       })
       // A render that never committed leaves its read unowned. Past the render lease it
       // is no longer this subscriber's read, so its freshness is checked like any other.
-      if (this.#clock.now() - this.#coldStartSettledAt <= RENDER_READ_LEASE_MS) {
+      // So is a reader stricter than the one whose render started the read: a cached
+      // result that was fresh enough for a looser sibling may be too old for this one.
+      if (
+        this.#clock.now() - this.#coldStartSettledAt <= RENDER_READ_LEASE_MS &&
+        staleTime >= this.#coldStartStaleTime
+      ) {
         return { kind: 'adopt' }
       }
     }
@@ -92,6 +98,12 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   graphStarted(): void {
     this.#coldStartAwaitingSubscriber = this.owners.size === 0
     this.#coldStartSettledAt = this.#clock.now()
+    this.#coldStartStaleTime = 0
+  }
+
+  /** The cold start served a cached result without fetching, tolerating this staleness. */
+  servedFromCache(staleTime: number): void {
+    this.#coldStartStaleTime = staleTime
   }
 
   retainRenderRead(onExpire: () => void): void {

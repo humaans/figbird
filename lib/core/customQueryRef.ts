@@ -161,8 +161,10 @@ export class CustomQueryRef<T> {
     }
     if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead()) {
       queueMicrotask(() => {
-        if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead())
-          this.#host.onAbandoned()
+        if (this.#state.status !== 'error') return
+        if (this.#lifetime.canReleaseFailedRead()) this.#host.onAbandoned()
+        // A reader that subscribed in the same commit now holds the failure.
+        else this.#lifetime.armFailedReadRetry()
       })
       return
     }

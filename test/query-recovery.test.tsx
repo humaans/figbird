@@ -273,3 +273,94 @@ it('resetting one of two failed boundaries recovers their shared query', async t
     d.unmount()
   }
 })
+
+it('warm remount: the strictest reader in a commit decides revalidation', async t => {
+  for (const order of ['loose first', 'strict first', 'both loose']) {
+    const { figbird: original, adapter } = app()
+    original.dispose()
+    const clock = new TestClock()
+    const figbird = new Figbird({ schema, adapter, clock, gcTime: 60_000, retry: false })
+    t.teardown(() => figbird.dispose())
+    let calls = 0
+    installTransport(adapter, async () => ({ id: 1, status: `fetch ${++calls}` }))
+    function Reader({ staleTime }: { staleTime: number }) {
+      return <span className='ready'>{useQuery(q.jobs.get(1), { staleTime })?.status}</span>
+    }
+    const staleTimes =
+      order === 'loose first'
+        ? [Infinity, 0]
+        : order === 'strict first'
+          ? [0, Infinity]
+          : [Infinity, Infinity]
+    const d = dom()
+    const tree = (visible: boolean) => (
+      <FigbirdProvider figbird={figbird}>
+        {visible && (
+          <Suspense fallback={<div className='waiting'>Waiting</div>}>
+            {staleTimes.map((staleTime, i) => (
+              <Reader key={i} staleTime={staleTime} />
+            ))}
+          </Suspense>
+        )}
+      </FigbirdProvider>
+    )
+    d.render(tree(true))
+    await d.flush()
+    t.is(calls, 1)
+    d.render(tree(false))
+    await d.flush()
+    await clock.advance(100)
+    d.render(tree(true))
+    await d.flush()
+    t.is(calls, order === 'both loose' ? 1 : 2, order)
+    d.unmount()
+  }
+})
+
+it('a reader that mounts beside an already failed query does not waste the first boundary retry', async t => {
+  for (const kind of ['entity', 'custom']) {
+    const { App, figbird, adapter } = app()
+    t.teardown(() => figbird.dispose())
+    let calls = 0
+    let run: () => Promise<Job> = async () => {
+      calls++
+      throw new Error('offline')
+    }
+    installTransport(adapter, () => run())
+    const builder = kind === 'entity' ? q.jobs.get(1) : q.jobs.getCheck({ id: 1 })
+    // The route's preparation fails before any component mounts.
+    const prepared = figbird.prepare(builder)
+    await t.throwsAsync(prepared.promise, { message: 'offline' })
+    function Holder() {
+      return <span className='holder'>{useQueryResult(builder, { suspense: false }).status}</span>
+    }
+    function Probe() {
+      return <span className='ready'>{useQuery(builder)?.status}</span>
+    }
+    const d = dom({ onCaughtError: () => {} })
+    const tree = (key: string) => (
+      <App>
+        <Holder />
+        <Boundary key={key}>
+          <Suspense fallback={<div className='waiting'>Waiting</div>}>
+            <Probe />
+          </Suspense>
+        </Boundary>
+      </App>
+    )
+    d.render(tree('first'))
+    await d.flush()
+    t.truthy(d.$('[data-failed]'), kind)
+    prepared.release()
+    await d.flush()
+    run = async () => {
+      calls++
+      return { id: 1, status: 'recovered' }
+    }
+    d.render(tree('retry'))
+    await d.flush()
+    t.is(d.$('.ready')?.textContent, 'recovered', kind)
+    t.is(calls, 2, kind)
+    d.unmount()
+  }
+})

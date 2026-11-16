@@ -11,6 +11,10 @@
   adopted as fresh.
 - Releasing a stale preparation handle no longer expires the custom query that
   replaced it, and idle retention keeps results a pending boundary has rendered.
+- When readers with different `staleTime` values remount a cached query in the same
+  commit, the strictest one decides whether it revalidates.
+- A boundary retry recovers on the first attempt when a non-Suspense reader mounted
+  beside a query that had already failed.
 
 - Declare custom reads with `service<T>().queries({ name: query<F>() })` and use them
   through the existing query hooks. Their results are cached separately from entities.
