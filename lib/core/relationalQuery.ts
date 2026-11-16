@@ -1353,7 +1353,14 @@ export class RelationalQueryRef<
    * eviction, a retry interns a fresh ref and cold-starts.
    */
   releaseColdStart(): void {
-    if (this.#lifetime.canEvictAbandonedRead()) {
+    if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead()) {
+      queueMicrotask(() => {
+        if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead())
+          this.#cleanup()
+      })
+      return
+    }
+    if (this.#lifetime.canReleaseColdStart()) {
       this.#scheduleCleanup()
     }
   }
@@ -1371,7 +1378,11 @@ export class RelationalQueryRef<
     })
   }
 
-  /** @internal Release settled speculative work only when no owner adopted it. */
+  /** @internal Protect uncommitted reads before budget-driven eviction. */
+  retainRenderRead(onExpire: () => void): void {
+    this.#lifetime.retainRenderRead(onExpire)
+  }
+
   canEvictAbandonedRead(): boolean {
     return this.#lifetime.canEvictAbandonedRead()
   }
