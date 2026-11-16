@@ -15,6 +15,17 @@
   commit, the strictest one decides whether it revalidates.
 - A boundary retry recovers on the first attempt when a non-Suspense reader mounted
   beside a query that had already failed.
+- `gcTime: 0` no longer hangs when idle retention meets a custom query that a pending
+  boundary has rendered, and retention keeps a single timer.
+- A custom query whose first read fails with a refetch queued behind it leaves its
+  Suspense fallback once the refetch lands.
+- Releasing a `prepare()` handle, or a prefetch timing out, while a Suspense read is
+  still loading no longer leaves that boundary on its fallback.
+- A stricter reader revalidates cached parts of a relational query even when a looser
+  reader's render fetched other parts of it.
+- Devtools extensions receive custom query rows and `read:*` events only when they ask
+  for them, so extensions released before custom queries keep working. The panel no
+  longer fails on event kinds it does not know.
 
 - Declare custom reads with `service<T>().queries({ name: query<F>() })` and use them
   through the existing query hooks. Their results are cached separately from entities.
