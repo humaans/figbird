@@ -143,11 +143,10 @@ test('optional query definitions are inferred', t => {
   t.is(taskQueryType, 'TaskQuery')
 })
 
-test('imperative custom reads preserve schema method argument and result types', t => {
-  const fixturePath = join(__dirname, 'fixtures', 'mutations-inference.ts')
-  t.is(getTypeAtPosition(fixturePath, 'ReadResult'), 'SendDocumentResult')
-  t.is(
-    getTypeAtPosition(fixturePath, 'ReadArgs'),
-    '[id: string, options?: SendDocumentOptions | undefined]',
-  )
+test('custom queries infer opaque result shapes and service method tuples', t => {
+  const fixture = join(__dirname, 'fixtures', 'custom-query-inference.ts')
+  t.is(getTypeAtPosition(fixture, 'CustomData'), 'Status')
+  t.is(getTypeAtPosition(fixture, 'RequestData'), 'Status')
+  t.is(getTypeAtPosition(fixture, 'CountData'), 'number')
+  t.is(getTypeAtPosition(fixture, 'NullData'), 'null')
 })

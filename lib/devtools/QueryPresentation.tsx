@@ -9,6 +9,8 @@ export const QUERY_CLASS_DESCRIPTIONS: Record<string, string> = {
   'server-authoritative':
     'The server decides which records belong in this result. Figbird normally refetches after realtime changes; a cursor query may merge a row update when it proves that page boundaries stay valid.',
   get: 'A direct record lookup by ID.',
+  custom:
+    'An opaque custom-method result. Refresh it explicitly; realtime events do not maintain this query.',
 }
 
 export function ClassBadge({ value }: { value: string }) {
@@ -17,7 +19,7 @@ export function ClassBadge({ value }: { value: string }) {
       ? 'green'
       : value === 'server-window'
         ? 'amber'
-        : value === 'get'
+        : value === 'get' || value === 'custom'
           ? 'neutral'
           : 'red'
   return (

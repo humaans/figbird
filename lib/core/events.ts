@@ -8,7 +8,7 @@ export type MutationMethod = 'create' | 'update' | 'patch' | 'remove'
 
 /**
  * Method name carried on `mutate:*` events — one of the CRUD methods, or a custom
- * service method name (custom methods flow through the same lifecycle events so
+ * service method name (custom methods on `m` flow through the same lifecycle events so
  * devtools and `useMutating` see them). `(string & {})` keeps CRUD autocomplete.
  */
 // oxlint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -32,6 +32,7 @@ export interface CacheQueryEffect {
  */
 export type FigbirdEvent = (
   | {
+      queryId?: string
       kind: 'read:start'
       readId: number
       serviceName: string
@@ -39,6 +40,7 @@ export type FigbirdEvent = (
       args?: readonly unknown[]
     }
   | {
+      queryId?: string
       kind: 'read:end'
       readId: number
       serviceName: string
@@ -46,6 +48,7 @@ export type FigbirdEvent = (
       durationMs: number
     }
   | {
+      queryId?: string
       kind: 'read:error'
       readId: number
       serviceName: string

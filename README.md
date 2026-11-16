@@ -69,7 +69,7 @@ function Root() {
 
 `createHooks(schema)` is pure and safe to evaluate at import time. The provider selects the
 runtime instance, so tests and stories can inject their own client. Imperative
-code outside React uses the instance directly: `figbird.r`, `figbird.m`, `figbird.prepare`, and
+code outside React uses the instance directly: `figbird.m`, `figbird.prepare`, and
 `figbird.prefetch`. Construct each injected instance with the same schema object passed to
 `createHooks`; provider-bound APIs and schema-built queries throw when the schemas differ.
 
@@ -79,18 +79,20 @@ Successful results stay fresh for five minutes by default, so short remounts reu
 cache without another request. Set `staleTime` on `new Figbird(...)` to change the app-wide
 default, or pass it to an individual query reader.
 
-For an imperative custom read, use the provider instance's `r` proxy:
+Custom service methods declared in the schema can also be queried:
 
-```ts
-const { r, m } = useFigbird() // typed useFigbird from createHooks(schema)
-const { jobId } = await m.senderSignatures.checkVerification({ id })
-const status = await r.senderSignatures.getCheck({ id, jobId })
+```tsx
+const { q, useQuery } = createHooks(schema)
+
+function VerificationStatus({ id, jobId }) {
+  const status = useQuery(q.senderSignatures.getCheck({ id, jobId }))
+  return <span>{status.stage}</span>
+}
 ```
 
-Custom methods are typed from the schema's `methods` declaration. `q` builds cached,
-reactive entity queries; `r` executes custom reads once without caching or mutation
-tracking; `m` executes writes. Custom reads appear in devtools, propagate transport
-errors, and leave polling and retries to the application.
+Custom queries share cached results and the ordinary query loading, error, refetch,
+and retry behavior. Their results stay separate from the entity cache and are not
+updated by realtime events. Use `m` for writes and side-effecting custom methods.
 
 ## Features
 

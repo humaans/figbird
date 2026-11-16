@@ -1660,3 +1660,39 @@ it('panel renders custom reads with service, method, duration and failure detail
   t.false(document.body.textContent!.includes('jobs.getCheck.getCheck'))
   d.unmount()
 })
+
+it('panel inspects opaque custom query results without creating entity-cache entries', async t => {
+  const customSchema = createSchema({
+    services: {
+      jobs: service<{
+        item: { id: number }
+        methods: { getCheck: (id: number) => Promise<{ progress: number }> }
+      }>(),
+    },
+  })
+  const { figbird, adapter } = createTestApp(customSchema, { jobs: { data: {} } })
+  t.teardown(() => figbird.dispose())
+  adapter.mutate = async () => ({ progress: 75 })
+  const collector = createCollector(figbird)
+  collector.start()
+  t.teardown(() => collector.stop())
+  const d = dom()
+  d.render(<FigbirdDevtoolsPanel collector={collector} theme='light' />)
+  const ref = figbird.query(figbird.q.jobs.getCheck(1))
+  let release = () => {}
+  await d.flush(async () => {
+    release = ref.subscribe(() => {})
+    await ref.suspensePromise()
+  })
+  d.click(d.$all('button').find(button => button.textContent === 'queries')!)
+  const row = d.$('tbody tr')
+  t.truthy(row)
+  t.true(row!.textContent!.includes('getCheck'))
+  t.true(row!.textContent!.includes('custom'))
+  d.click(row!)
+  t.true(document.body.textContent!.includes('progress'))
+  t.true(document.body.textContent!.includes('75'))
+  t.deepEqual(figbird.inspectCache(), [])
+  d.unmount()
+  release()
+})

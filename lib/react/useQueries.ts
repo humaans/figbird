@@ -28,7 +28,7 @@ import type { RelationalQueryState } from '../core/figbird.js'
 import type { QueryInput, QueryInputBuilder } from '../core/queryDefinition.js'
 import { suspensePromiseAll } from '../core/relationalQuery.js'
 import { validateStaleTime } from '../core/staleTime.js'
-import type { AnyQueryBuilder, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
+import type { AnyQuery, QueryBuilderKind, QueryBuilderResult } from '../core/queryBuilder.js'
 import type { Schema } from '../core/schema.js'
 import { useFigbird } from './context.js'
 import { projectSuspenseResult, type FigbirdLike, type SuspenseQueryResult } from './useQuery.js'
@@ -45,7 +45,7 @@ export interface UseQueriesOptions {
 }
 
 /** A heterogeneous tuple erases each request's args while retaining its builder. */
-type SchemaQueryInput<S extends Schema> = QueryInput<AnyQueryBuilder<S>>
+type SchemaQueryInput<S extends Schema> = QueryInput<AnyQuery<S>>
 
 /**
  * The `useQueries` call surface — declared once and shared by the root export

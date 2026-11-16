@@ -1,4 +1,6 @@
 // core
+export type { CustomQuery } from './core/customQuery.js'
+export type { CustomQueryRef } from './core/customQueryRef.js'
 export {
   defineMutationQueue,
   Figbird,
@@ -36,8 +38,6 @@ export type {
   MutationSchedule,
   MutationsHandle,
   MutationsProxy,
-  ReadsHandle,
-  ReadsProxy,
   PreparedQuery,
   QueryDefinition,
   QueryInput,
@@ -88,7 +88,7 @@ export type {
 } from './core/schema.js'
 
 // query builder
-export type { QueryAST, QueryBuilder, QueryBuilderProxy } from './core/queryBuilder.js'
+export type { AnyQuery, QueryAST, QueryBuilder, QueryBuilderProxy } from './core/queryBuilder.js'
 
 // query classification report types (returned by figbird.explain / figbird.inspect)
 export type { ClassificationReason, QueryNodeClass } from './core/queryClassification.js'

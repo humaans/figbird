@@ -3,6 +3,7 @@
  * Produces a Feathers-compatible AST that can be executed with relations
  */
 
+import { CustomQuery, type CustomQueryMethods } from './customQuery.js'
 import { hashObject } from './hash.js'
 import { assertJunctionUnwindowed } from './relationPlan.js'
 import { isPlainRecord, sameValue } from './valueEquality.js'
@@ -512,17 +513,34 @@ export class QueryBuilder<
  * types from the schema on the call site.
  */
 export type QueryBuilderProxy<S extends Schema> = {
-  <K extends ServiceNames<S>>(serviceName: K): QueryBuilder<S, K & string, ServiceItem<S, K>>
+  <K extends ServiceNames<S>>(
+    serviceName: K,
+  ): QueryBuilder<S, K & string, ServiceItem<S, K>> &
+    CustomQueryMethods<S, K, keyof QueryBuilder<S>>
   (serviceName: string): QueryBuilder<S, string, unknown>
 } & {
-  [K in ServiceNames<S>]: QueryBuilder<S, K & string, ServiceItem<S, K>>
+  [K in ServiceNames<S>]: QueryBuilder<S, K & string, ServiceItem<S, K>> &
+    CustomQueryMethods<S, K, keyof QueryBuilder<S>>
 }
 
 /**
  * Creates a proxy that generates QueryBuilder instances for each service
  */
 export function createQueryBuilderProxy<S extends Schema>(schema: S): QueryBuilderProxy<S> {
-  const create = (serviceName: string) => new QueryBuilder(schema, serviceName)
+  const create = (serviceName: string) => {
+    const builder = new QueryBuilder(schema, serviceName)
+    return new Proxy(builder, {
+      get(target, prop) {
+        if (typeof prop === 'symbol' || prop in target) {
+          const member = Reflect.get(target, prop, target)
+          // Methods use private fields and must retain the real builder receiver.
+          return typeof member === 'function' ? member.bind(target) : member
+        }
+        if (prop === 'then' || prop === 'toJSON') return undefined
+        return (...args: unknown[]) => new CustomQuery(schema, serviceName, prop, args)
+      },
+    })
+  }
 
   return new Proxy(create as QueryBuilderProxy<S>, {
     apply(_, _thisArg, [serviceName]: [string]) {
@@ -567,26 +585,32 @@ type MergeRelated<TItem, TRelated extends object> = TItem extends unknown
  * - one  → MergeRelated<TItem, TRelated> | null
  */
 export type QueryBuilderResult<B> =
-  B extends QueryBuilder<
-    Schema,
-    string,
-    infer TItem,
-    infer TRelated,
-    infer TCard,
-    'find' | 'get' | 'paginate' | 'all'
-  >
-    ? TCard extends 'one'
-      ? MergeRelated<TItem, TRelated> | null
-      : Array<MergeRelated<TItem, TRelated>>
-    : never
+  B extends CustomQuery<Schema, infer TResult>
+    ? TResult
+    : B extends QueryBuilder<
+          Schema,
+          string,
+          infer TItem,
+          infer TRelated,
+          infer TCard,
+          'find' | 'get' | 'paginate' | 'all'
+        >
+      ? TCard extends 'one'
+        ? MergeRelated<TItem, TRelated> | null
+        : Array<MergeRelated<TItem, TRelated>>
+      : never
 
 /**
  * Type-level: extract the `kind` discriminator (`'find' | 'get' | 'paginate' | 'all'`) of a
  * QueryBuilder. Used by hooks to widen their return shape for paginated queries.
  */
 export type QueryBuilderKind<B> =
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-  B extends QueryBuilder<Schema, string, any, any, any, infer K> ? K : never
+  B extends CustomQuery<Schema, unknown>
+    ? 'custom'
+    : // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- infer only the builder kind
+      B extends QueryBuilder<Schema, string, any, any, any, infer K>
+      ? K
+      : never
 
 /**
  * Any builder over schema S — the loose constraint for overload-dispatch seams,
@@ -595,6 +619,10 @@ export type QueryBuilderKind<B> =
  */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyQueryBuilder<S extends Schema = any> = QueryBuilder<S, any, any, any, any, any>
+
+/** Every query accepted by ordinary query consumers. */
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any -- schema variance at the public dispatch seam
+export type AnyQuery<S extends Schema = any> = AnyQueryBuilder<S> | CustomQuery<S, unknown>
 
 /** A list-producing find builder accepted by viewport/window query consumers. */
 /* oxlint-disable @typescript-eslint/no-explicit-any -- public overload seam preserves concrete builder types */

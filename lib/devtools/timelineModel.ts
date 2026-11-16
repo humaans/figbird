@@ -103,6 +103,7 @@ function buildReadActivities(snapshot: DevtoolsSnapshot, nowPoint: number): Time
       const label = `${read.serviceName}.${read.method}`
       return {
         id: `read:${read.readId}`,
+        ...(read.queryId === undefined ? {} : { queryId: read.queryId }),
         kind: 'read',
         startAt: read.startAt,
         ...(read.endAt === undefined ? {} : { endAt: read.endAt }),

@@ -50,6 +50,7 @@ export interface ClassificationReason {
     | 'window-filter'
     | 'relational-filter'
     | 'snapshot'
+    | 'custom-method'
   detail?: string
 }
 
@@ -247,7 +248,7 @@ export interface ExplainNode {
   /** Root, dotted relation, or internal junction path (`'members#junction'`). */
   path: string
   service: string
-  kind: 'find' | 'get' | 'paginate' | 'all'
+  kind: 'find' | 'get' | 'paginate' | 'all' | 'custom'
   /** Present for an internal junction-service query in a two-hop relation. */
   role?: 'junction'
   class: QueryNodeClass

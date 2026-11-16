@@ -1,4 +1,6 @@
-import { createReadsProxy, type ReadsProxy } from './reads.js'
+import { CustomQuery } from './customQuery.js'
+import { CustomQueryRef } from './customQueryRef.js'
+import { QueryRetention } from './queryRetention.js'
 import { trimAbandonedReads } from './abandonedReads.js'
 import { systemClock, type Clock, type ClockTimer } from './clock.js'
 import { explainQuery } from './relationPlan.js'
@@ -27,6 +29,7 @@ import {
   createQueryBuilderProxy,
   queryBuilderUsesSchema,
   type AnyQueryBuilder,
+  type AnyQuery,
   type AnyWindowQueryBuilder,
   type QueryBuilderProxy,
   type QueryBuilderItem,
@@ -104,7 +107,6 @@ export type {
   QueryState,
   QueryStatus,
 } from './queryTypes.js'
-export type { ReadsHandle, ReadsProxy } from './reads.js'
 export type { FigbirdEvent, FigbirdEvents, MutationEventMethod, MutationMethod } from './events.js'
 export type {
   CreateMutationOptions,
@@ -161,7 +163,7 @@ export type {
  * such as router data adapters. Use `QueryInput<B, Args>` when preserving a specific
  * builder's result type matters.
  */
-export type AnyQueryInput<S extends Schema = AnySchema> = QueryInput<AnyQueryBuilder<S>>
+export type AnyQueryInput<S extends Schema = AnySchema> = QueryInput<AnyQuery<S>>
 
 export { RelationalQueryRef } from './relationalQuery.js'
 export type { RelationalPaginationState, RelationalQueryState } from './relationalQuery.js'
@@ -228,6 +230,13 @@ export class Figbird<
   // (see RelationalQueryRef#cleanup).
   // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   #relationalQueryCache: Map<string, RelationalQueryRef<any, S, any, any, any>> = new Map()
+
+  #customQueryCache = new Map<string, CustomQueryRef<unknown>>()
+  #customRetention: QueryRetention
+  #customStateListeners = new Set<() => void>()
+  #customNotificationScheduled = false
+  #retry: number | false
+  #retryDelay: RetryDelay | undefined
 
   // Window refs are interned independently from ordinary relational refs because their
   // range is subscriber state rather than query identity. Multiple readers of the same
@@ -311,6 +320,17 @@ export class Figbird<
     this.adapter = adapter
     this.schema = schema
     this.#staleTime = staleTime
+    this.#retry = retry ?? 3
+    this.#retryDelay = retryDelay
+    this.#customRetention = new QueryRetention(
+      gcTime,
+      key => {
+        this.#customQueryCache.get(key)?.dispose()
+        this.#customQueryCache.delete(key)
+        this.#notifyCustomState()
+      },
+      clock,
+    )
     this.queryStore = new QueryStore<AdapterParams<A>, AdapterFindMeta<A>, AdapterQuery<A>>({
       adapter,
       clock,
@@ -339,6 +359,10 @@ export class Figbird<
     this.#disposed = true
     for (const ref of this.#windowQueryCache.values()) ref.dispose()
     for (const ref of this.#relationalQueryCache.values()) ref.dispose()
+    this.#customRetention.dispose()
+    for (const ref of this.#customQueryCache.values()) ref.dispose()
+    this.#customQueryCache.clear()
+    this.#customStateListeners.clear()
     this.#windowQueryCache.clear()
     this.#relationalQueryCache.clear()
     for (const queues of this.#keyedMutationQueues.values()) {
@@ -412,7 +436,7 @@ export class Figbird<
   /**
    * Materialize a query and return its live reference — the non-React mirror of
    * `useQuery`. Accepts a builder, a bound request, or an argumentless definition. The returned
-   * RelationalQueryRef manages sub-queries and assembles related data.
+   * Entity references assemble related data; custom-query references retain opaque results.
    *
    * @example
    * ```ts
@@ -438,6 +462,7 @@ export class Figbird<
    * const ref = figbird.query(issueDetail({ id: 42 }))
    * ```
    */
+  query<Args, T>(query: QueryInput<CustomQuery<S, T>, Args>): CustomQueryRef<T>
   query<Args, B extends AnyQueryBuilder<S>>(
     queryOrBuilder: QueryInput<B, Args>,
   ): RelationalQueryRef<
@@ -446,7 +471,29 @@ export class Figbird<
     AdapterParams<A>,
     AdapterFindMeta<A>,
     AdapterQuery<A>
-  > {
+  >
+  query<Args, B extends AnyQuery<S>>(
+    query: QueryInput<B, Args>,
+  ):
+    | CustomQueryRef<QueryBuilderResult<B>>
+    | RelationalQueryRef<
+        QueryBuilderResult<B>,
+        S,
+        AdapterParams<A>,
+        AdapterFindMeta<A>,
+        AdapterQuery<A>
+      >
+  query<Args, B extends AnyQuery<S>>(
+    queryOrBuilder: QueryInput<B, Args>,
+  ):
+    | CustomQueryRef<QueryBuilderResult<B>>
+    | RelationalQueryRef<
+        QueryBuilderResult<B>,
+        S,
+        AdapterParams<A>,
+        AdapterFindMeta<A>,
+        AdapterQuery<A>
+      > {
     this.queryStore.assertActive()
     type T = QueryBuilderResult<B>
     if (!this.schema) {
@@ -456,6 +503,13 @@ export class Figbird<
       )
     }
     const { builder, name } = resolveQueryInput(queryOrBuilder)
+    if (builder instanceof CustomQuery) {
+      if (builder.schema !== this.schema)
+        throw new Error('The query builder uses a different schema from this Figbird instance')
+      const ref = this.#customQuery(builder)
+      ref.setDisplayName(name)
+      return ref as CustomQueryRef<T>
+    }
     if (!queryBuilderUsesSchema(builder, this.schema)) {
       throw new Error('The query builder uses a different schema from this Figbird instance')
     }
@@ -496,6 +550,48 @@ export class Figbird<
     }
     ref.setDisplayName(name)
     return ref
+  }
+
+  #customQuery(builder: CustomQuery<S, unknown>): CustomQueryRef<unknown> {
+    const key = builder.hash()
+    let ref = this.#customQueryCache.get(key)
+    if (ref) {
+      this.#customQueryCache.delete(key)
+      this.#customQueryCache.set(key, ref)
+    } else {
+      const serviceName = resolveServicePath(this.schema, builder.serviceName)
+      ref = new CustomQueryRef(key, serviceName, builder.method, builder.args, this.#staleTime, {
+        clock: this.clock,
+        assertActive: () => this.queryStore.assertActive(),
+        fetch: () => this.queryStore.read(serviceName, builder.method, builder.args, key),
+        isRetryable: error => this.adapter.isRetryableError?.(error) ?? true,
+        retry: this.#retry,
+        retryDelay: this.#retryDelay,
+        onChange: () => this.#notifyCustomState(),
+        onActive: () => this.#customRetention.cancel(key),
+        onIdle: () => this.#customRetention.retain(key),
+        onSettled: () => trimAbandonedReads(this.#customQueryCache, ref),
+        onAbandoned: () => {
+          if (this.#customQueryCache.get(key) !== ref) return
+          this.#customQueryCache.delete(key)
+          this.#customRetention.cancel(key)
+          ref?.dispose()
+          this.#notifyCustomState()
+        },
+      })
+      this.#customQueryCache.set(key, ref)
+    }
+    trimAbandonedReads(this.#customQueryCache, ref)
+    return ref
+  }
+
+  #notifyCustomState(): void {
+    if (this.#customNotificationScheduled || this.#disposed) return
+    this.#customNotificationScheduled = true
+    queueMicrotask(() => {
+      this.#customNotificationScheduled = false
+      for (const listener of this.#customStateListeners) listener()
+    })
   }
 
   /**
@@ -588,7 +684,7 @@ export class Figbird<
    * })
    * ```
    */
-  prepare<Args, B extends AnyQueryBuilder<S>>(
+  prepare<Args, B extends AnyQuery<S>>(
     query: QueryInput<B, Args>,
     options?: { staleTime?: number },
   ): PreparedQuery {
@@ -631,7 +727,7 @@ export class Figbird<
    * <Row onMouseEnter={() => figbird.prefetch(issueDetail({ id: issue.id }))} />
    * ```
    */
-  prefetch<Args, B extends AnyQueryBuilder<S>>(
+  prefetch<Args, B extends AnyQuery<S>>(
     query: QueryInput<B, Args>,
     options?: { staleTime?: number },
   ): void {
@@ -769,20 +865,6 @@ export class Figbird<
    */
   call(servicePath: string, method: string, ...args: unknown[]): Promise<unknown> {
     return this.queryStore.call(servicePath, method, args)
-  }
-
-  #readsProxy: ReadsProxy<S> | null = null
-
-  /**
-   * Imperative custom reads, typed from the schema. Read intent is declared by
-   * the caller; this does not enforce server-side purity or authorization.
-   * Calls bypass mutation tracking and the query cache, emitting `read:*` events.
-   * In React, obtain the provider instance through `useFigbird()`.
-   */
-  get r(): ReadsProxy<S> {
-    return (this.#readsProxy ??= createReadsProxy((service, method, args) =>
-      this.queryStore.read(resolveServicePath(this.schema, service), method, args),
-    ) as ReadsProxy<S>)
   }
 
   #mutationsProxy: MutationsProxy<S> | null = null
@@ -1001,6 +1083,14 @@ export class Figbird<
    * inactive cached ones refetch when next subscribed.
    */
   refetch(serviceName?: ServiceNames<S> | (string & {})): void {
+    this.queryStore.assertActive()
+    for (const ref of this.#customQueryCache.values()) {
+      if (
+        serviceName === undefined ||
+        ref.inspect().serviceName === resolveServicePath(this.schema, serviceName)
+      )
+        ref.invalidate()
+    }
     this.queryStore.refetchQueries(
       serviceName === undefined ? undefined : resolveServicePath(this.schema, serviceName),
     )
@@ -1014,10 +1104,23 @@ export class Figbird<
    * Use it to answer "why did adding `.limit(30)` change realtime behavior", to
    * assert a query's class in tests, or to power devtools.
    */
-  explain<Args, B extends AnyQueryBuilder<S>>(queryOrBuilder: QueryInput<B, Args>): ExplainReport {
+  explain<Args, B extends AnyQuery<S>>(queryOrBuilder: QueryInput<B, Args>): ExplainReport {
     // Resolved without interning — explain never materializes a query. The walk
     // itself consumes the compiled relation plan used by query execution.
     const { builder } = resolveQueryInput(queryOrBuilder)
+    if (builder instanceof CustomQuery)
+      return {
+        nodes: [
+          {
+            path: '(root)',
+            service: builder.serviceName,
+            kind: 'custom',
+            class: 'server-authoritative',
+            reasons: [{ code: 'custom-method' }],
+            realtime: 'manual',
+          },
+        ],
+      }
     const nodes = explainQuery(
       builder.toAST(),
       this.schema ?? { services: {} },
@@ -1034,7 +1137,7 @@ export class Figbird<
    * devtools should build on (internal store shapes stay free to change).
    */
   inspect(): InspectedQuery[] {
-    const rows: InspectedQuery[] = []
+    const rows: InspectedQuery[] = [...this.#customQueryCache.values()].map(ref => ref.inspect())
     for (const [serviceName, service] of this.queryStore.getState()) {
       for (const query of service.queries.values()) {
         const q = queryOfParams(query.desc.params)
@@ -1115,7 +1218,13 @@ export class Figbird<
   subscribeToStateChanges(
     fn: (state: Map<string, ServiceState<AdapterFindMeta<A>>>) => void,
   ): () => void {
-    return this.queryStore.subscribeToStateChanges(fn)
+    const notify = () => fn(this.queryStore.getState())
+    this.#customStateListeners.add(notify)
+    const unsubscribe = this.queryStore.subscribeToStateChanges(fn)
+    return () => {
+      this.#customStateListeners.delete(notify)
+      unsubscribe()
+    }
   }
 }
 
@@ -1125,12 +1234,15 @@ export interface InspectedQuery {
   /** Store-entry generation for this stable logical query id. */
   generation: number
   serviceName: string
-  method: 'find' | 'get'
+  method: string
+  /** Custom-method results are opaque and excluded from the entity cache. */
+  custom?: boolean
+  name?: string
   resourceId?: string | number
   query: Record<string, unknown> | undefined
   /** Native adapter page details. Offset pages remain visible in `query` as `$skip`/`$limit`. */
   page?: { request: PageRequest; info?: PageInfo }
-  classification: QueryNodeClass | 'get'
+  classification: QueryNodeClass | 'get' | 'custom'
   classificationReasons?: readonly Readonly<ClassificationReason>[]
   realtimeStrategy?: 'merge' | 'refetch' | 'manual'
   /** True when this entry was materialized with `skip: true`. */
@@ -1142,6 +1254,8 @@ export interface InspectedQuery {
   itemCount: number
   fetchedAt: number | undefined
   subscriberCount: number
+  prepareCount?: number
+  prefetchCount?: number
   fetchCount: number
   errorCount: number
   lastDurationMs?: number

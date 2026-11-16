@@ -112,6 +112,7 @@ export type { TimelineTraceSummary } from './timelineTraceStore.js'
 /** Custom read spans have no query-cache or mutation identity. */
 export interface ReadSpan {
   readId: number
+  queryId?: string
   serviceName: string
   method: string
   startAt: number
@@ -764,6 +765,7 @@ class FigbirdCollector implements Collector {
         const previous = this.#reads.get(capturedEvent.readId)
         const base = previous ?? {
           readId: capturedEvent.readId,
+          ...(capturedEvent.queryId === undefined ? {} : { queryId: capturedEvent.queryId }),
           serviceName: capturedEvent.serviceName,
           method: capturedEvent.method,
           startAt: capturedEvent.kind === 'read:start' ? at : at - capturedEvent.durationMs,
@@ -917,6 +919,12 @@ class FigbirdCollector implements Collector {
 
       if (existing && existing.lastKnown.generation === row.generation && row.subscriberCount > 0) {
         record.metrics.realtimeSeen += Math.max(0, serviceRealtime - record.serviceRealtimeBaseline)
+      }
+      if (row.custom) {
+        record.metrics.fetchCount = row.fetchCount
+        record.metrics.errorCount = row.errorCount
+        record.metrics.totalDurationMs = row.totalDurationMs
+        if (row.lastDurationMs !== undefined) record.metrics.lastDurationMs = row.lastDurationMs
       }
       record.current = capturedState
       record.lastKnown = capturedState

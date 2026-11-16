@@ -902,15 +902,28 @@ export class QueryStore<
   #nextReadId = 1
 
   /** Custom reads share adapter dispatch with custom writes, never their lifecycle. */
-  async read(serviceName: string, method: string, args: unknown[]): Promise<unknown> {
+  async read(
+    serviceName: string,
+    method: string,
+    args: unknown[],
+    queryId?: string,
+  ): Promise<unknown> {
     this.assertActive()
     const readId = this.#nextReadId++
     const startedAt = this.#clock.now()
-    this.#telemetry.emit({ kind: 'read:start', readId, serviceName, method, args })
+    this.#telemetry.emit({
+      kind: 'read:start',
+      readId,
+      serviceName,
+      method,
+      args,
+      ...(queryId === undefined ? {} : { queryId }),
+    })
     try {
       const result = await this.#adapter.mutate(serviceName, method, args)
       this.#telemetry.emit({
         kind: 'read:end',
+        ...(queryId === undefined ? {} : { queryId }),
         readId,
         serviceName,
         method,
@@ -920,6 +933,7 @@ export class QueryStore<
     } catch (error) {
       this.#telemetry.emit({
         kind: 'read:error',
+        ...(queryId === undefined ? {} : { queryId }),
         readId,
         serviceName,
         method,

@@ -464,6 +464,10 @@ export function eventSearchText(
 
 export function eventQueryId(event: DevtoolsEvent['event']): string | undefined {
   switch (event.kind) {
+    case 'read:start':
+    case 'read:end':
+    case 'read:error':
+      return event.queryId
     case 'fetch:start':
     case 'fetch:end':
     case 'fetch:error':
