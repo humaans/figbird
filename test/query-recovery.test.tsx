@@ -428,3 +428,49 @@ it('warm remount: a stricter reader revalidates what the cold start served from 
   t.deepEqual(finds(), { issues: 2, users: 1 })
   d.unmount()
 })
+
+it('a retry that refetches the service and resets the boundary makes one request', async t => {
+  for (const kind of ['entity', 'custom']) {
+    const { App, figbird, adapter } = app()
+    t.teardown(() => figbird.dispose())
+    let calls = 0
+    installTransport(adapter, async () => {
+      calls++
+      throw new Error('permanent')
+    })
+    const builder = kind === 'entity' ? q.jobs.get(1) : q.jobs.getCheck({ id: 1 })
+    function Holder() {
+      return <span className='holder'>{useQueryResult(builder, { suspense: false }).status}</span>
+    }
+    function Probe() {
+      return <span className='ready'>{useQuery(builder)?.status}</span>
+    }
+    const d = dom({ onCaughtError: () => {} })
+    const tree = (reset: number) => (
+      <App>
+        <Holder />
+        <Boundary key={reset}>
+          <Suspense fallback={<div className='waiting'>Waiting</div>}>
+            <Probe />
+          </Suspense>
+        </Boundary>
+      </App>
+    )
+    d.render(tree(0))
+    await d.flush()
+    await d.flush()
+    t.is(calls, 1, kind)
+    t.truthy(d.$('[data-failed]'), kind)
+
+    // One Retry button: refresh the service's queries and reset the failed boundary.
+    await d.flush(() => {
+      figbird.refetch('jobs')
+      d.render(tree(1))
+    })
+    await d.flush()
+    await d.flush()
+    t.truthy(d.$('[data-failed]'), kind)
+    t.is(calls, 2, `${kind}: the failed refetch is not retried again on its own`)
+    d.unmount()
+  }
+})

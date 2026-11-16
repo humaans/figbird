@@ -1331,6 +1331,9 @@ export class RelationalQueryRef<
   #notifyListeners(): void {
     // Compute snapshot once and cache it
     const snapshot = this.getSnapshot()
+    // An armed retry belongs to the failure a reader saw. Once the query has moved on,
+    // for example through a service-wide refetch, a later failure is a new one.
+    if (snapshot.status !== 'error') this.#lifetime.clearFailedReadRetry()
     this.#settleSuspense(snapshot)
     // Notify all listeners with the cached snapshot
     for (const listener of this.#lifetime.owners.keys()) {
