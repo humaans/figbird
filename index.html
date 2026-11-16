@@ -1126,13 +1126,41 @@ before sweeping active queries, defaulting to <code>[0, 3000]</code> ms. Inactiv
 are marked pending and refresh when they are next read. Reconnects during the wait
 coalesce into one sweep. Set <code>reconnectJitter: 0</code> for immediate sweeps.</li>
 </ul>
-<p>An adapter using <code>subscribeToConnectionEvents</code> can emit
-<code>{ type: 'reconnected', reconcile: false }</code> when it can prove no events were missed.
-Figbird still reports the reconnect but skips that sweep, preserving reconciliation
-already pending. Omit <code>reconcile</code> or set it to <code>true</code> whenever continuity is uncertain.</p>
 <p>Manual <code>refetch()</code>, first fetches, and SWR revalidation are user/loader intent and are
 never gated.</p>
 <p>One practical consequence: an <strong>unwindowed</strong> relation like <code>.related('comments')</code> is local-exact, so a teammate&rsquo;s new comment merges straight from the socket event with no refetch. If you don&rsquo;t need a window, don&rsquo;t add one.</p>
+<h4 id="continuity-when-events-were-missed">Continuity: when events were missed<a class="heading-anchor" href="#continuity-when-events-were-missed" aria-label="Link to this section">#</a></h4>
+<p>The cache is correct only while it has applied every event since each query was last
+fetched. Two things break that, and the scheduler above drains both:</p>
+<ul>
+<li><strong>The stream broke.</strong> Events may have been missed, so every realtime-maintained query
+owes a reconcile. Without help, Figbird assumes this after every reconnect.</li>
+<li><strong>One query&rsquo;s fetch failed.</strong> When a realtime-maintained query&rsquo;s refetch gives up after
+its retries, the query stays owed, so the next reconnect or sweep retries it. Refused
+requests (non-retryable errors) are an answer a retry would repeat, so they are not
+retried. Queries with <code>realtime: 'disabled'</code> are fixed snapshots and are not swept.</li>
+</ul>
+<p>When the application can tell whether events were missed better than the transport, for
+example from a server-issued event sequence, pass a <code>continuity</code> source, modelled on
+<code>visibility</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ts" data-lang="ts"><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">figbird</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Figbird</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">adapter</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">schema</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">continuity</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">// After a reconnect: return false only when no events were missed.
+</span></span></span><span class="line"><span class="cl">    <span class="nx">missedEventsOnReconnect</span><span class="o">:</span> <span class="p">({</span> <span class="nx">connectionId</span> <span class="p">})</span> <span class="o">=&gt;</span> <span class="nx">sequence</span><span class="p">.</span><span class="nx">missedSinceLastLogin</span><span class="p">(</span><span class="nx">connectionId</span><span class="p">),</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">// Events found missing while still connected.
+</span></span></span><span class="line"><span class="cl">    <span class="nx">onMissedEvents</span>: <span class="kt">listener</span> <span class="o">=&gt;</span> <span class="nx">sequence</span><span class="p">.</span><span class="nx">onGap</span><span class="p">(</span><span class="nx">listener</span><span class="p">),</span>
+</span></span><span class="line"><span class="cl">  <span class="p">},</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><p>Figbird reports the reconnect at once and only holds the sweep for the answer. Returning
+<code>false</code> skips it; <code>true</code>, an error, or no answer within 30 seconds sweeps. A newer
+disconnect or reconnect supersedes an answer still pending, and Figbird drops it, so each
+answer must cover every event since the last answer Figbird acted on, not just since the
+previous reconnect. <code>onMissedEvents</code> runs the same jittered sweep a reconnect does,
+deferred while the tab is hidden. Its fetches carry a <code>missed-events</code> trace cause, and its
+<code>reconnect:sweep</code> event has <code>trigger: 'missed-events'</code>, so traces tell a gap from a
+reconnect. Either way, reconciles already owed, such as a failed refetch, still run.</p>
 <h3 id="freshness-tolerance-staletime">Freshness tolerance: staleTime<a class="heading-anchor" href="#freshness-tolerance-staletime" aria-label="Link to this section">#</a></h3>
 <p>Successful data stays fresh for five minutes by default. A mount within that window reuses
 the cached result without a request; after it, the cached result renders immediately while
@@ -1737,6 +1765,8 @@ order.</p>
 </span></span><span class="line"><span class="cl">  <span class="nx">retry</span><span class="o">?</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">retryDelay</span><span class="o">?</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">  <span class="nx">reconnectJitter</span><span class="o">?</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">visibility</span><span class="o">?</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">  <span class="nx">continuity</span><span class="o">?</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl"><span class="p">})</span>
 </span></span></code></pre></div><table>
 	<thead>
