@@ -1,3 +1,4 @@
+import { RENDER_READ_LEASE_MS } from '../lib/core/renderReadLease'
 import { flushTasks, TestClock } from './clock.js'
 import test from 'ava'
 import { FeathersAdapter } from '../lib/adapters/feathers'
@@ -149,7 +150,7 @@ test('Figbird instance retains idle queries and releases owned resources on disp
   for (let index = 1; index < 100; index++) {
     await figbird.query(figbird.q.notes.where({ tag: `abandoned-${index}` })).suspensePromise()
   }
-  await clock.advance(10)
+  await clock.advance(RENDER_READ_LEASE_MS + 10)
   t.true(figbird.inspect().length <= 20, 'abandoned roots release their underlying subscriptions')
   t.is(figbird.query(figbird.q.notes.where({ tag: 'active' })), pinned)
   t.is(figbird.query(figbird.q.notes.where({ tag: 'pending' })), pendingRef)

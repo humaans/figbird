@@ -1,5 +1,6 @@
 interface AbandonedRead {
   readonly coldReadGroup?: object
+  retainRenderRead?(onExpire: () => void): void
   canEvictAbandonedRead(): boolean
   evictAbandonedRead(): boolean
 }
@@ -9,6 +10,7 @@ export function trimAbandonedReads<T extends AbandonedRead>(
   cache: ReadonlyMap<string, T>,
   protectedRef: T | undefined,
 ): void {
+  protectedRef?.retainRenderRead?.(() => trimAbandonedReads(cache, undefined))
   if (cache.size <= 20) return
   const groups = new Map<object, T[]>()
   for (const ref of cache.values()) {

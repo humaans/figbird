@@ -1,3 +1,4 @@
+import { RenderReadLease } from './renderReadLease.js'
 import type { Clock, ClockTimer } from './clock.js'
 import { QueryLifetime } from './queryLifetime.js'
 import { isWithinStaleTime, validateStaleTime } from './staleTime.js'
@@ -27,10 +28,12 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #coldStartAwaitingSubscriber = false
   #prefetch: PrefetchLease | null = null
+  readonly #renderRead: RenderReadLease
 
   constructor(clock: Clock, defaultStaleTime: number) {
     super()
     this.#clock = clock
+    this.#renderRead = new RenderReadLease(clock)
     this.#defaultStaleTime = defaultStaleTime
   }
 
@@ -52,6 +55,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     const adoptsPreparation = source === 'subscriber' && this.#claimPreparedAdoption()
     const adoptsPrefetch = source === 'prepare' && this.#claimPrefetch()
     this.acquire(listener, lease)
+    this.#renderRead.release()
 
     if (this.#coldStartAwaitingSubscriber) {
       // Keep adoption open through the commit's immediate StrictMode resubscription.
@@ -82,8 +86,24 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     this.#coldStartAwaitingSubscriber = this.owners.size === 0
   }
 
-  canEvictAbandonedRead(): boolean {
+  retainRenderRead(onExpire: () => void): void {
+    if (this.owners.size === 0) this.#renderRead.retain(onExpire)
+  }
+
+  get renderReadRetained(): boolean {
+    return this.#renderRead.active
+  }
+
+  canReleaseFailedRead(): boolean {
+    return [...this.owners.values()].every(owner => owner.source !== 'subscriber')
+  }
+
+  canReleaseColdStart(): boolean {
     return this.owners.size === 0 && this.reads.get('root')?.status === 'settled'
+  }
+
+  canEvictAbandonedRead(): boolean {
+    return !this.#renderRead.active && this.canReleaseColdStart()
   }
 
   suspensePromise(start: () => void): Promise<void> {
@@ -94,10 +114,12 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   settleSuspense(error: Error | null): boolean {
     const wasPending = this.reads.get('root')?.status === 'pending'
     this.settle('root', null, error)
+    if (wasPending && this.owners.size === 0) this.#renderRead.renew()
     return wasPending
   }
 
   override reset(): void {
+    this.#renderRead.release()
     if (this.#preparedAdoption.kind === 'wave') {
       this.#preparedAdoption = { kind: 'idle', adoptedThrough: this.#preparedAdoption.generation }
     }
