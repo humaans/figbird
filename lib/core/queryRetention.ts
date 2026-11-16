@@ -6,6 +6,8 @@ export class QueryRetention {
   readonly #expire: (queryId: string) => number | void
   readonly #deadlines = new Map<string, number>()
   #timer: ClockTimer | null = null
+  /** When the pending timer fires. */
+  #timerAt = Infinity
   #disposed = false
 
   /**
@@ -30,8 +32,12 @@ export class QueryRetention {
 
   retain(queryId: string): void {
     if (this.#disposed || this.#duration === Infinity) return
-    this.#deadlines.set(queryId, this.#clock.now() + this.#duration)
-    if (this.#timer === null) this.#arm(this.#duration)
+    const deadline = this.#clock.now() + this.#duration
+    this.#deadlines.set(queryId, deadline)
+    // A postponed entry can leave the timer set far later than this deadline.
+    if (this.#timer !== null && deadline >= this.#timerAt) return
+    this.#cancelTimer()
+    this.#arm(this.#duration)
   }
 
   cancel(queryId: string): void {
@@ -47,11 +53,14 @@ export class QueryRetention {
   #cancelTimer(): void {
     this.#timer?.cancel()
     this.#timer = null
+    this.#timerAt = Infinity
   }
 
   #arm(delay: number): void {
+    this.#timerAt = this.#clock.now() + delay
     this.#timer = this.#clock.setTimeout(() => {
       this.#timer = null
+      this.#timerAt = Infinity
       const now = this.#clock.now()
       let next = Infinity
       // Sweep a copy: an entry retained or postponed during the sweep waits for the

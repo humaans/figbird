@@ -57,3 +57,26 @@ test('retention: retaining during a sweep leaves one timer set for the earliest 
   t.deepEqual(expired, ['a', 'b', 'c'])
   t.is(clock.pendingTimers, 0)
 })
+
+test('retention: an entry retained behind a postponed one still expires on its own deadline', async t => {
+  const clock = new TestClock()
+  const expired: string[] = []
+  const retention = new QueryRetention(
+    1000,
+    id => {
+      if (id === 'held') return 60_000
+      expired.push(id)
+      return undefined
+    },
+    clock,
+  )
+  retention.retain('held')
+  await clock.advance(1000)
+  // The only pending timer is now a minute away, for the postponed entry.
+  retention.retain('idle')
+  await clock.advance(1000)
+  t.deepEqual(expired, ['idle'])
+  t.is(clock.pendingTimers, 1)
+  retention.dispose()
+  t.is(clock.pendingTimers, 0)
+})
