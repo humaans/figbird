@@ -14,15 +14,15 @@ type PreparedAdoption =
 
 type FreshnessDecision =
   | { kind: 'adopt' }
-  | { kind: 'check'; staleTime: number; fetchedSince?: number }
+  | { kind: 'check'; staleTime: number; fetchedAfter?: number | undefined }
 
 /**
  * A read started during render, before any subscriber exists. `staleTime` is the
  * tolerance it accepted cached results with, so everything it used is either that
- * fresh or was fetched after `startedAt`.
+ * fresh or was fetched after the `fetchedAfter` revision.
  */
 interface ColdStart {
-  startedAt: number
+  fetchedAfter: number | undefined
   settledAt: number
   staleTime: number
 }
@@ -40,7 +40,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   #nextPreparationGeneration = 0
   #preparedAdoption: PreparedAdoption = { kind: 'idle', adoptedThrough: 0 }
   #coldStartAwaitingSubscriber = false
-  #coldStart: ColdStart = { startedAt: 0, settledAt: 0, staleTime: 0 }
+  #coldStart: ColdStart = { fetchedAfter: undefined, settledAt: 0, staleTime: 0 }
   #prefetch: PrefetchLease | null = null
   #failedReadRetryArmed = false
   #failedReadRetryGeneration = 0
@@ -85,7 +85,7 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
         if (staleTime >= coldStart.staleTime) return { kind: 'adopt' }
         // A stricter reader than the one whose render started the read. What that
         // render fetched is fresh for everyone; what it took from cache is not.
-        return { kind: 'check', staleTime, fetchedSince: coldStart.startedAt }
+        return { kind: 'check', staleTime, fetchedAfter: coldStart.fetchedAfter }
       }
     }
     return adoptsPreparation
@@ -107,10 +107,10 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   }
 
   /** `staleTime` is the tolerance the graph accepts cached results with. */
-  graphStarted(staleTime = 0): void {
+  graphStarted(staleTime = 0, fetchedAfter?: number): void {
     this.#coldStartAwaitingSubscriber = this.owners.size === 0
     const now = this.#clock.now()
-    this.#coldStart = { startedAt: now, settledAt: now, staleTime }
+    this.#coldStart = { fetchedAfter, settledAt: now, staleTime }
   }
 
   retainRenderRead(onExpire: () => void): void {

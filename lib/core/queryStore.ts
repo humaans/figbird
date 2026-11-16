@@ -130,6 +130,7 @@ interface QueryExecution<TMeta> {
   readonly serviceName: string
   readonly generation: number
   readonly listeners: Set<(state: QueryState<unknown, TMeta>) => void>
+  fetchedRevision: number
   cancelRetry?: () => void
   stats?: QueryFetchStats
   followup?: FetchContext
@@ -228,6 +229,7 @@ export class QueryStore<
   #state: Map<string, ServiceState<TMeta>> = new Map()
   #executions = new Map<string, QueryExecution<TMeta>>()
   #nextQueryGeneration = 1
+  #fetchRevision = 0
 
   #fetchEventJournal = new FetchEventJournal()
 
@@ -607,6 +609,11 @@ export class QueryStore<
     return { ...stats, history: [...stats.history] }
   }
 
+  /** @internal Checkpoint for distinguishing this render's fetches from cached results. */
+  get fetchRevision(): number {
+    return this.#fetchRevision
+  }
+
   getQueryGeneration(queryId: string): number | undefined {
     return this.#executions.get(queryId)?.generation
   }
@@ -626,6 +633,7 @@ export class QueryStore<
       this.#executions.set(queryId, {
         serviceName: desc.serviceName,
         generation: this.#nextQueryGeneration++,
+        fetchedRevision: 0,
         listeners: new Set(),
       })
 
@@ -796,9 +804,8 @@ export class QueryStore<
     const staleTime = options.staleTime ?? this.#staleTime
     const isFresh =
       isWithinStaleTime(q.fetchedAt, staleTime, this.#clock.now()) ||
-      (options.fetchedSince !== undefined &&
-        q.fetchedAt !== undefined &&
-        q.fetchedAt >= options.fetchedSince)
+      (options.fetchedAfter !== undefined &&
+        (this.#executions.get(queryId)?.fetchedRevision ?? 0) > options.fetchedAfter)
     if (
       this.#reconciliation.isPending(queryId) ||
       (q.state.status === 'success' &&
@@ -1469,8 +1476,10 @@ export class QueryStore<
     let hadEffectiveJournalEvents = false
     const eventEffects: AppliedEventEffect[] = []
 
-    const serviceName = this.#executions.get(queryId)?.serviceName
-    const touched = this.#transactOverServiceByName(serviceName ?? '', (service, touch) => {
+    const execution = this.#executions.get(queryId)
+    if (!execution) return
+    const serviceName = execution.serviceName
+    const touched = this.#transactOverServiceByName(serviceName, (service, touch) => {
       const query = service.queries.get(queryId)
       if (!query) return
       touch(queryId)
@@ -1543,6 +1552,7 @@ export class QueryStore<
         getId,
         isItemStale: (current, next) => this.#adapter.isItemStale(current, next),
       })
+      execution.fetchedRevision = ++this.#fetchRevision
       eventEffects.push(
         ...this.#updateQueriesForEvents({
           service,
@@ -1581,11 +1591,7 @@ export class QueryStore<
 
     // Fetch diffs share event publication with realtime, except they cannot
     // trigger refetch-mode queries: a refetch-on-diff would cycle.
-    const publishedEffects = this.#publishServiceEventEffects(
-      serviceName ?? '',
-      eventEffects,
-      'none',
-    )
+    const publishedEffects = this.#publishServiceEventEffects(serviceName, eventEffects, 'none')
     const serverMaintainedQueriesToRefetch = publishedEffects.reconcileQueryIds
 
     const query = this.#getQuery(queryId)

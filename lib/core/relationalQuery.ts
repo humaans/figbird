@@ -79,6 +79,7 @@ export interface RelationalQueryHost<TParams, TMeta extends Record<string, unkno
   clock: Clock
   queryStore: {
     isObservabilityActive(): boolean
+    readonly fetchRevision: number
     subscribeToProcessedEvents(fn: (event: ProcessedCacheEvent) => void): () => void
     subscribeToRealtimeInvalidations(fn: (event: RealtimeInvalidation) => void): () => void
     subscribeToProjectionSettlements(fn: (event: ProcessedProjectionEvent) => void): () => void
@@ -390,7 +391,7 @@ export class RelationalQueryRef<
     } else {
       this.#root.setStaleTime(this.#staleTime)
       if (freshness.kind === 'check') {
-        this.#ensureFresh(freshness.staleTime, freshness.fetchedSince)
+        this.#ensureFresh(freshness.staleTime, freshness.fetchedAfter)
       }
     }
 
@@ -439,11 +440,11 @@ export class RelationalQueryRef<
     }
   }
 
-  #ensureFresh(staleTime: number, fetchedSince?: number): void {
+  #ensureFresh(staleTime: number, fetchedAfter?: number): void {
     if (!this.#graphRunId) this.#beginGraphRun()
-    this.#root?.ensureFresh(staleTime, this.#graph('(root)'), fetchedSince)
+    this.#root?.ensureFresh(staleTime, this.#graph('(root)'), fetchedAfter)
     for (const { queryRef, path, role } of this.#queryLeaves()) {
-      queryRef.ensureFresh({ staleTime, graph: this.#graph(path, role), fetchedSince })
+      queryRef.ensureFresh({ staleTime, graph: this.#graph(path, role), fetchedAfter })
     }
     this.#scheduleGraphRunCompletion(this.getSnapshot())
   }
@@ -825,7 +826,7 @@ export class RelationalQueryRef<
   }
 
   #setupRoot(): void {
-    this.#lifetime.graphStarted(this.#staleTime)
+    this.#lifetime.graphStarted(this.#staleTime, this.#host.queryStore.fetchRevision)
     this.#beginGraphRun()
     this.#subscribeToRelationalFilterInvalidations()
 

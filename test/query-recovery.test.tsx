@@ -283,7 +283,10 @@ it('resetting one of two failed boundaries recovers their shared query', async t
 })
 
 it('warm remount: the strictest reader in a commit decides revalidation', async t => {
-  for (const order of ['loose first', 'strict first', 'both loose']) {
+  const cases = [0, 100].flatMap(age =>
+    ['loose first', 'strict first', 'both loose'].map(order => ({ age, order })),
+  )
+  for (const { age, order } of cases) {
     const { figbird: original, adapter } = app()
     original.dispose()
     const clock = new TestClock()
@@ -317,10 +320,10 @@ it('warm remount: the strictest reader in a commit decides revalidation', async 
     t.is(calls, 1)
     d.render(tree(false))
     await d.flush()
-    await clock.advance(100)
+    await clock.advance(age)
     d.render(tree(true))
     await d.flush()
-    t.is(calls, order === 'both loose' ? 1 : 2, order)
+    t.is(calls, order === 'both loose' ? 1 : 2, `${order}, cache age ${age}`)
     d.unmount()
   }
 })
