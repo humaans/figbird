@@ -23,12 +23,20 @@ function cleanQuery(query: QueryValue, operators: string[], filters: string[]): 
   if ((query as unknown) instanceof Date) {
     return (query as unknown as Date).toJSON()
   } else if (Array.isArray(query)) {
-    return query.map(value => cleanQuery(value, operators, filters)) as QueryValue
+    // JSON turns undefined inside an array into null, and so does the cache key.
+    return query.map(value =>
+      value === undefined ? null : cleanQuery(value, operators, filters),
+    ) as QueryValue
   } else if (isObject(query)) {
     const result: Query = {}
 
     Object.keys(query).forEach(key => {
       const value = query[key]
+      // An undefined value is not part of the query: JSON and query strings drop
+      // the key, so the server never filters on it, and the cache key ignores it.
+      // Matching it here as "field is null" would evict rows the server returned.
+      if (value === undefined) return
+
       if (key[0] === '$') {
         if (filters.includes(key)) {
           return
@@ -39,7 +47,14 @@ function cleanQuery(query: QueryValue, operators: string[], filters: string[]): 
         }
       }
 
-      result[key] = cleanQuery(value, operators, filters)
+      const cleaned = cleanQuery(value, operators, filters)
+      // A filter UI with nothing selected builds `$or: []`. sift throws on it; it
+      // constrains nothing, which is also what a query string sends.
+      if ((key === '$or' || key === '$and') && Array.isArray(cleaned) && cleaned.length === 0) {
+        return
+      }
+
+      result[key] = cleaned
     })
 
     return result

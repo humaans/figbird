@@ -41,6 +41,13 @@ Realtime fixes.
 - A find without `$limit` that the server cut to its default page size is now kept as
   a page of that size. Removing a row refills the page from the server, and a new row
   no longer grows it past the page size. It used to be treated as the complete result.
+Query fixes.
+
+- A query value of `undefined`, as in `where({ teamId: me?.teamId })`, is now ignored
+  everywhere, as it already was in the request and the cache key. Realtime updates
+  used to read it as "is null" and drop rows from the list. An empty `$or` or `$and`
+  no longer throws, and a condition left empty, such as `{ rank: {} }`, is left to the
+  server, with the new classification reason `empty-condition`.
 
 Type changes that can affect consumers.
 

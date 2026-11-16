@@ -1009,6 +1009,8 @@ export class FeathersAdapter<TQuery = Record<string, unknown>> implements Adapte
     const operatorContext = { serviceName: context?.serviceName ?? '' }
 
     for (const [name, operand] of Object.entries(q ?? {})) {
+      // An undefined operand never reaches the server, so no operator applies.
+      if (operand === undefined) continue
       const handler = this.#operatorFor(name, context)
       if (handler) {
         predicates.push(handler(operand, operatorContext))

@@ -316,6 +316,8 @@ export function matchesQuery(
 ): boolean {
   return Object.entries(query).every(([key, value]) => {
     if (key.startsWith('$')) return true
+    // A real server never receives an undefined value: JSON and query strings drop it.
+    if (value === undefined) return true
     const actual = item[key]
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const op = value as { $in?: unknown[] }

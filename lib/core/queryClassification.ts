@@ -14,6 +14,8 @@
  *   always trigger a refetch.
  */
 
+import { isPlainRecord } from './valueEquality.js'
+
 export type QueryNodeClass = 'local-exact' | 'server-window' | 'server-authoritative'
 
 /**
@@ -47,6 +49,7 @@ export interface ClassificationReason {
     | 'native-pagination'
     | 'select-projection'
     | 'server-only-operator'
+    | 'empty-condition'
     | 'window-filter'
     | 'relational-filter'
     | 'snapshot'
@@ -101,8 +104,11 @@ export function explainQueryNode(
   }
 
   const window: ClassificationReason[] = []
-  walkQueryKeys(query, (key, top) => {
-    if (!key.startsWith('$')) return
+  walkQueryKeys(query, (key, top, value) => {
+    if (!key.startsWith('$')) {
+      if (isEmptyCondition(value)) authoritative.push({ code: 'empty-condition', detail: key })
+      return
+    }
     if (PROJECTION_QUERY_FILTERS.has(key)) {
       authoritative.push({ code: 'select-projection', detail: key })
     } else if (SERVER_WINDOW_QUERY_FILTERS.has(key)) {
@@ -111,6 +117,8 @@ export function explainQueryNode(
       if (!allPages) window.push({ code: 'window-filter', detail: key })
     } else if (!LOCAL_QUERY_OPERATORS.has(key) && !(top && localOperators?.has(key))) {
       authoritative.push({ code: 'server-only-operator', detail: key })
+    } else if (Array.isArray(value) && value.some(item => isEmptyCondition(item))) {
+      authoritative.push({ code: 'empty-condition', detail: key })
     }
   })
 
@@ -143,23 +151,37 @@ export function explainQueryNode(
  * (before its children), recursing through nested objects and arrays. `top` is
  * true only for keys of the root object — the level the adapter matcher peels
  * custom operators from.
+ *
+ * Keys whose value is undefined are skipped. They never reach the server and are
+ * not part of the cache key, so `{ $limit: undefined }` must classify as `{}` does:
+ * the two share one cache entry.
  */
-function walkQueryKeys(value: unknown, visit: (key: string, top: boolean) => void): void {
+function walkQueryKeys(value: unknown, visit: QueryKeyVisitor): void {
   walkQueryKeysAtDepth(value, visit, true)
 }
 
-function walkQueryKeysAtDepth(
-  value: unknown,
-  visit: (key: string, top: boolean) => void,
-  top: boolean,
-): void {
+type QueryKeyVisitor = (key: string, top: boolean, value: unknown) => void
+
+/**
+ * A condition with nothing in it: `{ rank: {} }`, an `$or` branch `{}`, or either
+ * of those once undefined values are dropped (`{ rank: { $gt: undefined } }`).
+ * Transports and servers disagree about it. JSON sends the empty object, which one
+ * server reads as "equals {}" and another as no condition; a query string omits it.
+ * No local reading is safe, so the server decides.
+ */
+function isEmptyCondition(value: unknown): boolean {
+  return isPlainRecord(value) && Object.values(value).every(item => item === undefined)
+}
+
+function walkQueryKeysAtDepth(value: unknown, visit: QueryKeyVisitor, top: boolean): void {
   if (!value || typeof value !== 'object') return
   if (Array.isArray(value)) {
     for (const item of value) walkQueryKeysAtDepth(item, visit, false)
     return
   }
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    visit(key, top)
+    if (child === undefined) continue
+    visit(key, top, child)
     walkQueryKeysAtDepth(child, visit, false)
   }
 }
