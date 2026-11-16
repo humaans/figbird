@@ -29,7 +29,14 @@ export interface RelationalFilterPath {
 
 export interface RelationalFilterDependency {
   serviceName: string
+  /** Every field of the service that the filter paths read. */
   fields: Set<string>
+  /**
+   * The fields read off the service's rows when they are reached through a relation,
+   * rather than as the root row: the key a hop lands on, the filtered field, and the
+   * FK of a further hop.
+   */
+  relatedFields: Set<string>
 }
 
 export function hasRelationalFilter(schema: Schema, ast: QueryAST): boolean {
@@ -260,6 +267,23 @@ export function relationalFilterServerReasons(
   return reasons
 }
 
+/**
+ * Every relational filter path of a relation refinement, as classification reasons.
+ * Only the root query gets the relational matcher; a relation's own query runs the
+ * plain one, which reads a dotted key off the bare row and never matches. So any
+ * relational path there leaves the relation's membership to the server.
+ */
+export function relationRefinementServerReasons(
+  schema: Schema,
+  serviceName: string,
+  query: unknown,
+): ClassificationReason[] {
+  return collectRelationalFilterPaths(schema, serviceName, query).map(({ path, field }) => ({
+    code: 'relational-filter',
+    detail: [...path, field].join('.'),
+  }))
+}
+
 function dedupeRelationalPaths(paths: RelationalFilterPath[]): RelationalFilterPath[] {
   const seen = new Set<string>()
   const deduped: RelationalFilterPath[] = []
@@ -279,16 +303,17 @@ export function collectRelationalFilterDependencies(
   // event-matching input), so they're passed in rather than re-derived here.
   paths: RelationalFilterPath[],
 ): RelationalFilterDependency[] {
-  const byService = new Map<string, Set<string>>()
-  const add = (serviceName: string, fields: string[]) => {
-    const path = resolveServicePath(schema, serviceName)
-    let set = byService.get(path)
-    if (!set) {
-      set = new Set()
-      byService.set(path, set)
+  const byService = new Map<string, RelationalFilterDependency>()
+  const add = (service: string, fields: string[], related: boolean) => {
+    const serviceName = resolveServicePath(schema, service)
+    let dependency = byService.get(serviceName)
+    if (!dependency) {
+      dependency = { serviceName, fields: new Set(), relatedFields: new Set() }
+      byService.set(serviceName, dependency)
     }
     for (const field of fields) {
-      set.add(field)
+      dependency.fields.add(field)
+      if (related) dependency.relatedFields.add(field)
     }
   }
 
@@ -299,22 +324,28 @@ export function collectRelationalFilterDependencies(
       const relDef = schema.relationships?.[currentService]?.[relName]
       if (!relDef) break
 
+      // Past the first hop, the row holding the FK is itself a related row.
+      const related = i > 0
       if (relDef.via) {
         // Two hops: parent → intermediate (junction) → destination.
-        add(currentService, [relDef.via.sourceField])
-        add(relDef.via.destService, [relDef.via.destField, relDef.sourceField])
+        add(currentService, [relDef.via.sourceField], related)
+        add(relDef.via.destService, [relDef.via.destField, relDef.sourceField], true)
       } else {
-        add(currentService, [relDef.sourceField])
+        add(currentService, [relDef.sourceField], related)
       }
 
       const isLeaf = i === filterPath.path.length - 1
-      add(relDef.destService, isLeaf ? [relDef.destField, filterPath.field] : [relDef.destField])
+      add(
+        relDef.destService,
+        isLeaf ? [relDef.destField, filterPath.field] : [relDef.destField],
+        true,
+      )
 
       currentService = relDef.destService
     }
   }
 
-  return Array.from(byService, ([serviceName, fields]) => ({ serviceName, fields }))
+  return Array.from(byService.values())
 }
 
 export function shouldRefetchRelationalFilterQuery(
@@ -328,13 +359,18 @@ export function shouldRefetchRelationalFilterQuery(
   const dep = dependencies.find(item => item.serviceName === event.serviceName)
   if (!dep) return false
 
-  // The store decides root rows itself: the relational matcher answers 'unknown'
-  // for a row it can't evaluate, which reconciles the root there.
-  if (event.serviceName === resolveServicePath(schema, ast.service)) return false
+  // The store decides a root row itself: the relational matcher answers 'unknown'
+  // for a row it can't evaluate, which reconciles the root there. But it re-evaluates
+  // only the event's own row. When a path leads back to the root service, as in
+  // `manager.status` on users, the row is also a related row of other root rows, and
+  // only the fields read off related rows can move those.
+  const isRootEvent = event.serviceName === resolveServicePath(schema, ast.service)
+  const fields = isRootEvent ? dep.relatedFields : dep.fields
+  if (fields.size === 0) return false
 
   if (event.type === 'created' || event.type === 'removed') return true
 
-  return itemChangedFields(event.previousItem, event.item, dep.fields)
+  return itemChangedFields(event.previousItem, event.item, fields)
 }
 
 /** What relation hops are followed through: the schema, the entity cache, and its keys. */
@@ -354,48 +390,62 @@ function materializeRelationalFilterItem<TMeta extends Record<string, unknown>>(
   item: unknown,
   paths: RelationalFilterPath[],
 ): { item: unknown; unresolved: Set<string>; missing: Set<string> } {
-  let materialized = cloneRecord(item)
   const unresolved = new Set<string>()
   const missing = new Set<string>()
-  for (const path of paths) {
-    const result = materializeRelationPath(context, serviceName, materialized, path.path)
-    if (result.kind === 'unresolved') {
-      unresolved.add(path.path.join('.'))
-      continue
-    }
-    if (result.kind === 'missing') missing.add(path.path.join('.'))
-    materialized = result.item
-  }
+  const materialized = attachRelations(
+    context,
+    serviceName,
+    item,
+    paths.map(path => path.path),
+    0,
+    { unresolved, missing },
+  )
   return { item: materialized, unresolved, missing }
 }
 
-type MaterializedPath =
-  | { kind: 'resolved' | 'missing'; item: Record<string, unknown> }
-  | { kind: 'unresolved' }
-
-function materializeRelationPath<TMeta extends Record<string, unknown>>(
+/**
+ * A copy of the item with the relation at `depth` of each path attached. Paths that
+ * share a relation are followed together, so the relation is attached once with all
+ * of their deeper hops: following `assignee.team` and `assignee` one after the other
+ * would attach the assignee twice, the second time without its team.
+ */
+function attachRelations<TMeta extends Record<string, unknown>>(
   context: CacheContext<TMeta>,
   serviceName: string,
-  item: Record<string, unknown>,
-  path: string[],
-): MaterializedPath {
-  if (path.length === 0) return { kind: 'resolved', item }
+  item: unknown,
+  paths: string[][],
+  depth: number,
+  outcome: { unresolved: Set<string>; missing: Set<string> },
+): Record<string, unknown> {
+  const materialized = cloneRecord(item)
+  const pathsByRelation = new Map<string, string[][]>()
+  for (const path of paths) {
+    const relName = path[depth]!
+    const group = pathsByRelation.get(relName)
+    if (group) group.push(path)
+    else pathsByRelation.set(relName, [path])
+  }
 
-  const [relName, ...rest] = path
-  const relDef = relName ? context.schema.relationships?.[serviceName]?.[relName] : undefined
-  if (!relName || !relDef) return { kind: 'unresolved' }
-
-  const related = resolveRelatedItem(context, relDef, item)
-  if (related === undefined) return { kind: 'unresolved' }
-  // A null FK is a known absence: the path's predicates see a null relation.
-  if (related === null) return { kind: 'missing', item: { ...item, [relName]: null } }
-
-  const nextRelated =
-    rest.length > 0
-      ? materializeRelationPath(context, relDef.destService, cloneRecord(related), rest)
-      : { kind: 'resolved' as const, item: related as Record<string, unknown> }
-  if (nextRelated.kind === 'unresolved') return nextRelated
-  return { kind: nextRelated.kind, item: { ...item, [relName]: nextRelated.item } }
+  for (const [relName, group] of pathsByRelation) {
+    const relDef = context.schema.relationships?.[serviceName]?.[relName]
+    const related = relDef ? resolveRelatedItem(context, relDef, materialized) : undefined
+    if (!relDef || related === undefined) {
+      for (const path of group) outcome.unresolved.add(path.join('.'))
+      continue
+    }
+    // A null FK is a known absence: the paths' predicates see a null relation.
+    if (related === null) {
+      for (const path of group) outcome.missing.add(path.join('.'))
+      materialized[relName] = null
+      continue
+    }
+    const deeper = group.filter(path => path.length > depth + 1)
+    materialized[relName] =
+      deeper.length > 0
+        ? attachRelations(context, relDef.destService, related, deeper, depth + 1, outcome)
+        : related
+  }
+  return materialized
 }
 
 /**

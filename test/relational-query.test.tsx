@@ -2697,6 +2697,160 @@ it('local reads: a materialized service answers a relation filter only when rela
   for (const unsub of unsubs) unsub()
 })
 
+// A schema with a second hop (assignee → team), a self-reference (user → manager),
+// and a relation whose destination has its own relation (comments → author).
+function createNestedFilterApp(
+  data: {
+    issues?: Record<number, Record<string, unknown>>
+    comments?: Record<number, Record<string, unknown>>
+  } = {},
+) {
+  type AnyService = { item: Record<string, unknown> }
+  const nestedSchema = createSchema({
+    services: {
+      issues: service<AnyService>(),
+      users: service<AnyService>(),
+      teams: service<AnyService>(),
+      comments: service<AnyService>(),
+    },
+    relationships: {
+      issues: ({ one, many }) => ({
+        assignee: one({ sourceField: 'assigneeId', destService: 'users' }),
+        comments: many({ sourceField: 'id', destService: 'comments', destField: 'issueId' }),
+      }),
+      users: ({ one }) => ({
+        team: one({ sourceField: 'teamId', destService: 'teams' }),
+        manager: one({ sourceField: 'managerId', destService: 'users' }),
+      }),
+      comments: ({ one }) => ({
+        author: one({ sourceField: 'authorId', destService: 'users' }),
+      }),
+    },
+  })
+  return createTestApp(nestedSchema, {
+    issues: { data: data.issues ?? { 1: { id: 1, title: 'A', assigneeId: 1 } } },
+    users: {
+      data: {
+        1: { id: 1, name: 'Alice', status: 'active', teamId: 1, managerId: 2 },
+        2: { id: 2, name: 'Boss', status: 'active', teamId: 1, managerId: null },
+      },
+    },
+    teams: { data: { 1: { id: 1, name: 'Core' } } },
+    comments: { data: data.comments ?? {} },
+  })
+}
+
+function snapshotIds(ref: { getSnapshot: () => { data: unknown } }): number[] {
+  return ((ref.getSnapshot().data ?? []) as Array<{ id: number }>).map(row => row.id)
+}
+
+for (const [name, where] of [
+  ['deeper path first', { 'assignee.team.name': 'Core', 'assignee.status': 'active' }],
+  ['shallower path first', { 'assignee.status': 'active', 'assignee.team.name': 'Core' }],
+  ['sibling deep paths', { 'assignee.team.name': 'Core', 'assignee.manager.name': 'Boss' }],
+  [
+    'sibling deep paths, reversed',
+    { 'assignee.manager.name': 'Boss', 'assignee.team.name': 'Core' },
+  ],
+] as const) {
+  it(`realtime: filter paths sharing a first hop keep a matching row (${name})`, async t => {
+    const { figbird, feathers } = createNestedFilterApp()
+    const ref = figbird.query(figbird.q.issues.where(where))
+    // Every related row is cached, so the matcher can decide the issue locally.
+    const unsubs = [
+      figbird.query(figbird.q.users).subscribe(() => {}),
+      figbird.query(figbird.q.teams).subscribe(() => {}),
+      ref.subscribe(() => {}),
+    ]
+    await flushTasks()
+    t.deepEqual(snapshotIds(ref), [1])
+    const findCount = feathers.service('issues').counts.find
+
+    await feathers.service('issues').patch(1, { title: 'Renamed' })
+    await flushTasks()
+
+    t.deepEqual(snapshotIds(ref), [1], 'the issue still matches both paths')
+    t.is(feathers.service('issues').counts.find, findCount, 'decided locally, no refetch')
+
+    for (const unsub of unsubs) unsub()
+  })
+}
+
+it('realtime: a relation refined by a related field is maintained by the server', async t => {
+  const { figbird, feathers } = createNestedFilterApp({
+    comments: { 10: { id: 10, issueId: 1, authorId: 1, body: 'x' } },
+  })
+  const query = figbird.q.issues.related('comments', c => c.where({ 'author.name': 'Alice' }))
+  const comments = () =>
+    (ref.getSnapshot().data as Array<{ comments: Array<{ id: number; body: string }> }>)[0]!
+      .comments
+  const ref = figbird.query(query)
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  t.deepEqual(
+    comments().map(comment => comment.id),
+    [10],
+  )
+  const findCount = feathers.service('comments').counts.find
+
+  await feathers.service('comments').patch(10, { body: 'edited' })
+  await flushTasks()
+  t.deepEqual(
+    comments().map(comment => comment.body),
+    ['edited'],
+    'the patched comment stays',
+  )
+  t.is(feathers.service('comments').counts.find, findCount + 1, 'the server decides membership')
+
+  await feathers.service('comments').create({ id: 11, issueId: 1, authorId: 1, body: 'new' })
+  await flushTasks()
+  t.deepEqual(
+    comments().map(comment => comment.id),
+    [10, 11],
+    'a new matching comment arrives with the refetch',
+  )
+
+  const node = figbird.explain(query).nodes.find(n => n.path === 'comments')!
+  t.is(node.class, 'server-authoritative')
+  t.is(node.realtime, 'refetch')
+  t.deepEqual(node.reasons, [{ code: 'relational-filter', detail: 'author.name' }])
+
+  unsub()
+})
+
+it('realtime: a self-referential relation filter reconciles when the related row changes', async t => {
+  const { figbird, feathers } = createNestedFilterApp()
+  const ref = figbird.query(figbird.q.users.where({ 'manager.status': 'active' }))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('users').counts.find
+
+  // The store re-evaluates only the patched row; user 1 points at it.
+  await feathers.service('users').patch(2, { status: 'inactive' })
+  await flushTasks()
+
+  t.is(feathers.service('users').counts.find, findCount + 1, 'the root reconciles')
+
+  unsub()
+})
+
+it('realtime: a self-referential relation filter ignores fields it does not read', async t => {
+  const { figbird, feathers } = createNestedFilterApp()
+  const ref = figbird.query(figbird.q.users.where({ 'manager.status': 'active' }))
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const findCount = feathers.service('users').counts.find
+
+  await feathers.service('users').patch(2, { name: 'Renamed' })
+  // A row's own FK is its own membership, which the store's matcher decides.
+  await feathers.service('users').patch(1, { name: 'Also renamed' })
+  await flushTasks()
+
+  t.is(feathers.service('users').counts.find, findCount, 'no reconcile')
+
+  unsub()
+})
+
 it('optimistic queue: projected dependency changes update relational filters without refetching', async t => {
   interface FilterDocument {
     id: number

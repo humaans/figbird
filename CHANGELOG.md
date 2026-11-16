@@ -36,11 +36,13 @@ Mutation fixes.
 
 - A realtime change that arrives just before a write to the same record is no longer
   hidden while the write is pending, or undone when an optimistic write fails.
+
 Realtime fixes.
 
 - A find without `$limit` that the server cut to its default page size is now kept as
   a page of that size. Removing a row refills the page from the server, and a new row
   no longer grows it past the page size. It used to be treated as the complete result.
+
 Query fixes.
 
 - A query value of `undefined`, as in `where({ teamId: me?.teamId })`, is now ignored
@@ -48,6 +50,19 @@ Query fixes.
   used to read it as "is null" and drop rows from the list. An empty `$or` or `$and`
   no longer throws, and a condition left empty, such as `{ rank: {} }`, is left to the
   server, with the new classification reason `empty-condition`.
+
+Relational filter fixes.
+
+- A query filtered by two related fields that share a relation, such as
+  `where({ 'assignee.team.name': 'Core', 'assignee.status': 'active' })`, no longer
+  drops a matching row when a realtime event for that row arrives.
+- A relation refined by a related field, such as
+  `related('comments', c => c.where({ 'author.name': 'Alice' }))`, is now kept up to
+  date by refetching. Realtime events used to empty it, and `explain()` reported it as
+  merged locally.
+- A query filtered through a relation back to its own service, such as
+  `q.users.where({ 'manager.status': 'active' })`, now refetches when a related row
+  changes a field the filter reads.
 
 Type changes that can affect consumers.
 

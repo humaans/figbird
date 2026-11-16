@@ -4,10 +4,14 @@ import {
   planRootPagination,
   rootAllPages,
   rootServerReasons,
+  type ClassificationReason,
   type ExplainNode,
   type QueryNodeClass,
 } from './queryClassification.js'
-import { relationalFilterServerReasons } from './relationalFilters.js'
+import {
+  relationalFilterServerReasons,
+  relationRefinementServerReasons,
+} from './relationalFilters.js'
 import { resolveServicePath, type RelationshipDef, type Schema } from './schema.js'
 import type { FindDescriptor, FindQueryConfig } from './queryTypes.js'
 
@@ -20,6 +24,8 @@ export interface RelationQueryPlan {
   query: Record<string, unknown>
   descriptor(value: RelationValue | { $in: RelationValue[] }): FindDescriptor
   config: FindQueryConfig
+  /** Why `config.server` is set, when it isn't only an explicit `.server()`. */
+  serverReasons?: ClassificationReason[]
 }
 
 interface PlannedRelation {
@@ -50,6 +56,7 @@ function queryPlan(
   before: Record<string, unknown>,
   after: Record<string, unknown>,
   config: FindQueryConfig,
+  serverReasons?: ClassificationReason[],
 ): RelationQueryPlan {
   const serviceName = resolveServicePath(schema, service)
   const bind = (value: RelationValue | { $in: RelationValue[] }) => ({
@@ -67,6 +74,7 @@ function queryPlan(
       params: { query: bind(value) },
     }),
     config,
+    ...(serverReasons ? { serverReasons } : {}),
   }
 }
 
@@ -135,6 +143,12 @@ export function compileRelations(
     const perParent = windowed && !listWindow
     const strategy = definition.via ? 'junction' : perParent ? 'perParent' : 'fanIn'
     const allPages = !perParent
+    // A refinement filtered by its own related rows, such as `author.name` on
+    // comments, can't be matched locally, so events refetch it like `.server()`.
+    const serverReasons = rootServerReasons(
+      Boolean(child.server),
+      relationRefinementServerReasons(schema, definition.destService, query),
+    )
     const sort =
       strategy !== 'perParent' &&
       !explicitSort &&
@@ -158,8 +172,9 @@ export function compileRelations(
           realtime,
           fetchPolicy: 'swr',
           ...(strategy !== 'perParent' && allPages ? { allPages: true } : {}),
-          ...(child.server ? { server: true } : {}),
+          ...(serverReasons.length > 0 ? { server: true } : {}),
         },
+        serverReasons,
       ),
     }
     if (strategy === 'junction' && definition.via) {
@@ -223,6 +238,7 @@ export function explainQuery(
   function explain(plan: RelationQueryPlan) {
     return explainQueryNode(plan.query, {
       server: plan.config.server,
+      serverReasons: plan.serverReasons,
       allPages: plan.config.allPages,
       localOperators: localOperatorsFor(plan.service),
     })
