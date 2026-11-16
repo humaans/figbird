@@ -151,20 +151,14 @@ export class CustomQueryRef<T> {
   }
 
   releaseColdStart(): void {
-    if (this.#state.status === 'error' && !this.#lifetime.canReleaseFailedRead()) {
-      this.#lifetime.armFailedReadRetry()
+    if (this.#state.status === 'error') {
+      this.#lifetime.failedReadObserved(
+        () => this.#state.status === 'error',
+        () => this.#host.onAbandoned(),
+      )
       return
     }
-    if (this.#state.status === 'error' && this.#lifetime.canReleaseFailedRead()) {
-      queueMicrotask(() => {
-        if (this.#state.status !== 'error') return
-        if (this.#lifetime.canReleaseFailedRead()) this.#host.onAbandoned()
-        // A reader that subscribed in the same commit now holds the failure.
-        else this.#lifetime.armFailedReadRetry()
-      })
-      return
-    }
-    if (this.#lifetime.owners.size === 0 && !this.#pending)
+    if (!this.#lifetime.owned && !this.#pending)
       this.#lifetime.scheduleCleanup(
         () => !this.#pending,
         () => this.#host.onAbandoned(),
@@ -177,21 +171,21 @@ export class CustomQueryRef<T> {
 
   canEvictAbandonedRead(): boolean {
     return (
-      !this.#lifetime.renderReadRetained &&
+      !this.#lifetime.leased &&
       (!this.#adopted || this.#state.status === 'error') &&
-      this.#lifetime.owners.size === 0 &&
+      !this.#lifetime.owned &&
       !this.#pending
     )
   }
 
   /** @internal A render that has not committed yet still expects this result. */
   get renderReadRetained(): boolean {
-    return this.#lifetime.renderReadRetained
+    return this.#lifetime.leased
   }
 
   /** @internal Idle retention may expire only results nothing holds or is fetching. */
   canExpire(): boolean {
-    return this.#lifetime.owners.size === 0 && !this.#pending
+    return !this.#lifetime.owned && !this.#pending
   }
 
   evictAbandonedRead(): boolean {

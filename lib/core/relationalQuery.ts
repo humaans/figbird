@@ -480,7 +480,7 @@ export class RelationalQueryRef<
     this.#lifetime.scheduleCleanup(
       () => {
         if (this.#root === null) return false
-        if (!this.#lifetime.hasPendingRead()) return true
+        if (!this.#lifetime.awaited) return true
         // A render is suspended on this read. Tearing the graph down would leave its
         // promise unsettled, so the read stays and is treated as that render's own.
         this.#lifetime.retainRenderRead(() => {})
@@ -1383,22 +1383,14 @@ export class RelationalQueryRef<
   }
 
   releaseColdStart(): void {
-    if (this.getSnapshot().status === 'error' && !this.#lifetime.canReleaseFailedRead()) {
-      this.#lifetime.armFailedReadRetry()
+    if (this.getSnapshot().status === 'error') {
+      this.#lifetime.failedReadObserved(
+        () => this.getSnapshot().status === 'error',
+        () => this.#cleanup(),
+      )
       return
     }
-    if (this.getSnapshot().status === 'error' && this.#lifetime.canReleaseFailedRead()) {
-      queueMicrotask(() => {
-        if (this.getSnapshot().status !== 'error') return
-        if (this.#lifetime.canReleaseFailedRead()) this.#cleanup()
-        // A reader that subscribed in the same commit now holds the failure.
-        else this.#lifetime.armFailedReadRetry()
-      })
-      return
-    }
-    if (this.#lifetime.canReleaseColdStart()) {
-      this.#scheduleCleanup()
-    }
+    if (this.#lifetime.canAbandon()) this.#scheduleCleanup()
   }
 
   /**
@@ -1427,7 +1419,7 @@ export class RelationalQueryRef<
   }
 
   canEvictAbandonedRead(): boolean {
-    return this.#lifetime.canEvictAbandonedRead()
+    return this.#lifetime.canEvict()
   }
 
   evictAbandonedRead(): boolean {

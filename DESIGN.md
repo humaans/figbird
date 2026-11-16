@@ -588,6 +588,35 @@ loading/error rendering use `useQueryResult`. The result hook defaults to Suspen
 `{ suspense: false }` for the tagged union. The names differ, but both projections run through one
 subscription and Suspense implementation. The legacy `useFind` / `useGet` shims remain deprecated.
 
+### Who Holds A Query
+
+A Suspense render reads a query before its component has committed, so for a while nothing
+is subscribed to it. If that render's result could be dropped in that window, the retry
+would start a fresh query and suspend again, without end. So a query is held by its owners
+(subscribers, `prepare()` handles, a prefetch pin) and, before any of those exist, by the
+render that read it. Every lifetime decision comes down to three facts:
+
+- **owned** — an owner exists.
+- **awaited** — a render is suspended on the query's promise. The graph must stay so the
+  promise settles.
+- **leased** — a render read the query recently and may still commit. The lease lasts five
+  minutes and is renewed each time the render tries again.
+
+Nothing tears a query down while it is owned or awaited. The lease additionally protects it
+from cache-pressure eviction, but an explicit release (a failed parallel read letting go of
+its siblings) still drops a query that is only leased.
+
+When the first owner arrives it takes over the read the render started. Within 30 seconds
+of that read settling it is treated as the owner's own and is not fetched again; a reader
+stricter than the one whose render started it still revalidates whatever came from cache.
+After that the read is ordinary cached data and the owner's `staleTime` decides. React
+cannot tell a render still waiting to commit from one it threw away, which is why both
+windows are measured in time.
+
+Unowned, unleased queries are bounded by a count budget per cache (20 entries, with the
+members of one parallel read counted together). That budget predates the lease and still
+does the bounding for window queries, which have no lease.
+
 ## Mutations And Optimism
 
 Mutations are remote-first: every `create`/`update`/`patch`/`remove` returns a promise that settles
