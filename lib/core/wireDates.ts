@@ -20,3 +20,22 @@ export function datesToIso(value: unknown): unknown {
   }
   return value
 }
+
+/**
+ * Drop undefined values from plain objects at every depth, and turn them into null
+ * inside arrays: what JSON does to a query on its way to the server, and what the
+ * cache key does when hashing it.
+ */
+export function withoutUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => (item === undefined ? null : withoutUndefined(item)))
+  }
+  if (isPlainRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .map(([key, item]) => [key, withoutUndefined(item)]),
+    )
+  }
+  return value
+}

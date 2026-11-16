@@ -7,7 +7,7 @@ import { CustomQuery, type CustomQueryMethods } from './customQuery.js'
 import { hashObject } from './hash.js'
 import { assertJunctionUnwindowed } from './relationPlan.js'
 import { isPlainRecord, sameValue } from './valueEquality.js'
-import { datesToIso } from './wireDates.js'
+import { datesToIso, withoutUndefined } from './wireDates.js'
 import type {
   Schema,
   ServiceNames,
@@ -215,8 +215,9 @@ export class QueryBuilder<
     return new QueryBuilder(this[queryBuilderSchema], this.#state.service, {
       ...this.#state,
       // A Date operand would never match the ISO strings rows carry, and would
-      // merge as an empty object.
-      query: mergeWhere(this.#state.query, datesToIso(query) as FeathersQuery),
+      // merge as an empty object. An undefined value never reaches the server, so
+      // it must not reach the AST either, where it would read as "field is null".
+      query: mergeWhere(this.#state.query, withoutUndefined(datesToIso(query)) as FeathersQuery),
     }) as QueryBuilder<S, TService, TItem, TRelated, TCardinality, K>
   }
 
