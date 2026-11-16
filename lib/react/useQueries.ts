@@ -182,6 +182,7 @@ export function useQueryResultsImpl(
   let firstError: Error | null = null
   for (const [i, state] of states.entries()) {
     if (state.status === 'error') {
+      if (refs[i]?.retryColdStart?.()) continue
       refs[i]?.releaseColdStart()
       firstError ??= state.error
     }

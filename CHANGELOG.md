@@ -1,5 +1,12 @@
 # Figbird Changelog
 
+## Unreleased
+
+- Keep cold Suspense reads temporarily retained while sibling reads settle, and evict
+  unused references under cache pressure after their render leases expire.
+- Error-boundary retries can restart failed queries held by preparation or
+  non-Suspense readers without dropping those readers.
+
 ## 0.24.1
 
 - New `continuity` option. If your app can tell when realtime events were missed, for
