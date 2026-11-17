@@ -167,6 +167,8 @@ export interface Query<T = unknown, TMeta = Record<string, unknown>, TQuery = un
   queryId: string
   desc: QueryDescriptor
   config: QueryConfig<T, TQuery>
+  /** Default page size proven by a truncated server response for this query. */
+  observedPageCap?: number | undefined
   maintenance: QueryMaintenance
   /** Diagnostic projection of the reconciliation scheduler; only the scheduler updates it. */
   pending: boolean

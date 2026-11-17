@@ -24,6 +24,7 @@ import {
   replayFetchedQueryFromEvents,
   reapplyQueryFromEntities,
   updateQueriesFromEvents,
+  windowLimit,
   type QueryMembershipScope,
 } from './windowMaintenance.js'
 import {
@@ -1380,8 +1381,8 @@ export class QueryStore<
     const { service, root, compare } = source
     const config = query.config as FindQueryConfig<unknown, unknown>
 
-    const { matchesLocal, limit: windowLimit, skip: windowSkip } = query.maintenance
-    const limit = config.allPages ? undefined : windowLimit
+    const { matchesLocal, skip: windowSkip } = query.maintenance
+    const limit = windowLimit(query)
     const skip = config.allPages ? 0 : windowSkip
     const rows: unknown[] = []
     // The root owns exhaustive membership. The entity cache may also contain rows

@@ -86,6 +86,7 @@ async function watch(
   }
   return {
     unsub,
+    refetch: () => ref.refetch(),
     texts: () => (snapshot().data as Note[]).map(note => note.text),
     total: () => (snapshot().meta as { total: number }).total,
   }
@@ -553,6 +554,45 @@ test('server page cap: a plain filter page does not grow past the cap', async t 
 
   t.deepEqual(texts(), ['a', 'b'])
   unsub()
+})
+
+test('an observed default cap survives a complete refetch and bounds subsequent creates', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, total, unsub } = await watch(figbird, { tag: 'x' })
+  t.teardown(unsub)
+  serverRemove(notes, 1)
+  await settle()
+  serverRemove(notes, 2)
+  await settle()
+  t.deepEqual(texts(), ['c', 'd'])
+  t.is(total(), 2)
+
+  serverCreate(notes, { id: 5, text: 'e', rank: 5, tag: 'x', updatedAt: 1 })
+  await settle()
+  t.deepEqual(texts(), ['c', 'd'])
+  t.is(total(), 3)
+  const inspected = figbird.inspect()[0]!
+  t.is(inspected.classification, 'server-window')
+  t.is(inspected.realtimeStrategy, 'refetch')
+})
+
+test('a find served from a complete local collection keeps its observed default cap', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2, defaultSort: { rank: 1 } })
+  const { texts, total, unsub, refetch } = await watch(figbird, { tag: 'x' })
+  t.teardown(unsub)
+  const all = figbird.query(figbird.q.notes.all())
+  t.teardown(all.subscribe(() => {}))
+  await settle()
+  const finds = notes.counts.find
+
+  refetch()
+  await settle()
+  t.deepEqual(texts(), ['a', 'b'])
+  t.is(total(), 4)
+  t.is(notes.counts.find, finds)
+  t.deepEqual(figbird.inspect().find(row => row.query?.tag === 'x')?.classificationReasons, [
+    { code: 'window-filter', detail: 'observed server page cap: 2' },
+  ])
 })
 
 test('server page cap: an in-place patch still merges without a refetch', async t => {

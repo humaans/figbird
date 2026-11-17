@@ -1,4 +1,4 @@
-import { servedLimit, servedPageCap } from '../adapters/queryPage.js'
+import { servedLimit } from '../adapters/queryPage.js'
 import { maintainWindow } from './windowDecision.js'
 import { sameValue } from './valueEquality.js'
 import { commitQuery } from './queryResults.js'
@@ -58,17 +58,15 @@ export function isCompleteSetQuery<TMeta>(query: Query<unknown, TMeta, unknown>)
 /**
  * The page size the query's committed rows were served under, or undefined when
  * nothing bounds them. A requested `$limit` is known up front; the server's default
- * page size only shows in the response, so it is read from the committed page.
+ * page size is learned from a truncated response and retained across commits.
  */
-function windowLimit<TMeta>(query: Query<unknown, TMeta, unknown>): number | undefined {
+export function windowLimit<TMeta>(query: Query<unknown, TMeta, unknown>): number | undefined {
   if (query.desc.method !== 'find') return undefined
   // `.all()` drains every page, so no page size bounds its rows.
   if ('allPages' in query.config && query.config.allPages === true) return undefined
-  const { limit, skip } = query.maintenance
-  if (query.state.status !== 'success') return limit
-  return limit === undefined
-    ? servedPageCap(query.state.meta, query.rows.data.length, skip)
-    : servedLimit(query.state.meta, limit)
+  const { limit } = query.maintenance
+  if (limit === undefined) return query.observedPageCap
+  return query.state.status === 'success' ? servedLimit(query.state.meta, limit) : limit
 }
 
 /**
@@ -76,7 +74,7 @@ function windowLimit<TMeta>(query: Query<unknown, TMeta, unknown>): number | und
  * filters is classified local-exact, but when the server capped its page the rows
  * are a window like any other: removals must refill it and creates must not grow it.
  */
-function maintenanceClass<TMeta>(query: Query<unknown, TMeta, unknown>): StoredQueryClass {
+export function maintenanceClass<TMeta>(query: Query<unknown, TMeta, unknown>): StoredQueryClass {
   const { classification } = query.maintenance
   return classification === 'local-exact' && windowLimit(query) !== undefined
     ? 'server-window'

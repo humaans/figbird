@@ -1,3 +1,4 @@
+import { servedPageCap } from '../adapters/queryPage.js'
 import type { PageResponse, QueryResponse } from '../adapters/adapter.js'
 import { rebaseResponseData, type FetchRebasePlan } from './fetchRebase.js'
 import { queryPolicy } from './queryMaintenance.js'
@@ -127,9 +128,27 @@ export function buildFetchCommit<TMeta>({
         ? events.filter(event => event.mode !== 'server' || event.source !== 'realtime')
         : []
   const pageInfo = 'pageInfo' in result ? result.pageInfo : undefined
+  // Observe the raw server page before concurrent events rebase its membership.
+  // A later complete page can confirm the old bound is too small, but contains
+  // no evidence of truncation on its own.
+  let observedPageCap = query.observedPageCap
+  if (
+    source === 'server' &&
+    query.desc.method === 'find' &&
+    !query.desc.page &&
+    !('allPages' in query.config && query.config.allPages) &&
+    query.maintenance.limit === undefined &&
+    Array.isArray(result.data)
+  ) {
+    const count = result.data.length
+    observedPageCap =
+      servedPageCap(meta, count, query.maintenance.skip) ??
+      (observedPageCap !== undefined && count <= observedPageCap ? observedPageCap : undefined)
+  }
   return {
     query: {
       ...query,
+      observedPageCap,
       fetchedAt,
       state: {
         status: 'success',
