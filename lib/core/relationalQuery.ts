@@ -39,7 +39,7 @@ import {
 } from './relationalAssembly.js'
 import {
   collectRelationalFilterDependencies,
-  collectRelationalFilterPaths,
+  type RelationalFilterDependency,
   createRelationalFilterMatcher,
   getFieldValue,
   hasRelationalFilter,
@@ -223,7 +223,6 @@ export class RelationalQueryRef<
   #relationSubs: Map<string, RelationSub<TMeta>> = new Map()
   #lifetime: RelationalQueryLifetime<(state: RelationalQueryState<T>) => void>
   #processedEventUnsub: (() => void) | null = null
-  #relationalFilterReconcileQueued = false
   // Strictest active subscriber freshness tolerance — applied to newly-created
   // internal subscriptions. Existing subscriptions are prodded through ensureFresh()
   // when each subscriber joins, so late strict readers are honored too.
@@ -1258,61 +1257,89 @@ export class RelationalQueryRef<
   #subscribeToRelationalFilterInvalidations(): void {
     if (this.#ast.snapshot) return
     if (this.#processedEventUnsub) return
-    const paths = collectRelationalFilterPaths(this.#schema, this.#ast.service, this.#ast.query)
-    const dependencies = collectRelationalFilterDependencies(this.#schema, this.#ast, paths)
-    if (dependencies.length === 0) return
-
-    const releaseDependencies = dependencies.map(dependency =>
-      this.#host.queryStore.ensureRealtimeSubscription(dependency.serviceName),
-    )
-
-    const affectsFilter = (event: ProcessedCacheEvent) =>
-      shouldRefetchRelationalFilterQuery(this.#schema, this.#ast, dependencies, event)
-
-    const unsubscribeEvents = this.#host.queryStore.subscribeToProcessedEvents(event => {
-      if (!affectsFilter(event)) return
-      if (event.mode !== 'server') {
-        const laneKeys =
-          event.mode === 'optimistic' ? new Set([event.mutationLaneKey]) : new Set<string>()
-        for (const queryId of this.#root?.queryIds() ?? []) {
-          this.#host.queryStore.reapplyQuery(queryId, laneKeys)
-        }
-        return
+    const targets: Array<{
+      servicePath: string
+      dependencies: RelationalFilterDependency[]
+      reconcile: () => void
+      root: boolean
+    }> = []
+    const add = (service: string, query: unknown, reconcile: () => void, root = false) => {
+      const dependencies = collectRelationalFilterDependencies(this.#schema, service, query)
+      if (dependencies.length) {
+        targets.push({
+          servicePath: resolveServicePath(this.#schema, service),
+          dependencies,
+          reconcile,
+          root,
+        })
       }
-      this.#queueRelationalFilterReconcile()
-    })
-    const dependencyServices = new Set(dependencies.map(dependency => dependency.serviceName))
-    const unsubscribeInvalidations = this.#host.queryStore.subscribeToRealtimeInvalidations(
-      event => {
-        if (!dependencyServices.has(event.serviceName)) return
-        this.#queueRelationalFilterReconcile()
-      },
+    }
+    add(this.#ast.service, this.#ast.query, () => this.#root?.reconcile(), true)
+    const visit = (plans: RelationPlan[]) => {
+      for (const plan of plans) {
+        if (plan.kind === 'missing') continue
+        add(plan.destination.service, plan.destination.query, () => {
+          for (const { queryRef, path, role } of this.#queryLeaves()) {
+            if (path === plan.key && !role) queryRef.reconcile()
+          }
+        })
+        visit(plan.children)
+      }
+    }
+    visit(this.#relationPlans)
+    if (!targets.length) return
+
+    const store = this.#host.queryStore
+    const services = new Set(
+      targets.flatMap(target => target.dependencies.map(dep => dep.serviceName)),
     )
-    const unsubscribeSettlements = this.#host.queryStore.subscribeToProjectionSettlements(event => {
-      if (affectsFilter(event)) this.#queueRelationalFilterReconcile()
+    const releases = Array.from(services, service => store.ensureRealtimeSubscription(service))
+
+    // Batch invalidations before looking up the live leaves: a parent update in
+    // the same batch may have replaced the per-parent refs or the fan-in chunks.
+    const pending = new Set<() => void>()
+    const queue = (reconcile: () => void) => {
+      if (!pending.size)
+        queueMicrotask(() => {
+          if (this.#lifetime.owners.size) for (const run of pending) run()
+          pending.clear()
+        })
+      pending.add(reconcile)
+    }
+
+    const unsubscribeEvents = store.subscribeToProcessedEvents(event => {
+      for (const target of targets) {
+        if (!shouldRefetchRelationalFilterQuery(target.servicePath, target.dependencies, event))
+          continue
+        if (event.mode === 'server') {
+          queue(target.reconcile)
+        } else if (target.root) {
+          // Only the root has a matcher that can evaluate a projected relation locally.
+          const laneKeys =
+            event.mode === 'optimistic' ? new Set([event.mutationLaneKey]) : new Set<string>()
+          for (const queryId of this.#root?.queryIds() ?? []) store.reapplyQuery(queryId, laneKeys)
+        }
+      }
+    })
+    const unsubscribeInvalidations = store.subscribeToRealtimeInvalidations(event => {
+      for (const target of targets) {
+        if (target.dependencies.some(dep => dep.serviceName === event.serviceName))
+          queue(target.reconcile)
+      }
+    })
+    const unsubscribeSettlements = store.subscribeToProjectionSettlements(event => {
+      for (const target of targets) {
+        if (shouldRefetchRelationalFilterQuery(target.servicePath, target.dependencies, event))
+          queue(target.reconcile)
+      }
     })
     this.#processedEventUnsub = () => {
+      pending.clear()
       unsubscribeEvents()
       unsubscribeInvalidations()
       unsubscribeSettlements()
-      for (const release of releaseDependencies) release()
+      for (const release of releases) release()
     }
-  }
-
-  /**
-   * A related change can move root membership only, so the root reconciles through
-   * the store's gate — related services are often the busiest, and their bursts must
-   * coalesce under the cooldown and wait out a hidden tab. Relation leaves keep
-   * themselves fresh through their own realtime.
-   */
-  #queueRelationalFilterReconcile(): void {
-    if (this.#relationalFilterReconcileQueued) return
-    this.#relationalFilterReconcileQueued = true
-    queueMicrotask(() => {
-      this.#relationalFilterReconcileQueued = false
-      if (this.#lifetime.owners.size === 0) return
-      this.#root?.reconcile()
-    })
   }
 
   #createRelationalMatcher(ast: QueryAST): (query: unknown) => (item: unknown) => MatchResult {
@@ -1441,7 +1468,6 @@ export class RelationalQueryRef<
     this.#pagedRoot = null
     this.#processedEventUnsub?.()
     this.#processedEventUnsub = null
-    this.#relationalFilterReconcileQueued = false
     for (const sub of this.#relationSubs.values()) {
       this.#disposeRelationSub(sub)
     }
