@@ -298,10 +298,8 @@ function dedupeRelationalPaths(paths: RelationalFilterPath[]): RelationalFilterP
 
 export function collectRelationalFilterDependencies(
   schema: Schema,
-  ast: QueryAST,
-  // The root query's filter paths — callers already hold them (they're also the
-  // event-matching input), so they're passed in rather than re-derived here.
-  paths: RelationalFilterPath[],
+  service: string,
+  query: unknown,
 ): RelationalFilterDependency[] {
   const byService = new Map<string, RelationalFilterDependency>()
   const add = (service: string, fields: string[], related: boolean) => {
@@ -317,8 +315,8 @@ export function collectRelationalFilterDependencies(
     }
   }
 
-  for (const filterPath of paths) {
-    let currentService = ast.service
+  for (const filterPath of collectRelationalFilterPaths(schema, service, query)) {
+    let currentService = service
     for (let i = 0; i < filterPath.path.length; i++) {
       const relName = filterPath.path[i]!
       const relDef = schema.relationships?.[currentService]?.[relName]
@@ -349,8 +347,7 @@ export function collectRelationalFilterDependencies(
 }
 
 export function shouldRefetchRelationalFilterQuery(
-  schema: Schema,
-  ast: QueryAST,
+  servicePath: string,
   // Derived from the static AST — precomputed once at subscription time by the
   // caller rather than re-derived on every processed event.
   dependencies: RelationalFilterDependency[],
@@ -364,7 +361,7 @@ export function shouldRefetchRelationalFilterQuery(
   // only the event's own row. When a path leads back to the root service, as in
   // `manager.status` on users, the row is also a related row of other root rows, and
   // only the fields read off related rows can move those.
-  const isRootEvent = event.serviceName === resolveServicePath(schema, ast.service)
+  const isRootEvent = event.serviceName === servicePath
   const fields = isRootEvent ? dep.relatedFields : dep.fields
   if (fields.size === 0) return false
 

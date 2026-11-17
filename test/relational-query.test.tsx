@@ -2818,6 +2818,50 @@ it('realtime: a relation refined by a related field is maintained by the server'
   unsub()
 })
 
+it('realtime: author changes reconcile only the refined comments, even from an empty list', async t => {
+  const { figbird, feathers } = createNestedFilterApp({
+    comments: { 10: { id: 10, issueId: 1, authorId: 2 } },
+  })
+  const users = feathers.service('users')
+  const comments = feathers.service('comments')
+  // Translate the server-side join before the mock applies its filters and pagination.
+  comments.options.queryAware = true
+  const find = comments.find.bind(comments)
+  comments.find = params => {
+    const { 'author.name': name, ...query } = params?.query ?? {}
+    const authors = Object.values(users.data).filter(user => user.name === name)
+    return find({ ...params, query: { ...query, authorId: { $in: authors.map(user => user.id) } } })
+  }
+  const ref = figbird.query(
+    figbird.q.issues.related('comments', c => c.where({ 'author.name': 'Alice' })),
+  )
+  const unsub = ref.subscribe(() => {})
+  t.teardown(unsub)
+  await flushTasks()
+  const ids = () =>
+    (ref.getSnapshot().data as Array<{ comments: { id: number }[] }>)[0]!.comments.map(
+      row => row.id,
+    )
+  const rootFinds = feathers.service('issues').counts.find
+  const leafFinds = comments.counts.find
+  t.deepEqual(ids(), [])
+
+  await users.patch(2, { name: 'Alice' })
+  await flushTasks()
+  t.deepEqual(ids(), [10])
+  t.is(comments.counts.find, leafFinds + 1)
+
+  await users.patch(2, { status: 'inactive' })
+  await flushTasks()
+  t.is(comments.counts.find, leafFinds + 1)
+
+  await users.patch(2, { name: 'Bob' })
+  await flushTasks()
+  t.deepEqual(ids(), [])
+  t.is(comments.counts.find, leafFinds + 2)
+  t.is(feathers.service('issues').counts.find, rootFinds)
+})
+
 it('realtime: a self-referential relation filter reconciles when the related row changes', async t => {
   const { figbird, feathers } = createNestedFilterApp()
   const ref = figbird.query(figbird.q.users.where({ 'manager.status': 'active' }))
