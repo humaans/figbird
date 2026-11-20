@@ -43,7 +43,7 @@ import {
   type QueryNodeClass,
 } from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
-import { queryPolicy } from './queryMaintenance.js'
+import { inspectQueryMaintenance } from './windowMaintenance.js'
 import { QueryRef } from './queryRef.js'
 import {
   DEFAULT_GC_TIME,
@@ -1154,6 +1154,8 @@ export class Figbird<
         const stats = this.queryStore.getQueryStats(query.queryId)
         const generation = this.queryStore.getQueryGeneration(query.queryId)
         if (generation === undefined) continue
+        const { classification, classificationReasons, realtimeStrategy } =
+          inspectQueryMaintenance(query)
         rows.push({
           queryId: query.queryId,
           generation,
@@ -1169,9 +1171,9 @@ export class Figbird<
                 },
               }
             : {}),
-          classification: query.maintenance.classification,
-          classificationReasons: queryPolicy(query.maintenance).classificationReasons,
-          realtimeStrategy: queryPolicy(query.maintenance).realtimeStrategy,
+          classification,
+          classificationReasons,
+          realtimeStrategy,
           skipped: query.config.skip === true,
           status: query.state.status,
           isFetching: query.state.isFetching,

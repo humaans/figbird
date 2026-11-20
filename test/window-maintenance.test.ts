@@ -86,6 +86,7 @@ async function watch(
   }
   return {
     unsub,
+    refetch: () => ref.refetch(),
     texts: () => (snapshot().data as Note[]).map(note => note.text),
     total: () => (snapshot().meta as { total: number }).total,
   }
@@ -555,6 +556,45 @@ test('server page cap: a plain filter page does not grow past the cap', async t 
   unsub()
 })
 
+test('an observed default cap survives a complete refetch and bounds subsequent creates', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, total, unsub } = await watch(figbird, { tag: 'x' })
+  t.teardown(unsub)
+  serverRemove(notes, 1)
+  await settle()
+  serverRemove(notes, 2)
+  await settle()
+  t.deepEqual(texts(), ['c', 'd'])
+  t.is(total(), 2)
+
+  serverCreate(notes, { id: 5, text: 'e', rank: 5, tag: 'x', updatedAt: 1 })
+  await settle()
+  t.deepEqual(texts(), ['c', 'd'])
+  t.is(total(), 3)
+  const inspected = figbird.inspect()[0]!
+  t.is(inspected.classification, 'server-window')
+  t.is(inspected.realtimeStrategy, 'refetch')
+})
+
+test('a find served from a complete local collection keeps its observed default cap', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2, defaultSort: { rank: 1 } })
+  const { texts, total, unsub, refetch } = await watch(figbird, { tag: 'x' })
+  t.teardown(unsub)
+  const all = figbird.query(figbird.q.notes.all())
+  t.teardown(all.subscribe(() => {}))
+  await settle()
+  const finds = notes.counts.find
+
+  refetch()
+  await settle()
+  t.deepEqual(texts(), ['a', 'b'])
+  t.is(total(), 4)
+  t.is(notes.counts.find, finds)
+  t.deepEqual(figbird.inspect().find(row => row.query?.tag === 'x')?.classificationReasons, [
+    { code: 'window-filter', detail: 'observed server page cap: 2' },
+  ])
+})
+
 test('server page cap: an in-place patch still merges without a refetch', async t => {
   for (const query of [{ $sort: { rank: 1 } }, { tag: 'x' }]) {
     const { figbird, notes } = createApp({ defaultLimit: 2 })
@@ -690,5 +730,130 @@ test('server page cap: query reapply reconciles instead of rebuilding from the e
   )
   await settle()
   t.is(notes.counts.find, finds + 1)
+  unsub()
+})
+
+test('server page cap: in-flight removal replayed onto a capped page removes the visible row', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  let releaseFind: (() => void) | undefined
+  const originalFind = notes.find.bind(notes)
+  notes.find = async params => {
+    await new Promise<void>(resolve => {
+      releaseFind = resolve
+    })
+    return originalFind(params)
+  }
+
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { tag: 'x' } } },
+    { realtime: 'merge' },
+  )
+  const unsub = ref.subscribe(() => {})
+  await settle()
+
+  // Remove row 1 on the server while the initial capped find is still in flight.
+  serverRemove(notes, 1)
+  await settle()
+
+  // Complete the in-flight find (whose snapshot had rows [1, 2], total 4 -> cap 2).
+  // Replaying the in-flight removal must drop row 1 from the visible page.
+  notes.find = originalFind
+  releaseFind?.()
+  await settle()
+
+  const texts = ((ref.getSnapshot()?.data ?? []) as Note[]).map(note => note.text)
+  t.false(texts.includes('a'))
+  unsub()
+})
+
+test('server page cap: stale-entity rebase keeps capped page membership intact', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  // Cache entity 1 via a get query, then update it to a newer revision that no
+  // longer matches tag: 'x' while the find response still returns the stale row.
+  const getRef = figbird.queryDesc(
+    { serviceName: 'notes', method: 'get', resourceId: 1 },
+    { realtime: 'merge' },
+  )
+  const unsubGet = getRef.subscribe(() => {})
+  await settle()
+  notes.emit('patched', { id: 1, text: 'a', rank: 1, tag: 'other', updatedAt: 5 })
+  await settle()
+
+  const ref = figbird.queryDesc(
+    { serviceName: 'notes', method: 'find', params: { query: { tag: 'x' } } },
+    { realtime: 'merge' },
+  )
+  const unsub = ref.subscribe(() => {})
+  await settle()
+
+  // Server returned [1(v1), 2(v1)] with total 4 (observed cap 2). Because the
+  // page is treated as a server-window (not local-exact), rebaseMembership is
+  // disabled and the newer entity is kept in place rather than shrinking the page.
+  const rows = (ref.getSnapshot()?.data ?? []) as Note[]
+  t.is(rows.length, 2)
+  t.is(rows[0]?.id, 1)
+  t.is(rows[0]?.tag, 'other')
+  unsub()
+  unsubGet()
+})
+
+test('server page cap: a larger server response clears a previously observed cap', async t => {
+  let limit = 2
+  const feathers = mockFeathers({ notes: { data: seed() } }, { queryAwareFind: true })
+  const notes = feathers.service('notes')
+  const originalFind = notes.find.bind(notes)
+  notes.find = async params => {
+    const res = await originalFind({
+      ...params,
+      query: { ...(params?.query ?? {}), $limit: limit },
+    })
+    return res
+  }
+  const figbird = new Figbird({
+    schema,
+    adapter: new FeathersAdapter(feathers),
+    eventBatchInterval: 0,
+    reconcileCooldown: 0,
+  })
+
+  const { texts, unsub } = await watch(figbird, { tag: 'x' })
+  t.deepEqual(texts(), ['a', 'b'])
+  t.is(figbird.inspect()[0]?.classification, 'server-window')
+
+  // Server raises its default page size to 10; refetch disproves cap 2.
+  limit = 10
+  await figbird.refetch('notes')
+  await settle()
+
+  t.deepEqual(texts(), ['a', 'b', 'c', 'd'])
+  t.is(figbird.inspect()[0]?.classification, 'local-exact')
+  t.is(figbird.inspect()[0]?.realtimeStrategy, 'merge')
+
+  const finds = notes.counts.find
+  serverCreate(notes, { id: 9, text: 'z', rank: 9, tag: 'x', updatedAt: 1 })
+  await settle()
+  t.is(notes.counts.find, finds)
+  t.deepEqual(texts(), ['a', 'b', 'c', 'd', 'z'])
+  unsub()
+})
+
+test('server page cap: a $skip page without $limit retains its observed cap', async t => {
+  const { figbird, notes } = createApp({ defaultLimit: 2 })
+  const { texts, unsub } = await watch(figbird, { tag: 'x', $skip: 1 })
+  t.deepEqual(texts(), ['b', 'c'])
+  t.is(figbird.inspect()[0]?.classification, 'server-window')
+
+  // Removing row 4 leaves total 3 (skip 1 + 2 rows = 3 -> no longer truncated),
+  // but the previously observed cap of 2 must still be retained.
+  serverRemove(notes, 4)
+  await figbird.refetch('notes')
+  await settle()
+  t.deepEqual(texts(), ['b', 'c'])
+  t.is(figbird.inspect()[0]?.classification, 'server-window')
+
+  // Creating a new row must not grow the page past the retained cap of 2.
+  serverCreate(notes, { id: 9, text: 'z', rank: 9, tag: 'x', updatedAt: 1 })
+  await settle()
+  t.true(texts().length <= 2)
   unsub()
 })
