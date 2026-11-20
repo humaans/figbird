@@ -101,6 +101,11 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
     if (!this.owned) this.#renderRead.retain(onExpire)
   }
 
+  /** The last owner left while a render was suspended; hand the read over to that render. */
+  handoffToAwaitingRender(onExpire: () => void): void {
+    if (!this.owned && this.awaited) this.#renderRead.handoffToAwaitingRender(onExpire)
+  }
+
   get owned(): boolean {
     return this.owners.size > 0
   }
@@ -127,8 +132,9 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
 
   /**
    * A Suspense reader threw this query's failure to its error boundary. With no
-   * subscriber the failed query is dropped, so a boundary retry starts a fresh one.
-   * A subscriber keeps it alive, so the retry is armed to refetch in place instead.
+   * owner the failed query is dropped, so a boundary retry starts a fresh one.
+   * Any active owner (subscriber, `prepare()`, prefetch) keeps it alive, so the
+   * retry is armed to refetch in place instead.
    */
   failedReadObserved(stillFailed: () => boolean, abandon: () => void): void {
     this.#releaseFailedRead(stillFailed, abandon, () => this.#armFailedReadRetry())
@@ -144,14 +150,14 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   }
 
   #releaseFailedRead(stillFailed: () => boolean, abandon: () => void, held: () => void): void {
-    if (this.#hasSubscriber()) {
+    if (this.owned) {
       held()
       return
     }
     // A reader in the same commit subscribes after this render, so look again after it.
     queueMicrotask(() => {
       if (!stillFailed()) return
-      if (this.#hasSubscriber()) held()
+      if (this.owned) held()
       else abandon()
     })
   }
@@ -174,10 +180,6 @@ export class RelationalQueryLifetime<TListener> extends QueryLifetime<TListener,
   clearFailedReadRetry(): void {
     this.#failedReadRetryArmed = false
     this.#failedReadRetryGeneration++
-  }
-
-  #hasSubscriber(): boolean {
-    return [...this.owners.values()].some(owner => owner.source === 'subscriber')
   }
 
   suspensePromise(start: () => void): Promise<void> {

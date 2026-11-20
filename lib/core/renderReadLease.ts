@@ -31,6 +31,7 @@ export class RenderRead {
   // and the store's fetch revision when it began. Everything it used is that fresh or
   // was fetched after that revision.
   #awaitingOwner = false
+  #claimGeneration = 0
   #settledAt = 0
   #staleTime = 0
   #fetchedAfter: number | undefined = undefined
@@ -52,10 +53,22 @@ export class RenderRead {
 
   /** The render started the query's graph. `unowned` is false when an owner started it. */
   started(unowned: boolean, staleTime: number, fetchedAfter: number | undefined): void {
+    this.#claimGeneration++
     this.#awaitingOwner = unowned
     this.#settledAt = this.#clock.now()
     this.#staleTime = staleTime
     this.#fetchedAfter = fetchedAfter
+  }
+
+  /**
+   * The last owner left while a render was suspended on this read; hand the read
+   * over to that render so it stays protected and adoptable when the render commits.
+   */
+  handoffToAwaitingRender(onExpire: () => void): void {
+    this.#claimGeneration++
+    this.#awaitingOwner = true
+    this.#settledAt = this.#clock.now()
+    this.retain(onExpire)
   }
 
   /** The read the render is suspended on settled; the render is about to try again. */
@@ -71,9 +84,10 @@ export class RenderRead {
   claim(staleTime: number): RenderReadClaim | null {
     this.#endLease()
     if (!this.#awaitingOwner) return null
+    const generation = this.#claimGeneration
     // Keep the read claimable through the commit's immediate StrictMode resubscription.
     queueMicrotask(() => {
-      this.#awaitingOwner = false
+      if (generation === this.#claimGeneration) this.#awaitingOwner = false
     })
     // A render that never committed leaves its read unowned. Past the adoption window
     // it is no longer this owner's read, so its freshness is checked like any other.
@@ -87,6 +101,7 @@ export class RenderRead {
   /** The query was torn down. */
   reset(): void {
     this.#endLease()
+    this.#claimGeneration++
     this.#awaitingOwner = false
   }
 

@@ -70,7 +70,9 @@ export class QueryRetention {
         if (deadline > now || this.#deadlines.get(queryId) !== deadline) continue
         this.#deadlines.delete(queryId)
         const delay = this.#expire(queryId)
-        if (typeof delay === 'number') postponed.push([queryId, now + Math.max(1, delay)])
+        if (typeof delay === 'number' && Number.isFinite(delay)) {
+          postponed.push([queryId, now + Math.max(1, delay)])
+        }
       }
       if (this.#disposed) return
       for (const [queryId, deadline] of postponed) {

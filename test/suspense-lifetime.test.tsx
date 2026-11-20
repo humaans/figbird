@@ -299,7 +299,102 @@ it('releasing a pin while a Suspense read is pending does not strand the read', 
     t.is(outcome, 'settled', pin)
     t.is(calls, 1, pin)
     t.is(figbird.query(builder).getSnapshot().data?.status, 'done', pin)
+    // Committing a staleTime: 0 subscriber adopts the handed-over render read without refetching.
+    const unsub = figbird.query(builder).subscribe(() => {}, { staleTime: 0 })
+    await clock.advance(0)
+    t.is(calls, 1, `${pin}: committing after handoff does not refetch`)
+    unsub()
   }
+})
+
+it('entity queries: a failed prepare pin retries in place without orphaning the ref', async t => {
+  const { App, figbird, adapter } = createTestApp(schema, { jobs: { data: {} } })
+  t.teardown(() => figbird.dispose())
+  let calls = 0
+  adapter.get = async () => {
+    calls++
+    throw new Error('offline')
+  }
+  const builder = q.jobs.get(1)
+  const prepared = figbird.prepare(builder)
+  const initialRef = figbird.query(builder)
+  await t.throwsAsync(prepared.promise, { message: 'offline' })
+  function Probe() {
+    return <div className='ready'>{useQuery(builder)?.status}</div>
+  }
+  const d = dom({ onCaughtError: () => {} })
+  d.render(
+    <App>
+      <Boundary key='first'>
+        <Suspense fallback={<div>Loading</div>}>
+          <Probe />
+        </Suspense>
+      </Boundary>
+    </App>,
+  )
+  await d.flush()
+  t.truthy(d.$('.failed'))
+  t.is(figbird.query(builder), initialRef, 'prepare pin keeps the same ref alive')
+  adapter.get = async (_service, id) => {
+    calls++
+    return { data: { id, status: 'recovered' } }
+  }
+  d.render(
+    <App>
+      <Boundary key='retry'>
+        <Suspense fallback={<div>Loading</div>}>
+          <Probe />
+        </Suspense>
+      </Boundary>
+    </App>,
+  )
+  await d.flush()
+  t.is(d.$('.ready')?.textContent, 'recovered')
+  t.is(figbird.query(builder), initialRef, 'boundary retry recovers the pinned ref in place')
+  t.is(calls, 2)
+  d.unmount()
+  prepared.release()
+})
+
+it('useQueries does not start a cold sibling fetch when an earlier sibling is already errored', async t => {
+  const { App, figbird, adapter } = createTestApp(schema, { jobs: { data: {} } })
+  t.teardown(() => figbird.dispose())
+  const calls: (string | number)[] = []
+  adapter.get = async (_service, id) => {
+    calls.push(id)
+    if (id === 1) throw new Error('offline')
+    return { data: { id, status: 'ok' } }
+  }
+  const failed = q.jobs.get(1)
+  const cold = q.jobs.get(2)
+  // Seed job 1 into an error state held by a non-Suspense reader.
+  const holdRelease = figbird.query(failed).subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.deepEqual(calls, [1])
+
+  function Probe() {
+    const [first, second] = useQueries([failed, cold])
+    return (
+      <div className='ready'>
+        {first?.status}:{second?.status}
+      </div>
+    )
+  }
+  const d = dom({ onCaughtError: () => {} })
+  d.render(
+    <App>
+      <Boundary>
+        <Suspense fallback={<div>Loading</div>}>
+          <Probe />
+        </Suspense>
+      </Boundary>
+    </App>,
+  )
+  await d.flush()
+  t.truthy(d.$('.failed'))
+  t.deepEqual(calls, [1], 'cold sibling 2 was not fetched during a render that throws sibling 1')
+  d.unmount()
+  holdRelease()
 })
 
 it('a parallel read does not retry a held failure before a reader has thrown it', async t => {

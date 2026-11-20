@@ -227,7 +227,8 @@ function createPageBridge(): DevtoolsPageBridge {
       const capability: DevtoolsCapability = 'custom-queries'
       const session: DevtoolsBridgeSession = {
         cacheDirty: true,
-        customQueries: options?.capabilities?.includes(capability) ?? false,
+        customQueries:
+          Array.isArray(options?.capabilities) && options.capabilities.includes(capability),
         events: new CappedBuffer(EVENT_LIMIT),
         expires: null,
         queriesDirty: true,

@@ -554,3 +554,52 @@ test('custom q: arguments are copied, so later changes cannot alter the query', 
   t.is(figbird.query(figbird.q.jobs.getCheck({ id: 1 }, extra)), ref)
   release()
 })
+
+test('custom q: releasing a pin while a Suspense read is pending keeps the lease under gcTime 0', async t => {
+  const { figbird: original, adapter } = app()
+  original.dispose()
+  const clock = new TestClock()
+  const figbird = new Figbird({ schema, adapter, clock, gcTime: 0, staleTime: 0, retry: false })
+  t.teardown(() => figbird.dispose())
+  let calls = 0
+  const gate = deferred<{ id: number; status: string }>()
+  adapter.call = () => {
+    calls++
+    return calls === 1 ? gate.promise : Promise.resolve({ id: 1, status: 'refetched' })
+  }
+  const builder = figbird.q.jobs.getCheck({ id: 1 })
+  const prepared = figbird.prepare(builder)
+  const read = figbird.query(builder).suspensePromise()
+
+  // Release the pin before the request lands; the awaited render takes over the lease.
+  prepared.release()
+  await clock.advance(0)
+  gate.resolve({ id: 1, status: 'handed-off' })
+  await read
+  await clock.advance(10)
+
+  const ref = figbird.query(builder)
+  t.is(ref.getSnapshot().status, 'success')
+  t.deepEqual(ref.getSnapshot().data, { id: 1, status: 'handed-off' })
+  // Committing a staleTime: 0 subscriber adopts the handed-off render read without refetching.
+  const unsub = ref.subscribe(() => {}, { staleTime: 0 })
+  await clock.advance(0)
+  t.is(calls, 1)
+  unsub()
+})
+
+test('custom q: inspect reports itemCount 0 for null or undefined results', async t => {
+  const { figbird, adapter } = app()
+  t.teardown(() => figbird.dispose())
+  for (const [id, result] of [
+    [1, null],
+    [2, undefined],
+  ] as const) {
+    adapter.call = async () => result
+    const ref = figbird.query(figbird.q.jobs.getCheck({ id }))
+    const unsub = ref.subscribe(() => {})
+    await waitFor(() => ref.getSnapshot().status === 'success', `nullish result ${id}`)
+    t.is(ref.inspect().itemCount, 0)
+    unsub()
+  }
+})

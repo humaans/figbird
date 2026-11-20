@@ -110,7 +110,7 @@ export interface TimelineConnectionEvent {
 
 export type { TimelineTraceSummary } from './timelineTraceStore.js'
 
-/** Custom read spans have no query-cache or mutation identity. */
+/** Custom read span recorded by the collector (linked to `queryId` when cached). */
 export interface ReadSpan {
   readId: number
   queryId?: string

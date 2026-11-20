@@ -72,7 +72,7 @@ export interface QueryRefLike<T> {
   loadMore?(): void
   setColdReadGroup(group: object): void
   suspensePromise(): Promise<void>
-  releaseColdStart(): void
+  releaseColdStart(observed?: boolean): void
   retryColdStart?(): boolean
   hash(): string
   kind(): 'find' | 'get' | 'paginate' | 'all' | 'custom'
