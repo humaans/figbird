@@ -477,3 +477,58 @@ it('a retry that refetches the service and resets the boundary makes one request
     d.unmount()
   }
 })
+
+it('parallel recovery preserves the freshness policy of cached siblings', async t => {
+  for (const staleTime of [Infinity, 0]) {
+    const { figbird: original, adapter } = app()
+    original.dispose()
+    const clock = new TestClock()
+    const figbird = new Figbird({ schema, adapter, clock, staleTime: 0, retry: false })
+    t.teardown(() => figbird.dispose())
+    const calls = new Map<string | number, number>()
+    let fail = true
+    adapter.get = async (_service, id) => {
+      calls.set(id, (calls.get(id) ?? 0) + 1)
+      if (id === 1 && fail) throw new Error('offline')
+      return { data: { id, status: 'ready' } }
+    }
+    const warm = q.jobs.get(2)
+    const preparation = figbird.prepare(warm)
+    await preparation.promise
+    preparation.release()
+    await clock.advance(100)
+    const failed = q.jobs.get(1)
+    const failedRef = figbird.query(failed)
+    const releaseFailed = failedRef.subscribe(() => {})
+    t.teardown(releaseFailed)
+    await t.throwsAsync(failedRef.suspensePromise(), { message: 'offline' })
+    function Probe() {
+      const [first, second] = useQueries([failed, warm], { staleTime })
+      return (
+        <span className='ready'>
+          {first?.status}:{second?.status}
+        </span>
+      )
+    }
+    const d = dom({ onCaughtError: () => {} })
+    const tree = (reset: number) => (
+      <FigbirdProvider figbird={figbird}>
+        <Boundary key={reset}>
+          <Suspense fallback={<div>Waiting</div>}>
+            <Probe />
+          </Suspense>
+        </Boundary>
+      </FigbirdProvider>
+    )
+    d.render(tree(0))
+    await d.flush()
+    t.truthy(d.$('[data-failed]'))
+    t.is(calls.get(2), 1, 'failure does not fetch the sibling')
+    fail = false
+    d.render(tree(1))
+    await d.flush()
+    t.is(d.$('.ready')?.textContent, 'ready:ready')
+    t.is(calls.get(2), staleTime === 0 ? 2 : 1, `retry respects staleTime ${staleTime}`)
+    d.unmount()
+  }
+})

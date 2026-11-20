@@ -58,9 +58,16 @@ function splitWindow(q: Record<string, unknown> | undefined): {
 } {
   if (!q) return { filters: undefined, sort: undefined, limit: undefined, skip: 0 }
   const { $sort, $limit, $skip, ...filters } = q
+  let sort: Record<string, number> | undefined
+  if ($sort && typeof $sort === 'object' && !Array.isArray($sort)) {
+    const definedEntries = Object.entries($sort as Record<string, number | undefined>).filter(
+      (entry): entry is [string, number] => entry[1] !== undefined,
+    )
+    if (definedEntries.length > 0) sort = Object.fromEntries(definedEntries)
+  }
   return {
     filters: Object.keys(filters).length > 0 ? filters : undefined,
-    sort: $sort as Record<string, number> | undefined,
+    sort,
     limit: $limit as number | undefined,
     skip: ($skip as number | undefined) ?? 0,
   }

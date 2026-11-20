@@ -37,7 +37,7 @@ export function buildComparator(
   sort: Record<string, number>,
   compare: ValueComparator,
 ): (a: unknown, b: unknown) => number {
-  const entries = Object.entries(sort)
+  const entries = Object.entries(sort).filter(([, direction]) => direction !== undefined)
   return (a, b) => {
     for (const [field, direction] of entries) {
       const cmp = compare(

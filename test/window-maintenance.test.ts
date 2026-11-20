@@ -4,6 +4,8 @@ import { Figbird } from '../lib/core/figbird'
 import { createSchema, service } from '../lib/core/schema'
 import { compareValues, type ValueComparator } from '../lib/core/sort'
 import { mockFeathers } from './helpers'
+import { flushTasks } from './clock'
+import { deferred } from './mutation-test-helpers'
 
 /**
  * Window maintenance: server-window finds merge realtime events locally when the
@@ -735,35 +737,40 @@ test('server page cap: query reapply reconciles instead of rebuilding from the e
 
 test('server page cap: in-flight removal replayed onto a capped page removes the visible row', async t => {
   const { figbird, notes } = createApp({ defaultLimit: 2 })
-  let releaseFind: (() => void) | undefined
+  t.teardown(() => figbird.dispose())
+  const captured = deferred<void>()
+  const releaseResponse = deferred<void>()
   const originalFind = notes.find.bind(notes)
   notes.find = async params => {
-    await new Promise<void>(resolve => {
-      releaseFind = resolve
-    })
-    return originalFind(params)
+    const snapshot = await originalFind(params)
+    captured.resolve()
+    await releaseResponse.promise
+    return snapshot
   }
 
   const ref = figbird.queryDesc(
     { serviceName: 'notes', method: 'find', params: { query: { tag: 'x' } } },
     { realtime: 'merge' },
   )
-  const unsub = ref.subscribe(() => {})
-  await settle()
+  const snapshots: Array<{ ids: number[]; total: number | undefined }> = []
+  t.teardown(
+    ref.subscribe(state => {
+      if (state.status === 'success') {
+        snapshots.push({ ids: state.data.map(row => row.id), total: state.meta.total })
+      }
+    }),
+  )
+  await captured.promise
 
-  // Remove row 1 on the server while the initial capped find is still in flight.
+  // The response has already captured rows [1, 2] and total 4.
   serverRemove(notes, 1)
-  await settle()
-
-  // Complete the in-flight find (whose snapshot had rows [1, 2], total 4 -> cap 2).
-  // Replaying the in-flight removal must drop row 1 from the visible page.
+  await flushTasks()
   notes.find = originalFind
-  releaseFind?.()
-  await settle()
+  releaseResponse.resolve()
+  await flushTasks()
 
-  const texts = ((ref.getSnapshot()?.data ?? []) as Note[]).map(note => note.text)
-  t.false(texts.includes('a'))
-  unsub()
+  // Inspect the first published success, before a trailing refetch can hide a missed replay.
+  t.deepEqual(snapshots[0], { ids: [2], total: 3 })
 })
 
 test('server page cap: stale-entity rebase keeps capped page membership intact', async t => {

@@ -69,6 +69,7 @@ function collectRelationalFilterPathsInto(
   }
 
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (child === undefined) continue
     if (key.startsWith('$')) {
       collectRelationalFilterPathsInto(schema, serviceName, child, paths)
       continue

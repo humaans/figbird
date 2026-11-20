@@ -179,14 +179,27 @@ export function compileRelations(
     }
     if (strategy === 'junction' && definition.via) {
       const via = definition.via
+      const junctionServerReasons = rootServerReasons(
+        false,
+        relationRefinementServerReasons(schema, via.destService, via.query ?? {}),
+      )
       return {
         ...common,
         kind: 'junction',
-        junction: queryPlan(schema, via.destService, via.destField, {}, via.query ?? {}, {
-          realtime,
-          fetchPolicy: 'swr',
-          allPages: true,
-        }),
+        junction: queryPlan(
+          schema,
+          via.destService,
+          via.destField,
+          {},
+          via.query ?? {},
+          {
+            realtime,
+            fetchPolicy: 'swr',
+            allPages: true,
+            ...(junctionServerReasons.length > 0 ? { server: true } : {}),
+          },
+          junctionServerReasons,
+        ),
       }
     }
     return { ...common, kind: strategy === 'perParent' ? 'perParent' : 'fanIn' }

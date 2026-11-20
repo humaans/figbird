@@ -133,7 +133,8 @@ export function useQueryResultsImpl(
   const refs = useStableArray(queries.map(query => figbird.query(query)))
   // Avoid starting ungrouped cold fetches during render when a sibling has already
   // failed and this render is about to throw to its ErrorBoundary.
-  if (!refs.some(ref => ref.getSnapshot().status === 'error')) {
+  const hasFailedRead = refs.some(ref => ref.getSnapshot().status === 'error')
+  if (!hasFailedRead) {
     for (const ref of refs) ref.prepareRead?.(staleTime)
   }
 
@@ -193,6 +194,12 @@ export function useQueryResultsImpl(
     }
   }
   if (firstError) throw firstError
+
+  // A retried failure can now suspend with its siblings. Prepare those siblings
+  // with this reader's freshness policy before starting the parallel read.
+  if (hasFailedRead) {
+    for (const ref of refs) ref.prepareRead?.(staleTime)
+  }
 
   // suspensePromiseAll materializes each pending query's root, so the whole set
   // starts fetching before the throw — that parallelism is the point of this hook.
