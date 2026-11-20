@@ -481,8 +481,8 @@ export class RelationalQueryRef<
         if (this.#root === null) return false
         if (!this.#lifetime.awaited) return true
         // A render is suspended on this read. Tearing the graph down would leave its
-        // promise unsettled, so the read stays and is treated as that render's own.
-        this.#lifetime.retainRenderRead(() => {})
+        // promise unsettled, so the read stays and is handed over to that render.
+        this.#lifetime.handoffToAwaitingRender(() => this.#onIdle?.())
         return false
       },
       () => this.#cleanup(),

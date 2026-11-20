@@ -106,7 +106,16 @@ export class CustomQueryRef<T> {
       if (this.#disposed) return
       this.#lifetime.release(fn)
       this.#lifetime.scheduleCleanup(
-        () => !this.#pending,
+        () => {
+          if (this.#pending) {
+            // A render is suspended on this read; hand it over so settling keeps the lease.
+            if (this.#lifetime.awaited) {
+              this.#lifetime.handoffToAwaitingRender(() => this.#host.onSettled())
+            }
+            return false
+          }
+          return true
+        },
         () => this.#host.onIdle(),
       )
       this.#host.onChange()
@@ -132,7 +141,7 @@ export class CustomQueryRef<T> {
   /** Service-wide invalidation starts active queries and marks retained results stale. */
   invalidate(): void {
     this.#invalidated = true
-    if (this.#lifetime.owners.size > 0 || this.#pending) this.refetch()
+    if (this.#lifetime.owned || this.#pending) this.refetch()
   }
 
   suspensePromise(): Promise<void> {
@@ -159,7 +168,7 @@ export class CustomQueryRef<T> {
       else this.#lifetime.releaseFailedRead(stillFailed, abandon)
       return
     }
-    if (!this.#lifetime.owned && !this.#pending)
+    if (this.#lifetime.canAbandon() && !this.#pending)
       this.#lifetime.scheduleCleanup(
         () => !this.#pending,
         () => this.#host.onAbandoned(),
@@ -172,9 +181,8 @@ export class CustomQueryRef<T> {
 
   canEvictAbandonedRead(): boolean {
     return (
-      !this.#lifetime.leased &&
+      this.#lifetime.canEvict() &&
       (!this.#adopted || this.#state.status === 'error') &&
-      !this.#lifetime.owned &&
       !this.#pending
     )
   }
@@ -214,7 +222,9 @@ export class CustomQueryRef<T> {
         this.#state.status === 'success'
           ? Array.isArray(this.#state.data)
             ? this.#state.data.length
-            : 1
+            : this.#state.data == null
+              ? 0
+              : 1
           : 0,
       fetchedAt: this.#fetchedAt,
       prepareCount: [...this.#lifetime.owners.values()].filter(owner => owner.source === 'prepare')
@@ -318,8 +328,8 @@ export class CustomQueryRef<T> {
     }
     this.#settle()
     this.#notify()
-    if (this.#lifetime.owners.size === 0) {
-      if (this.#adopted) this.#host.onIdle()
+    if (!this.#lifetime.owned) {
+      if (this.#adopted && !this.#lifetime.leased) this.#host.onIdle()
       else this.#host.onSettled()
     }
   }
