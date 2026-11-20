@@ -117,7 +117,11 @@ export function explainQueryNode(
       if (!allPages) window.push({ code: 'window-filter', detail: key })
     } else if (!LOCAL_QUERY_OPERATORS.has(key) && !(top && localOperators?.has(key))) {
       authoritative.push({ code: 'server-only-operator', detail: key })
-    } else if (Array.isArray(value) && value.some(item => isEmptyCondition(item))) {
+    } else if (
+      (key === '$or' || key === '$and') &&
+      Array.isArray(value) &&
+      value.some(item => isEmptyCondition(item))
+    ) {
       authoritative.push({ code: 'empty-condition', detail: key })
     }
   })
@@ -170,7 +174,14 @@ type QueryKeyVisitor = (key: string, top: boolean, value: unknown) => void
  * No local reading is safe, so the server decides.
  */
 function isEmptyCondition(value: unknown): boolean {
-  return isPlainRecord(value) && Object.values(value).every(item => item === undefined)
+  return (
+    isPlainRecord(value) &&
+    Object.entries(value).every(
+      ([key, item]) =>
+        item === undefined ||
+        ((key === '$or' || key === '$and') && Array.isArray(item) && item.length === 0),
+    )
+  )
 }
 
 function walkQueryKeysAtDepth(value: unknown, visit: QueryKeyVisitor, top: boolean): void {

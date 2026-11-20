@@ -28,14 +28,23 @@ export function datesToIso(value: unknown): unknown {
  */
 export function withoutUndefined(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map(item => (item === undefined ? null : withoutUndefined(item)))
+    const next = value.map(item => (item === undefined ? null : withoutUndefined(item)))
+    return next.some((item, index) => item !== value[index]) ? next : value
   }
   if (isPlainRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([, item]) => item !== undefined)
-        .map(([key, item]) => [key, withoutUndefined(item)]),
-    )
+    const entries = Object.entries(value)
+    let changed = false
+    const next: [string, unknown][] = []
+    for (const [key, item] of entries) {
+      if (item === undefined) {
+        changed = true
+        continue
+      }
+      const cleaned = withoutUndefined(item)
+      if (cleaned !== item) changed = true
+      next.push([key, cleaned])
+    }
+    return changed ? Object.fromEntries(next) : value
   }
   return value
 }

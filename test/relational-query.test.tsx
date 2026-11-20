@@ -5919,3 +5919,80 @@ test('.all(): get(id) answers locally from the materialized service', async t =>
   unsubRegex()
   unsubAll()
 })
+
+test('relational filters: undefined dotted values are ignored in classification and dependencies', t => {
+  const { figbird } = createApp()
+  const report = figbird.explain(
+    figbird.q.issues.related('comments', c => c.where({ 'author.name': undefined } as never)),
+  )
+  const commentsNode = report.nodes.find(node => node.path === 'comments')
+  t.truthy(commentsNode)
+  t.is(commentsNode?.class, 'local-exact')
+})
+
+test('relational filters: junction via.query dotted filters are server-authoritative and track dependencies', async t => {
+  const filteredJunctionSchema = createSchema({
+    services: {
+      roles: service<{ item: { id: number; name: string } }>(),
+      users: service<{ item: { id: number; name: string; active: boolean } }>(),
+      roleMembers: service<{
+        item: { id: number; roleId: number; userId: number; teamId: number }
+      }>(),
+      teams: service<{ item: { id: number; status: string } }>(),
+    },
+    relationships: {
+      roles: ({ many: manyRel }) => ({
+        members: manyRel(
+          {
+            sourceField: 'id',
+            destService: 'roleMembers',
+            destField: 'roleId',
+            query: { 'team.status': 'active' },
+          },
+          { sourceField: 'userId', destService: 'users', destField: 'id' },
+        ),
+      }),
+      roleMembers: ({ one: oneRel }) => ({
+        team: oneRel({
+          sourceField: 'teamId',
+          destService: 'teams',
+          destField: 'id',
+        }),
+      }),
+    },
+  })
+
+  const { figbird, feathers } = createTestApp(
+    filteredJunctionSchema,
+    {
+      roles: { data: { 1: { id: 1, name: 'Admin' } } },
+      users: { data: { 10: { id: 10, name: 'Alice', active: true } } },
+      roleMembers: { data: { 100: { id: 100, roleId: 1, userId: 10, teamId: 1 } } },
+      teams: { data: { 1: { id: 1, status: 'active' } } },
+    },
+    { queryAwareFind: true },
+  )
+
+  const builder = figbird.q.roles.related('members')
+  const report = figbird.explain(builder)
+  const junctionNode = report.nodes.find(node => node.service === 'roleMembers')
+  t.truthy(junctionNode)
+  t.is(junctionNode?.class, 'server-authoritative')
+
+  const ref = figbird.query(builder)
+  const unsub = ref.subscribe(() => {})
+  await flushTasks()
+  const junctionFinds = feathers.service('roleMembers').counts.find
+  const roleFinds = feathers.service('roles').counts.find
+
+  await feathers.service('teams').patch(1, { status: 'archived' })
+  await flushTasks()
+
+  t.is(
+    feathers.service('roleMembers').counts.find,
+    junctionFinds + 1,
+    'junction leaf reconciles when its filter dependency changes',
+  )
+  t.is(feathers.service('roles').counts.find, roleFinds, 'parent root stays warm')
+  unsub()
+})

@@ -1283,6 +1283,13 @@ export class RelationalQueryRef<
             if (path === plan.key && !role) queryRef.reconcile()
           }
         })
+        if (plan.kind === 'junction') {
+          add(plan.junction.service, plan.junction.query, () => {
+            for (const { queryRef, path, role } of this.#queryLeaves()) {
+              if (path === plan.key && role === 'junction') queryRef.reconcile()
+            }
+          })
+        }
         visit(plan.children)
       }
     }
@@ -1301,8 +1308,9 @@ export class RelationalQueryRef<
     const queue = (reconcile: () => void) => {
       if (!pending.size)
         queueMicrotask(() => {
-          if (this.#lifetime.owners.size) for (const run of pending) run()
+          const batch = [...pending]
           pending.clear()
+          if (this.#lifetime.owners.size) for (const run of batch) run()
         })
       pending.add(reconcile)
     }

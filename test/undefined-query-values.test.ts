@@ -5,6 +5,8 @@ import { Figbird } from '../lib/core/figbird'
 import { hashObject } from '../lib/core/hash'
 import { explainQueryNode } from '../lib/core/queryClassification'
 import { createSchema, service } from '../lib/core/schema'
+import { buildComparator, compareValues } from '../lib/core/sort'
+import { withoutUndefined } from '../lib/core/wireDates'
 import { flushTasks } from './clock'
 import { createTestApp, mockFeathers } from './helpers'
 
@@ -315,4 +317,24 @@ test('a query with an emptied condition refetches on events instead of matching'
 
   t.is(notes.counts.find, finds + 1)
   unsub()
+})
+
+test('classification handles nested empty $or/$and and does not flag $in array objects', t => {
+  t.deepEqual(explainQueryNode({ $or: [{ $and: [] }, { rank: 1 }] }), {
+    class: 'server-authoritative',
+    reasons: [{ code: 'empty-condition', detail: '$or' }],
+  })
+  t.is(classOf({ meta: { $in: [{}] } }), 'local-exact')
+})
+
+test('$sort with an undefined direction does not sort by that field locally', t => {
+  const compare = buildComparator({ rank: undefined as unknown as number }, compareValues)
+  const rows = [note(1, 'b', { rank: 2 }), note(2, 'a', { rank: 1 })]
+  t.is(compare(rows[0], rows[1]), 0)
+  t.is(compare(rows[1], rows[0]), 0)
+})
+
+test('withoutUndefined preserves identity when no undefined values are present', t => {
+  const input = { tag: 'x', rank: { $in: [1, 2] }, nested: [{ a: 1 }] }
+  t.is(withoutUndefined(input), input)
 })
