@@ -43,8 +43,7 @@ import {
   type QueryNodeClass,
 } from './queryClassification.js'
 export type { ExplainNode, ExplainReport } from './queryClassification.js'
-import { queryPolicy } from './queryMaintenance.js'
-import { maintenanceClass } from './windowMaintenance.js'
+import { inspectQueryMaintenance } from './windowMaintenance.js'
 import { QueryRef } from './queryRef.js'
 import {
   DEFAULT_GC_TIME,
@@ -1155,8 +1154,8 @@ export class Figbird<
         const stats = this.queryStore.getQueryStats(query.queryId)
         const generation = this.queryStore.getQueryGeneration(query.queryId)
         if (generation === undefined) continue
-        const classification = maintenanceClass(query)
-        const policy = queryPolicy(query.maintenance)
+        const { classification, classificationReasons, realtimeStrategy } =
+          inspectQueryMaintenance(query)
         rows.push({
           queryId: query.queryId,
           generation,
@@ -1173,20 +1172,8 @@ export class Figbird<
               }
             : {}),
           classification,
-          classificationReasons:
-            query.observedPageCap === undefined
-              ? policy.classificationReasons
-              : [
-                  ...policy.classificationReasons,
-                  {
-                    code: 'window-filter',
-                    detail: `observed server page cap: ${query.observedPageCap}`,
-                  },
-                ],
-          realtimeStrategy:
-            classification === 'server-window' && policy.realtimeStrategy === 'merge'
-              ? 'refetch'
-              : policy.realtimeStrategy,
+          classificationReasons,
+          realtimeStrategy,
           skipped: query.config.skip === true,
           status: query.state.status,
           isFetching: query.state.isFetching,

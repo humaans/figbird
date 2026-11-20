@@ -5,7 +5,11 @@ import { commitQuery } from './queryResults.js'
 /** Apply entity changes and window decisions to queries before publishing effects. */
 
 import { queryPolicy } from './queryMaintenance.js'
-import { isServerMaintained, type StoredQueryClass } from './queryClassification.js'
+import {
+  isServerMaintained,
+  type ClassificationReason,
+  type StoredQueryClass,
+} from './queryClassification.js'
 import { ItemRemovedError } from './errors.js'
 import {
   entityKey,
@@ -79,6 +83,31 @@ export function maintenanceClass<TMeta>(query: Query<unknown, TMeta, unknown>): 
   return classification === 'local-exact' && windowLimit(query) !== undefined
     ? 'server-window'
     : classification
+}
+
+/** Effective classification, reasons, and realtime strategy for diagnostics/inspection. */
+export function inspectQueryMaintenance<TMeta>(query: Query<unknown, TMeta, unknown>): {
+  classification: StoredQueryClass
+  classificationReasons: readonly ClassificationReason[]
+  realtimeStrategy: 'merge' | 'refetch' | 'manual'
+} {
+  const classification = maintenanceClass(query)
+  const policy = queryPolicy(query.maintenance)
+  const classificationReasons: readonly ClassificationReason[] =
+    query.observedPageCap === undefined
+      ? policy.classificationReasons
+      : [
+          ...policy.classificationReasons,
+          {
+            code: 'window-filter',
+            detail: `observed server page cap: ${query.observedPageCap}`,
+          },
+        ]
+  const realtimeStrategy =
+    classification === 'server-window' && policy.realtimeStrategy === 'merge'
+      ? 'refetch'
+      : policy.realtimeStrategy
+  return { classification, classificationReasons, realtimeStrategy }
 }
 
 export function groupEventsByService<TEvent extends { serviceName: string }>(
@@ -621,9 +650,10 @@ export function replayFetchedQueryFromEvents<TMeta>({
     if (!query || queryPolicy(query.maintenance).responseMode === 'snapshot') return
 
     const { mergeEvents, replayVisibleEvents } = queryPolicy(query.maintenance)
+    const shouldReplayVisible = replayVisibleEvents || isServerMaintained(maintenanceClass(query))
     if (mergeEvents) {
       const result = applyMergeEventToQuery(context, queryId, event)
-      if (result === 'applied' || !replayVisibleEvents) continue
+      if (result === 'applied' || !shouldReplayVisible) continue
     }
     applyVisibleEventEffect(
       context,
