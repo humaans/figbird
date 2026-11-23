@@ -1,5 +1,9 @@
 # Figbird Changelog
 
+## 0.24.2
+
+- An older realtime `created` event no longer overwrites a newer copy of the same row.
+
 ## 0.24.1
 
 - New `continuity` option. If your app can tell when realtime events were missed, for

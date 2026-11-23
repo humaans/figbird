@@ -257,7 +257,7 @@ export class MutationLanes<TEntry extends MutationLaneEntry> {
   ): AuthoritativeTransition | null {
     const state = this.#require(lane)
     const previousItem = state.base === ABSENT ? null : state.base
-    if ((type === 'updated' || type === 'patched') && this.#isStale(state, item)) {
+    if (type !== 'removed' && this.#isStale(state, item)) {
       return null
     }
 

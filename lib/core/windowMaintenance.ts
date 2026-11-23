@@ -83,18 +83,23 @@ export function applyEventsToService<TMeta>({
   isItemStale: (curr: unknown, next: unknown) => boolean
   processedEvents: ProcessedCacheEvent[]
 }): void {
-  for (const event of events) {
-    const id = getId(event.item)
+  for (const queued of events) {
+    const id = getId(queued.item)
     if (id === undefined) continue
     const itemId = entityKey(id)
     const previousItem = service.entities.get(itemId) ?? null
+    let event = queued
     if (
       event.mode === 'server' &&
       previousItem &&
-      (event.type === 'updated' || event.type === 'patched') &&
+      event.type !== 'removed' &&
       isItemStale(previousItem, event.item)
-    )
-      continue
+    ) {
+      // An older created still tells queries the row exists; they get the newer
+      // cached copy, since the row may have reached the cache without joining them.
+      if (event.type !== 'created') continue
+      event = { ...event, item: previousItem }
+    }
     if (event.mode === 'server' && event.source === 'fetch' && sameValue(previousItem, event.item))
       continue
 
