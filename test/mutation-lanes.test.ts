@@ -120,6 +120,89 @@ test('mutation lanes: realtime that overtakes an acknowledgement keeps the newer
   )
 })
 
+test('mutation lanes: an older realtime created does not overwrite a newer row', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    ...services(),
+    notes: { data: { 1: { id: 1, content: 'hello', updatedAt: 1 } } },
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  notes.emit('patched', { id: 1, content: 'newer', updatedAt: 3 })
+  notes.emit('created', { id: 1, content: 'older', updatedAt: 1 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'newer')
+})
+
+test('mutation lanes: an older realtime created still adds the newer cached row to queries', async t => {
+  const { figbird, feathers } = createTestApp(schema, services())
+  const notes = feathers.service('notes')
+  const states: Record<string, QueryState<Note[], Record<string, unknown>> | undefined> = {}
+  const finds = {
+    plain: figbird.queryDesc({ serviceName: 'notes', method: 'find' }),
+    window: figbird.queryDesc({
+      serviceName: 'notes',
+      method: 'find',
+      params: { query: { $sort: { id: 1 }, $limit: 10 } },
+    }),
+  }
+  for (const [name, ref] of Object.entries(finds)) {
+    ref.subscribe(state => {
+      states[name] = state as QueryState<Note[], Record<string, unknown>>
+    })
+  }
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  // The row reaches the cache newer than its created event, through a query that
+  // doesn't add it to the finds.
+  notes.data[5] = { id: 5, content: 'patched', updatedAt: 3 }
+  figbird.queryDesc({ serviceName: 'notes', method: 'get', resourceId: 5 }).subscribe(() => {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  notes.emit('created', { id: 5, content: 'created', updatedAt: 1 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+
+  for (const name of Object.keys(finds)) {
+    t.deepEqual(
+      states[name]?.data?.map(note => `${note.id}:${note.content}`),
+      ['1:hello', '2:world', '5:patched'],
+      name,
+    )
+  }
+})
+
+test('mutation lanes: an older realtime created does not overwrite a newer row mid-write', async t => {
+  const { figbird, feathers } = createTestApp(schema, {
+    ...services(),
+    notes: { data: { 1: { id: 1, content: 'hello', updatedAt: 1 } } },
+  })
+  const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
+  let latest: QueryState<Note[], Record<string, unknown>> | undefined
+  ref.subscribe(state => {
+    latest = state as QueryState<Note[], Record<string, unknown>>
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const notes = feathers.service('notes')
+
+  const ack = deferred<MockItem>()
+  notes.patch = (() => ack.promise) as never
+  const patching = figbird.m.notes.confirmed.patch(1, { content: 'mine' })
+  notes.emit('patched', { id: 1, content: 'newer', updatedAt: 3 })
+  notes.emit('created', { id: 1, content: 'older', updatedAt: 1 })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'newer', 'while the write is in flight')
+
+  ack.resolve({ id: 1, content: 'mine', updatedAt: 2 })
+  await patching
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(latest?.data?.find(note => note.id === 1)?.content, 'newer', 'after the write settles')
+})
+
 test('mutation lanes: the echo of our own remove does not swallow a re-create', async t => {
   const { figbird, feathers } = createTestApp(schema, services())
   const ref = figbird.queryDesc({ serviceName: 'notes', method: 'find' })
